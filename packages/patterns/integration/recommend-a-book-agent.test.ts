@@ -8,7 +8,6 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import { startAgentRunner } from "../../cli/commands/agent.ts";
-import { setAclEntry } from "../../cli/lib/acl.ts";
 import { loadIdentity } from "../../cli/lib/identity.ts";
 import { loadPieces } from "../../cli/lib/piece.ts";
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
@@ -31,19 +30,14 @@ describe("recommend-a-book visitor agent", () => {
       });
       const ownerKey = join(evidence, "owner.key");
       const visitorKey = join(evidence, "visitor.key");
-      const invitationKey = join(evidence, "invitation.key");
       await Deno.writeFile(ownerKey, await Identity.generatePkcs8(), {
         createNew: true,
       });
       await Deno.writeFile(visitorKey, await Identity.generatePkcs8(), {
         createNew: true,
       });
-      await Deno.writeFile(invitationKey, await Identity.generatePkcs8(), {
-        createNew: true,
-      });
       const owner = await loadIdentity(ownerKey);
       const visitor = await loadIdentity(visitorKey);
-      const invitation = await loadIdentity(invitationKey);
       const model = "scripted-personalized-book-demo";
       const requests: unknown[] = [];
       const modelServer = Deno.serve({
@@ -137,24 +131,6 @@ describe("recommend-a-book visitor agent", () => {
       let harness: MultiRuntimeHarness | undefined;
       let runner: Awaited<ReturnType<typeof startAgentRunner>> | undefined;
       try {
-        await setAclEntry(
-          {
-            apiUrl: apiUrl!,
-            space: invitation.did(),
-            identity: invitationKey,
-          },
-          owner.did(),
-          "OWNER",
-        );
-        await setAclEntry(
-          {
-            apiUrl: apiUrl!,
-            space: invitation.did(),
-            identity: ownerKey,
-          },
-          visitor.did(),
-          "WRITE",
-        );
         for (
           const [identity, key] of [[owner, ownerKey], [
             visitor,
@@ -174,7 +150,6 @@ describe("recommend-a-book visitor agent", () => {
         }
         harness = await MultiRuntimeHarness.create({
           apiUrl: new URL(apiUrl!),
-          spaceName: invitation.did(),
           programPath:
             `${rootPath}integration/fixtures/recommend-a-book/main.tsx`,
           rootPath,
@@ -186,12 +161,12 @@ describe("recommend-a-book visitor agent", () => {
               cfc: {
                 cfcEnforcementMode: "enforce-strict",
                 cfcFlowLabels: "persist",
-                cfcReadMaxConfidentiality: [
-                  cfcAtom.user(owner.did()),
-                  cfcAtom.space(invitation.did()),
-                ],
                 experimental: { agentBuiltin: true, serverExecution: false },
               },
+              readCeiling: (spaceDid) => [
+                cfcAtom.user(owner.did()),
+                cfcAtom.space(spaceDid),
+              ],
             },
             {
               label: "visitor",
@@ -199,12 +174,12 @@ describe("recommend-a-book visitor agent", () => {
               cfc: {
                 cfcEnforcementMode: "enforce-strict",
                 cfcFlowLabels: "persist",
-                cfcReadMaxConfidentiality: [
-                  cfcAtom.user(visitor.did()),
-                  cfcAtom.space(invitation.did()),
-                ],
                 experimental: { agentBuiltin: true, serverExecution: false },
               },
+              readCeiling: (spaceDid) => [
+                cfcAtom.user(visitor.did()),
+                cfcAtom.space(spaceDid),
+              ],
             },
           ],
         });

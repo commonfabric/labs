@@ -268,11 +268,9 @@ describe("cell-reference", () => {
       const keys = ["", ".", "..", "x", "...", ".h"];
       const paths: string[][] = [[]];
       for (let length = 1; length <= 3; length++) {
-        paths.push(
-          ...paths.filter((path) => path.length === length - 1).flatMap((
-            path,
-          ) => keys.map((key) => [...path, key])),
-        );
+        const extended = paths.filter((path) => path.length === length - 1)
+          .flatMap((path) => keys.map((key) => [...path, key]));
+        for (const path of extended) paths.push(path);
       }
       const meanings = new Map<string, string>();
       for (let climbs = 0; climbs <= 3; climbs++) {
@@ -404,11 +402,9 @@ describe("cell-reference", () => {
       ];
       const paths: string[][] = [[]];
       for (let depth = 1; depth <= 3; depth++) {
-        paths.push(
-          ...paths.filter((path) => path.length === depth - 1).flatMap((path) =>
-            keys.map((key) => [...path, key])
-          ),
-        );
+        const extended = paths.filter((path) => path.length === depth - 1)
+          .flatMap((path) => keys.map((key) => [...path, key]));
+        for (const path of extended) paths.push(path);
       }
       const contexts: ReferenceContext[] = [
         {},

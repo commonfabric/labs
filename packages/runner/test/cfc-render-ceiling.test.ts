@@ -1,6 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
+import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import {
   createRenderConfidentialityResolver,
   RENDER_DISPLAY_SINK_CLASS,
@@ -249,5 +251,447 @@ describe("CFC render resolver — per-label membership discovery (§4.9.3)", () 
       }],
     });
     expect(consulted).toContain(SPACE_TEAM);
+  });
+});
+
+// A module policy selected by a `PolicyOf` label: its manifest's exchange rule
+// releases the sealed clause to the readers of the policy's subject space by
+// adding `Space(THIS_POLICY.subject)` once the label carries the release
+// evidence. The standard display rule then admits a reader of that space.
+const RELEASE_MODULE = "sha256:release-module";
+const RELEASE_SYMBOL = "releaseToMembers";
+const releaseManifest = buildCfcPolicyArtifactManifest({
+  formatVersion: 1,
+  moduleIdentity: RELEASE_MODULE,
+  symbol: RELEASE_SYMBOL,
+  template: {
+    templateVersion: 1,
+    exchangeRules: [{
+      name: "releaseWhenTallied",
+      preCondition: {
+        confidentiality: [{ thisPolicy: true }],
+        integrity: [{
+          type: "TallyComplete",
+          space: { thisPolicyField: "subject" },
+        }],
+      },
+      postCondition: {
+        confidentiality: [{
+          type: CFC_ATOM_TYPE.Space,
+          id: { thisPolicyField: "subject" },
+        }],
+        integrity: [],
+      },
+    }],
+    dependencies: { authorityOnly: [], dataBearing: [] },
+    integrityRequirements: {},
+  },
+});
+const releaseRef = (subject: string) =>
+  cfcAtom.modulePolicyRef(
+    RELEASE_MODULE,
+    RELEASE_SYMBOL,
+    releaseManifest.policyDigest,
+    subject,
+  );
+const tallied = (space: string) => ({ type: "TallyComplete", space });
+
+describe("CFC render resolver — module policies at the display boundary", () => {
+  it("releases a PolicyOf label whose module rule admits space readers", () => {
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [SPACE_TEAM],
+      modulePolicyResolver: () => releaseManifest,
+    });
+    const resolved = resolve({
+      confidentiality: [releaseRef(SPACE_TEAM)],
+      integrity: [tallied(SPACE_TEAM)],
+    });
+    expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+  });
+
+  it("keeps the label sealed when the module rule's guard is unmet", () => {
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [SPACE_TEAM],
+      modulePolicyResolver: () => releaseManifest,
+    });
+    const resolved = resolve({ confidentiality: [releaseRef(SPACE_TEAM)] });
+    expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([
+      releaseRef(SPACE_TEAM),
+    ]);
+  });
+
+  it("keeps the label sealed for a viewer who reads no released space", () => {
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [SPACE_OTHER],
+      modulePolicyResolver: () => releaseManifest,
+    });
+    const resolved = resolve({
+      confidentiality: [releaseRef(SPACE_TEAM)],
+      integrity: [tallied(SPACE_TEAM)],
+    });
+    expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([{
+      anyOf: [releaseRef(SPACE_TEAM), cfcAtom.space(SPACE_TEAM)],
+    }]);
+  });
+
+  it("fails closed when the manifest is missing, mismatched, or unresolvable", () => {
+    const otherManifest = buildCfcPolicyArtifactManifest({
+      ...releaseManifest.manifest,
+      symbol: "otherRules",
+    });
+    for (
+      const modulePolicyResolver of [
+        undefined,
+        () => undefined,
+        () => otherManifest,
+        () => ({ ...releaseManifest, policyDigest: "sha256:forged" }),
+        () => {
+          throw new Error("manifest store unavailable");
+        },
+      ]
+    ) {
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: ALICE,
+        memberSpaces: [SPACE_TEAM],
+        modulePolicyResolver,
+      });
+      const label = [releaseRef(SPACE_TEAM)];
+      const resolved = resolve({
+        confidentiality: label,
+        integrity: [tallied(SPACE_TEAM)],
+      });
+      expect(resolved).toEqual(label);
+    }
+  });
+
+  it("mints a reader fact for a Space atom a module rule adds", () => {
+    // The label carries no Space atom until the module rule fires, so the
+    // membership lookup can only learn of the released space from the
+    // evaluation itself.
+    const consulted: string[] = [];
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      membershipProvider: {
+        readerRole: (space) => {
+          consulted.push(space);
+          return space === SPACE_TEAM ? "reader" : null;
+        },
+        subscribe: () => () => {},
+      },
+      modulePolicyResolver: () => releaseManifest,
+    });
+    const resolved = resolve({
+      confidentiality: [releaseRef(SPACE_TEAM)],
+      integrity: [tallied(SPACE_TEAM)],
+    });
+    expect(consulted).toEqual([SPACE_TEAM]);
+    expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([]);
+  });
+
+  it("does not admit an added Space atom the viewer cannot read", () => {
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      membershipProvider: providerGranting([SPACE_OTHER]),
+      modulePolicyResolver: () => releaseManifest,
+    });
+    const resolved = resolve({
+      confidentiality: [releaseRef(SPACE_TEAM)],
+      integrity: [tallied(SPACE_TEAM)],
+    });
+    expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([{
+      anyOf: [releaseRef(SPACE_TEAM), cfcAtom.space(SPACE_TEAM)],
+    }]);
+  });
+});
+
+// The manifest `packages/patterns/cfc-exchange-rules/direct-release.tsx`
+// compiles `directReleaseRules` to: a holder of `HasRole(reader)` on the
+// policy's subject space gains a `User(reader)` alternative. Its digest is the
+// one that pattern's baseline pins, so these tests exercise the rule the shell
+// actually renders rather than a look-alike.
+const DIRECT_RELEASE_DIGEST = "jr6me2Bb11h2h9txejm-Vjp-5-YPtlpKsLaGcjSR4Sk";
+const directReleaseManifest = buildCfcPolicyArtifactManifest({
+  formatVersion: 1,
+  moduleIdentity: "UsUHkONMerVZwnUOIBrbzrUlhEfaV0SByvpFqW28WLg",
+  symbol: "directReleaseRules",
+  template: {
+    templateVersion: 1,
+    exchangeRules: [{
+      name: "releaseToSpaceReader",
+      preCondition: {
+        confidentiality: [{ thisPolicy: true }],
+        integrity: [{
+          type: CFC_ATOM_TYPE.HasRole,
+          principal: { var: "reader" },
+          space: { thisPolicyField: "subject" },
+          role: "reader",
+        }],
+      },
+      postCondition: {
+        confidentiality: [{
+          type: CFC_ATOM_TYPE.User,
+          subject: { var: "reader" },
+        }],
+        integrity: [],
+      },
+    }],
+    dependencies: { authorityOnly: [], dataBearing: [] },
+    integrityRequirements: {},
+  },
+});
+const directReleaseRef = (subject: string) =>
+  cfcAtom.modulePolicyRef(
+    directReleaseManifest.manifest.moduleIdentity,
+    directReleaseManifest.manifest.symbol,
+    directReleaseManifest.policyDigest,
+    subject,
+  );
+
+describe("CFC render resolver — the direct-release PolicyOf rule", () => {
+  it("builds the manifest direct-release.tsx pins", () => {
+    expect(directReleaseManifest.policyDigest).toEqual(DIRECT_RELEASE_DIGEST);
+  });
+
+  it("releases the owner's own-space PolicyOf value to the owner", () => {
+    // The label carries no Space atom and no integrity: the only way to fit
+    // the ceiling is the module rule firing on the minted own-space role.
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      modulePolicyResolver: () => directReleaseManifest,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [directReleaseRef(ALICE)] }),
+      aliceCeiling,
+    )).toEqual([]);
+  });
+
+  it("releases a shared-space PolicyOf value to a verified reader of that space", () => {
+    // The subject space is neither static nor named by a Space atom, so its
+    // membership is known only by asking the provider about the policy's
+    // subject.
+    const consulted: string[] = [];
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      membershipProvider: {
+        readerRole: (space) => {
+          consulted.push(space);
+          return space === SPACE_TEAM ? "reader" : null;
+        },
+        subscribe: () => () => {},
+      },
+      modulePolicyResolver: () => directReleaseManifest,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [directReleaseRef(SPACE_TEAM)] }),
+      aliceCeiling,
+    )).toEqual([]);
+    expect(consulted).toEqual([SPACE_TEAM]);
+  });
+
+  it("keeps a shared-space PolicyOf value sealed from a non-reader", () => {
+    // The same fixture as the reader case, with the provider denying: what
+    // separates the two outcomes is the subject space's verified membership.
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      membershipProvider: providerGranting([SPACE_OTHER]),
+      modulePolicyResolver: () => directReleaseManifest,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [directReleaseRef(SPACE_TEAM)] }),
+      aliceCeiling,
+    )).toEqual([directReleaseRef(SPACE_TEAM)]);
+  });
+
+  it("does not release to another principal's reader evidence", () => {
+    // A HasRole fact the label carries for somebody else binds `reader` to
+    // that principal, and User(mallory) does not fit Alice's ceiling.
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      modulePolicyResolver: () => directReleaseManifest,
+    });
+    const resolved = resolve({
+      confidentiality: [directReleaseRef(SPACE_TEAM)],
+      integrity: [cfcAtom.hasRole(MALLORY, SPACE_TEAM, "reader")],
+    });
+    expect(atomsOutsideCeiling(resolved, aliceCeiling)).toEqual([{
+      anyOf: [directReleaseRef(SPACE_TEAM), cfcAtom.user(MALLORY)],
+    }]);
+  });
+
+  it("fails closed without a verified manifest even for the owner", () => {
+    for (
+      const modulePolicyResolver of [
+        undefined,
+        () => undefined,
+        () => ({ ...directReleaseManifest, policyDigest: "forged" }),
+      ]
+    ) {
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: ALICE,
+        memberSpaces: [ALICE],
+        modulePolicyResolver,
+      });
+      expect(atomsOutsideCeiling(
+        resolve({ confidentiality: [directReleaseRef(ALICE)] }),
+        aliceCeiling,
+      )).toEqual([directReleaseRef(ALICE)]);
+    }
+  });
+
+  it("reads the manifest from the spaces the label was read from", () => {
+    const asked: Array<readonly string[]> = [];
+    let listed = 0;
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      modulePolicyResolver: (_reference, spaces) => {
+        asked.push(spaces);
+        return spaces.includes(SPACE_OTHER) ? directReleaseManifest : undefined;
+      },
+    });
+    const spaces = () => {
+      listed++;
+      return [SPACE_OTHER];
+    };
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [directReleaseRef(ALICE)], spaces }),
+      aliceCeiling,
+    )).toEqual([]);
+    expect(asked).toEqual([[SPACE_OTHER]]);
+    // Without the spaces the label came from there is nowhere to read.
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [directReleaseRef(ALICE)] }),
+      aliceCeiling,
+    )).toEqual([directReleaseRef(ALICE)]);
+    // A label that selects no module policy never asks for them.
+    resolve({ confidentiality: [cfcAtom.space(ALICE)], spaces });
+    expect(listed).toEqual(1);
+  });
+
+  it("releases a committed subject the viewer's own space matches", () => {
+    // A cross-space copy carries its subject in commitment form. The runtime
+    // never opens it; the HasRole fact it mints for Alice's own space unifies
+    // with it commitment-aware (spec §4.3.6, §4.6.4.1).
+    const committed = directReleaseRef(
+      commitCfcFieldValue(ALICE) as unknown as string,
+    );
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      modulePolicyResolver: () => directReleaseManifest,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [committed] }),
+      aliceCeiling,
+    )).toEqual([]);
+  });
+
+  it("keeps a committed shared subject sealed, and never asks about it", () => {
+    // Alice reads the team space, but the label names it only as a digest:
+    // no membership query can be addressed to it, so nothing matches.
+    const committed = directReleaseRef(
+      commitCfcFieldValue(SPACE_TEAM) as unknown as string,
+    );
+    const consulted: string[] = [];
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [ALICE],
+      membershipProvider: {
+        readerRole: (space) => {
+          consulted.push(space);
+          return space === SPACE_TEAM ? "reader" : null;
+        },
+        subscribe: () => () => {},
+      },
+      modulePolicyResolver: () => directReleaseManifest,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({ confidentiality: [committed] }),
+      aliceCeiling,
+    )).toEqual([committed]);
+    expect(consulted).toEqual([]);
+  });
+});
+
+describe("CFC render resolver — spaces a module rule adds", () => {
+  // A rule that adds `Space(x)` for a space bound from label-carried evidence
+  // rather than from THIS_POLICY.subject. Membership is looked up only for
+  // the label's `Space` atoms (spec §4.9.3) and its module-policy subjects
+  // (docs/specs/cfc-spec-changes.md SC-44), which is also exactly what the
+  // reconciler watches, so such a space stays sealed.
+  const addsTeam = buildCfcPolicyArtifactManifest({
+    formatVersion: 1,
+    moduleIdentity: "sha256:release-elsewhere",
+    symbol: "releaseElsewhere",
+    template: {
+      templateVersion: 1,
+      exchangeRules: [{
+        name: "releaseToNamedSpace",
+        preCondition: {
+          confidentiality: [{ thisPolicy: true }],
+          integrity: [{ type: "ReleasedTo", space: { var: "x" } }],
+        },
+        postCondition: {
+          confidentiality: [{ type: CFC_ATOM_TYPE.Space, id: { var: "x" } }],
+          integrity: [],
+        },
+      }],
+      dependencies: { authorityOnly: [], dataBearing: [] },
+      integrityRequirements: {},
+    },
+  });
+  const ref = cfcAtom.modulePolicyRef(
+    addsTeam.manifest.moduleIdentity,
+    addsTeam.manifest.symbol,
+    addsTeam.policyDigest,
+    SPACE_OTHER,
+  );
+
+  it("leaves a space bound from other evidence sealed, unconsulted", () => {
+    const consulted: string[] = [];
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      membershipProvider: {
+        readerRole: (space) => {
+          consulted.push(space);
+          return space === SPACE_TEAM ? "reader" : null;
+        },
+        subscribe: () => () => {},
+      },
+      modulePolicyResolver: () => addsTeam,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({
+        confidentiality: [ref],
+        integrity: [{ type: "ReleasedTo", space: SPACE_TEAM }],
+      }),
+      aliceCeiling,
+    )).toEqual([{ anyOf: [cfcAtom.space(SPACE_TEAM), ref] }]);
+    expect(consulted).toEqual([SPACE_OTHER]);
+  });
+
+  it("admits that space when the viewer's membership is already known", () => {
+    // The same rule and evidence, with the team space a static member: the
+    // rule does fire, so the sealed case above is the membership lookup's
+    // scope and not a rule that never matched.
+    const resolve = createRenderConfidentialityResolver({
+      actingPrincipal: ALICE,
+      memberSpaces: [SPACE_TEAM],
+      modulePolicyResolver: () => addsTeam,
+    });
+    expect(atomsOutsideCeiling(
+      resolve({
+        confidentiality: [ref],
+        integrity: [{ type: "ReleasedTo", space: SPACE_TEAM }],
+      }),
+      aliceCeiling,
+    )).toEqual([]);
   });
 });

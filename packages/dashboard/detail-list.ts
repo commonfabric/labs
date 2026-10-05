@@ -3,6 +3,12 @@
  * measurement beside it. A row is one line: a name or measurement too wide for
  * the tile is cut rather than wrapped onto a second line, which would push the
  * row below it out of the list's view, and the full text stays in its tooltip.
+ * The names and the measurements each fill a column. When the two do not both
+ * fit, a column that needs less than half the room between them keeps all it
+ * needs and the other takes the rest; otherwise each gets half. A long name
+ * therefore never squeezes a short measurement down to nothing, nor a long
+ * measurement a short name. Room left over goes to the measurements, so a
+ * linked row spans the whole list.
  * A row with an address is a link to it.
  */
 
@@ -24,7 +30,7 @@ function row(entry: DetailRow): string {
   const content =
     `<span title="${
       escapeHtml(entry.name)
-    }" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;${LINE}"><span class="dot ${
+    }" style="font-weight:600;${LINE}"><span class="dot ${
       STATUS_DOT[entry.status]
     }"></span>${escapeHtml(entry.name)}</span><span title="${
       escapeHtml(entry.detail)
@@ -61,7 +67,7 @@ export function detailList(
     escapeHtml(names.focusKey)
   }" aria-label="${escapeHtml(names.subject)}${
     rows.length > 1 ? "; scroll for more" : ""
-  }"${scrolls} style="display:grid;grid-template-columns:auto 1fr;gap:7px 10px;margin-top:11px;font-size:12px;line-height:1.35">${
+  }"${scrolls} style="display:grid;grid-template-columns:minmax(0,max-content) minmax(0,auto);gap:7px 10px;margin-top:11px;font-size:12px;line-height:1.35">${
     rows.map(row).join("")
   }</div>`;
 }

@@ -163,8 +163,148 @@ Deno.test("Codex Responses supports stable affinity and reasoning controls", asy
 
   assertEquals(headers?.get("session-id"), "stable-session");
   assertEquals(body?.prompt_cache_key, "stable-session");
-  assertEquals(body?.reasoning, { effort: "low" });
+  assertEquals(body?.reasoning, { effort: "low", summary: "auto" });
   assertEquals(body?.prompt_cache_options, undefined);
+});
+
+Deno.test("Codex Responses asks for a reasoning summary and carries it beside the message", async () => {
+  let body: Record<string, unknown> | undefined;
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return Promise.resolve(sse({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{
+            type: "reasoning",
+            id: "rs_1",
+            encrypted_content: "encrypted-state",
+            summary: [
+              { type: "summary_text", text: "**Finding the form**" },
+              { type: "summary_text", text: "  " },
+              { type: "summary_text", text: "The order form is linked." },
+            ],
+          }, {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "browser",
+            arguments: '{"action":"snapshot"}',
+          }],
+        },
+      }));
+    },
+  });
+
+  const result = await client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "order" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-reasoning",
+  });
+
+  assertEquals(body?.reasoning, { summary: "auto" });
+  assertEquals(
+    result.assistant.reasoning,
+    "**Finding the form**\n\nThe order form is linked.",
+  );
+  assertEquals(result.assistant.content, "");
+});
+
+Deno.test("Codex Responses replays reasoning to the model without its summary", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const outputs = [[{
+    type: "reasoning",
+    id: "rs_1",
+    encrypted_content: "encrypted-state",
+    summary: [{ type: "summary_text", text: "PRIVATE SUMMARY" }],
+  }, {
+    type: "function_call",
+    id: "fc_1",
+    call_id: "call_1",
+    name: "browser",
+    arguments: '{"action":"snapshot"}',
+  }], [{
+    type: "message",
+    content: [{ type: "output_text", text: "done" }],
+  }]];
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(sse({
+        type: "response.completed",
+        response: { status: "completed", output: outputs[bodies.length - 1] },
+      }));
+    },
+  });
+  const request = {
+    model: "gpt-5.4",
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-replay",
+  };
+
+  const first = await client.complete({
+    ...request,
+    transcript: [{ role: "user", content: "look" }],
+  });
+  await client.complete({
+    ...request,
+    transcript: [
+      { role: "user", content: "look" },
+      first.assistant,
+      {
+        role: "tool",
+        toolCallId: "call_1",
+        toolName: "browser",
+        content: "{}",
+      },
+    ],
+  });
+
+  assertEquals(first.assistant.reasoning, "PRIVATE SUMMARY");
+  const input = JSON.stringify(bodies[1].input);
+  assertEquals(input.includes("encrypted-state"), true);
+  assertEquals(input.includes("PRIVATE SUMMARY"), false);
+});
+
+Deno.test("Codex Responses leaves out reasoning a turn has no summary of", async () => {
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: () =>
+      Promise.resolve(sse({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{
+            type: "reasoning",
+            id: "rs_1",
+            encrypted_content: "encrypted-state",
+            summary: [],
+          }, {
+            type: "message",
+            content: [{ type: "output_text", text: "done" }],
+          }],
+        },
+      })),
+  });
+
+  const result = await client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-no-summary",
+  });
+
+  assertEquals("reasoning" in result.assistant, false);
 });
 
 Deno.test("Codex Responses rejects API prompt cache mode controls", async () => {

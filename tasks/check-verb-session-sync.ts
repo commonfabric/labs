@@ -486,7 +486,9 @@ export async function main(deps: {
     const mdText = await Deno.readTextFile(
       doc.startsWith("/") ? doc : join(REPO_ROOT, doc),
     );
-    violations.push(...findViolations(demoText.get(demo)!, mdText, doc));
+    for (const violation of findViolations(demoText.get(demo)!, mdText, doc)) {
+      violations.push(violation);
+    }
   }
   if (violations.length > 0) {
     error(`verb-session sync: ${violations.length} violation(s)\n`);

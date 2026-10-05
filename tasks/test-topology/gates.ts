@@ -12,7 +12,7 @@
  * it.
  */
 
-import { collectPathsByScope, scopeOfPath } from "../typecheck.ts";
+import { collectPathsByScope, scopesReached } from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
 import {
@@ -100,11 +100,10 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-test-topology",
     kind: "gate",
     run: ["task", "check-test-topology"],
-    // Walks every tree this repository keeps source in for anything
-    // that looks like a test, and holds the topology to what it finds.
-    // The topology enumerates from those same trees, so a set stated
-    // here names every directory holding code and comes to all but a
-    // change that touches none of it.
+    // Reads every file the repository holds for anything that looks
+    // like a test, and holds the topology to what it finds. A set stated
+    // here would name every directory holding code and come to all but
+    // a change that touches none of it.
     reachedBy: [],
   },
   {
@@ -123,23 +122,6 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // Reads every Markdown document and the comments of every TypeScript
     // file, so a comment added anywhere can fail it.
     reachedBy: [],
-  },
-  {
-    name: "check-tripwires",
-    kind: "gate",
-    run: ["task", "check-tripwires"],
-    // Probes the weakness each tripwire asserts is still present, and
-    // reads the test file carrying the same assertion. A tripwire added
-    // against another package widens this list. The workflow is here
-    // because a tripwire reads the shape of the job matrix, so a change
-    // to it is a change to what that tripwire probes.
-    reachedBy: [
-      ".github/workflows/deno.yml",
-      "packages/identity/",
-      "packages/toolshed/routes/ingest-channels/",
-      "tasks/check-tripwires.ts",
-      "tasks/post-test-jobs-tripwire.test.ts",
-    ],
   },
   {
     name: "check-docs",
@@ -482,14 +464,19 @@ function gateSuite(
 
 /**
  * The type check, one unit per package group. The store records one
- * identity per group and the mapping from a changed file to its group is
- * direct, so `unitsForChange` names exactly the groups a change touches.
+ * identity per group.
+ *
+ * A group's check opens every module its files import, so a change can
+ * alter the verdict of a group other than its own. `unitsForChange` names
+ * each group whose files import a changed file, directly or through other
+ * modules, as well as the group owning it.
  */
 async function typecheckSuite(root: string): Promise<Suite> {
   const byScope = await collectPathsByScope(root);
   const scopes = [...byScope.keys()].sort();
   const known = new Set(scopes);
   const recordSurfaces = scopes.map((scope) => ({ kind: "typecheck", scope }));
+  const reached = await scopesReached(root, byScope);
   return {
     id: "typecheck",
     recordSurfaces,
@@ -498,17 +485,7 @@ async function typecheckSuite(root: string): Promise<Suite> {
     unavailable: [],
     // One `deno check` over a group records one identity.
     whole: scopes,
-    // A group's unit is the scope it checks rather than a path, so the
-    // diff is mapped onto scopes the same way the check itself groups
-    // the paths it walks.
-    unitsForChange(changed) {
-      const touched = new Set<string>();
-      for (const path of changed) {
-        const scope = scopeOfPath(path);
-        if (known.has(scope)) touched.add(scope);
-      }
-      return [...touched];
-    },
+    unitsForChange: reached,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       // `cfcheck` records under the same kind and its own names, so the

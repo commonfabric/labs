@@ -1,20 +1,34 @@
 import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join, resolve, toFileUrl } from "@std/path";
+import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
+  consoleDataDirectories,
   consoleHealthRows,
+  consoleHelpText,
+  consoleSandboxBanner,
   ConsoleServer,
+  consoleStartupBanner,
+  consoleVmHealthProbes,
+  createConsoleHealth,
   createConsoleInteractiveServiceOptions,
+  parseConsoleArgs,
   resolveConsoleConfig,
+  startConsoleServer,
 } from "../../console/server.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
 import {
   harnessSessionChatPolicy,
   harnessSessionEngineOptions,
 } from "../../src/session-assembly.ts";
-import type { CfHarnessEngine } from "../../src/engine.ts";
+import { CfHarnessEngine } from "../../src/engine.ts";
+import {
+  bashToolDescriptor,
+  bashToolDescriptorForRuntime,
+} from "../../src/tools/bash.ts";
+import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
+import { defaultDarwinRootfs } from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
@@ -30,7 +44,20 @@ import type {
   HarnessPromptLoopResult,
   RunHarnessTranscriptOptions,
 } from "../../src/prompt-loop.ts";
+import type {
+  BrowserHostResult,
+  HarnessBrowserHost,
+} from "../../src/contracts/browser-host.ts";
+import {
+  createHarnessChatErrorResponse,
+  createHarnessChatEventEnvelope,
+  createHarnessChatOkResponse,
+  type HarnessChatResponse,
+  type HarnessChatStartTurnParams,
+  type HarnessChatTurnStatus,
+} from "../../src/contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
+import { harnessClientProtocolEcho } from "../../src/contracts/client-command.ts";
 
 /**
  * A loop that answers the task it was given and nothing else. The console
@@ -137,6 +164,22 @@ const config = () =>
     "/console",
   );
 
+/** The same configuration, allowing a task to declare a browser host. */
+const configWithBrowserHost = () =>
+  resolveConsoleConfig(
+    [
+      "--fabric-identity",
+      "key.pkcs8",
+      "--fabric-space",
+      "console-test",
+      "--session-db",
+      "none",
+      "--allow-browser-host",
+    ],
+    {},
+    "/console",
+  );
+
 /** The same configuration, with an index for the proxy route to reach. */
 const configWithIndex = () =>
   resolveConsoleConfig(
@@ -232,6 +275,53 @@ describe("console/server", () => {
     );
     expect(response.status).toBe(200);
     return await response.json();
+  };
+
+  /** A started turn that keeps running until `finish()` is called. */
+  interface HeldTurn {
+    server: ConsoleServer;
+    sessionId: string;
+    turnId: string;
+
+    /** Lets the turn's model loop return, and waits for the turn to end. */
+    finish(): Promise<void>;
+  }
+
+  /**
+   * Starts a task on a server of its own whose model loop does not return
+   * until the test says so, so the turn is still running when the test acts
+   * on it.
+   */
+  const startHeldTurn = async (): Promise<HeldTurn> => {
+    const gate = Promise.withResolvers<void>();
+    const held = new ConsoleServer(
+      await config(),
+      (onEvent) =>
+        new HarnessInteractiveChatService({
+          createPromptLoop: () => ({
+            runTranscript: async (options) => {
+              await gate.promise;
+              return await answeringLoop({} as never).runTranscript(options);
+            },
+          }),
+          now: advancingClock(),
+          onEvent,
+        }),
+    );
+    const response = await held.handle(
+      jsonRequest("/api/task", { text: "keep working" }),
+    );
+    expect(response.status).toBe(200);
+    const { sessionId, turnId } = await response.json();
+    return {
+      server: held,
+      sessionId,
+      turnId,
+      finish: async () => {
+        gate.resolve();
+        await held.service.waitForTurn(sessionId, turnId);
+      },
+    };
   };
 
   /** What the index client was asked for, as it composed the request. */
@@ -596,6 +686,693 @@ describe("console/server", () => {
     });
   });
 
+  describe("the sandbox runtime", () => {
+    /** The selection Loom hands a console on the native runtime. */
+    const RUNSC_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+    };
+
+    const ARGS = [
+      "--fabric-identity",
+      "key.pkcs8",
+      "--fabric-space",
+      "console-test",
+      "--session-db",
+      "none",
+    ];
+
+    /** A runner that runs nothing: these tests read what a turn would build. */
+    const inertRunner: ProcessRunner = {
+      run: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
+    };
+
+    /**
+     * The sandbox a turn of this console runs in, built by the engine from
+     * the options the console hands every turn.
+     */
+    const turnSandbox = async (env: Record<string, string>) => {
+      const resolved = await resolveConsoleConfig(ARGS, env, "/console");
+      const { basePromptLoopOptions } = createConsoleInteractiveServiceOptions(
+        resolved,
+        {
+          modelProvider: "openai-compatible-gateway",
+          modelAuthSource: "none",
+          gatewayAuthMode: "none",
+        },
+        () => {},
+      );
+      const engine = new CfHarnessEngine({
+        ...basePromptLoopOptions,
+        runId: "console-turn",
+        processRunner: inertRunner,
+      });
+      return {
+        description: engine.sandbox.describe(),
+        run: {
+          cfcEnforcementMode: engine.getRunState().cfcEnforcementMode,
+        },
+      };
+    };
+
+    it("builds the direct runsc driver from the runtime the environment selects", async () => {
+      const { description, run } = await turnSandbox(RUNSC_ENV);
+
+      expect(description.kind).toBe("runsc-cfc");
+      expect(description.sessions).toBe(true);
+      expect(description.cfc?.image).toBe("/store/images/kitchensink");
+      expect(description.cfc?.runtimeName).toBeUndefined();
+      expect(description.cfc?.invocationContextTransport).toBe("fd");
+      // A console turn enforces, and no enforcing run can use a session, so
+      // the model is offered bash without one, as it is on Docker.
+      expect(run.cfcEnforcementMode).toBe("enforce-strict");
+      expect(bashToolDescriptorForRuntime(description, run)).toEqual(
+        bashToolDescriptor,
+      );
+    });
+
+    for (
+      const [name, env] of [
+        ["names no runtime", {}],
+        ["names `docker`", { CF_HARNESS_SANDBOX_RUNTIME: "docker" }],
+      ] as const
+    ) {
+      it(`builds the Docker driver, with its sidecar transports, when the environment ${name}`, async () => {
+        const { description, run } = await turnSandbox(env);
+
+        expect(description).toEqual({
+          kind: "docker-runsc-cfc",
+          defaultWorkingDirectory: "/workspace",
+          cfc: {
+            runtimeRequested: true,
+            runtimeName: "runsc-cfc",
+            image:
+              "us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest",
+            workspaceMountPath: "/workspace",
+            mounts: [{
+              kind: "workspace",
+              hostPath: "/console/.cf-harness-console/workspace",
+              sandboxPath: "/workspace",
+              readOnly: false,
+            }],
+            networkMode: "bridge",
+            extraDockerArgsCount: 0,
+            invocationContextTransport: "sidecar",
+            invocationContextTransportReadiness: "unverified",
+            invocationContextConfiguredPath:
+              "/console/.cf-harness-console/cfc/invocation-context",
+          },
+        });
+        expect(bashToolDescriptorForRuntime(description, run)).toEqual(
+          bashToolDescriptor,
+        );
+      });
+    }
+
+    it("sites the Docker driver's sidecar directories only for a console on Docker", async () => {
+      const docker = await resolveConsoleConfig(ARGS, {}, "/console");
+      const runsc = await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console");
+
+      expect([docker.cfcResultDir, docker.cfcInvocationContextDir]).toEqual([
+        "/console/.cf-harness-console/cfc/results",
+        "/console/.cf-harness-console/cfc/invocation-context",
+      ]);
+      expect([runsc.cfcResultDir, runsc.cfcInvocationContextDir]).toEqual([
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("throws the shared derivation's refusal for a runtime it does not know", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "podman" },
+          "/console",
+        ),
+      ).rejects.toThrow("sandbox runtime must be one of docker, runsc");
+    });
+
+    for (
+      const [flag, variable] of [
+        ["--sandbox-runtime", "CF_HARNESS_SANDBOX_RUNTIME"],
+        ["--sandbox-rootfs", "CF_HARNESS_SANDBOX_ROOTFS"],
+        ["--sandbox-cfc-policy", "CF_HARNESS_RUNSC_CFC_POLICY"],
+      ] as const
+    ) {
+      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\` in every spelling`, async () => {
+        for (
+          const spelling of [
+            [flag, "runsc"],
+            [`${flag}=runsc`],
+            [`${flag}=`],
+            [flag],
+            [flag, "runsc", flag, "docker"],
+          ]
+        ) {
+          await expect(
+            resolveConsoleConfig([...ARGS, ...spelling], {}, "/console"),
+          ).rejects.toThrow(variable);
+        }
+      });
+    }
+
+    it("resolves relative sandbox paths against the console's working directory", async () => {
+      const config = await resolveConsoleConfig(ARGS, {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_SANDBOX_ROOTFS: "images/kitchensink",
+        CF_HARNESS_RUNSC_CFC_POLICY: "policy/cfc.json",
+      }, "/console");
+
+      expect([config.sandboxRootfs, config.sandboxCfcPolicy]).toEqual([
+        "/console/images/kitchensink",
+        "/console/policy/cfc.json",
+      ]);
+    });
+
+    it("observes the driver's own default rootfs for a runsc console that names none", async () => {
+      // On macOS the driver finds the rootfs under the process's `HOME`; on
+      // any other platform a rootfs must be named, and the turn is refused.
+      const [, runtime, rootfs] = await (async () => {
+        const health = createConsoleHealth(
+          await resolveConsoleConfig(ARGS, {
+            CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+            CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+            CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+          }, "/console"),
+          undefined,
+          undefined,
+          {},
+          undefined,
+          () => Promise.reject(new Error("Docker is not asked")),
+        );
+        await health.refresh();
+        return health.snapshot().rows.filter((row) =>
+          row.id.startsWith("sandbox.")
+        );
+      })();
+
+      if (Deno.build.os === "darwin") {
+        const expected = defaultDarwinRootfs(Deno.env.get("HOME")!);
+        expect(rootfs.detail).toBe(expected);
+        expect(runtime.detail).toContain(`rootfs ${expected}`);
+      } else {
+        expect(runtime).toMatchObject({
+          state: "failed",
+          value: "configuration refused",
+        });
+        expect(runtime.reason).toContain("needs a rootfs");
+      }
+    });
+
+    it("observes the runsc configuration refused for a CFC policy inside a writable host mount", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "console-mount-" });
+      try {
+        const health = createConsoleHealth(
+          await resolveConsoleConfig([
+            ...ARGS,
+            "--host-mount",
+            `name=shared,source=${dir},target=/mnt/shared,mode=writable`,
+          ], {
+            CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+            CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+            CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+            CF_HARNESS_RUNSC_CFC_POLICY: join(dir, "policy.json"),
+          }, "/console"),
+          undefined,
+          undefined,
+          {},
+          undefined,
+          () => Promise.reject(new Error("Docker is not asked")),
+        );
+        await health.refresh();
+        const runtime = health.snapshot().rows.find((row) =>
+          row.id === "sandbox.runtime"
+        );
+
+        expect(runtime).toMatchObject({
+          state: "failed",
+          value: "configuration refused",
+        });
+        expect(runtime?.reason).toContain("writable mount");
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("observes the runsc configuration, and asks Docker nothing, for a console on the runsc runtime", async () => {
+      let dockerReads = 0;
+      const health = createConsoleHealth(
+        await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        undefined,
+        undefined,
+        {},
+        undefined,
+        () => {
+          dockerReads += 1;
+          return Promise.resolve({ runtimes: { "runsc-cfc": {} } });
+        },
+      );
+
+      await health.refresh();
+
+      expect(dockerReads).toBe(0);
+      expect(
+        health.snapshot().rows.filter((row) => row.group === "sandbox").map((
+          { id, state, value },
+        ) => ({ id, state, value })),
+      ).toEqual([
+        { id: "config.sandbox", state: "ok", value: "runsc" },
+        { id: "sandbox.runsc", state: "failed", value: "missing" },
+        { id: "sandbox.runtime", state: "failed", value: "CFC policy missing" },
+        { id: "sandbox.rootfs", state: "failed", value: "missing" },
+      ]);
+    });
+
+    it("adds the VM row for a console on the runsc runtime exactly where the store is a macOS one", async () => {
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await Deno.writeTextFile(join(store, "config.json"), "{}");
+        const health = createConsoleHealth(
+          await resolveConsoleConfig(ARGS, {
+            ...RUNSC_ENV,
+            CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+          }, "/console"),
+          undefined,
+          undefined,
+          { CFC_VM_HOME: store },
+          undefined,
+          () => Promise.reject(new Error("Docker is not asked")),
+        );
+
+        await health.refresh();
+
+        const vm = health.snapshot().rows.find((row) =>
+          row.id === "sandbox.vm"
+        );
+        if (Deno.build.os === "darwin") {
+          expect(vm).toMatchObject({
+            group: "sandbox",
+            state: "ok",
+            value: "idle; starts on first use",
+          });
+        } else {
+          expect(vm).toBeUndefined();
+        }
+      } finally {
+        await Deno.remove(store, { recursive: true });
+      }
+    });
+
+    it("adds no VM row for a console on Docker, whatever store the environment names", async () => {
+      // Settings a runsc console would resolve, so that only the runtime kind
+      // stands between this console and a VM row.
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await Deno.writeTextFile(join(store, "config.json"), "{}");
+        const runsc = await resolveConsoleConfig(ARGS, {
+          ...RUNSC_ENV,
+          CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+        }, "/console");
+        const health = createConsoleHealth(
+          { ...runsc, sandboxRuntimeKind: "docker" },
+          undefined,
+          undefined,
+          { CFC_VM_HOME: store },
+          undefined,
+          () => Promise.resolve({ runtimes: { "runsc-cfc": {} } }),
+        );
+
+        await health.refresh();
+
+        expect(health.snapshot().rows.map((row) => row.id)).not.toContain(
+          "sandbox.vm",
+        );
+      } finally {
+        await Deno.remove(store, { recursive: true });
+      }
+    });
+
+    /**
+     * Runs `body` with the process's `CFC_VM_HOME` naming `store`, which is
+     * where a console built without an environment finds its VM, and restores
+     * the variable after.
+     */
+    const withProcessVmHome = async <T>(
+      store: string,
+      body: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = Deno.env.get("CFC_VM_HOME");
+      Deno.env.set("CFC_VM_HOME", store);
+      try {
+        return await body();
+      } finally {
+        if (previous === undefined) Deno.env.delete("CFC_VM_HOME");
+        else Deno.env.set("CFC_VM_HOME", previous);
+      }
+    };
+
+    it("adds the VM row from the process's environment for a console built without one", async () => {
+      // runsc runs with the console process's environment, so that is where
+      // a console handed no environment looks for the store runsc uses.
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await Deno.writeTextFile(join(store, "config.json"), "{}");
+        const configured = await resolveConsoleConfig(ARGS, {
+          ...RUNSC_ENV,
+          CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+        }, "/console");
+
+        const vm = await withProcessVmHome(store, async () => {
+          const response = await new ConsoleServer(
+            configured,
+            () => server.service,
+          ).handle(getRequest("/api/health/detail"));
+          const { rows } = await response.json() as {
+            rows: readonly ConsoleHealthRow[];
+          };
+          return rows.find((row) => row.id === "sandbox.vm");
+        });
+
+        if (Deno.build.os === "darwin") {
+          expect(vm).toMatchObject({
+            label: "Sandbox VM",
+            value: "not checked",
+            detail: join(store, "daemon.sock"),
+          });
+        } else {
+          expect(vm).toBeUndefined();
+        }
+      } finally {
+        await Deno.remove(store, { recursive: true });
+      }
+    });
+
+    describe("consoleVmHealthProbes()", () => {
+      /** A macOS store holding `config.json`, removed after `body`. */
+      const withStore = async (body: (store: string) => Promise<void>) => {
+        const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+        try {
+          await Deno.writeTextFile(join(store, "config.json"), "{}");
+          await body(store);
+        } finally {
+          await Deno.remove(store, { recursive: true });
+        }
+      };
+
+      /** A runsc console whose rootfs names an image of `store`. */
+      const runscConsole = (store: string) =>
+        resolveConsoleConfig(ARGS, {
+          ...RUNSC_ENV,
+          CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+        }, "/console");
+
+      it("returns the VM probe for a runsc console on macOS whose store holds a `config.json`", async () => {
+        await withStore(async (store) => {
+          const probes = consoleVmHealthProbes(
+            await runscConsole(store),
+            { CFC_VM_HOME: store },
+            { platform: "darwin" },
+          );
+
+          expect(probes.map((probe) => probe.id)).toEqual(["sandbox.vm"]);
+        });
+      });
+
+      it("returns no VM probe for a console on Docker, on macOS or not", async () => {
+        await withStore(async (store) => {
+          const onDocker = {
+            ...await runscConsole(store),
+            sandboxRuntimeKind: "docker" as const,
+          };
+
+          expect(
+            consoleVmHealthProbes(onDocker, { CFC_VM_HOME: store }, {
+              platform: "darwin",
+            }),
+          ).toEqual([]);
+        });
+      });
+
+      it("returns no VM probe off macOS", async () => {
+        await withStore(async (store) => {
+          expect(
+            consoleVmHealthProbes(
+              await runscConsole(store),
+              { CFC_VM_HOME: store },
+              { platform: "linux" },
+            ),
+          ).toEqual([]);
+        });
+      });
+    });
+
+    /** The runsc selection with no CFC policy named, and none under `HOME`. */
+    const RUNSC_NO_POLICY_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+    };
+
+    /** The sandbox runtime row a console's health settles on. */
+    const runtimeRow = async (
+      config: Awaited<ReturnType<typeof resolveConsoleConfig>>,
+    ) => {
+      const health = createConsoleHealth(
+        config,
+        undefined,
+        undefined,
+        {},
+        undefined,
+        () => Promise.reject(new Error("Docker is not asked")),
+      );
+      await health.refresh();
+      return health.snapshot().rows.find((row) => row.id === "sandbox.runtime");
+    };
+
+    it("reports a runsc console with no CFC policy as failed, since its enforcing turns are refused", async () => {
+      const config = await resolveConsoleConfig(
+        ARGS,
+        RUNSC_NO_POLICY_ENV,
+        "/console",
+      );
+
+      const row = await runtimeRow(config);
+
+      expect(config.sandboxCfcPolicy).toBeUndefined();
+      expect(row).toMatchObject({
+        state: "failed",
+        value: "no CFC policy, so every turn is refused",
+      });
+      expect(row?.reason).toContain("enforce-strict");
+      expect(row?.remedy).toContain("CF_HARNESS_RUNSC_CFC_POLICY");
+    });
+
+    it("reports a runsc console with no CFC policy as degraded when its turns only observe", async () => {
+      const config = await resolveConsoleConfig(
+        ARGS,
+        RUNSC_NO_POLICY_ENV,
+        "/console",
+      );
+
+      const row = await runtimeRow({
+        ...config,
+        cfcEnforcementModeOverride: "observe",
+      });
+
+      expect(row).toMatchObject({
+        state: "degraded",
+        value: "direct runsc driver, no CFC policy",
+      });
+      expect(row?.reason).toContain("untracked");
+    });
+
+    it("observes the Docker runtime table for a console on Docker", async () => {
+      let dockerReads = 0;
+      const health = createConsoleHealth(
+        await resolveConsoleConfig(ARGS, {}, "/console"),
+        undefined,
+        undefined,
+        {},
+        undefined,
+        () => {
+          dockerReads += 1;
+          return Promise.resolve({ runtimes: { "runsc-cfc": {} } });
+        },
+      );
+
+      await health.refresh();
+
+      expect(dockerReads).toBe(1);
+      expect(
+        health.snapshot().rows.filter((row) => row.group === "sandbox").map((
+          { id, state, value },
+        ) => ({ id, state, value })),
+      ).toEqual([
+        { id: "config.sandbox", state: "ok", value: "docker" },
+        { id: "sandbox.docker", state: "ok", value: "responding" },
+        {
+          id: "sandbox.runtime",
+          state: "ok",
+          value: "runsc-cfc registered",
+        },
+      ]);
+    });
+
+    it("returns the sidecar directories as its banner for a console on Docker", async () => {
+      expect(
+        consoleSandboxBanner(await resolveConsoleConfig(ARGS, {}, "/console")),
+      ).toEqual([
+        "  results:    /console/.cf-harness-console/cfc/results",
+        "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
+      ]);
+    });
+
+    it("returns a banner saying every turn is refused for a runsc console with no CFC policy", async () => {
+      const config = await resolveConsoleConfig(
+        ARGS,
+        RUNSC_NO_POLICY_ENV,
+        "/console",
+      );
+
+      expect(consoleSandboxBanner(config).at(-1)).toBe(
+        "  policy:     (none: every turn is refused at enforce-strict)",
+      );
+      // Read off the mode, so a console whose turns only observe says so.
+      expect(
+        consoleSandboxBanner({
+          ...config,
+          cfcEnforcementModeOverride: "observe",
+        }).at(-1),
+      ).toBe("  policy:     (none: runsc runs without --cfc)");
+    });
+
+    it("returns the runsc binary, rootfs and policy as its banner for a console on the runsc runtime", async () => {
+      expect(
+        consoleSandboxBanner(
+          await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        ),
+      ).toEqual([
+        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  runsc:      /store/bin/runsc",
+        "  rootfs:     /store/images/kitchensink",
+        "  policy:     /store/policy.json",
+      ]);
+    });
+
+    it("returns the sidecar directories among those created only for a console on Docker", async () => {
+      // Strict: `toEqual` would pass a list carrying an `undefined` entry.
+      expect(
+        consoleDataDirectories(
+          await resolveConsoleConfig(ARGS, {}, "/console"),
+        ),
+      ).toStrictEqual([
+        "/console/.cf-harness-console/workspace",
+        "/console/.cf-harness-console/runs",
+        "/console/.cf-harness-console/cfc/results",
+        "/console/.cf-harness-console/cfc/invocation-context",
+      ]);
+      expect(
+        consoleDataDirectories(
+          await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        ),
+      ).toStrictEqual([
+        "/console/.cf-harness-console/workspace",
+        "/console/.cf-harness-console/runs",
+      ]);
+    });
+
+    it("returns a startup banner naming the sidecar directories for a console on Docker", async () => {
+      const banner = consoleStartupBanner(
+        await resolveConsoleConfig(
+          [
+            ...ARGS,
+            "--pattern-index-url",
+            "https://index.test/api",
+            "--skills-registry-url",
+            "https://skills.test",
+          ],
+          {},
+          "/console",
+        ),
+      );
+
+      expect(banner.slice(0, 5)).toEqual([
+        "\n  cf-harness console: http://127.0.0.1:8100",
+        "  space:      console-test",
+        "  fabric:     http://localhost:8000",
+        "  index:      https://index.test/api",
+        "  skills:     https://skills.test",
+      ]);
+      expect(banner.slice(-4)).toEqual([
+        "  results:    /console/.cf-harness-console/cfc/results",
+        "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
+        "  workspace:  /console/.cf-harness-console/workspace",
+        "  artifacts:  /console/.cf-harness-console/runs\n",
+      ]);
+    });
+
+    it("returns a startup banner naming the runsc driver, and no sidecar directory, for a console on the runsc runtime", async () => {
+      const banner = consoleStartupBanner(
+        await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+      );
+
+      expect(banner.slice(3, 5)).toEqual([
+        "  index:      (not configured)",
+        "  skills:     (not configured)",
+      ]);
+      expect(banner.slice(-6)).toEqual([
+        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  runsc:      /store/bin/runsc",
+        "  rootfs:     /store/images/kitchensink",
+        "  policy:     /store/policy.json",
+        "  workspace:  /console/.cf-harness-console/workspace",
+        "  artifacts:  /console/.cf-harness-console/runs\n",
+      ]);
+      expect(banner.some((line) => line.startsWith("  results:"))).toBe(false);
+    });
+
+    it("reports the runsc runtime's rows, and no Docker row, for a console on the runsc runtime", async () => {
+      // The process's environment names a store without a `config.json`, so
+      // that this host's own VM adds no row.
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      const rows = await withProcessVmHome(store, async () => {
+        const runscServer = new ConsoleServer(
+          await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+          () => server.service,
+        );
+
+        const response = await runscServer.handle(
+          getRequest("/api/health/detail"),
+        );
+        return (await response.json() as {
+          rows: readonly ConsoleHealthRow[];
+        }).rows;
+      }).finally(() => Deno.remove(store, { recursive: true }));
+
+      expect(
+        rows.filter((row) => row.group === "sandbox").map((
+          { id, label, value },
+        ) => ({ id, label, value })),
+      ).toEqual([
+        { id: "config.sandbox", label: "Sandbox", value: "runsc" },
+        { id: "sandbox.runsc", label: "Runsc Binary", value: "not checked" },
+        {
+          id: "sandbox.runtime",
+          label: "Sandbox Runtime",
+          value: "not checked",
+        },
+        {
+          id: "sandbox.rootfs",
+          label: "Sandbox Rootfs",
+          value: "not checked",
+        },
+      ]);
+    });
+  });
+
   describe("the module", () => {
     it("loads on a host with no FFI permission", async () => {
       // The console promises a machine without the SQLite native library can
@@ -679,6 +1456,7 @@ describe("console/server", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         artifactRoot: (await config()).artifactRoot,
+        protocol: harnessClientProtocolEcho(),
         sessions: [],
       });
     });
@@ -722,6 +1500,24 @@ describe("console/server", () => {
       );
 
       expect(response.status).toBe(403);
+    });
+
+    it("answers 403 to a browser's navigation and to another site's page, and 200 to the console's own page and to a client that is no browser", async () => {
+      const requests: Record<string, string>[] = [
+        { "sec-fetch-mode": "navigate", "sec-fetch-site": "none" },
+        { "sec-fetch-mode": "cors", "sec-fetch-site": "cross-site" },
+        { "sec-fetch-mode": "no-cors", "sec-fetch-site": "same-site" },
+        { "sec-fetch-mode": "cors", "sec-fetch-site": "same-origin" },
+        {},
+      ];
+      const statuses = [];
+      for (const headers of requests) {
+        statuses.push(
+          (await server.handle(getRequest("/api/health", headers))).status,
+        );
+      }
+
+      expect(statuses).toEqual([403, 403, 403, 200, 200]);
     });
   });
 
@@ -906,6 +1702,15 @@ describe("console/server", () => {
           Number.isFinite(Date.parse(row.checkedAt!))
         ),
       ).toBe(true);
+    });
+
+    it("defaults new tasks and the health display to `gpt-6.1-sol`", async () => {
+      const configured = await config();
+      expect(harnessSessionEngineOptions(configured).model).toBe("gpt-6.1-sol");
+      expect(
+        consoleHealthRows(configured).find((row) => row.id === "config.model"),
+      )
+        .toMatchObject({ value: "gpt-6.1-sol" });
     });
 
     it("sends every turn the reasoning effort the environment names, and reports where it came from", async () => {
@@ -1373,55 +2178,437 @@ describe("console/server", () => {
     });
 
     it("answers 410 `turn_canceled` for a turn that was canceled", async () => {
-      let finish: (() => void) | undefined;
-      const gate = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      const waitingServer = new ConsoleServer(
-        await config(),
-        (onEvent) =>
-          new HarnessInteractiveChatService({
-            createPromptLoop: () => ({
-              runTranscript: async (options) => {
-                await gate;
-                return await answeringLoop({} as never).runTranscript(options);
-              },
-            }),
-            now: advancingClock(),
-            onEvent,
-          }),
-      );
-      const page = await waitingServer.handle(getRequest("/"));
-      await page.body?.cancel();
-      const startedResponse = await waitingServer.handle(
-        jsonRequest("/api/task", { text: "keep working" }, {}),
-      );
-      const started = await startedResponse.json();
-      const canceled = await waitingServer.handle(
-        jsonRequest("/api/cancel", { sessionId: started.sessionId }, {}),
+      const held = await startHeldTurn();
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          reason: "stopped by the test",
+        }),
       );
       expect(canceled.status).toBe(200);
-      finish!();
-      await waitingServer.service.waitForTurn(
-        started.sessionId,
-        started.turnId,
-      );
+      await held.finish();
 
-      const response = await waitingServer.handle(getRequest(
-        `/api/turns/${started.turnId}/result`,
-        {},
+      const response = await held.server.handle(getRequest(
+        `/api/turns/${held.turnId}/result`,
       ));
 
       expect(response.status).toBe(410);
       expect(await response.json()).toEqual({
         code: "turn_canceled",
-        error: `turn ${started.turnId} was canceled`,
-        detail: "canceled from the console page",
+        error: `turn ${held.turnId} was canceled`,
+        detail: "stopped by the test",
       });
     });
   });
 
+  describe("POST /api/cancel", () => {
+    /** What the turn's result route gives as the reason it was canceled. */
+    const cancelReason = async (held: HeldTurn): Promise<unknown> => {
+      await held.finish();
+      const response = await held.server.handle(getRequest(
+        `/api/turns/${held.turnId}/result`,
+      ));
+      expect(response.status).toBe(410);
+      return (await response.json()).detail;
+    };
+
+    it("records the reason the caller gives for the cancel", async () => {
+      const held = await startHeldTurn();
+
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          turnId: held.turnId,
+          reason: "stopped from the Weaver pill",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped from the Weaver pill");
+    });
+
+    it("records only the route for a cancel that gives no reason", async () => {
+      const held = await startHeldTurn();
+
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", { sessionId: held.sessionId }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe(
+        "canceled by a request to the console",
+      );
+    });
+
+    it("refuses a turn id that is not a string, and leaves the turn running", async () => {
+      const held = await startHeldTurn();
+
+      for (const turnId of [7, null]) {
+        const refused = await held.server.handle(
+          jsonRequest("/api/cancel", { sessionId: held.sessionId, turnId }),
+        );
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: "turnId, when given, must be a string",
+        });
+      }
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          turnId: held.turnId,
+          reason: "stopped by the test",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped by the test");
+    });
+
+    it("refuses a reason that is not a non-empty string, and leaves the turn running", async () => {
+      const held = await startHeldTurn();
+
+      for (const reason of [42, "", "  ", null]) {
+        const refused = await held.server.handle(
+          jsonRequest("/api/cancel", { sessionId: held.sessionId, reason }),
+        );
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: "reason, when given, must be a non-empty string",
+        });
+      }
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          reason: "stopped by the test",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped by the test");
+    });
+  });
+
+  describe("POST /api/client-actions", () => {
+    it("returns 400 for malformed JSON before starting or settling a turn", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/client-actions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
+    const loomId = "loom-0123456789abcdef";
+
+    /**
+     * A server whose model loop asks the client to open a loom through the
+     * door the service hands it, then waits for that answer.
+     */
+    const askingServer = async (
+      actions: readonly unknown[] = [{ kind: "open_loom", loomId }],
+    ) => {
+      const asked = Promise.withResolvers<{
+        outcomes: Promise<readonly Record<string, unknown>[]>;
+      }>();
+      const options: Record<string, unknown>[] = [];
+      let ids = 0;
+      const server = new ConsoleServer(
+        await config(),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            randomUUID: () => `id-${++ids}`,
+            createPromptLoop: (loopOptions) => {
+              options.push(loopOptions as unknown as Record<string, unknown>);
+              return {
+                runTranscript: async (run) => {
+                  const request = (loopOptions as {
+                    requestClientActions?: (
+                      actions: readonly unknown[],
+                      signal?: AbortSignal,
+                    ) => Promise<readonly Record<string, unknown>[]>;
+                  }).requestClientActions;
+                  if (request !== undefined) {
+                    const outcomes = request(actions, run.signal);
+                    asked.resolve({ outcomes });
+                    await outcomes;
+                  }
+                  return await answeringLoop({} as never).runTranscript(run);
+                },
+              };
+            },
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      /** The id the service minted for the one action this loop asked for. */
+      const actionId = (sessionId: string): string =>
+        server.service.events(sessionId).map((e) => e.event).find((e) =>
+          e.kind === "client_action_requested"
+        )!.actionId;
+      return { server, asked, options, actionId };
+    };
+
+    it("settles a pending action through the service and answers 200", async () => {
+      const { server, asked, actionId } = await askingServer();
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "open it", clientActions: true }),
+      )).json();
+      const { outcomes } = await asked.promise;
+
+      const response = await server.handle(jsonRequest("/api/client-actions", {
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+        outcome: "done",
+        result: "opened",
+      }));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(await outcomes).toEqual([
+        {
+          action: { kind: "open_loom", loomId },
+          outcome: "done",
+          result: "opened",
+        },
+      ]);
+      const events = server.service.events(started.sessionId).map((e) =>
+        e.event
+      );
+      expect(events.filter((e) => e.kind === "client_action_requested"))
+        .toHaveLength(1);
+      expect(events.filter((e) => e.kind === "client_action_resolved"))
+        .toHaveLength(1);
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    it("answers 404 for an unknown action, 409 for a settled one, and 400 for a bad body", async () => {
+      const { server, asked, actionId } = await askingServer();
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "open it", clientActions: true }),
+      )).json();
+      await asked.promise;
+      const answer = (body: unknown) =>
+        server.handle(jsonRequest("/api/client-actions", body));
+
+      const unknown = await answer({
+        sessionId: started.sessionId,
+        actionId: "missing",
+        outcome: "done",
+      });
+      expect(unknown.status).toBe(404);
+      expect((await unknown.json()).error.code).toBe("unknown_action");
+
+      expect(
+        (await answer({
+          sessionId: started.sessionId,
+          actionId: actionId(started.sessionId),
+          outcome: "declined",
+        })).status,
+      ).toBe(200);
+      const again = await answer({
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+        outcome: "done",
+      });
+      expect(again.status).toBe(409);
+      expect((await again.json()).error.code).toBe("action_resolved");
+
+      for (
+        const body of [
+          {},
+          { sessionId: started.sessionId },
+          {
+            sessionId: started.sessionId,
+            actionId: actionId(started.sessionId),
+            outcome: "maybe",
+          },
+          {
+            sessionId: started.sessionId,
+            actionId: actionId(started.sessionId),
+            outcome: "done",
+            result: "x".repeat(501),
+          },
+        ]
+      ) {
+        expect((await answer(body)).status).toBe(400);
+      }
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    /** A typed-command wire fixture, as the Weaver's Swift tests read it. */
+    const wire = (name: string): Record<string, unknown> =>
+      JSON.parse(
+        Deno.readTextFileSync(
+          fromFileUrl(
+            new URL(
+              `../fixtures/client-command-wire/${name}.json`,
+              import.meta.url,
+            ),
+          ),
+        ),
+      );
+    const wireAction = (name: string) =>
+      (wire(name).event as { action: unknown }).action;
+
+    it("settles a typed command with its settlement body, and takes a resend without a second event", async () => {
+      const { server, asked, actionId } = await askingServer([
+        wireAction("request-invoke-query"),
+      ]);
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "what is here", clientActions: true }),
+      )).json();
+      const { outcomes } = await asked.promise;
+      const body = {
+        ...wire("resolve-executed-success"),
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+      };
+
+      const response = await server.handle(
+        jsonRequest("/api/client-actions", body),
+      );
+      expect(response.status).toBe(200);
+      const resend = await server.handle(
+        jsonRequest("/api/client-actions", body),
+      );
+      expect(resend.status).toBe(200);
+      const [outcome] = await outcomes;
+      expect(outcome.settlement).toMatchObject({
+        status: "executed",
+        outcome: { ok: true, transportStatus: 200, id: "loom.inspect" },
+      });
+      const resolved = server.service.events(started.sessionId)
+        .map((e) => e.event)
+        .filter((e) => e.kind === "client_action_resolved");
+      expect(resolved).toHaveLength(1);
+      expect(resolved[0]).toMatchObject({
+        outcome: "done",
+        settlement: { status: "executed", outcome: { bodyBytes: 378 } },
+      });
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    it("settles a catalog request, and answers 400 for a settlement of the wrong form", async () => {
+      const { server, asked, actionId } = await askingServer([
+        wireAction("request-list-commands"),
+      ]);
+      const started = await (await server.handle(
+        jsonRequest("/api/task", {
+          text: "what can you do",
+          clientActions: true,
+        }),
+      )).json();
+      const { outcomes } = await asked.promise;
+      const address = {
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+      };
+
+      const wrong = await server.handle(jsonRequest("/api/client-actions", {
+        ...wire("resolve-declined"),
+        ...address,
+      }));
+      expect(wrong.status).toBe(400);
+      expect((await wrong.json()).error.code).toBe("invalid_request");
+      const response = await server.handle(jsonRequest("/api/client-actions", {
+        ...wire("resolve-executed-catalog"),
+        ...address,
+      }));
+      expect(response.status).toBe(200);
+      const [outcome] = await outcomes;
+      expect(
+        (outcome.settlement as { catalog: { entries: unknown[] } }).catalog
+          .entries,
+      ).toHaveLength(3);
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    it("offers the tool only to a task that sets clientActions", async () => {
+      const { server, options } = await askingServer();
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "no actions please" }),
+      )).json();
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+      expect(options[0].requestClientActions).toBeUndefined();
+      expect(options[0].allowedToolIds as string[]).not.toContain(
+        "weaver_action",
+      );
+
+      const refused = await server.handle(
+        jsonRequest("/api/task", { text: "x", clientActions: "yes" }),
+      );
+      expect(refused.status).toBe(400);
+    });
+  });
+
   describe("POST /api/task", () => {
+    it("returns 400 for malformed JSON before starting or settling a turn", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/task", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
+    it("refuses a host whose protocol requires an unserved feature, before any session starts", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "what is on this loom?",
+        protocol: {
+          protocolVersion: 1,
+          requires: ["typed_commands", "browser_host"],
+        },
+      }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: "this console does not serve browser_host",
+        code: "protocol_mismatch",
+        protocol: harnessClientProtocolEcho(),
+        requestedVersion: 1,
+        missing: ["browser_host"],
+      });
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("answers 400 for a malformed protocol declaration", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "what is on this loom?",
+        protocol: { protocolVersion: "1", requires: [] },
+      }));
+
+      expect(response.status).toBe(400);
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("echoes its protocol on an accepted task", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "track my books",
+        clientActions: true,
+        protocol: {
+          protocolVersion: 1,
+          requires: ["client_actions", "typed_commands"],
+        },
+      }));
+
+      expect(response.status).toBe(200);
+      const started = await response.json();
+      expect(started.protocol).toEqual(harnessClientProtocolEcho());
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
     it("starts a follow-up turn in the session the request names", async () => {
       const started = await startTask({ text: "track my books" });
 
@@ -2004,6 +3191,22 @@ describe("console/server", () => {
   });
 
   describe("resolveConsoleConfig()", () => {
+    it("defaults to Sol 6.1 and preserves explicit model choices", async () => {
+      const flags = ["--fabric-identity", "k", "--fabric-space", "s"];
+      expect((await resolveConsoleConfig(flags, {}, "/console")).model)
+        .toBe("gpt-6.1-sol");
+      expect(
+        (await resolveConsoleConfig(flags, {
+          CF_HARNESS_MODEL: "gpt-5.6-sol",
+        }, "/console")).model,
+      ).toBe("gpt-5.6-sol");
+      expect(
+        (await resolveConsoleConfig([...flags, "--model", "gpt-6-luna"], {
+          CF_HARNESS_MODEL: "gpt-5.6-sol",
+        }, "/console")).model,
+      ).toBe("gpt-6-luna");
+    });
+
     it("throws naming both ways to supply a fabric session when neither is given", async () => {
       await expect(resolveConsoleConfig([], {}, "/console")).rejects.toThrow(
         "a fabric session is required",
@@ -2028,6 +3231,199 @@ describe("console/server", () => {
           "/console",
         ),
       ).rejects.toThrow("CF_HARNESS_CONSOLE_PORT must be a positive integer");
+    });
+
+    it("throws naming a misspelled restriction flag and the flag it meant", async () => {
+      await expect(
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--no-pattern-index-publsh",
+          ],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "`--no-pattern-index-publsh` is not a flag of the console. Did you " +
+          "mean `--no-pattern-index-publish`?",
+      );
+    });
+
+    it("throws naming a flag given no value, and not the word after it", async () => {
+      const refusal = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "k",
+          "--fabric-space",
+          "s",
+          "--workspace",
+          "--Secret prompt text",
+        ],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe(
+        "`--workspace` was given no value; a value starting with `-` needs " +
+          "the `--workspace=<value>` spelling",
+      );
+    });
+
+    it("throws for a port or a turn budget given no value, rather than using its default", async () => {
+      for (
+        const extra of [
+          ["--port", "-1"],
+          ["--max-model-turns", "-3"],
+          ["--port="],
+          ["--max-model-turns= "],
+        ]
+      ) {
+        const flag = extra[0].split("=")[0];
+        await expect(
+          resolveConsoleConfig(
+            ["--fabric-identity", "k", "--fabric-space", "s", ...extra],
+            {},
+            "/console",
+          ),
+        ).rejects.toThrow(`\`${flag}\` was given no value`);
+      }
+    });
+
+    it("throws naming no negative number standing alone", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", "-5x"],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "An argument starting with `-` is not a flag of the console.",
+      );
+    });
+
+    it("throws saying a negated switch takes no value", async () => {
+      await expect(
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--no-pattern-index-publish=true",
+          ],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow("`--no-pattern-index-publish` takes no value.");
+    });
+
+    it("throws naming a flag written after `--`, which it does not read", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", "--", "--bogus"],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "`--bogus` follows `--`, after which the console reads no flag; it " +
+          "takes no positional arguments.",
+      );
+    });
+
+    it("throws for a positional argument without repeating it", async () => {
+      for (
+        const extra of [["hunter2"], ["--", "--Secret words"], ["--", "-15"]]
+      ) {
+        const refusal = await resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", ...extra],
+          {},
+          "/console",
+        ).then(() => undefined, (error: Error) => error.message);
+
+        expect(refusal).toBe(
+          "The console takes no positional arguments, and reads no flag " +
+            "after `--`.",
+        );
+      }
+    });
+
+    it("throws naming an undeclared flag without the value given with it", async () => {
+      const refusal = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "k",
+          "--fabric-space",
+          "s",
+          "--api-key=sk-secret",
+        ],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe("`--api-key` is not a flag of the console.");
+    });
+  });
+
+  describe("consoleHelpText()", () => {
+    it("returns usage naming every flag for `--help` or `-h`, whatever else is on the line", () => {
+      for (
+        const args of [["--help"], ["-h"], ["--port", "8100", "--bogus", "-h"]]
+      ) {
+        const text = consoleHelpText(args);
+
+        expect(text).toContain("--fabric-identity");
+        expect(text).toContain("--no-pattern-index-publish");
+        expect(text).toContain("README.md");
+      }
+    });
+
+    it("returns `undefined` for arguments that ask for no help", () => {
+      expect(consoleHelpText(["--fabric-identity", "k"])).toBeUndefined();
+    });
+
+    it("leaves `--help` and `-h` among the flags the console takes", () => {
+      expect(() => parseConsoleArgs(["--help", "-h"])).not.toThrow();
+    });
+
+    it("prints usage for `--help` rather than resolving a configuration", async () => {
+      // Resolving one would throw: no fabric session is named here.
+      await startConsoleServer(["--help"], {}, "/console");
+    });
+
+    it("refuses a flag whose value reads as help, rather than printing usage", async () => {
+      for (const help of ["-h", "--help"]) {
+        await expect(
+          startConsoleServer(["--port", help], {}, "/console"),
+        ).rejects.toThrow(
+          "`--port` was given no value; a value starting with `-` needs " +
+            "the `--port=<value>` spelling",
+        );
+      }
+    });
+
+    it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {
+      await expect(
+        startConsoleServer(["--workspace", "-hidden"], {}, "/console"),
+      ).rejects.toThrow(
+        "`--workspace` was given no value; a value starting with `-` needs " +
+          "the `--workspace=<value>` spelling",
+      );
+    });
+
+    it("refuses a dotted flag without the value of the flag before the dot", async () => {
+      const refusal = await startConsoleServer(
+        ["--fabric-identity", "/secret/key.pem", "--fabric-identity.x", "y"],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe(
+        "`--fabric-identity.x` is not a flag of the console. Did you mean " +
+          "`--fabric-identity`?",
+      );
     });
   });
 
@@ -2710,6 +4106,470 @@ describe("console/server", () => {
       );
 
       expect(response.status).toBe(415);
+    });
+  });
+
+  describe("the browser host routes", () => {
+    const PAGE = { url: "https://shop.example/", title: "Shop" };
+
+    /**
+     * A server whose one turn asks its browser host for a snapshot and answers
+     * with what the host returned, so a test can play the host's part over
+     * the routes.
+     */
+    const hostedServer = async (): Promise<{
+      server: ConsoleServer;
+      loopOptions: CreateHarnessPromptLoopOptions[];
+      results: (BrowserHostResult | undefined)[];
+    }> => {
+      const loopOptions: CreateHarnessPromptLoopOptions[] = [];
+      const results: (BrowserHostResult | undefined)[] = [];
+      const hosted = new ConsoleServer(
+        await configWithBrowserHost(),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            createPromptLoop: (options) => {
+              loopOptions.push(options);
+              return {
+                runTranscript: async (run) => {
+                  const result = await options.browserHost?.perform({
+                    action: "snapshot",
+                    interactive: true,
+                  });
+                  results.push(result);
+                  const answer = {
+                    role: "assistant" as const,
+                    content: result?.status === "ok"
+                      ? result.text ?? ""
+                      : `refused: ${result?.status}`,
+                  };
+                  const transcript = [...run.transcript, answer];
+                  await run.onTranscriptEvent?.({
+                    message: answer,
+                    transcript,
+                  });
+                  return {
+                    model: "gpt-test",
+                    finalAssistantText: answer.content,
+                    transcript,
+                    modelTurns: 1,
+                    runState: {} as HarnessPromptLoopResult["runState"],
+                  };
+                },
+              };
+            },
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      return { server: hosted, loopOptions, results };
+    };
+
+    /** Reads `stream` until what it has delivered contains `text`. */
+    const readUntil = async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      text: string,
+    ): Promise<string> => {
+      const decoder = new TextDecoder();
+      let received = "";
+      while (!received.includes(text)) {
+        const { value, done } = await reader.read();
+        if (done) {
+          throw new Error(`stream ended before ${text}: ${received}`);
+        }
+        received += decoder.decode(value);
+      }
+      return received;
+    };
+
+    it("returns a host token only to a task that declares a host", async () => {
+      const { server: hosted, loopOptions } = await hostedServer();
+
+      const plain = await server.handle(
+        jsonRequest("/api/task", { text: "no browser" }),
+      );
+      const plainBody = await plain.json();
+      await server.service.waitForTurn(plainBody.sessionId, plainBody.turnId);
+      const declared = await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: { aFieldThisConsoleDoesNotKnow: true },
+      }));
+      const declaredBody = await declared.json();
+
+      expect(plainBody.browserHostToken).toBeUndefined();
+      expect(typeof declaredBody.browserHostToken).toBe("string");
+      expect(loopOptions[0]?.browserHost).toBeDefined();
+      expect(loopOptions[0]?.allowedSubagentProfiles).toContain("browser");
+
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: declaredBody.turnId,
+          token: declaredBody.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+      await hosted.handle(jsonRequest("/api/browser-host/result", {
+        turnId: declaredBody.turnId,
+        token: declaredBody.browserHostToken,
+        id: "1",
+        result: { status: "ok", page: PAGE, text: "" },
+      }));
+      await readUntil(reader, "event: close");
+      await reader.cancel();
+      await hosted.service.waitForTurn(
+        declaredBody.sessionId,
+        declaredBody.turnId,
+      );
+    });
+
+    it("writes each liveness tick to an attached host's stream", async () => {
+      const { server: hosted } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+
+      hosted.ping();
+      const ticked = await readUntil(reader, ": 1\n\n");
+      await hosted.handle(jsonRequest("/api/browser-host/result", {
+        turnId: started.turnId,
+        token: started.browserHostToken,
+        id: "1",
+        result: { status: "ok", page: PAGE, text: "" },
+      }));
+      await readUntil(reader, "event: close");
+      await reader.cancel();
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(ticked).toContain(": 1\n\n");
+    });
+
+    it("returns 400 for a host route body that is not JSON or names no turn", async () => {
+      const empty = await server.handle(
+        new Request("http://127.0.0.1:8100/api/browser-host/stream", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      const notJson = await server.handle(
+        new Request("http://127.0.0.1:8100/api/browser-host/stream", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      const noTurn = await server.handle(
+        jsonRequest("/api/browser-host/result", { token: "t", id: "1" }),
+      );
+
+      expect(empty.status).toBe(400);
+      expect(await empty.json()).toEqual({ error: "request body is not JSON" });
+      expect(notJson.status).toBe(400);
+      expect(await notJson.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect(noTurn.status).toBe(400);
+      expect(await noTurn.json()).toEqual({ error: "turnId is required" });
+    });
+
+    it("returns 403 for a host declaration a console that allows none is sent, and gives it no browser children", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error:
+          "this console takes no browser host; an operator allows one with --allow-browser-host",
+      });
+      expect(
+        (await (await server.handle(getRequest("/api/policy"))).json())
+          .allowedSubagentProfiles,
+      ).not.toContain("browser");
+    });
+
+    it("runs a console's ordinary task without browser children, and gives a host's turn them", async () => {
+      const { server: hosted, loopOptions } = await hostedServer();
+
+      const plain = await (await hosted.handle(
+        jsonRequest("/api/task", { text: "no browser" }),
+      )).json();
+      await hosted.service.waitForTurn(plain.sessionId, plain.turnId);
+
+      expect(plain.error).toBeUndefined();
+      expect(loopOptions[0]?.browserHost).toBeUndefined();
+      expect(loopOptions[0]?.allowedSubagentProfiles).not.toContain(
+        "browser",
+      );
+      expect(
+        (await (await hosted.handle(getRequest("/api/policy"))).json())
+          .allowedSubagentProfiles,
+      ).not.toContain("browser");
+    });
+
+    it("returns 400 for a host declaration that is not an object", async () => {
+      const { server: hosted } = await hostedServer();
+      const response = await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: ["profileFields"],
+      }));
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "browserHost must be an object",
+      });
+    });
+
+    it("returns 413 for a host route body larger than a result may be, without reading the rest", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/browser-host/result", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "x".repeat(32 * 1024 * 1024 + 1),
+        }),
+      );
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        error: "request body is larger than 33554432 bytes",
+      });
+    });
+
+    it("carries an operation to the host and its result back to the run", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+
+      const refused = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: "not-the-token",
+        }),
+      );
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const second = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      const delivered = await readUntil(reader, "\n\n");
+      const posted = await hosted.handle(
+        jsonRequest("/api/browser-host/result", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+          id: "1",
+          result: { status: "ok", page: PAGE, text: '- button "Buy"' },
+        }),
+      );
+      const closing = await readUntil(reader, "event: close");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(refused.status).toBe(404);
+      expect(await refused.json()).toEqual({
+        error: "no browser host for that turn",
+      });
+      expect(stream.headers.get("content-type")).toBe("text/event-stream");
+      expect(second.status).toBe(409);
+      await second.body?.cancel();
+      expect(delivered).toBe(
+        `event: request\ndata: ${
+          JSON.stringify({
+            id: "1",
+            operation: { action: "snapshot", interactive: true },
+          })
+        }\n\n`,
+      );
+      expect(posted.status).toBe(200);
+      expect(closing).toContain("event: close");
+      expect(results).toEqual([
+        { status: "ok", page: PAGE, text: '- button "Buy"' },
+      ]);
+    });
+
+    it("answers 404 for a result under another token or for an id nobody waits on, and 400 for one that is not a result, which fails the operation", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+      const post = (id: string, result: unknown, token: string) =>
+        hosted.handle(jsonRequest("/api/browser-host/result", {
+          turnId: started.turnId,
+          token,
+          id,
+          result,
+        }));
+
+      const forged = await post(
+        "1",
+        { status: "ok", page: PAGE },
+        "not-the-token",
+      );
+      const unknown = await post(
+        "2",
+        { status: "ok", page: PAGE },
+        started.browserHostToken,
+      );
+      const malformed = await post(
+        "1",
+        { status: "ok" },
+        started.browserHostToken,
+      );
+      await readUntil(reader, "event: close");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(forged.status).toBe(404);
+      await forged.body?.cancel();
+      expect(unknown.status).toBe(404);
+      await unknown.body?.cancel();
+      expect(malformed.status).toBe(400);
+      await malformed.body?.cancel();
+      expect(results).toEqual([{
+        status: "failed",
+        message:
+          "the browser host answered with something that is not a result",
+      }]);
+    });
+
+    it("ends a turn's channel when the turn ends before its start returns, and when it fails to start or throws", async () => {
+      const attached: (HarnessBrowserHost | undefined)[] = [];
+      /** A service whose turn ends inside its own start, or never starts. */
+      class ShortTurnService extends HarnessInteractiveChatService {
+        readonly #onEvent: HarnessInteractiveChatEventListener;
+        readonly #start: "ends" | "refuses" | "throws";
+
+        constructor(
+          onEvent: HarnessInteractiveChatEventListener,
+          start: "ends" | "refuses" | "throws",
+        ) {
+          super({
+            createPromptLoop: () => {
+              throw new Error("no turn runs here");
+            },
+            onEvent,
+          });
+          this.#onEvent = onEvent;
+          this.#start = start;
+        }
+
+        override async startTurn(
+          requestId: string,
+          params: HarnessChatStartTurnParams,
+          extra: { browserHost?: HarnessBrowserHost } = {},
+        ): Promise<HarnessChatResponse<HarnessChatTurnStatus>> {
+          attached.push(extra.browserHost);
+          const turnId = params.turnId ?? "";
+          if (this.#start === "throws") {
+            throw new Error("this turn could not be started");
+          }
+          if (this.#start === "refuses") {
+            return createHarnessChatErrorResponse(requestId, {
+              code: "invalid_request",
+              message: "this turn does not start",
+            });
+          }
+          await this.#onEvent(createHarnessChatEventEnvelope({
+            sessionId: params.sessionId,
+            turnId,
+            sequence: 1,
+            event: { kind: "turn_canceled", turnId },
+          }));
+          const at = new Date().toISOString();
+          return createHarnessChatOkResponse(requestId, {
+            turnId,
+            status: "canceled",
+            startedAt: at,
+            updatedAt: at,
+          });
+        }
+      }
+      const task = async (start: "ends" | "refuses" | "throws") => {
+        const shortTurns = new ConsoleServer(
+          await configWithBrowserHost(),
+          (onEvent) => new ShortTurnService(onEvent, start),
+        );
+        const response = await shortTurns.handle(jsonRequest("/api/task", {
+          text: "use the web",
+          browserHost: {},
+        }));
+        return { server: shortTurns, response };
+      };
+
+      const ended = await task("ends");
+      const started = await ended.response.json();
+      const attach = await ended.server.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const refused = await task("refuses");
+      await refused.response.body?.cancel();
+      await expect(task("throws")).rejects.toThrow(
+        "this turn could not be started",
+      );
+
+      expect(attach.status).toBe(404);
+      await attach.body?.cancel();
+      expect(refused.response.ok).toBe(false);
+      expect(attached).toHaveLength(3);
+      for (const host of attached) {
+        expect(await host?.perform({ action: "reload" })).toEqual({
+          status: "session-ended",
+          message: "the turn has ended",
+        });
+      }
+    });
+
+    it("ends the run's outstanding operation when the host's stream ends", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+
+      await reader.cancel();
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(results).toEqual([{
+        status: "session-ended",
+        message: "the browser host's connection ended",
+      }]);
     });
   });
 });

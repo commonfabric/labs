@@ -8,6 +8,29 @@ function scan(sources: readonly string[][], path: readonly string[]): boolean {
   return sources.some((source) => isPrefix(source, path));
 }
 
+/** The distinct `sources` that overlap `path`, as a sorted list of keys. */
+function overlappingByScan(
+  sources: readonly string[][],
+  path: readonly string[],
+): string[] {
+  return [
+    ...new Set(
+      sources.filter((source) =>
+        isPrefix(source, path) || isPrefix(path, source)
+      ).map((source) => JSON.stringify(source)),
+    ),
+  ].sort();
+}
+
+/** What `index.overlapping(path)` returns, as a sorted list of keys. */
+function overlappingByIndex(
+  index: PathPrefixIndex,
+  path: readonly string[],
+): string[] {
+  return index.overlapping(path).map((source) => JSON.stringify(source))
+    .sort();
+}
+
 function indexOf(sources: readonly string[][]): PathPrefixIndex {
   const index = new PathPrefixIndex();
   for (const source of sources) index.add(source);
@@ -27,6 +50,9 @@ describe("path-prefix-index", () => {
           sources.some((source) =>
             isPrefix(source, query) || isPrefix(query, source)
           ),
+        );
+        expect(overlappingByIndex(index, query)).toEqual(
+          overlappingByScan(sources, query),
         );
         hits += Number(expected);
       }
@@ -64,6 +90,7 @@ describe("path-prefix-index", () => {
     expect(indexOf([]).hasPrefixOf([])).toBe(false);
     expect(indexOf([]).overlaps([])).toBe(false);
     expect(indexOf([]).overlaps(["*"])).toBe(false);
+    expect(indexOf([]).overlapping([])).toEqual([]);
   });
 
   it("takes a wildcard in the source as matching any segment", () => {
@@ -152,6 +179,9 @@ describe("path-prefix-index", () => {
           sources.some((source) =>
             isPrefix(source, path) || isPrefix(path, source)
           ),
+        );
+        expect(overlappingByIndex(index, path)).toEqual(
+          overlappingByScan(sources, path),
         );
         compared++;
       }

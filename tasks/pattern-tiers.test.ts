@@ -215,21 +215,14 @@ describe("isWritable", () => {
 describe("staleTableEntries", () => {
   it("accepts tables whose every entry matches something", () => {
     expect(
-      staleTableEntries([
-        "factory-outputs/lot-watch/main.tsx",
-        "gideon-tests/a.tsx",
-        "plain-array-callback-locals/main.tsx",
-        "scope-bug-computed-vnode-blank/main.tsx",
-        "scope-bug-ct1597-forward/MINIMAL-REPRO.tsx",
-        "scope-bug-ct1597-reduce/main.tsx",
-        "test/a.tsx",
-        "test/vnode-helpers.ts",
-        "cell-link.tsx",
-        "nested-map-ifelse-test.tsx",
-        "render-test.tsx",
-        "self-reference-test.tsx",
-        "vehicles.ts",
-      ]),
+      staleTableEntries(
+        ["fixtures/nested/main.tsx", "fixtures/helper.ts", "legacy.tsx"],
+        {
+          directories: { "fixtures/": "fixture" },
+          files: { "legacy.tsx": "legacy" },
+          untiered: { "fixtures/helper.ts": "Shared test helper." },
+        },
+      ),
     ).toEqual([]);
   });
 

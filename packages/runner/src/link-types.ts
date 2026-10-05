@@ -9,6 +9,7 @@ import {
   decodeJsonPointer,
   encodeJsonPointer,
 } from "@commonfabric/utils/json-pointer";
+import type { NonDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { parseCellReference, renderCellReference } from "./cell-reference.ts";
 import {
@@ -26,10 +27,7 @@ import {
   type URI,
 } from "./sigil-types.ts";
 import { arrayEqual } from "./path-utils.ts";
-import type {
-  IMemorySpaceAddress,
-  MemoryAddressPathComponent,
-} from "./storage/interface.ts";
+import type { IMemorySpaceAddress } from "./storage/interface.ts";
 
 export { decodeJsonPointer, encodeJsonPointer };
 
@@ -81,7 +79,9 @@ export type ScopeCapAtDepth = {
  */
 export type NormalizedLink = {
   id?: URI; // URI format with "of:" prefix
-  path: readonly MemoryAddressPathComponent[];
+  // Relative to the linked document's `value`, so a path rooted at the stored
+  // document is refused.
+  path: NonDocumentPath;
   space?: MemorySpace;
   scope?: LinkScope;
   schema?: JSONSchema;
@@ -166,9 +166,15 @@ export type NormalizedFullLink = NormalizedLink & {
   scope: CellScope;
 };
 
-export type ValuePath = readonly ["value", ...string[]];
+/**
+ * A path rooted at a stored document that reaches into its payload, so its
+ * first segment is the `value` member holding the payload. A path relative to
+ * the payload, as a normalized link's is, has no such segment.
+ */
+export type StoredValuePath = readonly ["value", ...string[]];
+
 export type IMemorySpaceValueAddress = IMemorySpaceAddress & {
-  path: ValuePath;
+  path: StoredValuePath;
 };
 
 /**

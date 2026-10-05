@@ -97,9 +97,9 @@ env-reachable
 ([EXPERIMENTAL_OPTIONS.md](../development/EXPERIMENTAL_OPTIONS.md)). When the
 runtime produces none, the response omits `receipt` — absent, never fabricated.
 
-**Not every receipt comes from `cf piece call`.** Shell clicks,
-background-piece-service runs, and pattern-internal chains all dispatch handlers
-and write receipts with deterministic ids: `queueSchedulerEvent`
+**Not every receipt comes from `cf piece call`.** Shell clicks and
+pattern-internal chains also dispatch handlers and write receipts with
+deterministic ids: `queueSchedulerEvent`
 (`packages/runner/src/scheduler/events.ts`, behind the `queueEvent` facade) sets
 `id = args.eventId ?? mintEventId(eventLink, originTx)`. The fallback branch is
 a per-transaction key plus a sequence, or a random UUID — so those receipts are
@@ -283,9 +283,9 @@ whatever it names, and `of:` is a URI scheme, not a hash tag — the schemed
 form is not a parseable tagged hash.
 
 **One seam reaches most callers.** The address-string paths that matter go
-through `entityIdFrom`: the CLI, the shell (`runtime-processor`), the
-background piece service, and slug resolution. Two residual cautions carry
-forward: anything keying on the *raw input string* has two keys per entity
+through `entityIdFrom`: the CLI, the shell (`runtime-processor`), and slug
+resolution. Two residual cautions carry forward: anything keying on the *raw
+input string* has two keys per entity
 now that two spellings resolve (the cell layer keys on the normalized URI and
 is fine; CLI-level raw-string comparisons are where to look), and the old
 hand-stripping workarounds remain correct, since stripping `of:` from an
@@ -400,8 +400,8 @@ body, the fix may belong in the runner rather than the client: the receipt cell
 is minted unconditionally at the top of a dispatch, before any branching, so its
 address is known before the body runs. Checking for an existing receipt there
 would let a replay return the original outcome without re-executing — and would
-cover shell clicks, background-service runs, and pattern-internal chains, not
-only callers holding a terminal.
+cover shell clicks and pattern-internal chains, not only callers holding a
+terminal.
 
 **Option C — keep the address.** Treat the receipt address as the thing worth
 persisting, and make losing it the caller's problem to avoid. Costs nothing and

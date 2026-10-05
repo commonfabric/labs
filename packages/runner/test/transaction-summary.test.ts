@@ -1,6 +1,9 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+
+import { toDocumentPath } from "@commonfabric/memory/v2";
+
 import {
   debugTransactionWrites,
   formatTransactionSummary,
@@ -260,7 +263,7 @@ describe("transaction-summary", () => {
           space: "did:key:test" as any,
           id: "of:abc123" as any,
           type: "application/json",
-          path: ["value", "count"],
+          path: toDocumentPath(["value", "count"]),
         },
         value: 42,
         previousValue: 10,
@@ -348,7 +351,7 @@ describe("transaction-summary", () => {
         space: "did:key:test" as any,
         id: "short-id" as any,
         type: "application/json",
-        path: ["nothing"],
+        path: toDocumentPath(["nothing"]),
       },
       value: null,
     }], [{
@@ -375,7 +378,7 @@ describe("transaction-summary", () => {
             space: "did:key:test" as any,
             id: "a-very-long-object-identifier" as any,
             type: "application/json",
-            path: ["long"],
+            path: toDocumentPath(["long"]),
           },
           value: longText,
         },
@@ -384,7 +387,7 @@ describe("transaction-summary", () => {
             space: "did:key:test" as any,
             id: "of:array123" as any,
             type: "application/json",
-            path: ["items"],
+            path: toDocumentPath(["items"]),
           },
           value: [1, 2, 3],
         },
@@ -393,7 +396,7 @@ describe("transaction-summary", () => {
             space: "did:key:test" as any,
             id: "of:object123" as any,
             type: "application/json",
-            path: ["details"],
+            path: toDocumentPath(["details"]),
           },
           value: { nested: { count: 1 } },
         },
@@ -402,7 +405,7 @@ describe("transaction-summary", () => {
             space: "did:key:test" as any,
             id: "of:boolean123" as any,
             type: "application/json",
-            path: ["done"],
+            path: toDocumentPath(["done"]),
           },
           value: true,
         },
@@ -437,7 +440,7 @@ describe("transaction-summary", () => {
             space: "did:key:test" as any,
             id: "of:null123" as any,
             type: "application/json",
-            path: ["nothing"],
+            path: toDocumentPath(["nothing"]),
           },
           value: null,
         }]),

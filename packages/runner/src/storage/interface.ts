@@ -28,6 +28,7 @@ import type {
   CommitClass,
   CommitPrecondition,
   DeliveryFailureClass,
+  DocumentPath,
   EntityDocument,
   EntityIdListOptions,
   EntityIdListResult,
@@ -50,6 +51,10 @@ import type {
   ViewInterest,
   ViewPlan,
 } from "@commonfabric/memory/v2";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { Immutable } from "@commonfabric/utils/types";
 
@@ -76,17 +81,22 @@ import type {
   CfcWriteFloorMode,
   ConsultedGrant,
   ConsultedPolicyManifest,
-  ImplementationIdentity,
   PostCommitSideEffect,
   RuntimeWritePolicyAuthorization,
-  TrustSnapshot,
   WritePolicyInput,
 } from "../cfc/mod.ts";
 import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
+import type {
+  PendingCommitContext,
+  SpaceStorageDiagnostic,
+  StorageDiagnostics,
+} from "./diagnostics.ts";
+
 export type {
   ACL,
   DID,
@@ -115,7 +125,9 @@ export interface IStorageError {
 /** Typed producer evidence for a required replica load that failed before an
  * at-most-once handler could dispatch. The scheduler receives typed failure
  * evidence; an error name may inform `failureClass`, but diagnostic text never
- * constitutes policy evidence or durable `permanentEvidence`. */
+ * constitutes policy evidence or durable `permanentEvidence`. A name is
+ * permanent evidence only for a refusal this process decides by construction
+ * (`IForeignScopedReadRefusedError`). */
 export type ReplicaLoadFailure = {
   failureClass: DeliveryFailureClass;
   recoveryEpoch: string;
@@ -148,13 +160,14 @@ export const toReplicaLoadFailureError = (
     aclRevision?: unknown;
   } | undefined;
   const name = typeof named?.name === "string" ? named.name : "";
+  const foreignScopedReadRefused = name === "ForeignScopedReadRefusedError";
   const failureClass: DeliveryFailureClass = name === "SessionRevokedError"
     ? "session-revoked"
     : name === "ConnectionError"
     ? "connection"
     : name === "AuthorizationError"
     ? "authorization"
-    : name === "ProtocolError"
+    : name === "ProtocolError" || foreignScopedReadRefused
     ? "protocol"
     : name === "TimeoutError"
     ? "timeout"
@@ -165,10 +178,13 @@ export const toReplicaLoadFailureError = (
   return new ReplicaLoadFailureError({
     failureClass,
     recoveryEpoch: permanentAclEvidence ? `acl:${aclRevision}` : recoveryEpoch,
-    // A name is not durable evidence. Authorization becomes permanent only
-    // when the memory server supplies the current ACL revision. Versioned
-    // protocol validators construct ReplicaLoadFailureError directly.
-    permanentEvidence: permanentAclEvidence,
+    // A name off the wire is not durable evidence. Authorization becomes
+    // permanent only when the memory server supplies the current ACL
+    // revision. A foreign scoped read refusal is minted by this process from
+    // the read's scope and its serving posture, so the same read is refused
+    // every time. Versioned protocol validators construct
+    // ReplicaLoadFailureError directly.
+    permanentEvidence: permanentAclEvidence || foreignScopedReadRefused,
   }, cause);
 };
 
@@ -319,6 +335,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
 
   /**
+   * Chooses how the sessions this manager opens from here on reach their
+   * hosts: over one connection per host that they share, authenticated once
+   * per key, or over one connection per space. A manager without the method
+   * has no connections to share.
+   *
+   * @throws If a session is already open and the choice would change: the
+   * sessions would then be split across the two.
+   */
+  setSharedMemoryConnection?(enabled: boolean): void;
+
+  /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space
    * (federation site table). Optional: managers without remote resolution
    * (emulated/test) simply don't implement it. Returns true when the
@@ -330,53 +357,36 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   registerSpaceHost?(space: MemorySpace, host: string): boolean;
 
+  /**
+   * Record a host hint as {@link registerSpaceHost} does, and say why when it
+   * is refused. Optional: a manager may implement either method, or both
+   * with the same verdict.
+   */
+  registerSpaceHostDetailed?(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration;
+
   /** Changes memory-message compression for live and later remote sessions. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
 
   /**
-   * Register a derived space identity for fresh-space ACL genesis. Optional:
-   * storage managers without ACL bootstrap support may ignore this capability.
-   * The identity is never used as the principal for ordinary storage work.
+   * Creates a space and returns its DID, once the space's genesis commit is
+   * confirmed. The space's key is generated from random data, and signs one
+   * commit that writes `acl` as the space's access-control document and, when
+   * `root` is given, reserves the space's root pattern. The key is used for
+   * nothing else, and is never stored, returned, or logged.
    *
-   * `options.owner` names the genesis ACL's OWNER (OW31, RULED 2026-08-18:
-   * a provisioned space's first commit is signed by the space's own keys
-   * and names the ACTING user OWNER — the serving identity appears nowhere
-   * in the ACL). Absent, the genesis owner is the manager's own signer —
-   * the active user on a client, byte-identical to the pre-OW31 shape.
+   * `acl` must name a concrete OWNER, and must grant this manager's signer at
+   * least READ if this manager will open the space. `root` requires a host
+   * that supports root reservations; its complete source, cause, arguments,
+   * and attached source roots are snapshotted in the genesis receipt, and a
+   * later mount that declares a root intent must match it.
    *
-   * `options.genesisAcl` is the exact document a fresh space is born with
-   * (its first and only commit; no intermediate default is ever written),
-   * validated by the memory server's genesis admission rather than here.
-   * It is a demand: the open proceeds only if the space is fresh or is
-   * already owned exactly as the document says (grants below OWNER are the
-   * owner's to evolve), and is refused otherwise — never silently entered
-   * under someone else's ACL. It never reaches the home arm.
-   * The signer that will open the space must be granted at least READ by
-   * it. Supplying it together with `owner` in one registration is refused;
-   * a later registration for the same space replaces an earlier one, but
-   * not once the space's first mount has begun. A manager that cannot
-   * bootstrap an ACL refuses it rather than accept a document it would
-   * never write.
-   *
-   * `options.genesisRoot` requires an explicit `genesisAcl`. Its complete
-   * source, cause, arguments, and attached source roots are snapshotted in
-   * the genesis receipt and authenticated on every mount. Later mounts must
-   * match that immutable reservation.
+   * @throws If the memory server refuses the genesis commit. No DID is
+   *   returned then, and the space that was being created is abandoned.
    */
-  registerSpaceIdentity?(
-    identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
-  ): void;
-
-  /**
-   * Force `space`'s provider session — and with it any fresh-space ACL
-   * genesis the manager's session factory performs — to have completed
-   * (OW31 B4). Optional: managers without ACL bootstrap support resolve
-   * after a plain session mount; the serving loop's commit step calls it
-   * for `creation`-granted foreign targets so the genesis lands before
-   * the sink's data batch (protocol.md §2b's genesis clause).
-   */
-  ensureSpaceInitialized?(space: MemorySpace): Promise<void>;
+  createSpace?(acl: ACL, root?: GenesisRoot): Promise<MemorySpace>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -430,7 +440,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * connection cannot resolve ahead of fan-out the server sent earlier on it.
    * Multi-runtime test harnesses use it to make one runtime observe another's
    * committed state deterministically; a manager with no open remote
-   * connection resolves immediately.
+   * connection resolves immediately. A space under a permanent authorization
+   * denial (see `authorizationError()`), or refused one by this call's own
+   * round trip, is passed over rather than failing the whole call: the server
+   * sends nothing on a session it refuses. Any other failure, a retriable
+   * denial among them, fails the call.
    */
   pullOpenSpacesToHead(): Promise<void>;
 
@@ -472,7 +486,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * invisible to the barrier. The registration must tolerate rejection and
    * drop the promise once it settles.
    */
-  trackPendingCommit(promise: Promise<unknown>): void;
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void;
+
+  /** Snapshot pending work without waiting for durability or starting I/O. */
+  getDiagnostics?(): StorageDiagnostics;
 
   /**
    * Whether any registered commit is still unconfirmed. Every write flows
@@ -619,14 +639,34 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<EventAttentionResolveResult>;
 
   /**
-   * THE SESSION REMOUNT's trigger: an admitted commit touched `space`'s ACL
-   * document. A space session this manager holds — revoked or denied by an
-   * EARLIER ACL verdict — is dropped so the next load re-opens it, because
-   * the ACL is the only input that decision has. Never widens authority: a
-   * genuine de-authorization is refused again at `session.open`. Implemented
-   * by the v2 StorageManager; the serving loop's host is its only caller.
+   * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
+   * `space`'s ACL document. A space session this manager holds — revoked or
+   * denied by an EARLIER ACL verdict — is dropped so the next load re-opens
+   * it, because the ACL is the only input that decision has. Never widens
+   * authority: a genuine de-authorization is refused again at `session.open`.
+   * Implemented by the v2 StorageManager; the serving loop's host is its only
+   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
+   * such commit.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
+
+  /**
+   * Asks the memory server once more for a space it refused this manager,
+   * for a host that has reason to think the verdict changed, such as word
+   * that the principal was granted access. The other trigger of the session
+   * remount besides `noteSpaceAclChanged()`: it opens the session again
+   * through the same `session.open` admission the first attempt went
+   * through, so it can admit only what that admission would.
+   *
+   * Resolves once the server has decided. An admission clears
+   * `spaceAccessError()`, notifies `subscribeSpaceAccessChange()` observers,
+   * and repeats the loads the refusal failed. A refusal leaves the space
+   * refused, as it was, and does not reject. Any other failure, of the open
+   * or of a repeated load, rejects, and a later call repeats the loads that
+   * have not yet succeeded. Does nothing for a space this manager has not
+   * opened, or one it holds no refusal for.
+   */
+  retrySpaceAccess?(space: MemorySpace): Promise<void>;
 
   /**
    * Load cell from storage. Will also subscribe to new changes.
@@ -854,6 +894,33 @@ export const hasOperationStorageCapability = (
 };
 
 /**
+ * A storage provider that reaches the memory server's presence rooms
+ * (memory-v2 `04-protocol.md` §4.13) through its space session. The
+ * membership outlives the session it was joined through: a reconnect rejoins
+ * it, and a replacement of the provider's replica rejoins it on the
+ * replacement's session, each time delivering a fresh `snapshot` with the id
+ * the relay assigned there and republishing the last record.
+ */
+export interface IPresenceStorageCapability {
+  /**
+   * Joins `room` under this provider's space, delivering the room's events
+   * to `observer`, and returns the membership.
+   */
+  joinPresenceRoom(
+    room: string,
+    observer: (event: PresenceEvent) => void,
+  ): Promise<PresenceMembership>;
+}
+
+export const hasPresenceStorageCapability = (
+  value: unknown,
+): value is IPresenceStorageCapability => {
+  if (value === null || value === undefined) return false;
+  const candidate = value as Partial<IPresenceStorageCapability>;
+  return typeof candidate.joinPresenceRoom === "function";
+};
+
+/**
  * Extension of {@link IStorageManager} which is supposed to merge into
  * {@link IStorageManager} in the future. It provides capability to subscribe
  * to the storage notifications.
@@ -1069,7 +1136,8 @@ export interface IWriteOptions {
    * object key or punching an array hole — instead of storing a value.
    * `value` must be `undefined`. Without this flag, writing `undefined`
    * stores `undefined` as a real value: present-but-undefined is distinct
-   * from absent. A root-path delete retracts the document.
+   * from absent. A root-path delete retracts the document, and a delete of
+   * an array's `length` empties the array.
    */
   delete?: boolean;
 
@@ -1188,6 +1256,16 @@ export interface IStorageTransaction {
    * their reads. Event handlers retain ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
+
+  /**
+   * Whether this transaction's writes are derived from its reads, as a
+   * reactive computation's are, so that running it again reproduces them.
+   * When the space refuses such a write for lack of a grant, a replica may
+   * keep it as a local fold rather than revert it: it does so for each
+   * document the write sits directly on the confirmed version it was made
+   * over, and reverts the write to any other.
+   */
+  derivedWrites?: boolean;
 
   /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
@@ -1366,19 +1444,18 @@ export interface IStorageTransaction {
   ): void;
 
   /**
-   * Abandon the mergeable fast path for the arrays covered by `address`. A
-   * caller that rewrites an array in a way a recorded mergeable op cannot
-   * represent — an in-place reshape such as sort/reverse/splice after a push, or
-   * a whole-value overwrite — calls this so the commit emits the whole-array
-   * diff (the correct local value) instead of a tail-relative op whose recorded
-   * tail no longer identifies the appended elements.
+   * Abandon the mergeable fast path for the values covered by `address`, for
+   * the rest of the transaction. A caller that writes a value whole — a
+   * whole-value overwrite, or an in-place reshape such as sort/reverse/splice
+   * — calls this so the commit emits the whole-value diff (the correct local
+   * value) instead of an op. The write says what the value is, and an op
+   * resolves against whatever the store holds.
    *
-   * This covers every recorded op AT or BENEATH `address`, since a write to an
-   * enclosing object rewrites the arrays inside it too, and nothing above it, so
-   * a write beneath an array (an element edit) leaves that array's op alone. A
-   * path carrying no op yet is left untouched — not because a reshape before an
-   * op is harmless, but because that case is caught at commit instead, when the
-   * op's recorded tail is checked against the value it claims to describe.
+   * This covers every op AT or BENEATH `address`, since a write to an
+   * enclosing object rewrites the arrays inside it too, and nothing above it,
+   * so a write beneath an array (an element edit) leaves that array's op
+   * alone. An op recorded ahead of the write is dropped, and one that would
+   * be recorded after it is refused.
    */
   poisonMergeableOp?(address: IMemorySpaceAddress): void;
 
@@ -1602,6 +1679,12 @@ export interface IStorageTransaction {
   /**
    * Optional batched write hook for transactions that can apply multiple path
    * writes more efficiently than one-at-a-time.
+   *
+   * Not atomic: a batch that fails, whether a write returns an error or
+   * something throws, may leave some of its writes applied, and which ones is
+   * unspecified. The writes it does apply are applied consistently: the
+   * transaction's reads, its write details and its commit all include them. A
+   * caller that must not land part of a batch aborts the transaction.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
@@ -1792,6 +1875,24 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * the document itself.
    */
   stageContentAddressedDocument(space: MemorySpace, value: FabricValue): URI;
+
+  /**
+   * Mints the runtime secret called `name` in `space` when no trusted value
+   * is stored: a random value, written under the secret's label and writer
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
+   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
+   * one writer of the reserved namespace, which refuses every unprivileged
+   * write, and callable only with the runtime's authorization, since code
+   * that minted a secret in its own transaction could read it back there
+   * before its label is stored.
+   *
+   * @throws Error without the runtime's authorization.
+   */
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void;
 
   tx: IStorageTransaction;
 
@@ -2100,6 +2201,21 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   recordCfcStructureContainer(address: CfcAddress): void;
 
   /**
+   * Records a destination the runtime wrote a whole value to, so the flow
+   * stamp lands there rather than only at the paths the diff changed. See
+   * `CfcTxState.assertedValueRoots`. `reference` names the document root a
+   * pointer the runtime stored at `address` refers to (a custody box, or an
+   * entity anchoring split out). Dropped unless
+   * `authorization` carries the runtime's mark. The address is
+   * `deepFreeze()`d on entry.
+   */
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
+  ): void;
+
+  /**
    * Settles whether this transaction is CFC-relevant — the flow-label
    * relevance probe, then the sink-request ceiling probe — and runs
    * `prepareCfc()` when it is.
@@ -2114,7 +2230,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareForCommit(): void;
 
   /**
-   * Runs the same preparation with cooperative yields between targets.
+   * Runs the same preparation with cooperative yields between targets and
+   * within staged-reference label derivation.
    * Cancellation aborts the uncommitted transaction. The caller must await
    * completion before committing; activity during a yield aborts the attempt.
    */
@@ -2130,17 +2247,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareCfc(): string;
 
   /**
-   * Sets (or clears) the CFC trust snapshot for this transaction. See
-   * ownership note above.
+   * Marks the values the runtime initializes in this transaction as
+   * attributed to the acting principal (`CfcTxState.attributedInitialization`):
+   * the runner marks the transaction of a handler run the principal invoked,
+   * and a start deferred from one. The mark takes the runtime's authorization,
+   * and a call without it does nothing.
    */
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void;
-
-  /**
-   * Sets (or clears) the implementation identity that will be folded
-   * into the CFC digest for this transaction. See ownership note above.
-   */
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
   ): void;
 
   /**
@@ -2169,9 +2283,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Whether `input` was recorded by the runtime, under
    * `runtimeWritePolicyAuthorization`.
    *
-   * `recordCfcWritePolicyInput` is on this interface, and pattern-authored
-   * code reaches the transaction its cells are bound to, so an input's own
-   * fields say only what its recorder wrote. A gate that ACTS on an input
+   * `recordCfcWritePolicyInput` is on this interface, so any code holding
+   * the transaction can record an input, and an input's own fields say only
+   * what its recorder wrote. A gate that ACTS on an input
    * asks this; a gate that measures one does not need to.
    */
   isRuntimeWritePolicyInput(input: WritePolicyInput): boolean;
@@ -2772,7 +2886,8 @@ export type WriteError =
   | IUnsupportedMediaTypeError
   | InactiveTransactionError
   | IReadOnlyAddressError
-  | ITypeMismatchError;
+  | ITypeMismatchError
+  | IInvalidArrayLengthError;
 
 export type WriterError =
   | InactiveTransactionError
@@ -2835,6 +2950,14 @@ export type IMemoryAddress = {
 
 export type IMemorySpaceAddress = IMemoryAddress & {
   space: MemorySpace;
+};
+
+/**
+ * A memory address as the transaction journal records it: its path is rooted
+ * at the stored document, so user data sits under `value`.
+ */
+export type IMemorySpaceDocumentAddress = IMemorySpaceAddress & {
+  path: DocumentPath;
 };
 
 export type MemoryAddressPathComponent = string;
@@ -2918,6 +3041,9 @@ export interface ViewInterestLease {
 }
 
 export interface ISpaceReplica extends ISpace {
+  /** Existing session progress without starting I/O or awaiting commits. */
+  getDiagnostics?(): SpaceStorageDiagnostic;
+
   /**
    * Return a state for the requested entry or returns `undefined` if replica
    * does not have it. The state carries `since`, the commit sequence the
@@ -3244,6 +3370,12 @@ export interface ISpaceReplica extends ISpace {
 }
 
 /**
+ * Why a wave withdrew a sealed contribution. A contribution drop is retryable
+ * in place; an explicit wave abandon is expected enclosing-lifecycle teardown.
+ */
+export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
+
+/**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
  * sealed commit's pending writes promote to confirmed at that seq.
@@ -3268,9 +3400,8 @@ export type SealedCommitVerdict =
       message: string;
       superseded?: true;
       /** Structured withdrawal classification for consumers that must not
-       * parse diagnostic prose. A contribution drop is retryable in place;
-       * an explicit wave abandon is expected enclosing-lifecycle teardown. */
-      cause?: "contribution-dropped" | "wave-abandoned";
+       * parse diagnostic prose. */
+      cause?: WaveWithdrawalCause;
     };
   };
 
@@ -3306,7 +3437,18 @@ export type PullError =
   | IQueryError
   | IStoreError
   | IConnectionError
-  | IAuthorizationError;
+  | IAuthorizationError
+  | IForeignScopedReadRefusedError;
+
+/** A serving runtime's refusal of a scoped read of a space other than its home
+ * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
+ * scope and the runtime's serving posture decide it, never transport or session
+ * state, so the same read from the same runtime is refused every time. A served
+ * event whose required load meets it terminalizes at once instead of spending
+ * the delivery-failure budget (events.md §5). */
+export interface IForeignScopedReadRefusedError extends IStorageError {
+  readonly name: "ForeignScopedReadRefusedError";
+}
 
 export interface IStoreError extends IStorageError {
   readonly name: "StoreError";
@@ -3328,7 +3470,7 @@ export interface TransactionReactivityLog {
 }
 
 export interface TransactionWriteDetail {
-  address: IMemorySpaceAddress;
+  address: IMemorySpaceDocumentAddress;
   value?: FabricValue;
   previousValue?: FabricValue;
 
@@ -3386,10 +3528,10 @@ export interface NativeStorageCommit {
 
 export type Activity = Variant<{
   read: IReadActivity;
-  write: IMemorySpaceAddress;
+  write: IMemorySpaceDocumentAddress;
 }>;
 
-export interface IReadActivity extends IMemorySpaceAddress {
+export interface IReadActivity extends IMemorySpaceDocumentAddress {
   meta: Metadata;
   nonRecursive?: boolean;
 
@@ -3417,7 +3559,7 @@ export interface IReadActivity extends IMemorySpaceAddress {
  * the transaction inspection surface sees. `journalIndex` is the shared
  * activity clock (see {@link IReadActivity.journalIndex}).
  */
-export interface IWriteAttempt extends IMemorySpaceAddress {
+export interface IWriteAttempt extends IMemorySpaceDocumentAddress {
   journalIndex: number;
 }
 
@@ -3451,6 +3593,20 @@ export interface IReadOnlyAddressError extends IStorageError {
   readonly address: IMemoryAddress;
 
   from(space: MemorySpace): IReadOnlyAddressError;
+}
+
+/**
+ * Error returned when a write to an array's `length` would grow the array to
+ * `2 ** 32` or more, past the longest an array can be. Like a type mismatch,
+ * it would persist if the transaction were retried.
+ */
+export interface IInvalidArrayLengthError extends IStorageError {
+  readonly name: "InvalidArrayLengthError";
+
+  /** The address written, whose path ends in `length`. */
+  readonly address: IMemoryAddress;
+
+  from(space: MemorySpace): IInvalidArrayLengthError;
 }
 
 /**

@@ -6,7 +6,7 @@
 - AI-assisted specification
 
 ## Last Updated
-2026-07-17
+2026-09-28
 
 This document is the sole authoritative SES sandboxing specification for the
 current reimplementation effort. It supersedes prior divergence notes and
@@ -363,7 +363,7 @@ the built-ins directly, the runtime coarsens the clock to one-second resolution
 inside a handler, and it forbids any ambient clock/entropy read in a
 lift/computed or at pattern body.
 
-Version 1 of the allowed domain is a deliberate subset of
+Version 2 of the allowed domain is a deliberate subset of
 `@commonfabric/api`'s `FabricValue`:
 
 - `null`
@@ -379,10 +379,14 @@ Version 1 of the allowed domain is a deliberate subset of
   `sticky === false`)
 - exact intrinsic `Map` instances whose keys and values are allowed values
 - exact intrinsic `Set` instances whose elements are allowed values
+- `FabricPrimitive` instances (such as `FabricEpochNsec` and
+  `FabricDurationNsec`), kept as they are: every one is frozen when it is
+  constructed and holds its state privately, so it is already inert, as a
+  JavaScript primitive is
 
-Future widening of this set beyond the above, including temporal primitives or
+Future widening of this set beyond the above, including `FabricInstance`s or
 other richer `FabricValue` members, requires an explicit spec revision and
-validator version bump. The v1 verifier MUST NOT silently widen with upstream
+validator version bump. The v2 verifier MUST NOT silently widen with upstream
 `FabricValue` changes.
 
 This boundary is about executable behavior and authority, not about forcing
@@ -398,7 +402,7 @@ The default rejected domain includes:
 - `Promise`
 - `Error`
 - `Date`
-- class instances
+- class instances, other than `FabricPrimitive`s
 - `Map` / `Set` subclasses
 - platform capability objects
 
@@ -1034,6 +1038,57 @@ record simply copies the already-frozen namespace onto its module exports.
 Mutable state may only be introduced through explicit runtime-managed
 authorities returned later, not by mutating the shared runtime-module export
 graph itself.
+
+#### 5.3.3 Runtime Cells
+
+Pattern code holds live runtime cells. A handler or lift argument holds one
+wherever its schema says `asCell`, a builder function returns them, and a cell
+method that returns a cell returns another. A cell is therefore an authority
+surface, and the runtime treats it as a capability: holding a cell grants the
+operations of the public cell interface and nothing else. Each of those reads
+and writes through the transaction the cell is bound to, under that
+transaction's CFC and ACL checks. The runtime, its storage manager, and every
+transaction stay out of reach, which is what lets the CFC read ceiling, the
+transaction's journal, and the write-policy inputs the runtime records be
+trusted.
+
+The rules that keep this true:
+
+- A cell keeps its runtime, its transaction, the frame it was built under, and
+  the label view it carries in ECMAScript-private fields that no member hands
+  out. Host code reaches them through functions of the runner that pattern code
+  cannot import: `cellRuntime()`, `cellTx()`, `exportCell()`, and
+  `getCarriedCfcLabelView()`. Host code that passes a settle callback, which
+  receives the transaction, or stream-send options, which name the durable
+  event id, does so through `setCell()` and `sendEvent()`; a cell's own `set()`
+  and `send()` take only the value.
+- Those functions and `isCell()` recognize a cell by a private brand. An object
+  built on the cell prototype, or shaped like a cell, does not carry it, so the
+  host never takes such an object's word for its runtime, its transaction, or
+  its labels. A `Reactive` proxy over a whole cell stands for that cell.
+- A cell's constructor, which pattern code reaches through any cell it holds,
+  throws unless it is given a runtime and a transaction the runtime created.
+  `withTx()` and `getAsQueryResult()` refuse any other transaction as well.
+- The cell class, its prototype, and each cell are frozen, so pattern code
+  cannot change what a cell's members do for the host code that later reads
+  them.
+- What a handler or lift consumed is what its transaction read, and the run's
+  labels and checks are computed from that transaction's journal (CFC
+  specification sections 8.10.1 and 18.6). So while a run's code runs, a cell
+  bound to the run's transaction keeps to it: `withTx()` with no transaction
+  returns a cell still bound to it, `getArgumentCell()` binds the cell it
+  returns to it, and `sink()` and `pull()`, which read through transactions of
+  their own, throw. Two routes are not yet held to this, because the runtime
+  tells a run's code from its own only by the run's frame: a promise
+  continuation the run queued that runs after the run's function returns but
+  before its transaction commits, when the frame is gone, and `sinkMeta()`,
+  which the runtime's own code calls on a run's cells within the frame.
+
+`packages/runner/test/cell-authority.test.ts` runs these attacks from a pattern
+in the real sandbox. It also walks everything a cell, a stream, a `Reactive`
+proxy, and a query result reach, calling each method with callbacks and with a
+forged transaction in each argument position, and fails on reaching a runtime
+service or a transaction, or on host code using the forged one.
 
 ### 5.4 Smaller-Compartment String Rehydration
 
@@ -2534,6 +2589,7 @@ await runner.start(resultCell);
 | Global pollution | Frozen intrinsics, controlled globals |
 | Internal runtime-global exposure | Only approved globals are installed; implementation hooks like `RUNTIME_ENGINE_CONSOLE_HOOK` stay hidden |
 | Prototype pollution | SES-frozen intrinsics plus explicit freezing of forwarded host constructor/prototype pairs before installation |
+| Host authority through runtime cells | Cells keep their runtime and transaction private, are frozen, and are recognized by a private brand ([§5.3.3](#533-runtime-cells)) |
 | Closure-based data leakage | No surviving mutable module bindings; direct-function-only top-level forms plus function hardening |
 | State leakage via modules | Verified immutable top-level bindings, hardened shared runtime-module exports, write-once module exports, and dynamic imports rejected in v1 |
 | Resource exhaustion | Future: Add CPU/memory limits (not in this spec) |

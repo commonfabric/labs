@@ -2,6 +2,7 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { cellTx } from "../src/cell.ts";
 import { raw } from "../src/module.ts";
 import { createNodeFactory } from "../src/builder/module.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -40,7 +41,7 @@ describe("CFC builtin implementation identity", () => {
     runtime.moduleRegistry.addModuleByRef(
       "test-builtin",
       raw((inputsCell) => {
-        captured.push(inputsCell.tx?.getCfcState().implementationIdentity);
+        captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
         return () => undefined;
       }),
     );
@@ -79,7 +80,7 @@ describe("CFC builtin implementation identity", () => {
     runtime.moduleRegistry.addModuleByRef(
       "scoped-test-builtin",
       raw((inputsCell) => {
-        captured.push(inputsCell.tx?.getCfcState().implementationIdentity);
+        captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
         return () => undefined;
       }),
     );
@@ -93,10 +94,9 @@ describe("CFC builtin implementation identity", () => {
     );
     // `.asScope("user")` — what the transformer lowers a `PerUser<>` result
     // annotation to — records the scope on the REF module, so resolving the
-    // ref has to carry the registry module's `debugName` onto the scoped copy.
-    // That name is the whole proof of the builtin identity, and it is
-    // non-enumerable (so it stays out of the serialized key set), so a copy
-    // that does not go out of its way to keep it drops the identity.
+    // ref takes a scoped copy of the registry module. The registry has to
+    // record that copy as its own, or the copy writes unattributed: a builtin
+    // identity is registry membership, not anything the copy carries.
     runtime.runner.run(
       tx,
       createNodeFactory({
@@ -123,9 +123,10 @@ describe("CFC builtin implementation identity", () => {
       storageManager,
     });
 
-    // The name is what the policy identity is read from, and it stays out of
-    // `moduleToEncodableForm`'s key set — which is `...rest`, so the name must
-    // be non-enumerable wherever it is set. A module arriving with an ordinary
+    // The registry's name stays out of `moduleToEncodableForm`'s key set —
+    // which is `...rest`, so the name must be non-enumerable wherever it is
+    // set — while the module keeps its builtin identity, which comes from the
+    // registry's record rather than the name. A module arriving with an ordinary
     // `debugName` of its own is the case that tests it: `defineProperty`
     // carries forward an existing property's attributes, so anything that
     // leaves `enumerable` to default would keep this one enumerable and put
@@ -205,7 +206,7 @@ describe("CFC builtin implementation identity", () => {
 
     const captured: Array<unknown> = [];
     const module = raw((inputsCell) => {
-      captured.push(inputsCell.tx?.getCfcState().implementationIdentity);
+      captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
       return () => undefined;
     });
 
@@ -218,6 +219,64 @@ describe("CFC builtin implementation identity", () => {
     );
     runtime.runner.run(tx, module, {}, resultCell);
 
+    expect(captured[0]).toBeUndefined();
+    tx.abort("test-complete");
+  });
+
+  it("resolves the runtime's own registered builtins as builtins, plain and scoped", () => {
+    storageManager = StorageManager.emulate({
+      as: signer,
+    });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+
+    for (const ref of ["ifElse", "map"]) {
+      expect(
+        resolvePolicyFacingImplementationIdentity(
+          runtime.moduleRegistry.getModule(ref),
+        ),
+      ).toEqual({ kind: "builtin", builtinId: ref });
+      expect(
+        resolvePolicyFacingImplementationIdentity(
+          runtime.moduleRegistry.getModule(ref, "user"),
+        ),
+      ).toEqual({ kind: "builtin", builtinId: ref });
+    }
+  });
+
+  it("gives a raw module that only carries a debugName no builtin identity", () => {
+    storageManager = StorageManager.emulate({
+      as: signer,
+    });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+
+    // The name of a real builtin, on a module no registry handed out: a
+    // builtin identity is registry membership, never a member the module
+    // carries.
+    const captured: Array<unknown> = [];
+    const module = Object.assign(
+      raw((inputsCell) => {
+        captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
+        return () => undefined;
+      }),
+      { debugName: "ifElse" },
+    );
+
+    const tx = runtime.edit();
+    const resultCell = runtime.getCell(
+      signer.did(),
+      "cfc-debug-named-raw",
+      undefined,
+      tx,
+    );
+    runtime.runner.run(tx, module, {}, resultCell);
+
+    expect(captured).toHaveLength(1);
     expect(captured[0]).toBeUndefined();
     tx.abort("test-complete");
   });

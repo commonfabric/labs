@@ -1,6 +1,6 @@
 /** Custody seal workflow state transitions under Lit's headless element shim. */
 
-import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
@@ -82,13 +82,17 @@ const preview: Preview = {
     name: "calendar",
     subject: "did:key:actor",
   }],
+  witnessedRelease: true,
   stance: "sushi",
 };
+
+/** What the host's commit answers, with the receipt's type left open. */
+type Sealed = Awaited<ReturnType<RuntimeClient["commitCustodySeal"]>>;
 
 /** Gives each workflow independent handles and controllable host operations. */
 function setup(overrides: Partial<{
   prepare: RuntimeClient["prepareCustodySeal"];
-  commit: (id: string) => Promise<CellHandle>;
+  commit: (id: string) => Promise<Sealed>;
   cancel: RuntimeClient["cancelCustodySeal"];
   element: HeadlessSeal;
 }> = {}) {
@@ -116,7 +120,8 @@ function setup(overrides: Partial<{
     },
     commitCustodySeal: (id: string) => {
       committed.push(id);
-      return overrides.commit?.(id) ?? Promise.resolve(receipt);
+      return overrides.commit?.(id) ??
+        Promise.resolve({ receipt, box: receipt, instance: "instance" });
     },
     cancelCustodySeal: (id: string) => {
       canceled.push(id);
@@ -153,7 +158,7 @@ function renderedText(element: CFCustodySeal): string {
     else if (Array.isArray(value)) value.forEach(walk);
     else if (value && typeof value === "object" && "values" in value) {
       const template = value as { strings: string[]; values: unknown[] };
-      parts.push(...template.strings);
+      for (const part of template.strings) parts.push(part);
       template.values.forEach(walk);
     }
   };
@@ -236,6 +241,31 @@ describe("CFCustodySeal workflow", () => {
       "If the room releases only these answers, each answer reveals at most ~1.6 bits about your values.",
     );
     expect(text).toContain("Where should we eat?");
+    expect(text).not.toContain("one answer at a time");
+  });
+
+  it("warns instead of bounding an answer when the room's release is not witnessed", async () => {
+    using state = setup({
+      prepare: () => Promise.resolve({ ...preview, witnessedRelease: false }),
+    });
+    await state.element.accessForTestingOnly.prepare();
+    const text = renderedText(state.element);
+    expect(text).toContain(
+      "This room protects your answer's inputs from members' honest code only; a member running their own code can learn your stance one answer at a time.",
+    );
+    expect(text).not.toContain("reveals at most");
+    expect(text).not.toContain("state no bound");
+  });
+
+  it("warns when the preview does not say whether the release is witnessed", async () => {
+    const { witnessedRelease: _, ...unsaid } = preview;
+    using state = setup({
+      prepare: () => Promise.resolve(unsaid as Preview),
+    });
+    await state.element.accessForTestingOnly.prepare();
+    const text = renderedText(state.element);
+    expect(text).toContain("one answer at a time");
+    expect(text).not.toContain("reveals at most");
   });
 
   it("isolates each principal from the dialog's own annotations", async () => {
@@ -411,6 +441,46 @@ describe("CFCustodySeal confirmation", () => {
     expect(element.accessForTestingOnly.error).toBe("");
   });
 
+  it("names the room's box cell to the seal and announces only the instance", async () => {
+    const element = new OpenDialogSeal();
+    const receipt = createMockCellHandle<unknown>({}, { id: "of:receipt" });
+    const box = createMockCellHandle<unknown>({}, {
+      id: "of:box",
+      space: "did:key:verified-room" as never,
+    });
+    using state = setup({
+      element,
+      commit: () => Promise.resolve({ receipt, box, instance: "sealed-into" }),
+    });
+    const binding = createMockCellHandle<unknown>({}, { id: "of:room-box" });
+    element.box = binding;
+    element.willUpdate(new Map([["box", undefined]]));
+    const sealed: CustomEvent[] = [];
+    element.addEventListener(
+      "cf-sealed",
+      (event) => sealed.push(event as CustomEvent),
+    );
+    await element.accessForTestingOnly.prepare();
+    // The seal writes the link itself, into the cell named here.
+    expect(state.prepared.map(([cells]) => cells.box)).toEqual([
+      binding.ref(),
+    ]);
+    await element.accessForTestingOnly.confirm(
+      trustedClick(element.confirmButton),
+    );
+    expect(state.committed).toEqual([preview.id]);
+    expect(sealed.map((event) => event.detail)).toEqual([
+      { instance: "sealed-into" },
+    ]);
+  });
+
+  it("names no box cell when none is bound", async () => {
+    const element = new OpenDialogSeal();
+    using state = setup({ element });
+    await element.accessForTestingOnly.prepare();
+    expect(state.prepared.map(([cells]) => "box" in cells)).toEqual([false]);
+  });
+
   it("does not seal on a trusted click on anything but its own button", async () => {
     const element = new OpenDialogSeal();
     using state = setup({ element });
@@ -449,7 +519,7 @@ describe("CFCustodySeal confirmation", () => {
   });
 
   it("shows no failure from a seal whose binding changed while it committed", async () => {
-    const pending = Promise.withResolvers<CellHandle>();
+    const pending = Promise.withResolvers<Sealed>();
     const element = new OpenDialogSeal();
     using state = setup({ element, commit: () => pending.promise });
     await element.accessForTestingOnly.prepare();
@@ -464,7 +534,7 @@ describe("CFCustodySeal confirmation", () => {
   });
 
   it("announces nothing when a binding changes while the seal commits", async () => {
-    const pending = Promise.withResolvers<CellHandle>();
+    const pending = Promise.withResolvers<Sealed>();
     const element = new OpenDialogSeal();
     using state = setup({ element, commit: () => pending.promise });
     const sealed: Event[] = [];
@@ -475,7 +545,8 @@ describe("CFCustodySeal confirmation", () => {
     );
     element.terms = createMockCellHandle();
     element.willUpdate(new Map([["terms", state.terms]]));
-    pending.resolve(createMockCellHandle<unknown>({}));
+    const handle = createMockCellHandle<unknown>({});
+    pending.resolve({ receipt: handle, box: handle, instance: "instance" });
     await confirming;
     expect(state.committed).toEqual([preview.id]);
     expect(sealed).toEqual([]);

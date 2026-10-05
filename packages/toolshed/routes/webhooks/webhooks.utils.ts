@@ -4,7 +4,9 @@ import { runtime } from "@/index.ts";
 import { identity } from "@/lib/identity.ts";
 import {
   type Cell,
+  cellRuntime,
   type IExtendedStorageTransaction,
+  sendEvent,
   WebhookConfigSchema,
 } from "@commonfabric/runner";
 import {
@@ -131,7 +133,7 @@ async function writeServiceCell(
   await cell.sync();
   await runtime.storageManager.synced();
 
-  const { error } = await cell.runtime.editWithRetry((tx) => {
+  const { error } = await cellRuntime(cell).editWithRetry((tx) => {
     cell.withTx(tx).set(value);
   });
   if (error) throw error;
@@ -171,7 +173,7 @@ export async function writeConfidentialConfig(
   await cell.sync();
   await runtime.storageManager.synced();
 
-  const { error } = await cell.runtime.editWithRetry((tx) => {
+  const { error } = await cellRuntime(cell).editWithRetry((tx) => {
     cell.withTx(tx).set({ url, secret });
   });
   if (error) throw error;
@@ -238,7 +240,7 @@ export async function addToServiceIndex(
   webhookId: string,
 ): Promise<void> {
   const cell = await serviceIndexCell(space);
-  const { error } = await cell.runtime.editWithRetry((tx) =>
+  const { error } = await cellRuntime(cell).editWithRetry((tx) =>
     addToIndex(cell, tx, webhookId)
   );
   if (error) throw error;
@@ -249,7 +251,7 @@ export async function removeFromServiceIndex(
   webhookId: string,
 ): Promise<void> {
   const cell = await serviceIndexCell(space);
-  const { error } = await cell.runtime.editWithRetry((tx) =>
+  const { error } = await cellRuntime(cell).editWithRetry((tx) =>
     removeFromIndex(cell, tx, webhookId)
   );
   if (error) throw error;
@@ -272,7 +274,7 @@ export async function sendToStream(
   if (runtime.experimental.serverExecution !== true) {
     // OFF arm: byte-for-byte today's behavior — the outer tx's commit
     // is the acknowledgment.
-    const { error } = await streamCell.runtime.editWithRetry((tx) => {
+    const { error } = await cellRuntime(streamCell).editWithRetry((tx) => {
       streamCell.withTx(tx).send(payload);
     });
     if (error) throw error;
@@ -289,13 +291,8 @@ export async function sendToStream(
   // delivery beats a false 200 under at-least-once webhook semantics).
   const settled = new Promise<IExtendedStorageTransaction>(
     (resolve, reject) => {
-      streamCell.runtime.editWithRetry((tx) => {
-        (streamCell.withTx(tx) as unknown as {
-          send(
-            value: unknown,
-            onCommit?: (tx: IExtendedStorageTransaction) => void,
-          ): unknown;
-        }).send(payload, resolve);
+      cellRuntime(streamCell).editWithRetry((tx) => {
+        sendEvent(streamCell.withTx(tx), payload, resolve);
       }).then(({ error }) => {
         if (error) reject(error);
       }, reject);

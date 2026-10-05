@@ -6,9 +6,10 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import * as Path from "@std/path";
 import { Database } from "@db/sqlite";
 
+import { legacySpaceDid } from "@commonfabric/identity";
+
 import {
   candidateRoots,
-  deriveSpaceDid,
   discoverSpaceDbs,
   quickStats,
   resolveSpace,
@@ -116,10 +117,10 @@ Deno.test("discovery + resolution", async (t) => {
     await t.step(
       "resolveSpace resolves a space NAME via the runtime derivation",
       async () => {
-        // The runtime derives a named space's DID; we mirror it, so addressing a
-        // space by the name the shell shows finds the same DB.
+        // A name resolves to the DID the legacy derivation gives it, as it does
+        // in the shell, so addressing a space by that name finds the same DB.
         const name = "state-inspector-test-space";
-        const did = await deriveSpaceDid(name);
+        const did = await legacySpaceDid(name);
         assert(did.startsWith("did:key:z"), "derives a did:key DID");
         makeSpace(`${engine}/${did}.sqlite`, 1);
         const found = discoverSpaceDbs({
@@ -195,7 +196,7 @@ Deno.test("discovery finds a space under a MEMORY_DIR written as a file URL", as
     const engine = `${dir}/engine-v3/engine-v3`;
     await Deno.mkdir(engine, { recursive: true });
     const name = "state-inspector-url-space";
-    const did = await deriveSpaceDid(name);
+    const did = await legacySpaceDid(name);
     makeSpace(`${engine}/${did}.sqlite`, 1);
 
     // The trailing separator is the one the default carries.

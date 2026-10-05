@@ -75,6 +75,16 @@ export const findNode = (
     .find((child) => child !== undefined);
 };
 
+/** How many elements named `name` sit under `root`, counting nested ones. */
+export const countElements = (root: unknown, name: string): number => {
+  const value = readValue(root);
+  const self = isRecord(value) && readValue(value.name) === name ? 1 : 0;
+  return childNodes(value).reduce<number>(
+    (sum, child) => sum + countElements(child, name),
+    self,
+  );
+};
+
 export const findNodeByProp = (
   root: unknown,
   prop: string,

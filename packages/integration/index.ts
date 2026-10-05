@@ -17,4 +17,5 @@ export {
 export { dismissDialogs, Page, pipeConsole } from "./page.ts";
 export * from "./presentation/mod.ts";
 export * as env from "./env.ts";
+export { createLegacyTestSpace, createTestSpace } from "./test-space.ts";
 export * from "./utils.ts";

@@ -1,7 +1,12 @@
 /** Verifies rendered nested filters and mapped rows after writes from another replica. */
 
 import { Identity } from "@commonfabric/identity";
-import { Browser, env, type Page } from "@commonfabric/integration";
+import {
+  Browser,
+  createTestSpace,
+  env,
+  type Page,
+} from "@commonfabric/integration";
 import { login } from "@commonfabric/integration/shell-utils";
 import type { Cell } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -52,7 +57,9 @@ async function renderedRows(page: Page) {
         ),
       }));
       for (const element of root.querySelectorAll("*")) {
-        if (element.shadowRoot) rows.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const row of collect(element.shadowRoot)) rows.push(row);
+        }
       }
       return rows;
     }
@@ -71,9 +78,9 @@ describe("rendered vote rows across replicas", () => {
         `reactive rows ${variant}`,
         { implementation: "noble" },
       );
-      const spaceName = `${env.SPACE_NAME}-${variant}-${profileLocation}`;
+      const spaceDid = await createTestSpace(identity);
       const cc = await initializePiecesController({
-        space: spaceName,
+        space: spaceDid,
         apiUrl: new URL(env.API_URL),
         identity,
       });
@@ -84,32 +91,23 @@ describe("rendered vote rows across replicas", () => {
         let input: object | undefined;
         let externalProfiles: Cell<{ name: string }[]> | undefined;
         if (crossSpace) {
-          const profileController = await initializePiecesController({
-            space: `${spaceName}-profiles`,
-            apiUrl: new URL(env.API_URL),
-            identity,
+          const profiles = cc.runtime.getCell<{ name: string }[]>(
+            await createTestSpace(identity),
+            "remote-voter-profiles",
+          );
+          const initialized = await cc.runtime.editWithRetry((tx) => {
+            const writableProfiles = profiles.withTx(tx);
+            writableProfiles.set([]);
+            for (const key of ["alice", "bob", "carol"]) {
+              const profile = writableProfiles.elementById(key);
+              profile.set({ name: key });
+              writableProfiles.addUnique(profile);
+            }
           });
-          try {
-            const profiles = cc.runtime.getCell<{ name: string }[]>(
-              profileController.getSpace(),
-              "remote-voter-profiles",
-            );
-            const initialized = await cc.runtime.editWithRetry((tx) => {
-              const writableProfiles = profiles.withTx(tx);
-              writableProfiles.set([]);
-              for (const key of ["alice", "bob", "carol"]) {
-                const profile = writableProfiles.elementById(key);
-                profile.set({ name: key });
-                writableProfiles.addUnique(profile);
-              }
-            });
-            if (initialized.error) throw new Error(initialized.error.message);
-            await cc.synced();
-            input = { profiles };
-            externalProfiles = profiles;
-          } finally {
-            await profileController.dispose();
-          }
+          if (initialized.error) throw new Error(initialized.error.message);
+          await cc.synced();
+          input = { profiles };
+          externalProfiles = profiles;
         }
         const program = await resolveLocalProgram(
           (resolver) => cc.runtime.harness.resolve(resolver),
@@ -153,8 +151,8 @@ describe("rendered vote rows across replicas", () => {
         page.addEventListener("pageerror", (event) => {
           errors.push(event.detail.message);
         });
-        await page.goto(`${env.FRONTEND_URL}${spaceName}/${piece.id}`);
-        await waitForPieceView(page, spaceName, piece.id);
+        await page.goto(`${env.FRONTEND_URL}${spaceDid}/${piece.id}`);
+        await waitForPieceView(page, spaceDid, piece.id);
         await login(page, identity);
         await settleView(page);
         await waitForSettledText(
@@ -206,7 +204,9 @@ describe("rendered vote rows across replicas", () => {
                   .map((element) => element.textContent ?? "");
                 for (const element of root.querySelectorAll("*")) {
                   if (element.shadowRoot) {
-                    values.push(...collect(element.shadowRoot));
+                    for (const value of collect(element.shadowRoot)) {
+                      values.push(value);
+                    }
                   }
                 }
                 return values;
@@ -281,7 +281,7 @@ describe("rendered vote rows across replicas", () => {
                 variant,
                 profileLocation,
                 reconnect: Boolean(networkControlUrl),
-                url: `${env.FRONTEND_URL}${spaceName}/${piece.id}`,
+                url: `${env.FRONTEND_URL}${spaceDid}/${piece.id}`,
                 assertions: [
                   "linked values and profiles before first browser materialization",
                   "remote colors",

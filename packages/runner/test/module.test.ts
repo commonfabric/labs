@@ -33,7 +33,7 @@ import {
 import { reactive } from "../src/builder/reactive.ts";
 import { externalRefTo } from "./schema-ref-helpers.ts";
 import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
-import { CellImpl } from "../src/cell.ts";
+import { CellImpl, exportCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { trustPattern } from "./support/trusted-builder.ts";
@@ -332,7 +332,7 @@ describe("module", () => {
       );
       const stream = clickHandler({ x: reactive(10), y: reactive(20) });
       expect(isReactive(stream)).toBe(true);
-      const { kind, nodes } = (stream as any).export();
+      const { kind, nodes } = exportCell(stream);
       expect(kind).toBe("stream");
       expect(nodes.size).toBe(1);
       expect([...nodes][0].module).toMatchObject({ wrapper: "handler" });
@@ -508,7 +508,7 @@ describe("module", () => {
       const result = toggleHandler({ elements } as any);
 
       expect(isReactive(result)).toBe(true);
-      const { nodes } = result.export();
+      const { nodes } = exportCell(result);
       expect(nodes.size).toBe(1);
       const handlerNode = [...nodes][0];
       expect((handlerNode.module as Module).wrapper).toBe("handler");
@@ -535,7 +535,7 @@ describe("module", () => {
       );
       const stream = clickHandler.with({ x: reactive(10), y: reactive(20) });
       expect(isReactive(stream)).toBe(true);
-      const { kind, nodes } = (stream as any).export();
+      const { kind, nodes } = exportCell(stream);
       expect(kind).toBe("stream");
       expect(nodes.size).toBe(1);
       expect([...nodes][0].module).toMatchObject({ wrapper: "handler" });

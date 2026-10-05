@@ -12,6 +12,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   BRIDGE_PROTOCOL,
+  BRIDGE_READ_REFUSED,
   BRIDGE_VERSION,
   type BridgeCellIdentity,
   type BridgeError,
@@ -22,6 +23,8 @@ import {
   type BridgeResourceDescriptor,
   isBridgeRequest,
 } from "./ipc.ts";
+
+export { BRIDGE_READ_REFUSED };
 
 /** Behavior advertised for one named bridge resource. */
 export type BridgeResourceKind = "cell" | "stream" | "sqlite" | "service";
@@ -34,19 +37,51 @@ export type BridgeMethod = (
   input: FabricValue | undefined,
 ) => FabricValue | undefined | Promise<FabricValue | undefined>;
 
+/**
+ * Thrown by a host's bridge cell for a read the host was refused, or a write
+ * it will not make through a cell whose read was refused. The bridge answers
+ * the guest with its code, `BRIDGE_READ_REFUSED`, and holds the path the guest
+ * named to the refusal: a write through that path is refused until a read of
+ * it is admitted, whatever cell answers for the path by then.
+ */
+export class BridgeReadRefusedError extends Error {
+  readonly code = BRIDGE_READ_REFUSED;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeReadRefusedError";
+  }
+}
+
+/** Hears a sink's failure, such as a refusal of the read it delivers. */
+export type BridgeSinkFailure = (error: BridgeError) => void;
+
 /** Cell-shaped capability exposed beneath one named bridge resource. */
 export type BridgeCell = {
   get(): FabricValue | undefined;
   pull(): FabricValue | undefined | Promise<FabricValue | undefined>;
   initialize?(value: FabricValue): FabricValue | Promise<FabricValue>;
   set?(value: FabricValue): void | Promise<void>;
-  push?(...values: FabricValue[]): void | Promise<void>;
+  push?(values: readonly FabricValue[]): void | Promise<void>;
+  /**
+   * Delivers each value of the cell to `listener`, and each refusal of its
+   * read to `failed`, which the guest hears as an error of its subscription
+   * rather than as a value.
+   */
   sink?(
     listener: (value: FabricValue | undefined) => void,
+    failed: BridgeSinkFailure,
   ): BridgeCancel;
   key?(key: string | number): BridgeCell;
   resolve?(): BridgeCell | Promise<BridgeCell>;
   identity?: BridgeCellIdentity;
+  /**
+   * Whether the cell holds what a read of it found (or what was written
+   * through it), so that `get()` is its value. False for one that has read
+   * nothing yet, whose `get()` is no value, and whose sink delivers nothing
+   * until a read answers. Left out, the cell always holds its value.
+   */
+  hasValue?(): boolean;
 };
 
 type BridgeResourceMetadata = {
@@ -185,6 +220,17 @@ function cellOperation<K extends BridgeCellOperation>(
     : undefined;
 }
 
+/** Whether `cell` holds its value ({@link BridgeCell.hasValue}). */
+function cellHasValue(cell: BridgeCell): boolean {
+  const property = Object.getOwnPropertyDescriptor(cell, "hasValue");
+  if (
+    !property || !("value" in property) || typeof property.value !== "function"
+  ) {
+    return true;
+  }
+  return property.value.call(cell) === true;
+}
+
 function cellOperationNames(cell: BridgeCell): BridgeCellOperation[] {
   return [...CORE_OPERATIONS].filter((operation) =>
     cellOperation(cell, operation as BridgeCellOperation) !== undefined
@@ -229,7 +275,9 @@ function descriptor(
   const operations: string[] = [];
   if (kind === "cell") {
     const cell = resourceCell(name, resource);
-    operations.push(...cellOperationNames(cell));
+    for (const operation of cellOperationNames(cell)) {
+      operations.push(operation);
+    }
   } else if (resourceSink(resource)) {
     operations.push("sink");
   }
@@ -270,6 +318,14 @@ function discoverResource(
   return resource;
 }
 
+/** A path as a guest names it: a resource, then each key beneath it. */
+type GuestPath = readonly string[];
+
+/** `path` as the key of the paths a host holds to a refusal. */
+function pathKey(path: GuestPath): string {
+  return JSON.stringify(path);
+}
+
 function bridgeError(
   code: string,
   message: string,
@@ -300,6 +356,11 @@ function normalizeBridgeError(
   );
 }
 
+/** Whether `error` is a refusal of a read (`read-refused`). */
+function isReadRefusal(error: unknown): boolean {
+  return normalizeBridgeError(error).code === BRIDGE_READ_REFUSED;
+}
+
 /** Owns one loaded guest's access to one explicitly supplied bridge. */
 export class FabricBridgeHost {
   readonly #bridge: FabricBridge;
@@ -311,8 +372,22 @@ export class FabricBridgeHost {
       cell: BridgeCell;
       operations: ReadonlySet<BridgeCellOperation>;
       resource: string;
+      /** The path the guest resolved to this cell. */
+      path: GuestPath;
     }
   >();
+  /**
+   * The paths whose last read the guest was refused, each held to that
+   * refusal for the guest's writes through it until a read of it is
+   * admitted. Kept by the path the guest names, not by the cell answering
+   * for it, which may change between requests (a context whose own read is
+   * refused reaches a field through itself rather than through the link the
+   * field holds), and by the path a resolved cell was resolved from, so a
+   * guest reaches no refused path afresh by resolving it. A path enters only
+   * when a read of it is refused and leaves when one is admitted, so this
+   * holds no more than one entry for each refused path the guest has read.
+   */
+  readonly #refusedPaths = new Set<string>();
   #nextCellHandle = 0;
   #operationTail: Promise<void> | undefined;
   #connected = true;
@@ -353,6 +428,7 @@ export class FabricBridgeHost {
     }
     this.#subscriptions.clear();
     this.#cells.clear();
+    this.#refusedPaths.clear();
     this.#port.close();
   }
 
@@ -471,7 +547,10 @@ export class FabricBridgeHost {
 
     switch (operation) {
       case "pull": {
-        const { cell, resource: name } = this.#requestCell(request, "pull");
+        const { cell, resource: name, path } = this.#requestCell(
+          request,
+          "pull",
+        );
         const pull = cellOperation(cell, "pull");
         if (!pull) {
           throw bridgeError(
@@ -480,10 +559,10 @@ export class FabricBridgeHost {
             name,
           );
         }
-        return await pull.call(cell);
+        return await this.#read(path, () => pull.call(cell));
       }
       case "initialize": {
-        const { cell, resource: name } = this.#requestCell(
+        const { cell, resource: name, path } = this.#requestCell(
           request,
           "initialize",
         );
@@ -495,10 +574,18 @@ export class FabricBridgeHost {
             name,
           );
         }
-        return await initialize.call(cell, request.value as FabricValue);
+        // Stores nothing over a value the cell holds, so a refused path does
+        // not stop it, and it answers with the stored value: a read.
+        return await this.#read(
+          path,
+          () => initialize.call(cell, request.value as FabricValue),
+        );
       }
       case "set": {
-        const { cell, resource: name } = this.#requestCell(request, "set");
+        const { cell, resource: name, path } = this.#requestCell(
+          request,
+          "set",
+        );
         const set = cellOperation(cell, "set");
         if (!set) {
           throw bridgeError(
@@ -507,11 +594,18 @@ export class FabricBridgeHost {
             name,
           );
         }
-        await set.call(cell, request.value as FabricValue);
+        await this.#write(
+          path,
+          name,
+          () => set.call(cell, request.value as FabricValue),
+        );
         return undefined;
       }
       case "push": {
-        const { cell, resource: name } = this.#requestCell(request, "push");
+        const { cell, resource: name, path } = this.#requestCell(
+          request,
+          "push",
+        );
         const push = cellOperation(cell, "push");
         if (!push) {
           throw bridgeError(
@@ -520,7 +614,11 @@ export class FabricBridgeHost {
             name,
           );
         }
-        await push.call(cell, ...(request.values ?? []));
+        await this.#write(
+          path,
+          name,
+          () => push.call(cell, request.values ?? []),
+        );
         return undefined;
       }
       case "resolve": {
@@ -536,12 +634,24 @@ export class FabricBridgeHost {
           cell,
           operations: new Set(operations),
           resource: target.resource,
+          path: target.path,
         });
         const identity = Object.getOwnPropertyDescriptor(cell, "identity");
-        const value = cell.get();
+        // What the resolved cell holds already, which is not a read: it can
+        // hold a refusal, and holds nothing when it has read nothing yet, so
+        // it refuses a path and admits none. One that has read nothing hands
+        // the guest no value, so the guest pulls before it reads.
+        const hasValue = cellHasValue(cell);
+        let value: FabricValue | undefined;
+        try {
+          value = hasValue ? cell.get() : undefined;
+        } catch (error) {
+          if (isReadRefusal(error)) this.#refuse(target.path);
+          throw error;
+        }
         return {
           handle,
-          hasValue: true,
+          hasValue,
           operations,
           ...(identity && "value" in identity && identity.value !== undefined &&
             {
@@ -583,17 +693,21 @@ export class FabricBridgeHost {
         let sinkResource:
           | ((
             listener: (value: FabricValue | undefined) => void,
+            failed: BridgeSinkFailure,
           ) => BridgeCancel)
           | undefined;
         let receiver: object;
+        let path: GuestPath | undefined;
         if (request.handle !== undefined || resource?.kind === "cell") {
           const target = this.#requestCell(request, "sink");
           const sink = cellOperation(target.cell, "sink");
           sinkResource = sink &&
-            ((listener) => sink.call(target.cell, listener));
+            ((listener, failed) => sink.call(target.cell, listener, failed));
           receiver = target.cell;
+          path = target.path;
         } else {
-          sinkResource = resource && resourceSink(resource);
+          const sink = resource && resourceSink(resource);
+          sinkResource = sink && ((listener) => sink.call(resource, listener));
           receiver = resource ?? {};
         }
         if (!sinkResource) {
@@ -607,7 +721,12 @@ export class FabricBridgeHost {
         }
         this.#subscriptions.get(request.subscription)?.();
         const subscription = request.subscription;
+        // A value delivered while the sink opens is what the cell held
+        // already, not a read: it admits no path. A refusal refuses one
+        // whenever it arrives.
+        let opening = true;
         const cancel = sinkResource.call(receiver, (value) => {
+          if (path !== undefined && !opening) this.#admit(path);
           this.#post({
             protocol: BRIDGE_PROTOCOL,
             version: BRIDGE_VERSION,
@@ -615,11 +734,72 @@ export class FabricBridgeHost {
             subscription,
             ...(value !== undefined && { value }),
           });
+        }, (error) => {
+          if (path !== undefined && isReadRefusal(error)) this.#refuse(path);
+          this.#post({
+            protocol: BRIDGE_PROTOCOL,
+            version: BRIDGE_VERSION,
+            type: "event",
+            subscription,
+            error: normalizeBridgeError(error, request.resource),
+          });
         });
+        opening = false;
         this.#subscriptions.set(subscription, cancel);
         return undefined;
       }
     }
+  }
+
+  /**
+   * Makes `read`, a read through `path`, and records what it found: an
+   * admitted read ends the path's refusal, and a refused one starts it.
+   */
+  async #read<T>(path: GuestPath, read: () => T | Promise<T>): Promise<T> {
+    let value: T;
+    try {
+      value = await read();
+    } catch (error) {
+      if (isReadRefusal(error)) this.#refuse(path);
+      throw error;
+    }
+    this.#admit(path);
+    return value;
+  }
+
+  /**
+   * Makes `write`, a write through `path`, unless the path's last read was
+   * refused: the guest then wrote what it could not have read, so the write
+   * is refused with the read's code. A write that the cell refuses as
+   * computed from a refused read holds the path to that refusal too. A
+   * write that lands ends no refusal; only an admitted read does.
+   */
+  async #write(
+    path: GuestPath,
+    resource: string,
+    write: () => void | Promise<void>,
+  ): Promise<void> {
+    if (this.#refusedPaths.has(pathKey(path))) {
+      throw bridgeError(
+        BRIDGE_READ_REFUSED,
+        `The host was refused the last read of this path of \`${resource}\`, so it writes nothing through it until a read of it is admitted.`,
+        resource,
+      );
+    }
+    try {
+      await write();
+    } catch (error) {
+      if (isReadRefusal(error)) this.#refuse(path);
+      throw error;
+    }
+  }
+
+  #refuse(path: GuestPath): void {
+    this.#refusedPaths.add(pathKey(path));
+  }
+
+  #admit(path: GuestPath): void {
+    this.#refusedPaths.delete(pathKey(path));
   }
 
   #requestCell(
@@ -628,9 +808,12 @@ export class FabricBridgeHost {
   ): {
     cell: BridgeCell;
     resource: string;
+    /** The path the guest named, from its resource, resolved or not. */
+    path: GuestPath;
   } {
     let cell: BridgeCell;
     let resourceName: string;
+    let path: GuestPath;
     if (request.handle !== undefined) {
       const resolved = this.#cells.get(request.handle);
       if (!resolved) {
@@ -655,6 +838,7 @@ export class FabricBridgeHost {
       }
       cell = resolved.cell;
       resourceName = resolved.resource;
+      path = resolved.path;
     } else {
       resourceName = request.resource ?? "";
       const resource = discoverResource(this.#bridge.resources, resourceName);
@@ -666,6 +850,7 @@ export class FabricBridgeHost {
         );
       }
       cell = resourceCell(resourceName, resource);
+      path = [resourceName];
     }
     for (const key of request.path ?? []) {
       const descend = cellOperation(cell, "key");
@@ -677,7 +862,8 @@ export class FabricBridgeHost {
         );
       }
       cell = validateCell(resourceName, descend.call(cell, key));
+      path = [...path, String(key)];
     }
-    return { cell, resource: resourceName };
+    return { cell, resource: resourceName, path };
   }
 }

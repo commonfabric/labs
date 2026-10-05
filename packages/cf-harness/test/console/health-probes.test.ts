@@ -1,14 +1,133 @@
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
+  askCfcVmStatus,
+  CFC_VM_STATUS_BOUND_MS,
+  type ConsolePathReading,
   consolePatternIndexHealthProbes,
+  type ConsolePolicyReading,
+  consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  consoleVmHealthProbe,
+  type ConsoleVmImage,
+  consoleVmStore,
+  readConsolePath,
+  readConsolePolicy,
+  touchCfcVmDaemon,
 } from "../../console/health-probes.ts";
+import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { join } from "@std/path";
 import { ConsoleHealth } from "../../console/health.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
 
 const signer = await Identity.fromPassphrase("console health observations");
+
+/**
+ * Whether this process searches a directory whose mode forbids it, as a
+ * privileged one does. No mode makes a path unreadable to such a process, so
+ * the case needing one cannot be set up for it.
+ */
+const searchesDespiteMode = (): boolean => {
+  const dir = Deno.makeTempDirSync({ prefix: "cf-harness-path-mode-" });
+  try {
+    Deno.mkdirSync(join(dir, "in"));
+    Deno.chmodSync(dir, 0o000);
+    try {
+      Deno.statSync(join(dir, "in"));
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    Deno.chmodSync(dir, 0o700);
+    Deno.removeSync(dir, { recursive: true });
+  }
+};
+
+/**
+ * A fake cfc-vm daemon at `<directory>/daemon.sock`, serving each connection
+ * the way the real one does. A connection closed before it sends a line is
+ * closed in turn, and nothing else happens: the real daemon does not count it
+ * as activity. A line is recorded without its newline and
+ * answered with what `answer` returns before the daemon hangs up, or, where
+ * that is `undefined`, held open unanswered until the daemon is closed.
+ * `leaveSocket` makes closing the daemon leave its socket file behind, as a
+ * daemon that is killed does.
+ */
+const fakeVmDaemon = (
+  directory: string,
+  answer: (line: string) => string | undefined,
+  options: { leaveSocket?: boolean } = {},
+) => {
+  const socket = join(directory, "daemon.sock");
+  // Closing a listener removes the path it bound; one bound elsewhere and
+  // moved into place leaves its socket where the probe looks.
+  const bound = options.leaveSocket ? join(directory, "bound.sock") : socket;
+  const listener = Deno.listen({ transport: "unix", path: bound });
+  if (options.leaveSocket) Deno.renameSync(bound, socket);
+  const lines: string[] = [];
+  const held: Deno.Conn[] = [];
+  const asked = Promise.withResolvers<void>();
+  const serve = async (connection: Deno.Conn) => {
+    const line = await readLine(connection);
+    if (line === undefined) {
+      connection.close();
+      return;
+    }
+    lines.push(line);
+    asked.resolve();
+    const reply = answer(line);
+    if (reply === undefined) {
+      held.push(connection);
+      return;
+    }
+    await connection.write(new TextEncoder().encode(`${reply}\n`));
+    connection.close();
+  };
+  const serving = (async () => {
+    for await (const connection of listener) {
+      await serve(connection).catch(() => {});
+    }
+  })().catch(() => {});
+  return {
+    lines,
+    /** Settles once the daemon has read its first line. */
+    asked: asked.promise,
+    /** Answers every connection held so far with `reply`, and hangs up. */
+    answerHeld: async (reply: string) => {
+      for (const connection of held.splice(0)) {
+        await connection.write(new TextEncoder().encode(`${reply}\n`));
+        connection.close();
+      }
+    },
+    close: async () => {
+      for (const connection of held) connection.close();
+      listener.close();
+      await serving;
+    },
+  };
+};
+
+/**
+ * Reads from `connection` up to its first newline, or to its end, or returns
+ * `undefined` for a connection that ended without a byte.
+ */
+const readLine = async (
+  connection: Deno.Conn,
+): Promise<string | undefined> => {
+  const decoder = new TextDecoder();
+  const buffer = new Uint8Array(256);
+  let text = "";
+  while (!text.includes("\n")) {
+    const read = await connection.read(buffer);
+    if (read === null) return text === "" ? undefined : text;
+    text += decoder.decode(buffer.subarray(0, read), { stream: true });
+  }
+  return text.split("\n")[0];
+};
 
 describe("health-probes", () => {
   describe("consoleSandboxHealthProbe()", () => {
@@ -58,6 +177,1464 @@ describe("health-probes", () => {
         ]);
       });
     }
+  });
+
+  describe("consoleRunscHealthProbe()", () => {
+    /** The parts of a resolved configuration the probe reads. */
+    const config = (policy?: string) =>
+      ({
+        runscBinary: "/store/bin/runsc",
+        rootfs: "/store/images/kitchensink",
+        ...(policy !== undefined ? { cfcPolicyPath: policy } : {}),
+      }) as RunscSandboxConfig;
+
+    /**
+     * Answers each path from `readings`; otherwise the rootfs is a directory
+     * and every other path an executable file.
+     */
+    const examine =
+      (readings: Record<string, ConsolePathReading>) =>
+      (path: string): ConsolePathReading =>
+        readings[path] ??
+          (path === "/store/images/kitchensink"
+            ? { found: "directory" }
+            : { found: "file", executable: true });
+
+    /** Answers each policy from `readings`, and a JSON object otherwise. */
+    const readPolicy =
+      (readings: Record<string, ConsolePolicyReading>) =>
+      (path: string): ConsolePolicyReading =>
+        readings[path] ?? { found: "policy" };
+
+    const observe = async (
+      resolve: () => RunscSandboxConfig,
+      readings: Record<string, ConsolePathReading> = {},
+      mode: CfcEnforcementMode = "enforce-strict",
+      policies: Record<string, ConsolePolicyReading> = {},
+    ) =>
+      (await consoleRunscHealthProbe(
+        resolve,
+        mode,
+        examine(readings),
+        readPolicy(policies),
+      ).read())
+        .map(({ id, state, value }) => ({ id, state, value }));
+
+    it("returns every row ok for an executable binary, a policy that parses and a rootfs directory", async () => {
+      const rows = await consoleRunscHealthProbe(
+        () => config("/store/policy.json"),
+        "enforce-strict",
+        examine({}),
+        readPolicy({}),
+      ).read();
+
+      expect(rows.map(({ id, state, value }) => ({ id, state, value })))
+        .toEqual([
+          { id: "sandbox.runsc", state: "ok", value: "executable" },
+          {
+            id: "sandbox.runtime",
+            state: "ok",
+            value: "direct runsc driver, CFC policy configured",
+          },
+          { id: "sandbox.rootfs", state: "ok", value: "present" },
+        ]);
+      expect(rows[0]).toMatchObject({
+        label: "Runsc Binary",
+        group: "sandbox",
+        source: "runsc configuration",
+        detail: "/store/bin/runsc",
+      });
+      expect(rows[1]).toMatchObject({
+        label: "Sandbox Runtime",
+        detail:
+          "runsc /store/bin/runsc; rootfs /store/images/kitchensink; CFC policy /store/policy.json",
+      });
+      expect(rows[2]).toMatchObject({
+        label: "Sandbox Rootfs",
+        group: "sandbox",
+        source: "runsc configuration",
+        detail: "/store/images/kitchensink",
+      });
+      expect(rows.every((row) => Number.isFinite(Date.parse(row.checkedAt!))))
+        .toBe(true);
+    });
+
+    for (
+      const [what, reading, value] of [
+        ["nothing at the binary path", { found: "absent" }, "missing"],
+        [
+          "a file without execute permission",
+          { found: "file", executable: false },
+          "not executable",
+        ],
+        [
+          "a directory at the binary path",
+          { found: "directory" },
+          "not executable",
+        ],
+        [
+          "neither a file nor a directory at the binary path",
+          { found: "other" },
+          "not executable",
+        ],
+      ] as const
+    ) {
+      it(`returns the binary row failed and \`${value}\` for ${what}`, async () => {
+        expect(
+          (await observe(() => config("/store/policy.json"), {
+            "/store/bin/runsc": reading,
+          }))[0],
+        ).toEqual({ id: "sandbox.runsc", state: "failed", value });
+      });
+    }
+
+    it("returns the binary row unknown when the binary could not be looked at", async () => {
+      expect(
+        (await observe(() => config("/store/policy.json"), {
+          "/store/bin/runsc": { found: "unreadable", reason: "EACCES" },
+        }))[0],
+      ).toEqual({
+        id: "sandbox.runsc",
+        state: "unknown",
+        value: "not verified",
+      });
+    });
+
+    for (const mode of ["enforce-strict", "enforce-explicit"] as const) {
+      it(`returns the runtime row failed when no CFC policy is configured and turns enforce at \`${mode}\``, async () => {
+        // The engine refuses every such turn before any tool runs.
+        const [, row] = await consoleRunscHealthProbe(
+          () => config(),
+          mode,
+          examine({}),
+        ).read();
+
+        expect(row).toMatchObject({
+          id: "sandbox.runtime",
+          state: "failed",
+          value: "no CFC policy, so every turn is refused",
+        });
+        expect(row.reason).toContain(mode);
+        expect(row.remedy).toContain("CF_HARNESS_RUNSC_CFC_POLICY");
+      });
+    }
+
+    it("returns the runtime row degraded when no CFC policy is configured and turns only observe", async () => {
+      const [, row] = await consoleRunscHealthProbe(
+        () => config(),
+        "observe",
+        examine({}),
+      ).read();
+
+      expect(row).toMatchObject({
+        id: "sandbox.runtime",
+        state: "degraded",
+        value: "direct runsc driver, no CFC policy",
+      });
+      expect(row.reason).toContain("untracked");
+    });
+
+    for (
+      const [what, reading, value, reason] of [
+        [
+          "absent",
+          { found: "absent" },
+          "CFC policy missing",
+          "Nothing exists at the configured CFC policy path.",
+        ],
+        [
+          "a directory",
+          { found: "directory" },
+          "CFC policy not a file",
+          "The configured CFC policy path is not a file.",
+        ],
+        [
+          "neither a file nor a directory",
+          { found: "other" },
+          "CFC policy not a file",
+          "The configured CFC policy path is not a file.",
+        ],
+      ] as const
+    ) {
+      it(`returns the runtime row failed when the configured CFC policy is ${what}`, async () => {
+        let reads = 0;
+        const [, row] = await consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          examine({ "/store/policy.json": reading }),
+          () => {
+            reads += 1;
+            return { found: "policy" };
+          },
+        ).read();
+
+        expect(row).toMatchObject({
+          id: "sandbox.runtime",
+          state: "failed",
+          value,
+          reason,
+        });
+        expect(row.remedy).toContain("CF_HARNESS_RUNSC_CFC_POLICY");
+        // A path that is not a file is not read.
+        expect(reads).toBe(0);
+      });
+    }
+
+    for (
+      const [what, reading, value] of [
+        [
+          "the console was refused permission to read it",
+          { found: "denied", reason: "PermissionDenied: read" },
+          "CFC policy unreadable",
+        ],
+        [
+          "it does not parse as a JSON object",
+          { found: "malformed", reason: "SyntaxError: Unexpected token" },
+          "CFC policy malformed",
+        ],
+      ] as const
+    ) {
+      it(`returns the runtime row failed, carrying the reason, when the configured CFC policy is a file and ${what}`, async () => {
+        const [, row] = await consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          examine({}),
+          readPolicy({ "/store/policy.json": reading }),
+        ).read();
+
+        expect(row).toMatchObject({
+          id: "sandbox.runtime",
+          state: "failed",
+          value,
+        });
+        expect(row.reason).toContain(reading.reason);
+        expect(typeof row.remedy).toBe("string");
+      });
+    }
+
+    it("returns the runtime row unknown, not failed, when reading the configured CFC policy failed other than by permission", async () => {
+      const [, row] = await consoleRunscHealthProbe(
+        () => config("/store/policy.json"),
+        "enforce-strict",
+        examine({}),
+        readPolicy({
+          "/store/policy.json": { found: "unreadable", reason: "EIO" },
+        }),
+      ).read();
+
+      expect(row).toMatchObject({
+        id: "sandbox.runtime",
+        state: "unknown",
+        value: "not verified",
+        reason: "EIO",
+      });
+      expect(row.remedy).toBeUndefined();
+    });
+
+    for (
+      const [what, reading, value] of [
+        ["nothing at the rootfs path", { found: "absent" }, "missing"],
+        [
+          "a file at the rootfs path",
+          { found: "file", executable: false },
+          "not a directory",
+        ],
+        [
+          "neither a file nor a directory at the rootfs path",
+          { found: "other" },
+          "not a directory",
+        ],
+      ] as const
+    ) {
+      it(`returns the rootfs row failed and \`${value}\` for ${what}`, async () => {
+        const rows = await consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          examine({ "/store/images/kitchensink": reading }),
+          readPolicy({}),
+        ).read();
+
+        expect(rows[2]).toMatchObject({
+          id: "sandbox.rootfs",
+          state: "failed",
+          value,
+          detail: "/store/images/kitchensink",
+        });
+        expect(rows[2].remedy).toContain("CF_HARNESS_SANDBOX_ROOTFS");
+        // The other rows are not what a missing rootfs is reported by.
+        expect(rows.slice(0, 2).map(({ state }) => state)).toEqual([
+          "ok",
+          "ok",
+        ]);
+      });
+    }
+
+    it("returns the rootfs row unknown when the rootfs could not be looked at", async () => {
+      expect(
+        (await observe(() => config("/store/policy.json"), {
+          "/store/images/kitchensink": {
+            found: "unreadable",
+            reason: "EACCES",
+          },
+        }))[2],
+      ).toEqual({
+        id: "sandbox.rootfs",
+        state: "unknown",
+        value: "not verified",
+      });
+    });
+
+    it("returns the runtime row unknown, not failed, when the configured CFC policy could not be looked at", async () => {
+      const rows = await consoleRunscHealthProbe(
+        () => config("/store/policy.json"),
+        "enforce-strict",
+        examine({
+          "/store/policy.json": { found: "unreadable", reason: "EACCES" },
+        }),
+        readPolicy({}),
+      ).read();
+
+      expect(rows[1]).toMatchObject({
+        id: "sandbox.runtime",
+        state: "unknown",
+        value: "not verified",
+        reason: "EACCES",
+      });
+      expect(rows[1].remedy).toBeUndefined();
+    });
+
+    it("returns every row unknown when the observation itself throws", async () => {
+      // `ConsoleHealth` reports a probe whose read rejects through the
+      // probe's own unavailable rows: a failure to look is not a failure of
+      // the runtime.
+      const health = new ConsoleHealth([], [
+        consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          () => {
+            throw new Error("examining failed");
+          },
+        ),
+      ]);
+
+      await health.refresh();
+
+      const rows = health.snapshot().rows;
+      expect(rows.map(({ id, state, value, reason }) => ({
+        id,
+        state,
+        value,
+        reason,
+      }))).toEqual([
+        {
+          id: "sandbox.runsc",
+          state: "unknown",
+          value: "not verified",
+          reason: "The runsc configuration could not be examined.",
+        },
+        {
+          id: "sandbox.runtime",
+          state: "unknown",
+          value: "not verified",
+          reason: "The runsc configuration could not be examined.",
+        },
+        {
+          id: "sandbox.rootfs",
+          state: "unknown",
+          value: "not verified",
+          reason: "The runsc configuration could not be examined.",
+        },
+      ]);
+      expect(rows.every((row) => row.checkedAt !== null)).toBe(true);
+    });
+
+    it("returns the runtime row failed with the driver's reason when the configuration is refused", async () => {
+      const rows = await consoleRunscHealthProbe(
+        () => {
+          throw new Error("runsc sandbox needs a rootfs");
+        },
+        "enforce-strict",
+        examine({}),
+      ).read();
+
+      expect(rows.map(({ id, state, value }) => ({ id, state, value })))
+        .toEqual([
+          { id: "sandbox.runsc", state: "unknown", value: "not verified" },
+          {
+            id: "sandbox.runtime",
+            state: "failed",
+            value: "configuration refused",
+          },
+          { id: "sandbox.rootfs", state: "unknown", value: "not verified" },
+        ]);
+      expect(rows[1].reason).toBe("runsc sandbox needs a rootfs");
+    });
+  });
+
+  describe("consoleVmStore()", () => {
+    /** A store directory holding `config.json` with `config`, or none. */
+    const withStore = async (
+      config: Record<string, unknown> | undefined,
+      body: (directory: string) => Promise<void> | void,
+    ) => {
+      const directory = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        if (config !== undefined) {
+          await Deno.writeTextFile(
+            join(directory, "config.json"),
+            JSON.stringify(config),
+          );
+        }
+        await body(directory);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    };
+
+    it("returns the store `CFC_VM_HOME` names, the image the rootfs names in it, and its idle timeout", async () => {
+      await withStore({ idleTimeoutSec: 300 }, (directory) => {
+        const rootfs = join(
+          Deno.realPathSync(directory),
+          "images",
+          "kitchensink",
+        );
+
+        expect(
+          consoleVmStore(rootfs, { CFC_VM_HOME: directory }, {
+            platform: "darwin",
+          }),
+        ).toEqual({
+          directory,
+          image: { found: "image", key: "kitchensink" },
+          idleTimeoutSec: 300,
+        });
+      });
+    });
+
+    it("returns the store under `HOME` when `CFC_VM_HOME` is unset", async () => {
+      await withStore(undefined, async (home) => {
+        const directory = join(
+          home,
+          "Library",
+          "Application Support",
+          "cfc-vm",
+        );
+        await Deno.mkdir(directory, { recursive: true });
+        await Deno.writeTextFile(join(directory, "config.json"), "{}");
+
+        for (const env of [{ HOME: home }, { CFC_VM_HOME: "", HOME: home }]) {
+          expect(
+            consoleVmStore("/elsewhere/rootfs", env, { platform: "darwin" }),
+          ).toEqual({
+            directory,
+            image: { found: "none" },
+            idleTimeoutSec: 600,
+          });
+        }
+      });
+    });
+
+    it("returns the daemon's own idle timeout where `config.json` names none it can use", async () => {
+      for (
+        const config of [{}, { idleTimeoutSec: 0 }, { idleTimeoutSec: "5" }]
+      ) {
+        await withStore(config, (directory) => {
+          expect(
+            consoleVmStore("/r", { CFC_VM_HOME: directory }, {
+              platform: "darwin",
+            }),
+          ).toEqual({
+            directory,
+            image: { found: "none" },
+            idleTimeoutSec: 600,
+          });
+        });
+      }
+    });
+
+    it("returns no image for a rootfs outside the store's `images`", async () => {
+      await withStore({}, (directory) => {
+        const store = consoleVmStore(
+          join(Deno.realPathSync(directory), "rootfs", "kitchensink"),
+          { CFC_VM_HOME: directory },
+          { platform: "darwin" },
+        );
+
+        expect(store).toEqual({
+          directory,
+          image: { found: "none" },
+          idleTimeoutSec: 600,
+        });
+      });
+    });
+
+    it("returns the image unresolved where the store's own path could not be resolved to compare the rootfs with", async () => {
+      await withStore({}, (directory) => {
+        const denied = new Deno.errors.PermissionDenied("denied");
+
+        const store = consoleVmStore(
+          join(directory, "images", "kitchensink"),
+          { CFC_VM_HOME: directory },
+          {
+            platform: "darwin",
+            realPath: () => {
+              throw denied;
+            },
+          },
+        );
+
+        expect(store).toEqual({
+          directory,
+          image: { found: "unresolved", reason: String(denied) },
+          idleTimeoutSec: 600,
+        });
+      });
+    });
+
+    it("compares the rootfs with the store as named where the store's path is not there to resolve", async () => {
+      await withStore({}, (directory) => {
+        const store = consoleVmStore(
+          join(directory, "images", "kitchensink"),
+          { CFC_VM_HOME: directory },
+          {
+            platform: "darwin",
+            realPath: () => {
+              throw new Deno.errors.NotFound("gone");
+            },
+          },
+        );
+
+        expect(store).toMatchObject({
+          image: { found: "image", key: "kitchensink" },
+        });
+      });
+    });
+
+    it("returns `undefined` off macOS", async () => {
+      await withStore({}, (directory) => {
+        expect(
+          consoleVmStore(join(directory, "images", "kitchensink"), {
+            CFC_VM_HOME: directory,
+          }, { platform: "linux" }),
+        ).toBeUndefined();
+      });
+    });
+
+    it("returns `undefined` for a directory with no `config.json`", async () => {
+      await withStore(undefined, (directory) => {
+        expect(
+          consoleVmStore(join(directory, "images", "kitchensink"), {
+            CFC_VM_HOME: directory,
+          }, { platform: "darwin" }),
+        ).toBeUndefined();
+      });
+    });
+
+    for (
+      const [what, write] of [
+        ["a directory", (path: string) => Deno.mkdir(path)],
+        ["not JSON", (path: string) => Deno.writeTextFile(path, "{")],
+        ["a JSON array", (path: string) => Deno.writeTextFile(path, "[]")],
+      ] as const
+    ) {
+      it(`returns the store with why its \`config.json\` could not be read where that is ${what}`, async () => {
+        // The file is there, so this is a store; what it configures, the
+        // idle timeout among it, is what could not be read.
+        await withStore(undefined, async (directory) => {
+          await write(join(directory, "config.json"));
+
+          const store = consoleVmStore("/r", { CFC_VM_HOME: directory }, {
+            platform: "darwin",
+          });
+
+          expect(store).toEqual({
+            directory,
+            unreadable: expect.stringContaining(
+              join(directory, "config.json"),
+            ),
+          });
+        });
+      });
+    }
+
+    it("returns `undefined` when neither `CFC_VM_HOME` nor `HOME` is set", () => {
+      expect(consoleVmStore("/r", {}, { platform: "darwin" })).toBeUndefined();
+    });
+  });
+
+  describe("consoleVmHealthProbe()", () => {
+    /** What a running daemon answers, as the real one does. */
+    const STATUS = {
+      activeClients: 0,
+      forwardPorts: [],
+      guest: {
+        memAvailableKiB: 1_883_096,
+        memTotalKiB: 2_040_268,
+        rootfs: 0,
+        runsc: 0,
+      },
+      idleSec: 29,
+      images: ["kitchensink"],
+      pid: 21275,
+      shares: {},
+      uptimeSec: 1592,
+    };
+
+    /** Runs `body` over an empty temporary store directory. */
+    const withStore = async (body: (directory: string) => Promise<void>) => {
+      const directory = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await body(directory);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    };
+
+    const store = (
+      directory: string,
+      image: ConsoleVmImage = { found: "image", key: "kitchensink" },
+    ) => ({ directory, image, idleTimeoutSec: 600 });
+
+    /** The row the probe returns, alone. */
+    const readRow = async (probe: ReturnType<typeof consoleVmHealthProbe>) => {
+      const rows = await probe.read();
+      expect(rows.map((row) => row.id)).toEqual(["sandbox.vm"]);
+      return rows[0];
+    };
+
+    it("returns unknown, and looks for no daemon, for a store whose `config.json` could not be read", async () => {
+      // The idle timeout that paces the questions is in that file, and a
+      // daemon started from it would not start.
+      let looked = 0;
+      const row = await readRow(
+        consoleVmHealthProbe({
+          directory: "/store",
+          unreadable: "/store/config.json is not JSON",
+        }, {
+          lstat: () => {
+            looked += 1;
+            throw new Deno.errors.NotFound("no socket");
+          },
+        }),
+      );
+
+      expect(looked).toBe(0);
+      expect(row).toMatchObject({
+        state: "unknown",
+        value: "not verified",
+        detail: "/store/daemon.sock",
+      });
+      expect(row.reason).toContain("/store/config.json is not JSON");
+    });
+
+    it("returns idle without connecting when the store has no daemon socket", async () => {
+      await withStore(async (directory) => {
+        let asked = 0;
+        const row = await readRow(
+          consoleVmHealthProbe(store(directory), {
+            ask: () => {
+              asked += 1;
+              return Promise.resolve({ found: "no-daemon" });
+            },
+          }),
+        );
+
+        expect(asked).toBe(0);
+        expect(row).toMatchObject({
+          label: "Sandbox VM",
+          state: "ok",
+          value: "idle; starts on first use",
+        });
+      });
+    });
+
+    it("returns idle when nothing listens on the socket the store holds", async () => {
+      await withStore(async (directory) => {
+        // What a daemon that stopped without removing its socket leaves.
+        const listener = Deno.listen({
+          transport: "unix",
+          path: join(directory, "live.sock"),
+        });
+        await Deno.rename(
+          join(directory, "live.sock"),
+          join(directory, "daemon.sock"),
+        );
+        listener.close();
+
+        const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+        expect(row).toMatchObject({
+          state: "ok",
+          value: "idle; starts on first use",
+        });
+      });
+    });
+
+    it({
+      name:
+        "returns unknown, not failed, for a daemon socket whose mode forbids connecting to it",
+      ignore: searchesDespiteMode(),
+      fn: async () => {
+        // A connection refused for want of permission says nothing of whether
+        // the daemon behind the socket answers.
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+          const socket = join(directory, "daemon.sock");
+          try {
+            await Deno.chmod(socket, 0o000);
+
+            const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+            expect(row).toMatchObject({
+              state: "unknown",
+              value: "not verified",
+            });
+            expect(row.reason).toContain("Permission denied");
+            expect(daemon.lines).toEqual([]);
+          } finally {
+            await Deno.chmod(socket, 0o600);
+            await daemon.close();
+          }
+        });
+      },
+    });
+
+    it("returns unknown, not failed, where the daemon it last asked could not be connected to", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          let connectable = true;
+          const probe = consoleVmHealthProbe(store(directory), {
+            touch: (socket) =>
+              connectable
+                ? touchCfcVmDaemon(socket)
+                : Promise.resolve({ failed: "PermissionDenied: denied" }),
+          });
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          connectable = false;
+
+          const row = await readRow(probe);
+
+          expect(row).toMatchObject({
+            state: "unknown",
+            value: "not verified",
+          });
+          expect(row.reason).toContain("PermissionDenied: denied");
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns running with the daemon's uptime, guest memory and images, and says the question is activity", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+          expect(row).toMatchObject({ state: "ok", value: "running" });
+          expect(row.detail).toContain("up 26m 32s");
+          expect(row.detail).toContain(
+            "guest memory 1839 MiB available of 1992 MiB",
+          );
+          expect(row.detail).toContain("images kitchensink");
+          expect(row.reason).toContain("counts as activity");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed naming the image the VM has not attached and the store holds no block image for", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: ["other"] }),
+        );
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM has no kitchensink image",
+          });
+          expect(row.remedy).toContain("ext4/kitchensink.ext4");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns unknown, not running, where which image the rootfs names could not be told", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: [] }),
+        );
+        try {
+          const row = await readRow(
+            consoleVmHealthProbe(
+              store(directory, {
+                found: "unresolved",
+                reason: "PermissionDenied: denied",
+              }),
+            ),
+          );
+
+          expect(row).toMatchObject({
+            state: "unknown",
+            value: "not verified",
+          });
+          expect(row.reason).toContain("PermissionDenied: denied");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns running when the store holds the block image the VM has not attached", async () => {
+      await withStore(async (directory) => {
+        await Deno.mkdir(join(directory, "ext4"));
+        await Deno.writeTextFile(
+          join(directory, "ext4", "kitchensink.ext4"),
+          "",
+        );
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: [] }),
+        );
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({ state: "ok", value: "running" });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed when the daemon takes the question and gives no answer within the bound", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        const daemon = fakeVmDaemon(directory, () => undefined);
+        try {
+          const reading = consoleVmHealthProbe(store(directory)).read();
+          await daemon.asked;
+          time.tick(CFC_VM_STATUS_BOUND_MS);
+          const [row] = await reading;
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
+          expect(row.reason).toContain(`${CFC_VM_STATUS_BOUND_MS} ms`);
+          expect(row.remedy).toContain("daemon.log");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns running for an answer that comes after the ten seconds the daemon gives its guest", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        const daemon = fakeVmDaemon(directory, () => undefined);
+        try {
+          const reading = consoleVmHealthProbe(store(directory)).read();
+          await daemon.asked;
+          time.tick(12_000);
+          await daemon.answerHeld(JSON.stringify(STATUS));
+          const [row] = await reading;
+
+          expect(row).toMatchObject({ state: "ok", value: "running" });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("leaves no timer running once the daemon has answered", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          const reading = await askCfcVmStatus(join(directory, "daemon.sock"));
+
+          expect(reading.found).toBe("status");
+          expect(time.next()).toBe(false);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns no daemon only for a connection refused or not found, and unreadable for any other failure to connect", async () => {
+      const failing = (error: Error) => () => Promise.reject(error);
+      const denied = new Deno.errors.PermissionDenied("denied");
+
+      expect(
+        await askCfcVmStatus("/store/daemon.sock", {
+          connect: failing(new Deno.errors.ConnectionRefused("refused")),
+        }),
+      ).toEqual({ found: "no-daemon" });
+      expect(
+        await askCfcVmStatus("/store/daemon.sock", {
+          connect: failing(new Deno.errors.NotFound("gone")),
+        }),
+      ).toEqual({ found: "no-daemon" });
+      expect(
+        await askCfcVmStatus("/store/daemon.sock", {
+          connect: failing(denied),
+        }),
+      ).toEqual({
+        found: "unreadable",
+        reason: `The daemon socket could not be connected to: ${denied}`,
+      });
+    });
+
+    it("returns no answer, carrying the error, where the exchange with the daemon fails within the bound", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          const reading = await askCfcVmStatus(join(directory, "daemon.sock"), {
+            // A connection closed under the question, so that writing it
+            // fails.
+            connect: async (path) => {
+              const connection = await Deno.connect({
+                transport: "unix",
+                path,
+              });
+              connection.close();
+              return connection;
+            },
+          });
+
+          expect(reading).toEqual({
+            found: "no-answer",
+            reason: expect.stringContaining(
+              "The exchange with the daemon failed: ",
+            ),
+          });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed when the daemon answers with something other than its status", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => "error: busy");
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    for (
+      const [what, answer] of [
+        ["no `images` list", { error: "busy", guest: STATUS.guest }],
+        ["an image that is not a name", { ...STATUS, images: [1] }],
+        ["a `guest` that is not an object", { ...STATUS, guest: "down" }],
+      ] as const
+    ) {
+      it(`returns failed when the daemon answers with ${what}, which is not a status`, async () => {
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => JSON.stringify(answer));
+          try {
+            const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+            expect(row).toMatchObject({
+              state: "failed",
+              value: "the VM daemon does not answer",
+            });
+          } finally {
+            await daemon.close();
+          }
+        });
+      });
+    }
+
+    for (
+      const guest of [{}, { memTotalKiB: 2_040_268 }, {
+        memAvailableKiB: 1_883_096,
+      }]
+    ) {
+      it(`returns failed when the daemon answers with the guest's figures ${JSON.stringify(Object.keys(guest))} alone`, async () => {
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(
+            directory,
+            () => JSON.stringify({ ...STATUS, guest }),
+          );
+          try {
+            const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+            expect(row).toMatchObject({
+              state: "failed",
+              value: "the VM guest does not answer",
+            });
+          } finally {
+            await daemon.close();
+          }
+        });
+      });
+    }
+
+    it("asks a running daemon no more often than its idle timeout and two of its idle checks, finding it listening between", async () => {
+      await withStore(async (directory) => {
+        // Fake time moves the wall clock the row's times are read from, so
+        // the second read is not in the first one's millisecond.
+        using time = new FakeTime();
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          let now = 1_000_000;
+          let touches = 0;
+          const probe = consoleVmHealthProbe(store(directory), {
+            now: () => now,
+            touch: (socket) => {
+              touches += 1;
+              return touchCfcVmDaemon(socket);
+            },
+          });
+
+          const first = await readRow(probe);
+          now += 629_999;
+          time.tick(629_999);
+          const between = await readRow(probe);
+
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+          expect(touches).toBe(1);
+          expect(between).toMatchObject({
+            state: first.state,
+            value: first.value,
+            detail: first.detail,
+          });
+          expect(between.checkedAt).not.toBe(first.checkedAt);
+          expect(between.reason).toContain(first.checkedAt);
+
+          now += 1;
+          await readRow(probe);
+          expect(daemon.lines.length).toBe(2);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns idle, and asks nothing, once the daemon it last asked has stopped and left its socket", async () => {
+      await withStore(async (directory) => {
+        const probe = consoleVmHealthProbe(store(directory));
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS), {
+          leaveSocket: true,
+        });
+        expect(await readRow(probe)).toMatchObject({ value: "running" });
+        await daemon.close();
+
+        expect(await readRow(probe)).toMatchObject({
+          state: "ok",
+          value: "idle; starts on first use",
+        });
+        expect(daemon.lines).toEqual(["#cfcvm status"]);
+      });
+    });
+
+    it("asks a daemon that has replaced the one it last asked at once", async () => {
+      await withStore(async (directory) => {
+        const probe = consoleVmHealthProbe(store(directory));
+        // The probe tells sockets apart by inode and modification time, and a
+        // file system may give a new socket the inode just freed, within the
+        // same clock tick. The second socket is bound while the first's file
+        // still holds its inode, so the two cannot match.
+        const first = fakeVmDaemon(directory, () => JSON.stringify(STATUS), {
+          leaveSocket: true,
+        });
+        await readRow(probe);
+        // A second name keeps the first socket's inode allocated past the
+        // close, so the replacement cannot be handed the same inode number.
+        // Linux reuses a freed one at once and stamps both sockets from a
+        // coarse clock, so without this the two could share the dev, inode
+        // and mtime the probe tells daemons apart by; macOS, where the row
+        // exists, reuses neither.
+        await Deno.link(
+          join(directory, "daemon.sock"),
+          join(directory, "first.sock"),
+        );
+        await first.close();
+        const second = fakeVmDaemon(directory, () => "error: busy", {
+          leaveSocket: true,
+        });
+        try {
+          expect(await readRow(probe)).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
+          expect(second.lines).toEqual(["#cfcvm status"]);
+        } finally {
+          await second.close();
+        }
+      });
+    });
+
+    const answeredButNotOk: {
+      what: string;
+      answer: Record<string, unknown>;
+      examine?: (path: string) => ConsolePathReading;
+      expected: { state: string; value: string };
+    }[] = [{
+      what: "the image the rootfs names missing",
+      answer: { ...STATUS, images: ["other"] },
+      expected: { state: "failed", value: "the VM has no kitchensink image" },
+    }, {
+      what: "the image's block file unreadable",
+      answer: { ...STATUS, images: ["other"] },
+      examine: () => ({ found: "unreadable", reason: "denied" }),
+      expected: { state: "unknown", value: "not verified" },
+    }, {
+      what: "no figures from the guest",
+      answer: { ...STATUS, guest: {} },
+      expected: { state: "failed", value: "the VM guest does not answer" },
+    }];
+    for (const { what, answer, examine, expected } of answeredButNotOk) {
+      it(`asks once in five reads within its interval where the answer found ${what}`, async () => {
+        // A status question is activity, so asking one at every read would
+        // keep the VM up for as long as anything reads the row.
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => JSON.stringify(answer));
+          try {
+            let now = 1_000_000;
+            let touches = 0;
+            const probe = consoleVmHealthProbe(store(directory), {
+              now: () => now,
+              touch: (socket) => {
+                touches += 1;
+                return touchCfcVmDaemon(socket);
+              },
+              ...(examine !== undefined ? { examine } : {}),
+            });
+
+            for (let read = 0; read < 5; read += 1) {
+              expect(await readRow(probe)).toMatchObject(expected);
+              now += 30_000;
+            }
+
+            expect(daemon.lines).toEqual(["#cfcvm status"]);
+            expect(touches).toBe(4);
+          } finally {
+            await daemon.close();
+          }
+        });
+      });
+    }
+
+    it("returns running once the missing image's block file is installed, without asking the daemon again", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: [] }),
+        );
+        try {
+          const probe = consoleVmHealthProbe(store(directory));
+          expect(await readRow(probe)).toMatchObject({ state: "failed" });
+
+          await Deno.mkdir(join(directory, "ext4"));
+          await Deno.writeTextFile(
+            join(directory, "ext4", "kitchensink.ext4"),
+            "",
+          );
+
+          expect(await readRow(probe)).toMatchObject({
+            state: "ok",
+            value: "running",
+          });
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    for (
+      const [what, reply] of [
+        ["a line that is not JSON", "error: unknown control status"],
+        ["a JSON object that is not a status", JSON.stringify({ ok: true })],
+      ] as const
+    ) {
+      it(`asks once in five reads within its interval where the daemon answers ${what}`, async () => {
+        // An answer is activity whatever it says, so asking again at every
+        // read would keep a daemon speaking another protocol up for as long as
+        // anything reads the row.
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => reply);
+          try {
+            let now = 1_000_000;
+            const probe = consoleVmHealthProbe(store(directory), {
+              now: () => now,
+            });
+
+            for (let read = 0; read < 5; read += 1) {
+              expect(await readRow(probe)).toMatchObject({
+                state: "failed",
+                value: "the VM daemon does not answer",
+              });
+              now += 30_000;
+            }
+
+            expect(daemon.lines).toEqual(["#cfcvm status"]);
+          } finally {
+            await daemon.close();
+          }
+        });
+      });
+    }
+
+    it("asks again at the next read after the daemon hung up without an answer", async () => {
+      await withStore(async (directory) => {
+        let reply = "";
+        const daemon = fakeVmDaemon(directory, () => reply);
+        try {
+          const probe = consoleVmHealthProbe(store(directory));
+          expect(await readRow(probe)).toMatchObject({ state: "failed" });
+
+          reply = JSON.stringify(STATUS);
+
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          expect(daemon.lines.length).toBe(2);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("asks again at the next read after no answer within the bound", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        let answered = false;
+        const daemon = fakeVmDaemon(
+          directory,
+          () => answered ? JSON.stringify(STATUS) : undefined,
+        );
+        try {
+          const probe = consoleVmHealthProbe(store(directory));
+          const reading = probe.read();
+          await daemon.asked;
+          time.tick(CFC_VM_STATUS_BOUND_MS);
+          expect((await reading)[0]).toMatchObject({ state: "failed" });
+
+          answered = true;
+
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          expect(daemon.lines.length).toBe(2);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    for (const gone of ["no socket", "a socket nothing listens on"] as const) {
+      it(`asks again after it found ${gone}, even where the socket then looks unchanged`, async () => {
+        // The socket's identity is held fixed, so that only having found no
+        // daemon stands between the last answer and the next question.
+        await withStore(async (directory) => {
+          const unchanged = Deno.lstatSync(directory);
+          let present = true;
+          const probe = consoleVmHealthProbe(store(directory), {
+            lstat: () => {
+              if (!present) throw new Deno.errors.NotFound("no socket");
+              return unchanged;
+            },
+          });
+          const first = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+          await readRow(probe);
+          await first.close();
+          present = gone === "a socket nothing listens on";
+          expect(await readRow(probe)).toMatchObject({
+            value: "idle; starts on first use",
+          });
+
+          present = true;
+          const second = fakeVmDaemon(
+            directory,
+            () => JSON.stringify(STATUS),
+          );
+          try {
+            await readRow(probe);
+
+            expect(second.lines).toEqual(["#cfcvm status"]);
+          } finally {
+            await second.close();
+          }
+        });
+      });
+    }
+
+    it("returns the row unknown when the observation itself throws", async () => {
+      // `ConsoleHealth` reports a probe whose read rejects through the
+      // probe's own unavailable rows: a failure to look is not a failure of
+      // the VM.
+      const unchanged = Deno.lstatSync(Deno.cwd());
+      const health = new ConsoleHealth([], [
+        consoleVmHealthProbe(store("/store"), {
+          lstat: () => unchanged,
+          ask: () => Promise.reject(new Error("asking failed")),
+        }),
+      ]);
+
+      await health.refresh();
+
+      const [row] = health.snapshot().rows;
+      expect(row).toMatchObject({
+        id: "sandbox.vm",
+        state: "unknown",
+        value: "not verified",
+        reason: "The VM daemon could not be looked for.",
+      });
+      expect(row.checkedAt).not.toBeNull();
+    });
+
+    it("returns unknown when the socket could not be looked at", async () => {
+      const row = await readRow(
+        consoleVmHealthProbe(store("/store"), {
+          lstat: () => {
+            throw new Deno.errors.PermissionDenied("denied");
+          },
+        }),
+      );
+
+      expect(row).toMatchObject({ state: "unknown", value: "not verified" });
+    });
+  });
+
+  describe("readConsolePolicy()", () => {
+    it("returns what a policy file holds: a JSON object, or malformed", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "cf-harness-policy-" });
+      try {
+        const write = async (name: string, text: string) => {
+          await Deno.writeTextFile(join(dir, name), text);
+          return join(dir, name);
+        };
+
+        expect(
+          readConsolePolicy(
+            await write("ok.json", '{"path_labels":[],"sink_rules":[]}'),
+          ),
+        ).toEqual({ found: "policy" });
+        for (
+          const text of ["", "{", "[]", "null", '"policy"', "42"]
+        ) {
+          expect(
+            readConsolePolicy(await write("bad.json", text)).found,
+          ).toBe("malformed");
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("returns denied for a read refused by permission, and unreadable for any other failed read", () => {
+      const denied = new Deno.errors.PermissionDenied(
+        "Permission denied (os error 13): open '/store/policy.json'",
+      );
+
+      expect(readConsolePolicy("/store/policy.json", () => {
+        throw denied;
+      })).toEqual({ found: "denied", reason: String(denied) });
+      const gone = new Deno.errors.NotFound("gone between stat and read");
+      expect(readConsolePolicy("/store/policy.json", () => {
+        throw gone;
+      })).toEqual({ found: "unreadable", reason: String(gone) });
+    });
+
+    it({
+      name: "returns denied for a policy file whose mode forbids reading it",
+      ignore: searchesDespiteMode(),
+      fn: async () => {
+        const dir = await Deno.makeTempDir({ prefix: "cf-harness-policy-" });
+        const policy = join(dir, "policy.json");
+        try {
+          await Deno.writeTextFile(policy, "{}");
+          await Deno.chmod(policy, 0o000);
+
+          expect(readConsolePolicy(policy).found).toBe("denied");
+        } finally {
+          await Deno.chmod(policy, 0o600);
+          await Deno.remove(dir, { recursive: true });
+        }
+      },
+    });
+  });
+
+  describe("readConsolePath()", () => {
+    it("returns unreadable, carrying the error, for a look that fails other than as not found", () => {
+      const denied = new Deno.errors.PermissionDenied(
+        "Permission denied (os error 13): stat '/store/bin/runsc'",
+      );
+
+      expect(readConsolePath("/store/bin/runsc", () => {
+        throw denied;
+      })).toEqual({ found: "unreadable", reason: String(denied) });
+      expect(readConsolePath("/store/bin/runsc", () => {
+        throw new Deno.errors.NotFound("not there");
+      })).toEqual({ found: "absent" });
+    });
+
+    it("returns what is at each path, and absent only for a path that is not there", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "cf-harness-path-" });
+      try {
+        const executable = join(dir, "runsc");
+        const plain = join(dir, "policy.json");
+        await Deno.writeTextFile(executable, "");
+        await Deno.chmod(executable, 0o755);
+        await Deno.writeTextFile(plain, "{}");
+        await Deno.chmod(plain, 0o644);
+
+        expect(readConsolePath(executable)).toEqual({
+          found: "file",
+          executable: true,
+        });
+        expect(readConsolePath(plain)).toEqual({
+          found: "file",
+          executable: false,
+        });
+        expect(readConsolePath(dir)).toEqual({ found: "directory" });
+        expect(readConsolePath(join(dir, "missing"))).toEqual({
+          found: "absent",
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it({
+      name:
+        "returns unreadable, not absent, for a path it has no permission to look at",
+      ignore: searchesDespiteMode(),
+      fn: async () => {
+        const dir = await Deno.makeTempDir({ prefix: "cf-harness-path-" });
+        const locked = join(dir, "locked");
+        try {
+          await Deno.mkdir(locked);
+          await Deno.writeTextFile(join(locked, "runsc"), "");
+          await Deno.chmod(locked, 0o000);
+
+          const reading = readConsolePath(join(locked, "runsc"));
+          expect(reading.found).toBe("unreadable");
+          expect(
+            reading.found === "unreadable" ? reading.reason : "",
+          ).toContain(join(locked, "runsc"));
+        } finally {
+          await Deno.chmod(locked, 0o700);
+          await Deno.remove(dir, { recursive: true });
+        }
+      },
+    });
   });
 
   describe("consolePatternIndexHealthProbes()", () => {

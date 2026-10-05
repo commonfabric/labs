@@ -10,8 +10,9 @@
  *
  * - {@link startServingMemoryServer} is reached in-process only, by
  *   `EmulatedStorageManager.connectTo(served.server, ...)`. Its session opens
- *   are authorized the way `newLoopbackServer()`'s are, by the principal the
- *   envelope names.
+ *   are authorized by `authorizeLoopbackSessionOpen()`: the serving runtimes'
+ *   signed opens are verified, as toolshed's are, and a client's unsigned
+ *   open is trusted as the principal it names.
  * - {@link listenServingMemoryServer} also listens on a localhost websocket,
  *   at `url`, for runtimes built with the `remoteClient` preset — in this
  *   realm, in a Deno Worker, or in a subprocess. Its session opens are
@@ -153,13 +154,25 @@ export async function listenServingMemoryServer(
     serve?: (
       request: Request,
     ) => Response | undefined | Promise<Response | undefined>;
+
+    /**
+     * The memory server's access-list mode. When given, the service identity
+     * is the server's one delegating principal, as a toolshed running server
+     * execution lists its own process identity, and no principal is a
+     * service principal. Absent, the server has no access-list
+     * configuration at all: `off`, with no delegating principal.
+     */
+    aclMode?: MemoryV2Server.MemoryAclMode;
   } = {},
 ): Promise<ListeningServingMemoryServer> {
-  const { apiUrl, serve: answer, ...hostOptions } = options;
+  const { apiUrl, serve: answer, aclMode, ...hostOptions } = options;
   const serviceIdentity = options.serviceIdentity ?? await Identity.generate();
-  const standalone = StandaloneMemoryServer.start(
-    answer !== undefined ? { serve: answer } : {},
-  );
+  const standalone = StandaloneMemoryServer.start({
+    ...(aclMode !== undefined
+      ? { acl: { mode: aclMode, delegatingDids: [serviceIdentity.did()] } }
+      : {}),
+    ...(answer !== undefined ? { serve: answer } : {}),
+  });
   const served = attachServingLoop({
     server: standalone.server,
     apiUrl: apiUrl ?? standalone.url,

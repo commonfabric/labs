@@ -18,6 +18,7 @@ import {
   describeTerminalFailure,
   normalizeTerminalResponse,
   providerRunAffinityKey,
+  REASONING_SUMMARY,
   toResponsesInput,
   toResponsesTools,
 } from "./responses-protocol.ts";
@@ -37,6 +38,7 @@ import type {
   HarnessModelTurnRequest,
   HarnessModelTurnResult,
 } from "./client.ts";
+import { assertOpenAIReasoningEffortSupported } from "./openai-reasoning.ts";
 import { normalizeOpenAIUsage } from "./usage.ts";
 
 export const OPENAI_CODEX_RESPONSES_URL =
@@ -512,6 +514,10 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         "openai-codex does not support server-side compaction in this release",
       );
     }
+    assertOpenAIReasoningEffortSupported(
+      request.model,
+      request.reasoningEffort,
+    );
     if (request.signal?.aborted) throw abortReason(request.signal);
     const converted = await toResponsesInput(
       request.transcript,
@@ -542,9 +548,13 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       text: { verbosity: "low" },
       include: ["reasoning.encrypted_content"],
       prompt_cache_key: affinityKey,
-      ...(request.reasoningEffort !== undefined
-        ? { reasoning: { effort: request.reasoningEffort } }
-        : {}),
+      // Every model Codex serves reasons, so every turn asks for a summary.
+      reasoning: {
+        ...(request.reasoningEffort !== undefined
+          ? { effort: request.reasoningEffort }
+          : {}),
+        summary: REASONING_SUMMARY,
+      },
       tool_choice: "auto",
       parallel_tool_calls: true,
     });

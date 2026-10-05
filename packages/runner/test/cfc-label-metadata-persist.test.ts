@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 
 import {
@@ -121,8 +122,8 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
       space: signer.did(),
       scope: "space",
       id: targetId,
-      path: ["value", "field"],
-    }, "v");
+      path: ["field"],
+    }, linkRefFrom({ space: signer.did(), id: sourceId, path: [] }));
     // The link-write policy input a round-tripped write records: the source
     // address is authoritative (derived from the sigil link itself), but the
     // carried view is whatever the main thread handed back.
@@ -132,7 +133,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       },
       source: {
         space: signer.did(),
@@ -377,15 +378,15 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
-      }, "v");
+        path: ["field"],
+      }, linkRefFrom({ space: signer.did(), id: sourceId, path: [] }));
       tx.recordCfcWritePolicyInput({
         kind: "link-write",
         target: {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),

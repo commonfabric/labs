@@ -93,4 +93,9 @@ export class SymbolCodec<Encoded>
   ): FabricValue {
     return Symbol.for(state);
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

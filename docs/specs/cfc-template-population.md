@@ -80,7 +80,10 @@ closes the pointer-identity residual**: a probe or dereference at a
 computed slot consumes the assignment decision (`J` decided *which*
 element the reader resolves through — inv-9 flow-path confidentiality),
 while still consuming nothing of the container's *content* classes and
-nothing of the target beyond its own link entry. The pointer/content
+nothing of the target beyond its own link entry. A dereference consumes
+it through the probe of the slot it follows, once per followed slot
+(spec §4.6.3 "Dereference retains the reference restrictions", §8.2.4);
+the target's content arrives through the ordinary reads of the target. The pointer/content
 split that today hangs on the exact-path anchoring hack moves onto the
 class axis, where it belongs — refined, not dissolved: probes stay clean
 of content taint (`shape`/`value` templates are not followRef-consumable)
@@ -291,11 +294,32 @@ minted into the same entries, not the mechanism.
      same-tx dereference trace skip templates (the C0 §6.1 row-4
      machinery rule extended to the plain reads resolution journals at
      followed slots; standalone observations — the row-3 SC-8 closures —
-     consume in full). Consequence of the second: a full dereference
-     consumes the target's content but not the slot's membership `J`;
-     §2's "probe **or dereference**" overstated what the shipped row-3/
-     row-4 boundary distinguishes, and the probe/standalone-read half is
-     what landed.
+     consume in full). The second boundary covers the reads a
+     dereference makes on its way, not the dereference: the probe of the
+     followed slot is a pointer observation, and it consumes the
+     `followRef` entries that resolve at that slot, the membership
+     template among them. A reader that follows a slot of a computed
+     container therefore carries the membership `J` with the target's
+     content, including where the targets carry no label of their own
+     (spec §18.7, "private query selects public targets"). A probe the
+     machinery marker covers, and the write path's probe of its own
+     destination, consume nothing, as before.
+  3. **A pointer observation consumes the templates at its slot, not
+     those beneath it.** A probe asks which reference sits at one slot,
+     and a runtime-minted `*` template beneath that slot labels which
+     reference sits at a child. Read at the sigil's path
+     (`linkProbeSubPath()`), a probe of a container matches the
+     container's own child template through the sigil key; in the atomic
+     layout, where the probe reads the slot itself, recursion reaches it.
+     `Cell.set` probes the root of the store it writes, so a probe that
+     consumed the templates beneath its slot would carry the label a
+     store was created under onto every other document its later
+     writers write. Dropping them takes nothing from a reader of the
+     children: following a child's slot consumes the template there
+     (item 2), reading a child's content or existence consumes the
+     `value`/`shape` twins, and a probe of a child's own slot consumes
+     the template at that slot. Declared `*` entries are the schema's
+     policy, not runtime templates, and stay consumed.
 - **Stage B (Stage-2 full population; one PR, after A):** the
   `/cfc/labels/...` template mints per §5 + `inspectConfLabel` consuming
   them (upgrading WP7's computed-in-hand labels to persisted templates),
@@ -315,11 +339,12 @@ minted into the same entries, not the mechanism.
   entry / SC-11-no-op by construction and keeps every derived/structure-
   keyed persist rule (freeze-carry, SC-4 pooling, writer-fit selection,
   restamp drops) ignoring them without carve-outs. The Stage-2 observation
-  CLASS on the `observes` axis because `readConsumesEntry` then already
-  yields the needed consumption table: no payload read class consumes them —
-  the introspection surface is the only consumer (the deliberately
-  over-inclusive `"all"` write-gate selection may, harmlessly: template
-  content duplicates the payload entries it derives from). Per labeled
+  CLASS on the `observes` axis marks them as observations of metadata. They
+  are keyed under `cfc/labels/...` relative to the stored document, so a
+  reader decodes them out of an envelope's payload entries
+  (`labelMap.documentEntries`, spec §4.6.4's resolution isolation): no
+  payload lookup, the over-inclusive write-gate selection included, ever
+  sees one, and the introspection surface is the only consumer. Per labeled
   target path: the whole-atom template plus one per-field template per
   DISTINCT protected top-level field name (deeper protected content —
   nested atoms behind public wrapper fields, array elements, bare

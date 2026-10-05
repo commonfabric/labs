@@ -185,6 +185,30 @@ describe("FabricError", () => {
     describe("`[CODEC]` `encode()` state", () => {
       const env = NULL_LIVE_ENVIRONMENT;
 
+      it("returns frozen state, for an instance that is not frozen", () => {
+        const se = FabricError.fromNativeError(new Error("hello"));
+
+        expect(Object.isFrozen(se)).toBe(false);
+        expect(Object.isFrozen(FabricError[CODEC].encode(se, env))).toBe(true);
+      });
+
+      it("returns state holding a `cause` as itself, unfrozen", () => {
+        const cause = { detail: "x" };
+        const se = new FabricError({
+          type: "Error",
+          message: "hello",
+          stack: undefined,
+          cause,
+        });
+        const state = FabricError[CODEC].encode(se, env) as Record<
+          string,
+          FabricValue
+        >;
+
+        expect(state.cause).toBe(cause);
+        expect(Object.isFrozen(cause)).toBe(false);
+      });
+
       it("returns `type`, `name=null` (common case), `message`, `stack`", () => {
         const se = FabricError.fromNativeError(new Error("hello"));
         const state = FabricError[CODEC].encode(se, env) as Record<

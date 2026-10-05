@@ -33,6 +33,7 @@ import {
   JSON_CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
+  REALM_CODEC,
 } from "@/codec-common";
 import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
 import { FabricRegExp } from "@/fabric-primitives";
@@ -175,6 +176,11 @@ describe("FabricRegExp", () => {
             source: "ab+c",
           });
         });
+
+        it("returns a frozen record", () => {
+          const re = new FabricRegExp(/ab+c/gi);
+          expect(Object.isFrozen(codec.encode(re, env))).toBe(true);
+        });
       });
 
       describe("canDecode()", () => {
@@ -288,6 +294,18 @@ describe("FabricRegExp", () => {
           expect(decoded).toBeInstanceOf(FabricRegExp);
           expect(decoded.source).toBe("^x*$");
           expect(decoded.flags).toBe("");
+        });
+      });
+    });
+
+    describe("[REALM_CODEC]", () => {
+      const codec = FabricRegExp[REALM_CODEC];
+      const env = NULL_LIVE_ENVIRONMENT;
+
+      describe("encode()", () => {
+        it("returns a frozen record", () => {
+          const re = new FabricRegExp(/ab+c/gi);
+          expect(Object.isFrozen(codec.encode(re, env))).toBe(true);
         });
       });
     });

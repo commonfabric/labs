@@ -90,6 +90,17 @@ counts their three child templates (`shape`, `value`, and `followRef`). These
 counters measure work before final entry coalescing; they do not count distinct
 persisted entries.
 
+## Parsing untrusted CFC labels
+
+`parseIfcLabel` from `@commonfabric/runner/cfc` is the public boundary for a
+standalone label received as untrusted JSON. It accepts object atoms and
+confidentiality `{ anyOf: [...] }` clauses, preserves extension atom type URIs,
+and returns a deeply detached `IFCLabel`.
+
+Malformed values throw `InvalidIfcLabelError` with a JSON-pointer-like `path`.
+Callers must treat the refusal as an invalid label, never as an unlabeled value.
+The parser checks grammar only; consumers remain responsible for policy meaning.
+
 ## Architecture
 
 The Runner has been refactored to eliminate singleton patterns in favor of
@@ -961,17 +972,13 @@ compiled closure replication into each requested space. Those writes participate
 in the runtime's durability barrier. With CFC disabled, compilation still uses
 the requested space for fabric imports but does not replicate closures.
 
+## Space access
+
+`ACLManager.grant(did, "READ" | "WRITE")` adds access monotonically inside the
+conflict-retried transaction, preserving existing WRITE or OWNER grants. Callers
+must not replay a grant after an independent revocation.
+
 ## Contributing
 
 See the project's main contribution guide for details on development workflow,
 testing, and submitting changes.
-
-## Private DID inboxes
-
-`InboxClient` from `@commonfabric/runner/inbox` provides signed generic
-delivery, private recipient reads, and durable deduplication. See
-[DID inboxes](../../docs/features/did-inboxes.md) for the wire contract.
-`ACLManager.grant(did, "READ" | "WRITE")` adds access monotonically inside the
-conflict-retried transaction, preserving existing WRITE or OWNER grants.
-Delivery and access changes are separate operations; callers own their workflow
-and must not replay a grant after an independent revocation.

@@ -36,7 +36,11 @@ a string is sufficient to tell whether it carries a `FabricValue` payload.
   the JSON body, on every encoded value (including encoded primitives — e.g.,
   the number `42` encodes as the seven-character string `fvj1:42`).
 - A conforming **decoder** verifies the prefix is present before parsing the
-  remainder as JSON, and strips the prefix before processing.
+  remainder as JSON, and strips the prefix before processing. It refuses JSON
+  in which an object names one member twice, and a number too large in
+  magnitude for an IEEE 754 double, which it does not round to an infinity or
+  to the largest double. It refuses the number `-0` too: negative zero is
+  written only as `SpecialNumber@1` (Section 3).
 - A short detection helper (`JsonCodecEngine.seemsLikeEncoded()`) tests for
   the prefix without parsing — useful for routing arbitrary input through the
   right decode path.
@@ -91,10 +95,15 @@ round-trip correctly.
 > format use the URL-safe base64url alphabet (`A-Za-z0-9-_`, per RFC 4648
 > Section 5). Encoders **must omit** trailing `=` padding characters. Decoders
 > **must accept** both padded and unpadded input for compatibility;
-> standard-base64 characters (`+`, `/`) are still invalid and must be rejected.
-> This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`, and
-> `EpochDay@1` state values, to the `hash` field of `Hash@1` state, and to the
-> `publicKey` and `privateKey` fields of `KeyPair@1` state.
+> standard-base64 characters (`+`, `/`) are still invalid and must be rejected,
+> as is whitespace, or any other character outside the alphabet and the
+> trailing padding. Every bit the characters carry past the last whole byte
+> must be zero, so that `AQ` is the one spelling of the byte `0x01` and `AR`
+> is refused.
+> This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
+> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, to the
+> `hash` field of `Hash@1` state, and to the `publicKey` and `privateKey` fields
+> of `KeyPair@1` state.
 
 The JSON key for a tagged value is the tag with `/` prepended, per Section 2:
 a value under `Link@1` is written `{ "/Link@1": <state> }`. What follows
@@ -104,11 +113,13 @@ Section 4.5.
 
 These types need no rule beyond the shape of their state:
 
-- `Link@1` — `{ id: string, path: string[], space: string }`.
+- `Link@1` — a plain object, the link's payload. The format sets no policy on
+  its fields, which each use of links defines; `{ id: string, path: string[],
+  space: string }` is one such shape.
 - `Error@1` — `{ type: string, name: string | null, message: string, stack?:
   string, cause?: <any>, ... }`, where the trailing properties are the error's
   own custom ones.
-- `Undefined@1` — `null`. The type is stateless (Section 5).
+- `Undefined@1` — `null`, and nothing else. The type is stateless (Section 5).
 - `Map@1` — `[[key, value], ...]`, entry pairs in insertion order.
 - `Set@1` — `[value, ...]`, values in insertion order.
 - `Bytes@1` — a base64url string, per the convention above.
@@ -193,10 +204,14 @@ than magnitude: `0x80` alone decodes as `-128`, so a leading zero byte is
 required to keep the value positive. This is the same encoding the hash byte
 format uses for bigint payloads (`2-hash-byte-format.md` Section 4.5).
 
-### `EpochNsec@1` and `EpochDay@1` — epoch quantities
+On decoding, a state that is not minimal — one with a leading `0x00` or `0xFF`
+byte that the sign does not need — is refused.
 
-Both carry a bigint, and both encode it exactly as `BigInt@1` does: base64url
-of the minimal two's-complement big-endian bytes.
+### Temporal quantities
+
+`EpochNsec@1`, `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` each carry a
+bigint, and each encodes it exactly as `BigInt@1` does: base64url of the
+minimal two's-complement big-endian bytes.
 
 ### `SpecialNumber@1` — numbers JSON cannot represent
 
@@ -211,7 +226,9 @@ State is one of exactly four literal strings, and nothing else:
 The state is a string rather than a JSON number because a numeric state would
 be lossy through the JSON layer: `JSON.stringify` emits `null` for `NaN` and
 the infinities, and drops the sign of `-0`. On decoding, any other state —
-including one that is not a string — produces a `ProblematicValue`.
+including one that is not a string — produces a `ProblematicValue`. This is
+the only way negative zero is written: the JSON number `-0` is refused
+(Section 1.1).
 
 Whether such a value reaches the encoder at all depends on the `FabricValue`
 conversion gate (`1-fabric-values.md` Section 4.9). The encoding above is the
@@ -266,8 +283,9 @@ See `1-fabric-values.md` Section 3.5.
 > carries the fields the decoding reads and that they are strings, that a
 > literal is one of a fixed set. `decode()` holds a check whose only
 > implementation is the decoding itself — that a base64url string (such as
-> `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, or `Bytes@1`) is valid base64url is
-> answered by decoding it, so asking first costs that work twice.
+> `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, `DurationNsec@1`, `DurationDay@1`,
+> or `Bytes@1`) is valid base64url is answered by decoding it, so asking first
+> costs that work twice.
 >
 > A codec may reject from `decode()` by throwing, or by returning a
 > `ProblematicValue` (see `1-fabric-values.md` Section 3.5); with a refusal from
@@ -289,6 +307,18 @@ See `1-fabric-values.md` Section 3.5.
 > - `[1, , , , 5]` encodes as `[1, { "/hole": 3 }, 5]`.
 > - A very sparse array like `a = []; a[1000000] = 'x'` encodes as `[{ "/hole":
 >   1000000 }, "x"]`.
+
+> **Bounding a decode of untrusted text.** Parsing JSON text builds every
+> value the text writes, and because a `hole` run carries its length as a
+> number, a few bytes can also stand for billions of array slots that any walk
+> over the decoded array visits. A decoder reading untrusted text may therefore
+> refuse text standing for more slots than a limit its caller sets. A slot is
+> an array element or a record member written in the text, wherever it
+> appears, and a `hole` run adds one slot for each hole past the first that it
+> stands for. The elements and members can be counted by scanning the text
+> without parsing it, so a decoder can refuse text before building any of it.
+> The format itself sets no limit, and a decoder reading text it wrote itself
+> sets none.
 
 ## 4. Detection
 
@@ -336,8 +366,7 @@ Types that require no decoding state use `null` as the value:
 { "/Undefined@1": null }
 ```
 
-Both `null` and `{}` are acceptable for "no state needed." `null` is the
-conventional choice, as it is slightly more idiomatic for signaling absence.
+`null` is the only such state. A decoder refuses any other, `{}` included.
 The distinction between "`null` state" and "no state needed" is implied by the
 type being represented, not by the wire encoding.
 
@@ -388,7 +417,9 @@ are frozen via `Object.freeze()`). The immutability guarantee (see
 `1-fabric-values.md` Section 2.9) is a property of decoding output, not of
 whether decoding occurred. A caller receiving a value from the engine's
 `decode()` can always assume it is immutable, regardless of whether it came from
-a `/quote` path, a decoded type, or a plain literal.
+a `/quote` path, a decoded type, or a plain literal. An engine constructed with
+`mutable` as `true` reverses this uniformly: none of its output is frozen, the
+`/quote` path's included.
 
 Use cases:
 - Storing schemas or examples that describe special types without instantiating

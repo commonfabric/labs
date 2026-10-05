@@ -679,9 +679,8 @@ function readCeilingOptions(
 
 export const runtimePresets = {
   /**
-   * Long-running server process (toolshed, background-piece-service main and
-   * worker). Remote storage, real fetch, patterns fetch against the
-   * deployment's own API base.
+   * Long-running server process (toolshed). Remote storage, real fetch,
+   * patterns fetch against the deployment's own API base.
    */
   productionServer(params: ProductionServerPresetParams): RuntimeOptions {
     return {
@@ -703,8 +702,8 @@ export const runtimePresets = {
   },
 
   /**
-   * Short-lived client runtime operating against a deployed API (cast-admin,
-   * pieces controller, `cf acl` / `cf piece`). Same posture as
+   * Short-lived client runtime operating against a deployed API (pieces
+   * controller, `cf acl` / `cf piece`). Same posture as
    * productionServer; the deltas are collectors and caches.
    */
   remoteClient(params: RemoteClientPresetParams): RuntimeOptions {

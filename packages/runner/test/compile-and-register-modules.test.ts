@@ -108,6 +108,108 @@ describe("PatternManager.compileAndRegisterModules", () => {
     expect(runtime.patternManager.getArtifactEntryRef(entry)).toBeDefined();
   });
 
+  describe("given a persistence space", () => {
+    it("writes the program's source closure into that space", async () => {
+      const space = signer.did();
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        { space },
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored?.files.map((file) => file.name)).toEqual(["/main.tsx"]);
+      // The read above leaves a sync in flight, which teardown would cut off.
+      await runtime.storageManager.synced();
+    });
+
+    it("writes nothing into that space when `when` declines the result", async () => {
+      const space = signer.did();
+      let offered: unknown;
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        {
+          space,
+          when: (evaluated) => {
+            offered = evaluated;
+            return false;
+          },
+        },
+      );
+      expect(offered).toBe(result);
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored).toBeUndefined();
+    });
+
+    it("registers the modules when `when` declines the write", async () => {
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        { space: signer.did(), when: () => false },
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      expect(runtime.patternManager.programModuleIdentities(identity))
+        .toBeDefined();
+    });
+
+    it("leaves the modules unregistered when the write fails", async () => {
+      // The entry's identity is a content hash, so a compile in a second
+      // runtime names the same one.
+      const probeStorage = StorageManager.emulate({ as: signer });
+      const probe = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: probeStorage,
+      });
+      let identity: string;
+      try {
+        const probed = await probe.patternManager.compileAndRegisterModules(
+          program,
+        );
+        identity = probe.patternManager.getArtifactEntryRef(
+          probed.main!["default"] as object,
+        )!.identity;
+      } finally {
+        await probe.dispose();
+        await probeStorage.close();
+      }
+
+      runtime.patternManager.accessForTestingOnly.compileCacheWriter = () =>
+        Promise.reject(new Error("write refused"));
+      await expect(
+        runtime.patternManager.compileAndRegisterModules(
+          program,
+          undefined,
+          { space: signer.did() },
+        ),
+      ).rejects.toThrow("write refused");
+      expect(runtime.patternManager.programModuleIdentities(identity))
+        .toBeUndefined();
+    });
+
+    it("writes nothing into a space when none is given", async () => {
+      const space = signer.did();
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored).toBeUndefined();
+    });
+  });
+
   it("reuses an injected module byte cache across runtimes and still registers", async () => {
     // The cf-test harness injects a process-wide module byte cache
     // (`RuntimeOptions.moduleByteCache`) so repeated pattern compiles across

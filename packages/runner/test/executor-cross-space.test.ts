@@ -28,6 +28,7 @@ import {
 } from "../src/runtime.ts";
 import type { Cell } from "../src/cell.ts";
 import type {
+  DID,
   IExtendedStorageTransaction,
   MemorySpace,
   URI,
@@ -36,7 +37,10 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectForeignStaleInstances } from "../src/executor/space-server.ts";
-import { stampWaveRunContext } from "../src/executor/wave.ts";
+import {
+  stampWaveRunContext,
+  type WaveCommitSink,
+} from "../src/executor/wave.ts";
 import { ACLManager } from "../src/acl-manager.ts";
 import { wish as wishBuiltin } from "../src/builtins/wish.ts";
 import {
@@ -53,10 +57,14 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+} from "./memory-v2-test-utils.ts";
 
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.
@@ -70,17 +78,6 @@ class SharedServerStorageManager extends EmulatedStorageManager {
     return super.connectTo(server, options) as SharedServerStorageManager;
   }
 }
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    subscriptionRefreshDelayMs: 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 const homeSigner = await Identity.fromPassphrase("cross-space home");
 const homeSpace = homeSigner.did() as MemorySpace;
@@ -99,8 +96,13 @@ describe("Phase 5 cross-space serving", () => {
   let servingRuntime: Runtime | undefined;
   let onServingRuntime: ((runtime: Runtime) => Promise<void>) | undefined;
 
-  const newHost = (): ExecutorHost =>
+  const newHost = (
+    decorateWaveCommitSink?: (sink: WaveCommitSink) => WaveCommitSink,
+  ): ExecutorHost =>
     new ExecutorHost({
+      ...(decorateWaveCommitSink === undefined
+        ? {}
+        : { decorateWaveCommitSink }),
       server,
       serviceIdentity: serviceSigner.did(),
       createRuntime: async (space) => {
@@ -140,7 +142,9 @@ describe("Phase 5 cross-space serving", () => {
     );
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({
+      subscriptionRefreshDelayMs: 0,
+    });
     servingRuntime = undefined;
     onServingRuntime = undefined;
     activations = new ArrivalLog();
@@ -355,7 +359,7 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
-  it("space-name resolution on a serving runtime requires the acting identity as genesis owner; a client stays owner-free (OW31, RULED 2026-08-18)", async () => {
+  it("a serving runtime creates an `inSpace` target only for an acting identity, which owns it alone; a client creates one owned by its user (OW31, RULED 2026-08-18)", async () => {
     const manager = SharedServerStorageManager.connectTo(server, {
       as: serviceSigner,
       servingHomeSpace: homeSpace,
@@ -366,24 +370,57 @@ describe("Phase 5 cross-space serving", () => {
       servingPosture: true,
       experimental: { serverExecution: true },
     });
+    const aclOf = async (space: MemorySpace) =>
+      (await server.readDocument(space, `of:${space}`))?.value;
+    /**
+     * What `name` resolves to in `homeSpace` without suspending, in a run
+     * acting for `acting` when that is given.
+     */
+    const resolvedSync = (runtime: Runtime, name: string, acting?: DID) => {
+      const tx = runtime.edit();
+      if (acting !== undefined) {
+        stampWaveRunContext(tx, {
+          actionId: "ow31-resolved-sync",
+          kind: "event-handler",
+          eventId: "e-ow31-resolved-sync",
+          acting: { user: acting, session: "sess-ow31" },
+          capabilityRef: "event-consequence:e-ow31-resolved-sync",
+        });
+      }
+      try {
+        return runtime.resolveInSpaceNameSync(homeSpace, name, tx);
+      } finally {
+        tx.abort(new Error("test-only"));
+      }
+    };
     try {
-      // No acting identity: the serving runtime REFUSES to resolve (and
-      // therefore to register a bootstrap authority) — a served
-      // `.inSpace()` with no actor must never mint a service-owned
-      // space.
-      await expect(serving.resolveSpaceName("ow31-refusal-probe")).rejects
-        .toThrow("acting identity as genesis owner");
+      // No acting identity: the serving runtime creates no space — a
+      // served `.inSpace()` with no actor must never create a
+      // service-owned space.
+      await expect(serving.createSpace()).rejects.toThrow(
+        "no owner was supplied",
+      );
+      await expect(serving.resolveInSpaceName(homeSpace, "ow31-refusal-probe"))
+        .rejects.toThrow("no owner was supplied");
+      expect(resolvedSync(serving, "ow31-refusal-probe")).toBeUndefined();
 
-      // With the acting user supplied, resolution succeeds and the
-      // cached DID resolves synchronously from then on (no repeated
+      // With the acting user supplied, the created space is owned by that
+      // user and nobody else — the service appears nowhere in its ACL —
+      // and the name resolves synchronously from then on (no repeated
       // refusal on the re-run path).
-      const did = await serving.resolveSpaceName("ow31-granted-probe", {
-        owner: aliceSigner.did(),
-      });
-      expect(serving.resolveSpaceNameSync("ow31-granted-probe")).toBe(did);
+      const did = await serving.resolveInSpaceName(
+        homeSpace,
+        "ow31-granted-probe",
+        { owner: aliceSigner.did() },
+      );
+      expect(await aclOf(did)).toEqual({ [aliceSigner.did()]: "OWNER" });
+      expect(resolvedSync(serving, "ow31-granted-probe", aliceSigner.did()))
+        .toBe(did);
+      // A run acting for nobody asked for that space, and is not given it.
+      expect(resolvedSync(serving, "ow31-granted-probe")).toBeUndefined();
 
-      // A CLIENT runtime keeps today's byte-identical shape: no owner
-      // required, the genesis names the active user via the signer arm.
+      // A CLIENT runtime supplies no owner: the space it creates is owned
+      // by its own user.
       const client = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: SharedServerStorageManager.connectTo(server, {
@@ -391,24 +428,32 @@ describe("Phase 5 cross-space serving", () => {
         }),
       });
       try {
-        const clientDid = await client.resolveSpaceName("ow31-client-probe");
-        expect(clientDid.startsWith("did:")).toBe(true);
+        const clientDid = await client.resolveInSpaceName(
+          aliceSigner.did(),
+          "ow31-client-probe",
+        );
+        expect(await aclOf(clientDid)).toEqual({
+          [aliceSigner.did()]: "OWNER",
+        });
       } finally {
         await client.storageManager.close();
         await client.dispose();
       }
 
-      // The RUNNER's owner derivation (review F1 on #6156): the genesis
-      // owner comes from the run context's ACTING user ONLY. A context
-      // carrying just a demand-supplied scopeKeyIdentity — the
-      // resolution scaffolding of a scope-attributed derivation whose
-      // acting settles (possibly to none) at the seal — must NOT
-      // register that principal as owner: the resolution REFUSES, since
-      // a provisioning crossing without acting would be refused
-      // carriage-less anyway and the orphaned genesis would name a
-      // principal the grant probe never sees.
+      // The RUNNER's owner derivation (review F1 on #6156): the owner comes
+      // from the run context's ACTING user ONLY. A context carrying just a
+      // demand-supplied scopeKeyIdentity — the resolution scaffolding of a
+      // scope-attributed derivation whose acting settles (possibly to
+      // none) at the seal — must NOT make that principal the owner: the
+      // resolution creates nothing, since a provisioning crossing without
+      // acting would be refused carriage-less anyway.
       const resolvePending =
         serving.runner.accessForTestingOnly.resolvePendingSpaceNamesAndRetry;
+      const pendingFrame = (name: string) =>
+        ({
+          space: homeSpace,
+          pendingSpaceNames: new Map([[name, undefined]]),
+        }) as Frame;
       const scaffolding = serving.edit();
       stampWaveRunContext(scaffolding, {
         actionId: "f1/scaffolding-only",
@@ -419,16 +464,13 @@ describe("Phase 5 cross-space serving", () => {
         },
       });
       await expect(
-        resolvePending(
-          { pendingSpaceNames: new Set(["ow31-f1-scaffolding"]) } as Frame,
-          scaffolding,
-        ),
-      ).rejects.toThrow("acting identity as genesis owner");
+        resolvePending(pendingFrame("ow31-f1-scaffolding"), scaffolding),
+      ).rejects.toThrow("this run has none");
       scaffolding.abort(new Error("test-only"));
-      expect(serving.resolveSpaceNameSync("ow31-f1-scaffolding"))
-        .toBeUndefined();
+      expect(resolvedSync(serving, "ow31-f1-scaffolding")).toBeUndefined();
 
-      // With a real ACTING user the same seam resolves and retries.
+      // With a real ACTING user the same seam resolves and retries, and
+      // the space it creates is that user's.
       const actingTx = serving.edit();
       stampWaveRunContext(actingTx, {
         actionId: "f1/acting",
@@ -438,25 +480,26 @@ describe("Phase 5 cross-space serving", () => {
         capabilityRef: "event-consequence:e-f1",
       });
       await expect(
-        resolvePending(
-          { pendingSpaceNames: new Set(["ow31-f1-acting"]) } as Frame,
-          actingTx,
-        ),
+        resolvePending(pendingFrame("ow31-f1-acting"), actingTx),
       ).rejects.toThrow("Resolving in-space target spaces");
       actingTx.abort(new Error("test-only"));
-      expect(serving.resolveSpaceNameSync("ow31-f1-acting")).toBeDefined();
+      const actingDid = resolvedSync(
+        serving,
+        "ow31-f1-acting",
+        aliceSigner.did(),
+      );
+      expect(actingDid === undefined ? undefined : await aclOf(actingDid))
+        .toEqual({ [aliceSigner.did()]: "OWNER" });
     } finally {
       await serving.dispose();
       await manager.close();
     }
   });
 
-  it("OW31 B4: a FAILED genesis forcing is isolated per space — the sink's INV-13 mirror refuses the batch, nothing lands, and the home space keeps serving", async () => {
-    // The forcing loop's failure arm (space-server.ts): a throwing
-    // `ensureSpaceInitialized` must not park the home space — the
-    // contributions targeting the fresh space are refused by the sink
-    // (foreign failure => home withheld => replay) and the loop keeps
-    // serving. The fail-closed cousin of the F6 pin above.
+  it("OW31 B4: a provisioning write into a DID nobody created is refused at the accept gate — counted, nothing lands, and the home space keeps serving", async () => {
+    // No space has the DID, so no ACL grants the carried actor anything:
+    // the crossing refuses action-scoped at accumulation, and the wave
+    // carrying the home space's writes is not disturbed.
     host = newHost();
     clientManager = SharedServerStorageManager.connectTo(server, {
       as: aliceSigner,
@@ -475,25 +518,22 @@ describe("Phase 5 cross-space serving", () => {
       await activated(homeSpace);
       expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
-      const attempts: MemorySpace[] = [];
-      const forcingAttempts = new ArrivalLog<MemorySpace>();
-      (serving.storageManager as unknown as {
-        ensureSpaceInitialized(space: MemorySpace): Promise<void>;
-      }).ensureSpaceInitialized = (space: MemorySpace) => {
-        attempts.push(space);
-        forcingAttempts.record(space);
-        return Promise.reject(
-          new Error("injected genesis-forcing failure (test)"),
-        );
-      };
 
-      const pSigner = await Identity.fromPassphrase("b4 forcing-fail space");
+      const pSigner = await Identity.fromPassphrase("b4 uncreated space");
       const pSpace = pSigner.did() as MemorySpace;
+      const uncreated = {
+        granted: false,
+        reason: `no space has the DID ${pSpace} — a space exists once its ` +
+          "genesis ACL commit lands (protocol.md §2b)",
+      };
+      expect(await server.foreignWriteAuthorityFor(pSpace, aliceSigner.did()))
+        .toEqual(uncreated);
       const foreignCell = serving.getCell<{ value: number }>(
         pSpace,
         "b4-fail-provisioned",
         undefined,
       );
+      const refusalsBefore = host!.stats().foreignWriteRefusals;
       const tx = serving.edit();
       stampWaveRunContext(tx, {
         actionId: "b4-fail-provision",
@@ -504,14 +544,12 @@ describe("Phase 5 cross-space serving", () => {
       });
       tx.enableMultiSpaceWrites?.([pSpace, homeSpace]);
       foreignCell.withTx(tx).set({ value: 41 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit()).error?.message ?? "").toContain(
+        "holds no structural write grant",
+      );
+      expect(host!.stats().foreignWriteRefusals).toBe(refusalsBefore + 1);
 
-      // The forcing was attempted and failed.
-      await forcingAttempts.matching((attempted) => attempted === pSpace);
-      const pEngine = await server.engineForSpace(pSpace);
-
-      // Failure isolation: a plain home-space write STILL commits — the
-      // loop was not parked by the misdirected provisioning.
+      // A plain home-space write still commits.
       const homeProbe = serving.getCell<{ value: number }>(
         homeSpace,
         "b4-fail-home-probe",
@@ -531,28 +569,22 @@ describe("Phase 5 cross-space serving", () => {
         () => selectDocHead(homeEngine, { id: probeId, scopeKey: "space" }) > 0,
       );
 
-      // Read past that admission: the loop carried the refused batch and
-      // then this write, so the sink having refused the creation-granted
-      // batch (INV-13 mirror) — the fresh space EMPTY, no genesis and no
-      // data — is a settled state rather than one these reads raced.
+      // Read past that admission, so the refusal is settled: nothing
+      // landed in the space, neither a genesis nor data.
       expect(host!.spaceServer(homeSpace)?.active ?? false).toBe(true);
-      expect(serverSeq(pEngine)).toBe(0);
+      expect(serverSeq(await server.engineForSpace(pSpace))).toBe(0);
     } finally {
       cancel();
     }
   });
 
-  it("OW31 B4 end-to-end: the SpaceServer's OWN commit step forces a creation-granted target's genesis before the sink's data batch (review F6 on #6156)", async () => {
-    // Drives the REAL SpaceServer loop (not a hand-built wave): a
-    // provisioning-shaped tx seals into the LIVE wave, its crossing
-    // resolves via the CREATION arm (the target store does not exist at
-    // probe time), and the commit step's forcing loop is the ONLY
-    // genesis source — `ensureSpaceInitialized` is instrumented to
-    // stand in for the loopback mount's bootstrap (the emulated factory
-    // has none) and to record the call. Neutering
-    // `creationGrantedForeignSpaces` reddens this test (mutation-
-    // witnessed in the build report): the sink's INV-13 mirror then
-    // refuses the batch and the data never lands.
+  it("OW31 B4 end-to-end: the SpaceServer's OWN commit step lands a provisioning write into a space the serving runtime created for the acting user (review F6 on #6156)", async () => {
+    // Drives the REAL SpaceServer loop (not a hand-built wave): the
+    // serving runtime creates the target for the acting user, as a served
+    // `.inSpace()` does before its handler re-runs, and a
+    // provisioning-shaped tx then seals into the LIVE wave. Its crossing
+    // is granted by the space's ACL through the acting user's OWNER, and the
+    // data lands behind the genesis the creation wrote.
     host = newHost();
     clientManager = SharedServerStorageManager.connectTo(server, {
       as: aliceSigner,
@@ -572,36 +604,9 @@ describe("Phase 5 cross-space serving", () => {
       expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
 
-      const pSigner = await Identity.fromPassphrase("b4 loop-forced space");
-      const pSpace = pSigner.did() as MemorySpace;
-      const forced: MemorySpace[] = [];
-      // Stand-in for the loopback bootstrap (the real serving manager's
-      // mount-time `#createInitializedSession`): mint the genesis the
-      // registered owner would get, engine-direct, and record the call.
-      (serving.storageManager as unknown as {
-        ensureSpaceInitialized(space: MemorySpace): Promise<void>;
-      }).ensureSpaceInitialized = async (space: MemorySpace) => {
-        forced.push(space);
-        const engine = await server.engineForSpace(space);
-        if (serverSeq(engine) === 0) {
-          applyCommit(engine, {
-            sessionId: "b4-loop-genesis",
-            space,
-            principal: space,
-            commit: {
-              localSeq: 1,
-              reads: { confirmed: [], pending: [] },
-              operations: [{
-                op: "set",
-                id: `of:${space}`,
-                value: {
-                  value: { [aliceSigner.did()]: "OWNER", "*": "WRITE" },
-                },
-              }],
-            },
-          });
-        }
-      };
+      const pSpace = await serving.createSpace({ owner: aliceSigner.did() });
+      expect(await server.foreignWriteAuthorityFor(pSpace, aliceSigner.did()))
+        .toEqual({ granted: true });
 
       // The provisioning-shaped crossing, sealed into the LIVE wave
       // (the SpaceServer installed the seal destination at activation):
@@ -631,25 +636,23 @@ describe("Phase 5 cross-space serving", () => {
       expect((await tx.commit()).error).toBeUndefined();
 
       const pEngine = await server.engineForSpace(pSpace);
-      await awaitAdmitted(server, () => serverSeq(pEngine) >= 2);
-      expect(forced).toContain(pSpace);
-      // Commit #1 IS the ACL, owner = the acting user, service nowhere.
+      const provisionedId = foreignCell.getAsNormalizedFullLink().id;
+      const provisionedSeq = () =>
+        selectDocHead(pEngine, { id: provisionedId, scopeKey: "space" });
+      await awaitAdmitted(server, () => provisionedSeq() > 0);
+      // Commit #1 IS the ACL, owner = the acting user alone, service
+      // nowhere.
       expect(
         selectDocHead(pEngine, { id: `of:${pSpace}`, scopeKey: "space" }),
       ).toBe(1);
       const acl = await server.readDocument(pSpace, `of:${pSpace}`);
-      expect(acl?.value).toEqual({
-        [aliceSigner.did()]: "OWNER",
-        "*": "WRITE",
-      });
-      expect(
-        Object.keys(acl?.value as Record<string, unknown>),
-      ).not.toContain(serviceSigner.did());
-      // The data batch rode the delegated admission under the actor.
+      expect(acl?.value).toEqual({ [aliceSigner.did()]: "OWNER" });
+      // The data batch rode the delegated admission under the actor. It is
+      // read by the commit that wrote the provisioned document, since the
+      // serving loop may commit to the new space on its own account first.
       const meta = pEngine.database.prepare(
-        `SELECT class, acting_principal FROM "commit"
-         WHERE seq > 1 ORDER BY seq LIMIT 1`,
-      ).get() as Record<string, string>;
+        `SELECT class, acting_principal FROM "commit" WHERE seq = ?`,
+      ).get(provisionedSeq()) as Record<string, string>;
       expect(meta.class).toBe("authored");
       expect(meta.acting_principal).toBe(aliceSigner.did());
     } finally {
@@ -695,8 +698,9 @@ describe("Phase 5 cross-space serving", () => {
       await serving.patternManager.flushCompileCacheWrites();
 
       // The provisioned target: its GENESIS already landed (the B4
-      // ordering — the .inSpace creation wave forces it), naming the
-      // acting user OWNER with the client-shape wildcard.
+      // ordering — a served `.inSpace()` creates it before its handler
+      // re-runs), naming the acting user OWNER, with a wildcard WRITE
+      // grant its owner added.
       const pSigner = await Identity.fromPassphrase("sa provisioned space");
       const pSpace = pSigner.did() as MemorySpace;
       const pEngine = await server.engineForSpace(pSpace);
@@ -809,7 +813,8 @@ describe("Phase 5 cross-space serving", () => {
       );
       await clientRuntime.patternManager.flushCompileCacheWrites();
 
-      // The provisioned target, genesis already landed (the B4 ordering).
+      // The provisioned target, genesis already landed (the B4 ordering),
+      // with a wildcard WRITE grant its owner added.
       const pSigner = await Identity.fromPassphrase("lc provisioned space");
       const pSpace = pSigner.did() as MemorySpace;
       const pEngine = await server.engineForSpace(pSpace);
@@ -1010,11 +1015,7 @@ describe("Phase 5 cross-space serving", () => {
   it("OW31 read posture under enforce: a serving manager reads an OWNER-ONLY home space through the acting-as-owner binding; a non-serving manager as the same identity is denied", async () => {
     const enforceServer = new MemoryV2Server.Server({
       subscriptionRefreshDelayMs: 0,
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
       acl: {
         mode: "enforce",
@@ -1330,17 +1331,30 @@ describe("Phase 5 cross-space serving", () => {
       );
       expect(host.spaceServer(homeSpace)?.active).toBe(true);
 
-      // The misdirected crossing: full §2b carriage, owner-by-identity
-      // grant (acting user IS the target space DID, so the accept gate
-      // admits without touching the engine) — and the target's engine
-      // cannot open.
+      // The misdirected crossing: full §2b carriage and a grant from the
+      // target's own ACL, which the accept gate reads from the server
+      // directly — and the target's engine cannot open at the commit step.
+      applyCommit(await server.engineForSpace(badSpace), {
+        sessionId: "f1b-genesis",
+        space: badSpace,
+        principal: badSpace,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: `of:${badSpace}`,
+            value: { value: { [aliceSigner.did()]: "OWNER" } },
+          }],
+        },
+      });
       const serving = servingRuntime!;
       const badTx = serving.edit();
       stampWaveRunContext(badTx, {
         actionId: "provision-into-bad-space",
         kind: "event-handler",
         eventId: "e-bad-space",
-        acting: { user: badSpace, session: "sess-bad" },
+        acting: { user: aliceSigner.did(), session: "sess-bad" },
         capabilityRef: "cap:test-grant",
       });
       serving.getCell<{ value: number }>(
@@ -1384,33 +1398,29 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
-  it("foreignWriteAuthorityFor: the structural grant supply — owner-by-identity, fresh-store creation (non-creating probe), the target's own ACL, fail-closed otherwise (protocol.md §2b; the F1 fix)", async () => {
+  it("foreignWriteAuthorityFor: the structural grant supply — the target's own ACL, fail-closed otherwise, a space with no store (non-creating probe) included, and nothing for being the space's DID (protocol.md §2b; the F1 fix)", async () => {
     const aliceDid = aliceSigner.did();
     const bobDid = bobSigner.did();
 
-    // Owner-by-identity: the target space IS the actor's DID (their
-    // home space — the wish bootstrap's sanctioned target).
-    expect(
-      await server.foreignWriteAuthorityFor(aliceDid, aliceDid),
-    ).toEqual({ granted: true, via: "owner" });
-
-    // Creation: a well-formed, never-materialized space is §2b's
-    // sanctioned provisioning...
+    // A well-formed DID no store holds is a space nobody created...
     const freshSigner = await Identity.fromPassphrase(
       "x-space fresh provision target",
     );
     const fresh = freshSigner.did();
-    expect(await server.foreignWriteAuthorityFor(fresh, aliceDid)).toEqual({
-      granted: true,
-      via: "creation",
-    });
-    // ...and the probe itself must NOT create the store: a second
-    // probe still sees a fresh space (had the first probe materialized
-    // it, this would now be exists-with-no-ACL → refused).
-    expect(await server.foreignWriteAuthorityFor(fresh, bobDid)).toEqual({
-      granted: true,
-      via: "creation",
-    });
+    const uncreated = {
+      granted: false,
+      reason: `no space has the DID ${fresh} — a space exists once its ` +
+        "genesis ACL commit lands (protocol.md §2b)",
+    };
+    expect(await server.foreignWriteAuthorityFor(fresh, aliceDid)).toEqual(
+      uncreated,
+    );
+    // ...and the probe itself must NOT create the store: a second probe
+    // still finds none (had the first probe materialized it, this would
+    // now be exists-with-no-ACL).
+    expect(await server.foreignWriteAuthorityFor(fresh, bobDid)).toEqual(
+      uncreated,
+    );
 
     // A malformed space name never resolves (or provisions) a store —
     // the F1c arbitrary-store-creation arm.
@@ -1433,6 +1443,12 @@ describe("Phase 5 cross-space serving", () => {
       aliceDid,
     );
     expect(noAcl.granted).toBe(false);
+    // ...for the space's own DID too: being the space's identity grants
+    // nothing by itself.
+    expect(
+      (await server.foreignWriteAuthorityFor(foreignSpace, foreignSpace))
+        .granted,
+    ).toBe(false);
 
     // The target's OWN ACL document is a real grant: bob grants alice
     // WRITE on bob's space; carol (no row, no wildcard) stays refused.
@@ -1449,7 +1465,12 @@ describe("Phase 5 cross-space serving", () => {
       await acl.set(aliceDid, "WRITE");
       await bobRuntime.storageManager.synced();
       expect(await server.foreignWriteAuthorityFor(bobDid, aliceDid)).toEqual(
-        { granted: true, via: "acl" },
+        { granted: true },
+      );
+      // Bob's own home space grants bob through the OWNER entry its ACL
+      // names, like any other grant.
+      expect(await server.foreignWriteAuthorityFor(bobDid, bobDid)).toEqual(
+        { granted: true },
       );
       const carolSigner = await Identity.fromPassphrase("x-space carol");
       const carol = await server.foreignWriteAuthorityFor(
@@ -2165,5 +2186,110 @@ export default pattern<
     } finally {
       await servingManager.close();
     }
+  });
+
+  it("settles a served event whose declared argument reaches a foreign scoped document without a budgeted connection deferral, and runs the later event behind it", async () => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    // The sibling of the pass-through test above, with one difference: the
+    // handle's declared schema has a shape, so the dependency preflight
+    // follows the link into the target. The handler body never reads it.
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Writable, type Stream } from "commonfabric";
+export default pattern<
+  { links: Writable<Writable<{ label?: string }>[]> },
+  { add: Stream<{ piece: Writable<{ label?: string }> }> }
+>(({ links }) => ({
+  add: action(({ piece }: { piece: Writable<{ label?: string }> }) => {
+    links.push(piece);
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ links: unknown[] }>(
+      homeSpace,
+      "declared-foreign-scoped-argument",
+    );
+    const result = clientRuntime.getCell<{ add: unknown }>(
+      homeSpace,
+      "declared-foreign-scoped-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ links: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit()).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    const engine = await server.engineForSpace(homeSpace);
+    const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+      (engine.database.prepare(
+        "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+      ).all() as { id: string }[]).flatMap(({ id }) =>
+        (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ?? []
+      );
+    const target = clientRuntime.getCell(
+      foreignSpace,
+      "declared-foreign-scoped-target",
+      undefined,
+      undefined,
+      "user",
+    );
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().some((entry) =>
+          entry.consequenced || entry.deliveryDeferral !== undefined
+        ),
+    );
+    // The serving runtime refuses every foreign scoped read, so the load can
+    // never succeed here. Either the event runs or its failure is recorded
+    // as permanent; a deferral without permanent evidence waits out the whole
+    // delivery-failure budget, and holds the space's later events with it.
+    const [first] = entries();
+    expect(
+      first.consequenced === true ||
+        first.deliveryDeferral?.permanentEvidence === true,
+      `entry: ${JSON.stringify(first.deliveryDeferral)}`,
+    ).toBe(true);
+
+    const later = clientRuntime.getCell(homeSpace, "declared-local-reference");
+    result.key("add").send({ piece: later });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 2 &&
+        entries().every((entry) => entry.consequenced),
+    );
+    expect(entries()[0]).toMatchObject({
+      status: "needs-attention",
+      attention: {
+        phase: "dispatch-load",
+        failureClass: "protocol",
+        code: "permanent-delivery-failure",
+      },
+    });
+    const stored = readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { links: unknown[] };
+    expect(stored.links).toHaveLength(1);
+    expect(parseLink(stored.links[0])).toMatchObject({
+      id: later.getAsNormalizedFullLink().id,
+    });
   });
 });

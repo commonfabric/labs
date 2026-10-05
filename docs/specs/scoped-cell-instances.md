@@ -374,6 +374,28 @@ or projected with `key()`. A stored value or reference retains its own scope;
 a reference to a missing target is still an existing reference. An unresolved
 or scope-blocked ancestor cannot authorize creation of a scoped default.
 
+A pattern-owned cell narrower than its result starts from its declared default
+for each actor instance. The setup that first declares the cell commits its
+manifest and default together. On a later independently owned start, an accepted
+manifest authorizes filling an absent actor instance in a separate transaction
+for that cell, before execution. Reading another private argument or another
+actor's cell during setup must not taint this constant default. The default
+does carry the label on its owning piece's root, which the filling transaction
+reads on its own, and no label of the piece's fields. The current
+pattern pointer, manifest declaration, and absence remain commit dependencies;
+existing values and ordinary CFC label and write-authority checks still apply.
+Dependency synchronization alone never initializes a default. A speculative
+start keeps its initialization in the speculative transaction and cannot vouch
+for durable initialization on a later authored start. A caller-owned
+setup keeps initialization in the caller's commit, including its abort. A run
+whose preparation sees a superseded declaration, or that continues after
+dependency loading rejects, initializes within the commit that accepts its
+requested setup, under the same CFC checks. Neither case vouches for completed
+preparation in the naming cache. A cold start by a non-serving client with a
+confirmed READ-only space membership can resume persisted output without
+writing the viewer's absent scoped defaults. Their schema defaults remain
+readable; an explicit write still requires write access.
+
 Pattern argument setup materializes missing declared scoped properties even
 when the caller supplies the argument object through a Cell reference. The
 redirect stays at the input slot so existing child bindings follow subsequent
@@ -635,6 +657,22 @@ irrespective of this feature.
 The serialized declared scope (`space`, `user`, `session`, `inherit`, or `any`
 in schema positions) is distinct from `scope_key`. Declared scope is authoring
 and traversal metadata. `scope_key` is the runtime storage address dimension.
+
+Each instance stores its own CFC envelope beside its value. A write that
+narrows a slot's content into a scoped instance records the slot's schema
+policy input at that instance, so its envelope carries the labels the slot's
+schema declares and the write's per-path flow stamps. The flow stamp of a
+whole value a writer set is not recorded there. The broader slot keeps the
+label its own schema declares, beside the redirect.
+
+The cell label views and the runtime read ceiling read a scoped instance's
+labels as its own envelope joined with the confidentiality that a value read
+of each broader instance of the same id consumes: the space instance's for a
+user instance, the user and space instances' for a session instance. Entries
+labeling the pointer the broader slot holds are left out, and integrity comes
+from the instance's own envelope alone. Other readers, among them the flow
+join, the labels a schema read carries across links, dereference traces and
+label introspection, read the instance's own envelope only.
 
 ## Migration And Compatibility
 

@@ -50,6 +50,10 @@ a line for each new document to the index below.
 - [`committed-write-backpressure.md`](committed-write-backpressure.md) — how the
   scheduler keeps a committed write from being silently dropped when the server
   rejects it under contention
+- [`event-key.md`](event-key.md) — the key `eventKey()` returns to a handler:
+  what it is derived from, why it is the same on every run of one event and
+  different for another actor or stream, how far it can be trusted, and why it
+  is available only in a handler
 - [`authorization-failure-surfacing.md`](authorization-failure-surfacing.md) —
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait
@@ -76,11 +80,26 @@ a line for each new document to the index below.
 - [`home-space-internals.md`](home-space-internals.md) — the runtime
   implementation behind home-space behavior, including how the runtime derives
   the user's identity DID
+- [`current-principal.md`](current-principal.md) — the principal a handler acts
+  for: where `currentPrincipal()` gets it on a client and on a serving runtime,
+  what cannot steer it, why it is authority rather than intent, and why it is
+  available only in a handler
+- [`principal-of.md`](principal-of.md) — the principal a cell's label attests:
+  which claims `principalOf(target, kind)` reads, when it returns `undefined`,
+  how `principalsOf(target, kind)` tells a label attesting none from one
+  attesting several, what they read to find out, and why the result carries no
+  label
+- [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
+  about the access its principal holds in a space: where the level comes from,
+  who the principal is, when the answer is `"none"` and when it is not known,
+  and how it stays current
+- [`space-access-changes.md`](space-access-changes.md) — how a handler grants
+  and revokes access to a space with `grantSpaceAccess()` and
+  `revokeSpaceAccess()`: what a grant exposes, who may change the list and
+  where each refusal happens, how the change commits ahead of the handler's own
+  writes, and why a serving runtime refuses both
 
 ## Talking to the outside world
-
-- [`did-inboxes.md`](did-inboxes.md) — authenticated private delivery and durable
-  receipts
 
 - [`fetch-request-deadlines.md`](fetch-request-deadlines.md) — why the fetch
   builtins keep a wall-clock bound, what that bound actually measures, and what
@@ -131,6 +150,9 @@ a line for each new document to the index below.
 
 - [`logger-internals.md`](logger-internals.md) — the TypeScript side of the
   structured logging system: creating a logger, severity, timing, and flags
+- [`cfc-value-stamps.md`](cfc-value-stamps.md) — what `ifc.addIntegrity` puts
+  on a written value: where the stamp is stored, when a later write withdraws
+  it, and how one `*` entry stands for a list whose elements all carry it
 - [`cfc-denial-reporting.md`](cfc-denial-reporting.md) — how each Contextual
   Flow Control gate says what it turned away, what may be said at warning level
   and what reaches only debug, and how often a gate reports

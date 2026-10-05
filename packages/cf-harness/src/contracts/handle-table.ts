@@ -10,6 +10,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 
 import type { IFCLabel } from "@commonfabric/runner/cfc";
 
+import type { HarnessCommandResultProvenance } from "./client-command.ts";
 import type { HarnessSkillAcquisition } from "./skill.ts";
 
 /** Discriminator value of a {@link HarnessHandleTable}. */
@@ -85,8 +86,12 @@ export const ANY_HANDLE_TOKEN_PATTERN = new RegExp(
  * reports the label's atom types alone. A research referent is the one whose
  * content `describe_handle` does return, under this same label, which is how
  * a run — or a child handed the token — reads what research found instead of
- * researching again. The two kinds are told apart by `kind`, and each has
- * the label sources that can apply to it and no other.
+ * researching again. A return referent is a string a child's structured
+ * return sealed: the parent holds it to pass on — to another child, or to a
+ * tool field that takes a handle — and never reads it, so `describe_handle`
+ * reports its label's atom types alone, as for a document. The kinds are told
+ * apart by `kind`, and each has the label sources that can apply to it and no
+ * other.
  */
 export type HarnessHandleReferent =
   | (HarnessHandleReferentBase & {
@@ -94,10 +99,19 @@ export type HarnessHandleReferent =
     kind: "document";
 
     /**
-     * Where the label came from: the row's own `ifc`, or the label of the
-     * query, assigned because the row carried none.
+     * Where the label came from: the row's own `ifc`; the label of the query,
+     * assigned because the row carried none; or the label a Weaver command's
+     * result was held under. A `command` label is metadata the result carries
+     * with it: what a model may do with the result under that label is
+     * decided by the read policy, not by the label source.
      */
-    labelSource: "row" | "query";
+    labelSource: "row" | "query" | "command";
+
+    /**
+     * Which command produced the result, as whom, and against which loom
+     * and version. Present exactly when `labelSource` is `command`.
+     */
+    provenance?: HarnessCommandResultProvenance;
   })
   | (HarnessHandleReferentBase & {
     /** An admitted research kit. */
@@ -105,6 +119,13 @@ export type HarnessHandleReferent =
 
     /** The label research derived for its kit. */
     labelSource: "research";
+  })
+  | (HarnessHandleReferentBase & {
+    /** A string a child's structured return sealed. */
+    kind: "return";
+
+    /** The model-context label of the child that returned it. */
+    labelSource: "child";
   });
 
 /** What every referent carries whatever its kind. */
@@ -115,7 +136,11 @@ interface HarnessHandleReferentBase {
   /** The tool that observed the referent. */
   source: string;
 
-  /** The content as the model saw it, JSON. */
+  /**
+   * The content, JSON: as the model that holds the token saw it, for a
+   * document or research; as the child that returned it wrote it, for a
+   * return.
+   */
   value: FabricValue;
 
   /** The label the content was admitted under. */
@@ -204,9 +229,15 @@ export interface HarnessHandleEntry {
 }
 
 /**
- * The session-local handle table. `salt` is the owning run's id, fixed at
- * creation, so token derivation is deterministic within a run and disjoint
- * across runs. The version stays `1` across the optional
+ * The session-local handle table. `salt` is the id of the run that created
+ * the table, fixed for the table's life: every token minted into it derives
+ * from that salt, so derivation is deterministic within the table and
+ * disjoint across tables. A table outlives the run that created it where a
+ * session carries it on — an interactive session's next turn is a fresh run
+ * that starts from the table the session kept, still under its first salt —
+ * so the salt names the table's origin, not the run that holds it now. Two
+ * tables merge only when their salts agree, which is what says both grew
+ * from one table. The version stays `1` across the optional
  * {@link HarnessHandleEntry.schema}: an entry without one is well-formed, so
  * a table persisted before schemas were captured loads unchanged. The same
  * holds for {@link HarnessHandleTable.referents}.

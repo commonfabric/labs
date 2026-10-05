@@ -391,7 +391,7 @@ export function reduceSimulation(
     const advance = advances.at(0);
     if (!advance) break;
     acceptedActionIds.push(advance.id);
-    rejectedActionIds.push(...advances.slice(1).map((action) => action.id));
+    for (const action of advances.slice(1)) rejectedActionIds.push(action.id);
     advanceFire(input, turn, tiles);
     turn += 1;
     if (tiles.every((tile) => tile.fire === 0)) break;

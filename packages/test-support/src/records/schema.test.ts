@@ -5,6 +5,7 @@ import {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  isMainPush,
   localObjectName,
   objectNameSlug,
   parseContextLine,
@@ -244,6 +245,32 @@ describe("schema", () => {
       expect(parseContextLine(lines[0]!)).toEqual(CONTEXT);
       expect(parseRecordLine(lines[1]!)).toEqual(RECORD);
       expect(parseRecordLine(lines[2]!)).toEqual(RECORD);
+    });
+  });
+
+  describe("isMainPush()", () => {
+    const ci = {
+      workflowRunId: "1",
+      runAttempt: 1,
+      workflow: "CI",
+      job: "Coverage Check",
+      event: "push",
+      fork: false,
+    };
+    const pushed: RunContext = { ...CONTEXT, env: "ci", ci };
+
+    it("returns true for a push to main the fork flag does not mark", () => {
+      expect(isMainPush(pushed)).toBe(true);
+      const { fork: _, ...unmarked } = ci;
+      expect(isMainPush({ ...pushed, ci: unmarked })).toBe(true);
+    });
+
+    it("returns false for any other run", () => {
+      expect(isMainPush({ ...pushed, ci: { ...ci, fork: true } })).toBe(false);
+      expect(isMainPush({ ...pushed, ci: { ...ci, event: "pull_request" } }))
+        .toBe(false);
+      expect(isMainPush({ ...pushed, branch: "topic" })).toBe(false);
+      expect(isMainPush(CONTEXT)).toBe(false);
     });
   });
 

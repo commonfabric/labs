@@ -18,6 +18,7 @@ import { CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON } from "@commonfabric/runner/c
 import { createSession, Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
@@ -312,9 +313,9 @@ describe("opening a space root", () => {
       storageManager,
       experimental,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "update-space-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     controller = new PiecesController(session, runtime);
     await controller.synced();
@@ -329,7 +330,7 @@ describe("opening a space root", () => {
       storageManager,
       ...extraRuntimeOptions,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
       spaceDid: signer.did(),
     });
@@ -1566,7 +1567,9 @@ describe("opening a space root", () => {
   it("leaves the current root untouched when the identity swap cannot commit", async () => {
     await setup();
     await controller.ensureDefaultPattern();
-    const root = (await controller.getDefaultPattern(false))!;
+    const root = patchableCell(
+      (await controller.getDefaultPattern(false))!,
+    );
     const before = getPatternIdentityRef(root);
     const originalWithTx = root.withTx;
     root.withTx = (() => {
@@ -2196,7 +2199,9 @@ describe("opening a space root", () => {
 
   it("fails clearly when a root loses its source state during repair", async () => {
     const { oldRef } = await pinOldRequiredHome();
-    const root = (await controller.getDefaultPattern(false))!;
+    const root = patchableCell(
+      (await controller.getDefaultPattern(false))!,
+    );
     const restoreRun = patchRunSynced((opts) =>
       opts?.expectedPatternIdentity?.identity === oldRef.identity
         ? Promise.reject(new Error(MIGRATION_REJECTION))

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createNodeFactory } from "../src/builder/module.ts";
+import { cellTx } from "../src/cell.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
 import { raw, type RawNodeCause } from "../src/module.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -50,7 +51,7 @@ describe("Raw builtin publication binding", () => {
           publication,
         ) => {
           captured.push({ cause, declared, awaitSync, publication });
-          sendResult(inputs.tx!, "published");
+          sendResult(cellTx(inputs)!, "published");
           return () => undefined;
         }),
       );

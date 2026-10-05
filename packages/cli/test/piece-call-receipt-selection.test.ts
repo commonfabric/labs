@@ -27,6 +27,7 @@ import {
   parseSelectionProjection,
   parseSelectProjection,
 } from "../lib/cell-selection.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /** Cells seeded on one replica and inspected from another. */
 interface Fixture {
@@ -104,6 +105,7 @@ async function withReceipt(
     await check(
       (deps = {}) =>
         executeResolvedCallable(resolution, {}, {
+          sendEvent: sendThroughStandIn,
           invocation: { id: "inv:receipt", session: "ses:receipt" },
           ...deps,
         }),

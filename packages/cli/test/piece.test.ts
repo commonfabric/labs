@@ -25,6 +25,7 @@ import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 
 import { toCell } from "../../runner/src/back-to-cell.ts";
 import { setResultCell } from "../../runner/src/result-utils.ts";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   applyPieceSourceCommandAction,
   checkPieceSourceFromCommand,
@@ -4393,14 +4394,13 @@ describe("cli piece parsing", () => {
         }]),
       );
 
-      const brokenNested = runtime.getCell(
+      const brokenNested = patchableCell(runtime.getCell(
         space,
         "piece-search-broken-nested",
         nestedSchema,
-      );
-      Object.defineProperty(brokenNested, "pull", {
-        value: () => Promise.reject(new Error("nested cell unavailable")),
-      });
+      ));
+      brokenNested.pull = () =>
+        Promise.reject(new Error("nested cell unavailable"));
       const nestedErrors: unknown[] = [];
       const partialController = {
         getRegisteredPieces: () =>
@@ -4878,54 +4878,26 @@ describe("cli piece parsing", () => {
 
       const sourceError = new Error("source ownership unavailable");
       let repeatedCellPulls = 0;
-      const repeatedCellView = new Proxy(repeatedCell, {
-        get(target, property) {
-          if (property === "pull") {
-            return async () => {
-              repeatedCellPulls++;
-              return await target.pull();
-            };
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const repeatedCellView = patchableCell(repeatedCell);
+      repeatedCellView.pull = async () => {
+        repeatedCellPulls++;
+        return await repeatedCell.pull();
+      };
       let repeatedProxyMaterializations = 0;
-      const repeatedProxyCellView = new Proxy(repeatedProxySource, {
-        get(target, property) {
-          if (property === "asSchema") {
-            return (schema?: JSONSchema) => {
-              repeatedProxyMaterializations++;
-              return target.asSchema(schema);
-            };
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
-      const brokenSourceView = new Proxy(brokenSource, {
-        get(target, property) {
-          if (property === "resolveAsCell") {
-            return () => {
-              throw sourceError;
-            };
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
-      const brokenRootView = new Proxy(brokenRoot, {
-        get(target, property) {
-          if (property === "key") {
-            return () => brokenSourceView;
-          }
-          if (property === "pull") {
-            return () => Promise.resolve({ field: "unreachable source value" });
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const repeatedProxyCellView = patchableCell(repeatedProxySource);
+      repeatedProxyCellView.asSchema = ((schema?: JSONSchema) => {
+        repeatedProxyMaterializations++;
+        return repeatedProxySource.asSchema(schema);
+      }) as typeof repeatedProxyCellView.asSchema;
+      const brokenSourceView = patchableCell(brokenSource);
+      brokenSourceView.resolveAsCell = () => {
+        throw sourceError;
+      };
+      const brokenRootView = patchableCell(brokenRoot);
+      brokenRootView.key = (() =>
+        brokenSourceView) as unknown as typeof brokenRootView.key;
+      brokenRootView.pull = () =>
+        Promise.resolve({ field: "unreachable source value" });
 
       const ownerId = pieceId(ownerResult);
       if (ownerId === undefined) {

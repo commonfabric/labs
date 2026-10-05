@@ -6,11 +6,16 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../src/link-utils.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const alice = await Identity.fromPassphrase(
   "runner-profile-owner-cfc-alice",
@@ -140,12 +145,12 @@ const setTrustedProfileWriter = (
   actingPrincipal?: string,
 ) => {
   if (actingPrincipal !== undefined) {
-    tx.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(tx, {
       id: `profile-trust-${actingPrincipal}`,
       actingPrincipal,
     });
   }
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PROFILE_WRITER,
   });
@@ -253,7 +258,7 @@ describe("profile owner CFC policy", () => {
 
       // A second run in the same transaction (e.g. an inline child pattern)
       // changes the transaction-level implementation identity.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "system.unrelated-writer",
       });
@@ -412,8 +417,8 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot(undefined);
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, undefined);
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: PROFILE_WRITER,
       });
@@ -442,7 +447,7 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "profile-trust-untrusted",
         actingPrincipal: alice.did(),
       });
@@ -474,11 +479,11 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "profile-trust-owner-without-integrity",
         actingPrincipal: alice.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: PROFILE_WRITER,
       });
@@ -627,13 +632,13 @@ describe("profile owner CFC policy", () => {
     try {
       const profileHomePattern = await compileProfileHomePattern(runtime);
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "pattern-create",
         actingPrincipal: alice.did(),
       });
       // The creating context (e.g. a profile-create handler) is not the
       // per-field edit handler (setName/setAvatar/addElement).
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "system.profile-create",
       });
@@ -782,11 +787,11 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "setup-projection",
         actingPrincipal: alice.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "system.not-the-profile-writer",
       });
@@ -827,7 +832,7 @@ describe("profile owner CFC policy", () => {
             id: target.id,
             path,
           }],
-        });
+        }, runtimeWritePolicyAuthorization);
       }
       tx.prepareCfc();
       const result = await tx.commit();
@@ -845,8 +850,11 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: "no-marker", actingPrincipal: alice.did() });
-      tx.setCfcImplementationIdentity({
+      setCfcTrustSnapshot(tx, {
+        id: "no-marker",
+        actingPrincipal: alice.did(),
+      });
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "system.not-the-profile-writer",
       });
@@ -871,6 +879,76 @@ describe("profile owner CFC policy", () => {
     }
   });
 
+  it("counts a setup-projection marker only when the runtime recorded it", async () => {
+    // Pattern code reaches the transaction its cells are bound to, so it can
+    // record a marker through the public interface. The same write under the
+    // same non-writer identity is refused with a marker recorded that way,
+    // and admitted with one recorded as the runtime records it.
+    const { runtime, storageManager } = createRuntime();
+    const attempt = async (
+      name: string,
+      authorization?: typeof runtimeWritePolicyAuthorization,
+    ) => {
+      const tx = runtime.edit();
+      setCfcTrustSnapshot(tx, { id: name, actingPrincipal: alice.did() });
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "system.not-the-profile-writer",
+      });
+      const cell = runtime.getCell(
+        alice.did(),
+        name,
+        profileSchema(alice.did()),
+        tx,
+      );
+      cell.set({ name: "Ada", avatar: "", elements: [] });
+      const target = cell.getAsNormalizedFullLink();
+      recordTrustedEdit(tx, target, ["name"]);
+      recordTrustedEdit(tx, target, ["avatar"]);
+      recordTrustedEdit(tx, target, ["elements"]);
+      const resultTarget = runtime.getCell(
+        alice.did(),
+        `${name}-result`,
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink();
+      for (const path of [["name"], ["avatar"], ["elements"]]) {
+        tx.recordCfcWritePolicyInput({
+          kind: "structural-provenance",
+          target: {
+            space: resultTarget.space,
+            scope: resultTarget.scope,
+            id: resultTarget.id,
+            path,
+          },
+          claim: "runtime.setup.result-projection",
+          sources: [{
+            space: target.space,
+            scope: target.scope,
+            id: target.id,
+            path,
+          }],
+        }, authorization);
+      }
+      tx.prepareCfc();
+      return (await tx.commit()).error?.message;
+    };
+    try {
+      expect(await attempt("owner-init-unauthorized-marker")).toContain(
+        "writeAuthorizedBy",
+      );
+      expect(
+        await attempt(
+          "owner-init-authorized-marker",
+          runtimeWritePolicyAuthorization,
+        ),
+      ).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("verifies writeAuthorizedBy per field against the authoring identity", async () => {
     // Two protected fields on one cell, each authorized by a different builtin,
     // written under their respective identities. writeAuthorizedBy must be
@@ -887,19 +965,19 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({ id: "per-path", actingPrincipal: alice.did() });
+      setCfcTrustSnapshot(tx, { id: "per-path", actingPrincipal: alice.did() });
       const cell = runtime.getCell(
         alice.did(),
         "per-path-identity",
         twoFieldSchema,
         tx,
       );
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.x",
       });
       cell.key("x").set("vx");
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.y",
       });
@@ -927,7 +1005,7 @@ describe("profile owner CFC policy", () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "per-path-neg",
         actingPrincipal: alice.did(),
       });
@@ -938,7 +1016,7 @@ describe("profile owner CFC policy", () => {
         tx,
       );
       // Both fields written under writer.x; y is not authorized for writer.x.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.x",
       });

@@ -21,6 +21,7 @@ import {
   sourceDocKey,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -313,7 +314,7 @@ describe("ESM compile via content-addressed cell cache", () => {
 
       const legacyTx = firstRuntime.edit();
       const previousIdentity = legacyTx.getCfcState().implementationIdentity;
-      legacyTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(legacyTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -330,7 +331,7 @@ describe("ESM compile via content-addressed cell cache", () => {
           cell.set(stored);
         }
       } finally {
-        legacyTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(legacyTx, previousIdentity);
       }
       legacyTx.prepareCfc();
       expect((await legacyTx.commit()).error).toBeUndefined();

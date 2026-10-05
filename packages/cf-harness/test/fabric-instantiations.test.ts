@@ -176,9 +176,9 @@ describe("fabric-instantiations", () => {
         onPatternInstantiated: recorder.observe,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `fabric-instantiations-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );

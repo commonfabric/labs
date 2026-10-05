@@ -27,16 +27,11 @@ describe("cfc-meta-seam-write-policy", () => {
   // labeled piece document (slug assignment, the pattern updater's identity
   // swap, setup over an existing piece) rejects under the enforcing modes.
   //
-  // The exemption reaches the schema-policy requirement and nothing else. A
-  // meta write is still a flow-label target: it carries the writing
-  // transaction's join onto the document it lands on, so a value read from a
-  // labeled document and parked in a meta field arrives labeled.
-  //
-  // The exemption is recorded per RAW storage path. A user field literally
-  // named `slug` lives under `["value", "slug"]` and canonicalizes to the
-  // same logical path as the meta field's raw `["slug"]`, so keying on the
-  // canonical path would exempt the user field too; it must stay a
-  // policy-targeted value write.
+  // A meta field is a member of the document rather than its payload, so a
+  // meta write names no payload path (spec §4.6.5): it is neither a policy
+  // target nor a flow-label target. A user field literally named `slug`
+  // lives under `["value", "slug"]`, a different place from the member
+  // `["slug"]`, and stays a policy-targeted value write.
 
   const setup = async () => {
     const storageManager = StorageManager.emulate({ as: signer });
@@ -133,17 +128,17 @@ describe("cfc-meta-seam-write-policy", () => {
     }
   });
 
-  it("stamps the writing transaction's confidentiality onto a document a raw meta write lands on", async () => {
-    // The policy exemption must not become a laundering channel: a value
-    // read out of a labeled document and written into an unlabeled
-    // document's meta field arrives carrying the label, exactly as a value
-    // write would.
+  it("labels no payload path for a secret parked in a meta field", async () => {
+    // A document's own member carries no label until a stored entry can name
+    // one, which the CFC owner accepted on 2026-10-01 (`cfc-spec-changes.md`
+    // SC-55). So a value read out of a labeled document and parked in a meta
+    // field arrives unlabeled, and no payload path is labeled in its place.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
       // The assertion at the end of this test reads the sink document's
-      // stored labelMap. Persisting flow labels is what puts the writing
+      // stored labelMap. Persisting flow labels is what would put the writing
       // transaction's confidentiality into it.
       cfcFlowLabels: "persist",
     });
@@ -210,10 +205,9 @@ describe("cfc-meta-seam-write-policy", () => {
       };
       const entries = replica.getDocument(sinkId)?.cfc?.labelMap?.entries ?? [];
       const stamped = entries.filter((entry) =>
-        entry.path.length === 1 && entry.path[0] === "slug" &&
         (entry.label.confidentiality ?? []).includes("secret-label")
       );
-      expect(stamped.length).toBeGreaterThan(0);
+      expect(stamped).toEqual([]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

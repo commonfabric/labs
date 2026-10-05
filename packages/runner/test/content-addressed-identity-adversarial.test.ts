@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/utils/sandbox-contract";
@@ -11,7 +12,9 @@ import {
 } from "../src/builder/pattern-metadata.ts";
 import { moduleToEncodableForm } from "../src/builder/to-encodable-form.ts";
 import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
+import { CUSTODY_SEAL_WRITER } from "../src/cfc/custody-seal.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";
+import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { ExecutableRegistry } from "../src/harness/executable-registry.ts";
 import type { HarnessedFunction } from "../src/harness/types.ts";
 import {
@@ -19,6 +22,7 @@ import {
   recordVerifiedProvenance,
 } from "../src/harness/verified-provenance.ts";
 import { Runtime } from "../src/runtime.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 /**
  * C5 red-team gate for PR C (content-addressed `$implRef` + CFC provenance) of
@@ -333,7 +337,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       const cell = runtime.getCell(signer.did(), "attack4-binding", schema, tx);
 
       // Attacker's verified identity claims a DIFFERENT module/path (their own).
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "attacker-module-identity",
         sourceFile: "/attacker.tsx",
@@ -386,7 +390,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
 
       // Same module + file, but a DIFFERENT binding (a sibling handler in the
       // same module must not be able to write the owner's field).
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "shared-module-identity",
         sourceFile: "/shared.tsx",
@@ -442,7 +446,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         tx,
       );
       // Different verified writer — the rebind cannot overwrite the owner's stamp.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "attacker-module",
         sourceFile: "/attacker.tsx",
@@ -491,7 +495,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         tx,
       );
 
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "match-module-identity",
         sourceFile: "/match.tsx",
@@ -535,7 +539,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         required: ["owned"],
       } as unknown as JSONSchema;
       const cell = runtime.getCell(signer.did(), name, schema, tx);
-      tx.setCfcImplementationIdentity(identity as never);
+      setCfcImplementationIdentity(tx, identity as never);
       cell.set({ owned: "x" });
       const digest = tx.prepareCfc();
       const result = await tx.commit();
@@ -843,7 +847,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       required: ["owned"],
     } as unknown as JSONSchema;
     const cell = runtime.getCell(signer.did(), name, schema, tx);
-    tx.setCfcImplementationIdentity(identity as never);
+    setCfcImplementationIdentity(tx, identity as never);
     cell.set({ owned: "x" });
     const digest = tx.prepareCfc();
     const result = await tx.commit();
@@ -979,10 +983,10 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
 
   describe("attack 12: host artifacts execute but never resolve verified", () => {
     // Attack 12 — host-artifact escalation. A host-trusted callable EXECUTES
-    // but yields NO `kind:"verified"` CFC identity, by two independent
-    // defenses: the `unsafe-host:` debugName short-circuit AND the absence of
-    // provenance. A genuine canonical `fn.src` on a host fn does NOT
-    // manufacture verification.
+    // but yields NO `kind:"verified"` CFC identity: it has no provenance. A
+    // genuine canonical `fn.src` on a host fn does NOT manufacture
+    // verification, and a `debugName` on its module does not manufacture a
+    // builtin identity either — that comes only from registry membership.
 
     it("a host fn with an EMPTY debugName falls into the provenance arm and resolves undefined (src alone is not proof)", () => {
       const hostFn = Object.assign(() => 42, {
@@ -997,7 +1001,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       expect(identity).toBeUndefined();
     });
 
-    it("a host fn given a forged BUILTIN debugName resolves builtin (not verified) and so cannot satisfy a verified-binding claim", async () => {
+    it("a host fn given a forged BUILTIN debugName resolves no identity: a builtin identity comes only from the registry", () => {
       const hostFn = Object.assign(() => 42, {
         src: "cf:module/SOME_MODULE/main.tsx:1:1",
       });
@@ -1005,10 +1009,32 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         { type: "javascript", debugName: "forgedBuiltin" } as unknown as Module,
         { implementation: hostFn },
       );
-      expect(identity?.kind).toBe("builtin");
-      // A builtin identity is rejected by a verified-BINDING writeAuthorizedBy
-      // claim (it demands `identity.kind === "verified"`), so the forged-builtin
-      // dodge buys no ownership.
+      // The name is a member the module carries, as a module read from a
+      // stored graph carries whatever the data said. No registry handed this
+      // module out, so it is no builtin; and its fn has no provenance.
+      expect(identity).toBeUndefined();
+    });
+
+    it("a verified fn whose module carries a debugName resolves verified: the name never overrides provenance", () => {
+      const fn = (() => 42) as unknown as HarnessedFunction;
+      recordVerifiedProvenance(fn, {
+        identity: "attack12-module",
+        symbol: "named",
+      });
+      const identity = resolvePolicyFacingImplementationIdentity(
+        { type: "javascript", debugName: "fetchJson" } as unknown as Module,
+        { implementation: fn },
+      );
+      expect(identity?.kind).toBe("verified");
+      expect((identity as { moduleIdentity?: string }).moduleIdentity).toBe(
+        "attack12-module",
+      );
+    });
+
+    it("a builtin identity cannot satisfy a verified-binding claim", async () => {
+      // A verified-BINDING writeAuthorizedBy claim demands
+      // `identity.kind === "verified"`, so even a genuine builtin identity
+      // buys no ownership of a binding-claimed slot.
       const { digest, result } = await driveE2Claim(
         {
           __ctWriterIdentityOf: {
@@ -1017,11 +1043,317 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
             path: ["ownerHandler"],
           },
         },
-        { kind: "builtin", builtinId: "forgedBuiltin" },
+        { kind: "builtin", builtinId: "someBuiltin" },
         "attack12-builtin-vs-binding",
       );
       expect(digest).toBe("");
       expect(result.error).toBeDefined();
+    });
+  });
+
+  describe("attack 13: a debugName carried in stored data never names a builtin", () => {
+    // Attack 13 — builtin identity from data. A builtin's policy identity is
+    // what host operations read as "this builtin wrote it": the custody seal's
+    // `TransformedBy` witness, reviewed snapshot copies, and the trusted-builtin
+    // arm of `writeAuthorizedBy`. A stored graph is data, and a module in it
+    // can carry any member, `debugName` among them. Run as-is, such a module
+    // executes on the unverified stringified-source fallback; its writes must
+    // stay unattributed, not stamped as the builtin the data names.
+
+    const COPY_PROGRAM = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+import { handler, pattern, Writable } from "commonfabric";
+
+const copy = handler<void, { from: string; to: Writable<string> }>(
+  (_event, { from, to }) => { to.set(from); },
+);
+
+export default pattern<{ from: string }>(({ from }) => {
+  const to = new Writable<string>("").for("to");
+  return { to, copy: copy({ from, to }) };
+});
+`,
+      }],
+    };
+
+    /** Every `TransformedBy` atom anywhere in `value`. */
+    const transformedByIn = (value: unknown): Record<string, unknown>[] => {
+      const found: Record<string, unknown>[] = [];
+      const visit = (node: unknown) => {
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+          return;
+        }
+        if (node === null || typeof node !== "object") return;
+        const record = node as Record<string, unknown>;
+        if (record.type === CFC_ATOM_TYPE.TransformedBy) found.push(record);
+        Object.values(record).forEach(visit);
+      };
+      visit(value);
+      return found;
+    };
+
+    const kindsOf = (atoms: Record<string, unknown>[]) =>
+      atoms.map((atom) => (atom.identity as { kind?: unknown }).kind);
+
+    /** The atoms whose identity names the custody seal's writer. */
+    const namesTheSeal = (atoms: Record<string, unknown>[]) =>
+      atoms.filter((atom) =>
+        (atom.identity as { builtinId?: unknown }).builtinId ===
+          CUSTODY_SEAL_WRITER
+      );
+
+    /**
+     * Run the copy handler, its module first passed through `asStored`, over
+     * a confidential source document, and return the `TransformedBy` atoms
+     * stamped on the document it wrote.
+     */
+    const stampsFromCopy = async (
+      name: string,
+      asStored: (module: Module) => Module,
+    ) => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const pattern = await runtime.patternManager.compilePattern(
+        COPY_PROGRAM,
+      ) as Pattern;
+      await runtime.idle();
+      const module = handlerModules(pattern)[0];
+      const nodes = pattern.nodes.map((node) =>
+        node.module === module ? { ...node, module: asStored(module) } : node
+      );
+      const graph = { ...pattern, nodes } as unknown as Pattern;
+
+      const source = runtime.getCell<string>(signer.did(), `${name}-source`, {
+        type: "string",
+        ifc: { confidentiality: [cfcAtom.space(signer.did())] },
+      } as JSONSchema);
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          source.withTx(tx).set("confidential");
+        })).error,
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell<{ to: string }>(
+        signer.did(),
+        name,
+        undefined,
+        tx,
+      );
+      // deno-lint-ignore no-explicit-any
+      const result = runtime.run(
+        tx,
+        graph,
+        { from: source },
+        resultCell,
+      ) as any;
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      await result.pull();
+      await runtime.idle();
+
+      const sendTx = runtime.edit();
+      result.withTx(sendTx).key("copy").send(undefined);
+      expect((await sendTx.commit()).error).toBeUndefined();
+      await runtime.idle();
+      expect(await result.key("to").pull()).toBe("confidential");
+
+      const written = result.key("to").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const readTx = runtime.edit();
+      try {
+        const envelope = loadStoredCfcEnvelope(readTx, written);
+        expect(envelope.status).toBe("loaded");
+        return transformedByIn(envelope);
+      } finally {
+        readTx.abort();
+      }
+    };
+
+    it("control: the compiled handler's write is stamped with its verified identity", async () => {
+      const stamps = await stampsFromCopy("attack13-control", (m) => m);
+      expect(kindsOf(stamps)).toContain("verified");
+      expect(kindsOf(stamps)).not.toContain("builtin");
+    });
+
+    it("control: a host operation's identity, set on its transaction, still stamps as that builtin", async () => {
+      // Host operations (the custody seal, snapshot copies) name themselves on
+      // their own transaction rather than through a module, so registry
+      // membership is not what attributes them.
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const source = runtime.getCell<string>(
+        signer.did(),
+        "attack13-host-source",
+        {
+          type: "string",
+          ifc: { confidentiality: [cfcAtom.space(signer.did())] },
+        } as JSONSchema,
+      );
+      const target = runtime.getCell<string>(
+        signer.did(),
+        "attack13-host-target",
+      );
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          source.withTx(tx).set("confidential");
+        })).error,
+      ).toBeUndefined();
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: CUSTODY_SEAL_WRITER,
+          });
+          target.withTx(tx).set(source.withTx(tx).get());
+        })).error,
+      ).toBeUndefined();
+      const readTx = runtime.edit();
+      try {
+        const envelope = loadStoredCfcEnvelope(
+          readTx,
+          target.getAsNormalizedFullLink(),
+        );
+        expect(envelope.status).toBe("loaded");
+        expect(
+          transformedByIn(envelope).map((atom) => atom.identity),
+        ).toContainEqual({ kind: "builtin", builtinId: CUSTODY_SEAL_WRITER });
+      } finally {
+        readTx.abort();
+      }
+    });
+
+    it("a stored handler module naming the custody seal writes unattributed, never as the seal", async () => {
+      // The handler module as a stored graph carries it: stringified source,
+      // no `$implRef`, and an enumerable `debugName` naming a host writer.
+      const stamps = await stampsFromCopy("attack13-stored", (module) => {
+        const encodable = (module as Module & {
+          toEncodableForm: () => unknown;
+        }).toEncodableForm() as Record<string, unknown>;
+        const { $implRef: _dropped, ...rest } = encodable;
+        return {
+          ...rest,
+          implementation: Function.prototype.toString.call(
+            module.implementation,
+          ),
+          debugName: CUSTODY_SEAL_WRITER,
+        } as unknown as Module;
+      });
+      expect(kindsOf(stamps)).not.toContain("builtin");
+      expect(namesTheSeal(stamps)).toEqual([]);
+    });
+
+    it("an authored pattern's plain op graph naming the custody seal maps without the seal's stamp", async () => {
+      // An ordinary compiled pattern hands `mapWithPattern` a plain-object
+      // graph. The list builtin resolves an op that carries no entry ref as
+      // the embedded graph it is, so the module in it runs as-is on the
+      // unverified stringified-source fallback, `debugName` and all.
+      const program = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
+import { pattern } from "commonfabric";
+
+const OP: any = {
+  argumentSchema: {
+    type: "object",
+    properties: {
+      element: { type: "string" },
+      params: { type: "object", properties: { from: { type: "string" } } },
+    },
+  },
+  resultSchema: { type: "string" },
+  result: {
+    $alias: { partialCause: "__patternResult", path: [], scope: "space" },
+  },
+  nodes: [{
+    module: {
+      type: "javascript",
+      implementation: "(x) => x",
+      debugName: "${CUSTODY_SEAL_WRITER}",
+    },
+    inputs: { $alias: { cell: "argument", path: ["params", "from"] } },
+    outputs: {
+      $alias: { partialCause: "__patternResult", path: [], scope: "space" },
+    },
+  }],
+};
+
+export default pattern<{ items: string[]; from: string }>(({ items, from }) => ({
+  out: (items as any).mapWithPattern(OP, { from }),
+}));
+`,
+        }],
+      };
+
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const source = runtime.getCell<string>(
+        signer.did(),
+        "attack13-op-source",
+        {
+          type: "string",
+          ifc: { confidentiality: [cfcAtom.space(signer.did())] },
+        } as JSONSchema,
+      );
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          source.withTx(tx).set("confidential");
+        })).error,
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      const pattern = await runtime.patternManager.compilePattern(program, {
+        space: signer.did(),
+        tx,
+      });
+      const resultCell = runtime.getCell<{ out: string[] }>(
+        signer.did(),
+        "attack13-op",
+        undefined,
+        tx,
+      );
+      // deno-lint-ignore no-explicit-any
+      const result = runtime.run(tx, pattern, {
+        items: ["a"],
+        from: source,
+      }, resultCell) as any;
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      await result.pull();
+      await runtime.idle();
+      expect(await result.key("out").key(0).pull()).toBe("confidential");
+
+      const written = result.key("out").key(0).resolveAsCell()
+        .getAsNormalizedFullLink();
+      const readTx = runtime.edit();
+      try {
+        const envelope = loadStoredCfcEnvelope(readTx, written);
+        expect(envelope.status).toBe("loaded");
+        expect(namesTheSeal(transformedByIn(envelope))).toEqual([]);
+      } finally {
+        readTx.abort();
+      }
     });
   });
 });

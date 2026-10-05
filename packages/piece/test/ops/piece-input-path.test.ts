@@ -25,7 +25,10 @@ describe("piece input paths", () => {
       storageManager: storage,
     });
     pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: crypto.randomUUID() }),
+      createSession({
+        identity: signer,
+        spaceDid: await runtime.createSpace(),
+      }),
       runtime,
     );
     await pieces.synced();

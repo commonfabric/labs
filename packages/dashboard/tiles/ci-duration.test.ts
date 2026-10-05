@@ -22,8 +22,10 @@ import {
   loomCiDuration,
   renderGantt,
   renderGanttRoute,
+  weaverCiDuration,
 } from "./ci-duration.ts";
 import { PERFORMANCE_VIEW_STYLES } from "../performance-views.ts";
+import { collectFromWorkingRuns } from "../test/github-attempts.ts";
 import { STATUS_EDGE, STATUS_WASH } from "../palette.ts";
 
 const SVG = new TextEncoder().encode(
@@ -60,7 +62,7 @@ function run(over: Partial<Run>): Run {
     status: "completed",
     conclusion: "success",
     run_attempt: 1,
-    event: "push",
+    event: "pull_request",
     head_sha: "sha",
     display_title: "t",
     created_at: startedAt,
@@ -458,27 +460,36 @@ Deno.test("commit Gantt data routes start the exact selected collection", async 
 
 Deno.test("CI duration tiles link to their repository histories", async () => {
   assertEquals(loomCiDuration.routes, undefined);
-  const loom = await loomCiDuration.collect(ctx([run({})]));
+  const loom = await collectFromWorkingRuns(loomCiDuration, ctx([run({})]));
   assertEquals(loom.href, "/bench?view=ci&repo=loom");
-  assertEquals(loom.hint, "history ↗");
-  const labs = await labsCiDuration.collect(ctx([run({})]));
+  assertEquals(loom.hint, "main run history ↗");
+  const labs = await collectFromWorkingRuns(labsCiDuration, ctx([run({})]));
   assertEquals(labs.href, "/bench?view=ci&repo=labs");
-  assertEquals(labs.hint, "history ↗");
+  assertEquals(labs.hint, "main run history ↗");
 
   const unavailable: Ctx = {
     runs: () => Promise.resolve([]),
     runsFor: () => Promise.reject(new Error("set GH_TOKEN to use GitHub")),
     env: () => undefined,
   };
-  const coldLabs = await labsCiDuration.collect(unavailable);
-  const coldLoom = await loomCiDuration.collect(unavailable);
+  const coldLabs = await collectFromWorkingRuns(labsCiDuration, unavailable);
+  const coldLoom = await collectFromWorkingRuns(loomCiDuration, unavailable);
   assertEquals(
     [coldLabs.href, coldLabs.hint, coldLabs.sub],
-    ["/bench?view=ci&repo=labs", "history ↗", "set GH_TOKEN"],
+    ["/bench?view=ci&repo=labs", "main run history ↗", "set GH_TOKEN"],
   );
   assertEquals(
     [coldLoom.href, coldLoom.hint, coldLoom.sub],
-    ["/bench?view=ci&repo=loom", "history ↗", "set GH_TOKEN"],
+    ["/bench?view=ci&repo=loom", "main run history ↗", "set GH_TOKEN"],
+  );
+
+  // Weaver has no history view to open, so its tile is not a link.
+  const weaver = await collectFromWorkingRuns(weaverCiDuration, ctx([run({})]));
+  assertEquals([weaver.href, weaver.hint], [undefined, undefined]);
+  const coldWeaver = await collectFromWorkingRuns(weaverCiDuration, unavailable);
+  assertEquals(
+    [coldWeaver.href, coldWeaver.hint, coldWeaver.sub],
+    [undefined, undefined, "set GH_TOKEN"],
   );
 });
 
@@ -766,7 +777,7 @@ Deno.test("/bench/gantt.svg returns a safe collection error to the page", async 
 });
 
 Deno.test("ci-duration: no passing runs is gray, never a false green", async () => {
-  const v = await labsCiDuration.collect(
+  const v = await collectFromWorkingRuns(labsCiDuration, 
     ctx([
       run({ conclusion: "failure" }),
       run({ status: "in_progress", conclusion: null }),
@@ -776,7 +787,7 @@ Deno.test("ci-duration: no passing runs is gray, never a false green", async () 
   assertEquals(v.value, "—"); // no data, like every other tile — not a zero-minute build
   assertEquals(v.duration, 0); // no span to label
   assertEquals(
-    await labsCiDuration.collect(ctx([])).then((x) => x.status),
+    await collectFromWorkingRuns(labsCiDuration, ctx([])).then((x) => x.status),
     "unknown",
   );
 });
@@ -789,32 +800,32 @@ Deno.test("ci-duration: the median minutes set the status against the thresholds
       updated_at: new Date().toISOString(),
     });
   assertEquals(
-    await labsCiDuration.collect(ctx([mins(10)])).then((
+    await collectFromWorkingRuns(labsCiDuration, ctx([mins(10)])).then((
       v,
     ) => [v.status, v.value]),
     ["good", "10m"],
   );
   assertEquals(
-    await labsCiDuration.collect(ctx([mins(16)])).then((
+    await collectFromWorkingRuns(labsCiDuration, ctx([mins(16)])).then((
       v,
     ) => [v.status, v.value]),
     ["warn", "16m"],
   );
   assertEquals(
-    await labsCiDuration.collect(ctx([mins(45)])).then((
+    await collectFromWorkingRuns(labsCiDuration, ctx([mins(45)])).then((
       v,
     ) => [v.status, v.value]),
     ["bad", "45m"],
   );
   // The median, not the mean: one long run among short ones doesn't move it.
-  const v = await labsCiDuration.collect(ctx([mins(10), mins(10), mins(180)]));
+  const v = await collectFromWorkingRuns(labsCiDuration, ctx([mins(10), mins(10), mins(180)]));
   assertEquals([v.status, v.value], ["good", "10m"]);
-  assertStringIncludes(v.sub ?? "", "last 3 passing runs"); // under the 20-run bar -> count window
+  assertStringIncludes(v.sub ?? "", "median of last 3 PR runs"); // under the 20-run bar -> count window
 });
 
-Deno.test("ci-duration measures from landing through completion", async () => {
+Deno.test("ci-duration measures from creation through completion", async () => {
   const now = Date.now();
-  const view = await labsCiDuration.collect(
+  const view = await collectFromWorkingRuns(labsCiDuration, 
     ctx([
       run({
         created_at: new Date(now - 15 * 60_000).toISOString(),
@@ -826,4 +837,3 @@ Deno.test("ci-duration measures from landing through completion", async () => {
 
   assertEquals(view.value, "15m");
 });
-

@@ -645,7 +645,7 @@ function renderGraph(){
 function renderTimeline(){
   const t=B.timeline; const host=$("#tl"); host.innerHTML="";
   if(!t.length){host.append(el("p",{class:"muted",text:"(no commits)"}));return;}
-  const W=820,H=150,pad=24,maxc=Math.max(...t.map(e=>e.cumulativeEntities),1);
+  const W=820,H=150,pad=24,maxc=t.reduce((m,e)=>Math.max(m,e.cumulativeEntities),1);
   const x=i=>pad+(W-2*pad)*(t.length<2?0:i/(t.length-1)), y=v=>H-pad-(H-2*pad)*(v/maxc);
   let p=""; t.forEach((e,i)=>p+=(i?" L":"M")+x(i).toFixed(1)+" "+y(e.cumulativeEntities).toFixed(1));
   const ns="http://www.w3.org/2000/svg",mk=(t2,a)=>{const n=document.createElementNS(ns,t2);for(const[k,v]of Object.entries(a))n.setAttribute(k,v);return n;};

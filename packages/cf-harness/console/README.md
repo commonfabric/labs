@@ -42,9 +42,11 @@ shared host, a tailnet with an access policy — and not behind a public address
 - **Toolshed and shell running locally.** `./scripts/start-local-dev.sh` from
   the repository root, which serves the API on `http://localhost:8000`. See
   [`docs/development/LOCAL_DEV_SERVERS.md`](../../../docs/development/LOCAL_DEV_SERVERS.md).
-- **Docker.** Every tool the model runs executes in the harness sandbox, which
-  is a container. A stopped Docker daemon is a run that fails on its first
-  `bash` call.
+- **A sandbox runtime.** Every tool the model runs executes in the harness
+  sandbox. By default that is a Docker container under the `runsc-cfc` runtime,
+  and a stopped Docker daemon is a run that fails on its first `bash` call. With
+  `CF_HARNESS_SANDBOX_RUNTIME=runsc` it is the direct `runsc` driver instead,
+  and Docker is not needed; see [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
@@ -101,18 +103,30 @@ deno task --cwd packages/cf-harness console:launch \
 That task reads the identity, the space and the toolshed URL off a loom
 instance's `pieces.json` when `--instance` names one, the store off
 `loom toolshed-store-dir`, the connector handles that instance has injected off
-its `sqlite-injection/handles.json` receipt, and the two `runsc-cfc` sidecar
-directories off the runtime registration `docker info` reports — so a sidecar
-path is fixed where Docker registers the runtime, not in loom. Without an
-instance the identity and the space are named — by the flags above, or by
-`CF_HARNESS_FABRIC_IDENTITY` and `CF_HARNESS_FABRIC_SPACE`, or by the `cf` CLI's
-own `CF_IDENTITY` and `CF_SPACE` — and their absence is an error naming them.
-The pattern index and skills registry are this deployment's constants rather
-than any fabric's. It prints every value with the record that decided it, and
-serves on the port Weaver pairs with. Arguments after `--` reach this server
-untouched, so every flag in the tables below is reachable through it.
-[`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it belongs
-to, including the tailnet topology and the pre-demo preflight.
+its `sqlite-injection/handles.json` receipt, and, on the Docker driver, the two
+`runsc-cfc` sidecar directories off the runtime registration `docker info`
+reports — so a sidecar path is fixed where Docker registers the runtime, not in
+loom. Without an instance the identity and the space are named — by the flags
+above, or by `CF_HARNESS_FABRIC_IDENTITY` and `CF_HARNESS_FABRIC_SPACE`, or by
+the `cf` CLI's own `CF_IDENTITY` and `CF_SPACE` — and their absence is an error
+naming them. The pattern index and skills registry are this deployment's
+constants rather than any fabric's. It prints every value with the record that
+decided it, and serves on the port Weaver pairs with. Arguments after `--` reach
+this server untouched, so every flag in the tables below is reachable through
+it. Each of the two refuses a flag it does not take, naming it and, where one is
+close, the flag it most likely meant, and `console:launch` holds the arguments
+after `--` to the server's flags before it reads anything, so a misspelled
+switch stops the launch rather than going unapplied. A console flag given to the
+launcher is refused with a pointer to `--`. A flag given no value is refused
+too, whether nothing follows it, the word after it starts with `-`, or its value
+is empty, rather than falling back to the default: a value starting with `-`
+needs the `--name=<value>` spelling. The server takes no positional argument,
+and so nothing after a `--` of its own. `--help` or `-h`, as a word of its own,
+prints the flags each takes, the launcher's before `--` and the server's after
+it, and serves nothing, unless it is the word after a flag that takes a value,
+which is that flag given no value. [`../docs/WEAVER.md`](../docs/WEAVER.md) is
+the operator procedure it belongs to, including the tailnet topology and the
+pre-demo preflight.
 
 Against a toolshed of your own, the environment below is what `console:launch`
 would otherwise have resolved:
@@ -162,6 +176,7 @@ Every environment variable has a flag, and the flag wins:
 | `--max-model-turns`           | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS`   | the prompt loop's default             |
 | `--skills-root`               | `CF_HARNESS_CONSOLE_SKILLS_ROOT`       | the repository's `skills/` tree       |
 | `--allow-skill-scripts`       | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`     | off; scripts do not run               |
+| `--allow-browser-host`        | `CF_HARNESS_ALLOW_BROWSER_HOST=1`      | off; a task may declare no host       |
 | `--host-mount`                | —                                      | none; repeatable                      |
 
 ### Skill scripts
@@ -205,6 +220,42 @@ takes the same spec the CLI takes, and is repeatable. It is how a reference tree
 — a corpus to work from, a checkout to read — reaches the sandbox a task runs
 in.
 
+### Sandbox runtime
+
+The console selects its sandbox the way the interactive entrypoints do: from its
+environment alone, through the derivation every cf-harness entrypoint shares
+(`src/sandbox/runtime-selection.ts`), so a console and a batch run started from
+one environment execute on the same driver. The package's
+[CURRENT_STATE](../docs/CURRENT_STATE.md#sandbox-runtimes) describes both
+drivers.
+
+| Environment                      | Selects                                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; unset is `docker`, and any other value refuses to start                  |
+| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names                                                      |
+| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`                     |
+| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there |
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                    |
+
+The batch CLI's `--sandbox-runtime`, `--sandbox-rootfs` and
+`--sandbox-cfc-policy` are refused here and by `console:launch`, in any
+spelling, naming the variable to set instead: the launcher reads the same
+environment to decide whether Docker is involved at all, and a flag one of them
+read and the other did not would leave the launch and the console describing two
+different sandboxes. The Docker image and the Docker runtime name are not
+configurable on the console.
+
+Under `runsc` the console builds the direct driver: no Docker, and the runtime
+description reads `runsc-cfc`. `bash` takes no `session`, as on Docker: the
+console's turns run at `enforce-strict`, and no enforcing run can use a sandbox
+session. `console:launch` reads no Docker runtime table, sites no sidecar
+directory, and refuses `--cfc-result-dir` and `--cfc-invocation-context-dir`,
+which it takes on the Docker driver only, because only that driver reads them;
+it prints the `runsc` binary, rootfs and CFC policy in their place, and so does
+the server when it binds. With no CFC policy, both say that every turn is
+refused. A console that names no runtime, or names `docker`, builds the Docker
+driver exactly as it would with no variable set.
+
 Every turn scans the skills root and records the registry on its run before the
 first model call, so `read_skill_resource` can answer and a delegated
 `pattern-author` child inherits its profile's preloaded skills — the authoring,
@@ -214,9 +265,10 @@ registry names host paths, and the run's `skill-registry.json` artifact records
 what the scan found.
 
 Everything the server writes lives under `.cf-harness-console/` in the working
-directory — the sandbox workspace, run artifacts, the session database, and the
-sandbox's two CFC sidecar transport directories. The harness refuses to start an
-enforcing run without those transports wired, so this surface sites them itself;
+directory — the sandbox workspace, run artifacts, the session database, and, on
+the Docker driver, the sandbox's two CFC sidecar transport directories. The
+harness refuses to start an enforcing run on that driver without those
+transports wired, so this surface sites them itself;
 `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` move them somewhere else.
 `CF_HARNESS_CONSOLE_DIR` moves the whole tree. Give each console a directory of
@@ -230,16 +282,20 @@ durable: restarting the server and reopening the page replays the log.
 
 ## HTTP routes
 
-Every route is behind the loopback `Host` check and nothing else. A caller that
-names this server's host may call any of them, in one request, with no preceding
-one.
+Every route is behind the loopback `Host` check. A caller that names this
+server's host may call any of them, in one request, with no preceding one,
+except the two `/api/browser-host/` routes, which also take the per-turn token
+`POST /api/task` answered with when the task declared a browser host.
 
 | Method | Route                        | Result                                                                                  |
 | ------ | ---------------------------- | --------------------------------------------------------------------------------------- |
 | `GET`  | `/api/health`                | Console health, configured Fabric API URL, and honestly limited Fabric-session liveness |
 | `GET`  | `/api/health/detail`         | Cached operator observations with deciding records, times, causes, and remedies         |
 | `POST` | `/api/task`                  | Starts a session or a follow-up turn                                                    |
-| `POST` | `/api/cancel`                | Cancels the active turn                                                                 |
+| `POST` | `/api/cancel`                | Cancels the active turn, recording the reason the caller gives                          |
+| `POST` | `/api/browser-host/stream`   | A turn's browser operations, over SSE, for the holder of its host token                 |
+| `POST` | `/api/browser-host/result`   | The host's result for one operation                                                     |
+| `POST` | `/api/client-actions`        | Settles one action the model asked the person's client to perform                       |
 | `GET`  | `/api/sessions`              | Durable session summaries                                                               |
 | `GET`  | `/api/status`                | Session status and artifact roots                                                       |
 | `GET`  | `/api/policy`                | What a new session here would run under                                                 |
@@ -274,26 +330,85 @@ an unknown row can have a null timestamp. An unavailable observation stays
 unknown rather than claiming a failure.
 
 Configuration rows name the active console address, port, space, store, model,
-and skill-script switch. The launcher passes its decision report directly into
-the server: connector rows retain every accepted or refused grant, its CFC class
-or refusal reason, and the injection receipt and piece declaration that decided
-it. Changing those files requires a console restart to establish new grants. A
-server flag takes precedence over the inherited launch value and its source. A
-directly configured server reports its explicit grants and marks the full
-connector inventory unknown. An absent injection receipt is also unknown; an
-observed empty receipt establishes an empty inventory.
+sandbox runtime, and skill-script switch. The launcher passes its decision
+report directly into the server: connector rows retain every accepted or refused
+grant, its CFC classes or refusal reason, and the injection receipt and piece
+declaration that decided it. Changing those files requires a console restart to
+establish new grants. A server flag takes precedence over the inherited launch
+value and its source. A directly configured server reports its explicit grants
+and marks the full connector inventory unknown. An absent injection receipt is
+also unknown; an observed empty receipt establishes an empty inventory.
 
-External rows check the running Docker daemon's `runsc-cfc` registration and the
-configured index's health and enrollment for the console identity. Each probe
-caches independently for 30 seconds. Reading the route returns the current
-snapshot immediately and schedules stale checks in the background, sharing any
-in-flight check. No probe is awaited by the route. The timestamp remains visible
-while an observation is being refreshed. Model rows describe the startup
-provider and credential source without exposing credentials or making a model
-request; a configured API key does not prove provider acceptance. Docker
-registration does not prove a sandbox can execute a task. Fabric-session
-liveness remains unverified, and Loom, toolshed, and application pin status
-belong to the application that observes them directly.
+External rows check the selected sandbox driver and the configured index's
+health and enrollment for the console identity. On the Docker driver the sandbox
+rows read the running daemon's `runsc-cfc` registration. On the direct `runsc`
+driver they ask Docker nothing: they resolve the driver's configuration the way
+a turn resolves it, and report whether the `runsc` binary is an executable file,
+whether the rootfs is a directory, and whether a CFC policy is configured,
+readable and a JSON object. A policy that is missing, not a file, unreadable for
+want of permission or malformed is failed: runsc cannot use it, and every
+command's output then arrives without a CFC result and is denied to the model.
+The console takes no enforcement mode, so its turns run at `enforce-strict`, and
+with no policy the runtime row is failed because the engine refuses every turn
+before any tool runs.
+
+On macOS the direct driver runs every sandbox in one VM, which `runsc` starts on
+a command's first use and which stops itself once it has gone its idle timeout
+without a client: `idleTimeoutSec` in the store's `config.json`, 600 seconds
+unless set. The rootfs there is only a marker directory, empty by design, so the
+rows above can all read ok while that VM is dead. The **Sandbox VM** row,
+`sandbox.vm`, reads the VM itself. It looks in the store `runsc` uses —
+`CFC_VM_HOME`, or else `~/Library/Application Support/cfc-vm` — and is there
+only on macOS and only where that store holds a `config.json`. Each line of the
+table applies where no line above it does:
+
+| What it finds                                                                                                                       | State and value                         |
+| ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| a `config.json` that cannot be read as a JSON object, in which case the daemon is not looked for                                    | unknown, `not verified`                 |
+| no `daemon.sock`, or one nothing listens on                                                                                         | ok, `idle; starts on first use`         |
+| a `daemon.sock` that cannot be looked at, or that cannot be connected to for any reason but nothing listening on it                 | unknown, `not verified`                 |
+| no answer within fifteen seconds, a hang-up with nothing said, or an answer that is not a status                                    | failed, `the VM daemon does not answer` |
+| a status without the guest's figures                                                                                                | failed, `the VM guest does not answer`  |
+| a status, where the store's path cannot be resolved to tell which of its images the rootfs names                                    | unknown, `not verified`                 |
+| a status, where the rootfs names no image of the store, or one the VM attached, or one whose `ext4/<key>.ext4` file the store holds | ok, `running`                           |
+| a status without the image the rootfs names, and an `ext4/<key>.ext4` that cannot be looked at                                      | unknown, `not verified`                 |
+| a status without the image the rootfs names, and no `ext4/<key>.ext4` file                                                          | failed, `the VM has no <key> image`     |
+
+The question is the one line `#cfcvm status` on the daemon's socket, and the
+running row's `detail` carries the answer's uptime, the guest's memory and the
+images the VM attached. The daemon answers it after asking its guest, which it
+gives up on after ten seconds, so the row waits fifteen for the answer. The
+daemon counts the question as client activity, which restarts its idle timer,
+and it takes the idle timeout from the same `config.json`. So the row asks
+nothing where there is no socket or that file cannot be read, and holds any
+answer a daemon gave, a status or anything else, for its idle timeout and 30
+seconds before asking that daemon again. It asks at once where it holds no
+answer: where the socket is not the one the last answer came on, or where the
+last question got none, whether none came within the bound, the exchange failed,
+the daemon hung up with nothing said, or the socket could not be connected to.
+While it holds an answer, it connects and hangs up without a word, which the
+daemon closes without counting as activity, and reports that answer, with the
+time it was given, against the store as it is: installing a missing image's
+block file clears that row at the next refresh without a question. A connection
+that finds nothing listening reads idle, and one that fails otherwise reads
+unknown; either drops the answer held. A daemon that has stopped, whether it
+removed its socket or not, therefore reads idle at the next refresh. Watching
+the row never starts a VM, and does not on its own keep one up: a VM nothing
+else uses stops before the next question, which finds no daemon. The most it
+does is keep a VM up for one idle timeout after its last use. Another client
+asking in between, a second console's row among them, counts as use.
+
+Each probe caches independently for 30 seconds. Reading the route returns the
+current snapshot immediately and schedules stale checks in the background,
+sharing any in-flight check. No probe is awaited by the route. The timestamp
+remains visible while an observation is being refreshed. Model rows describe the
+startup provider and credential source without exposing credentials or making a
+model request; a configured API key does not prove provider acceptance. Neither
+a Docker registration nor an executable `runsc` proves a sandbox can execute a
+task, nor does a rootfs directory, a running VM holding its image, or a policy
+that parses: nothing here starts a sandbox, and only `runsc` knows a policy's
+schema. Fabric-session liveness remains unverified, and Loom, toolshed, and
+application pin status belong to the application that observes them directly.
 
 A task body carries the text, optionally the session to continue, and optionally
 the cells the task is to be computed over, published patterns, and the
@@ -405,13 +520,17 @@ The completed-turn result is:
 
 `outcome` is `completed`, `question`, or `gave-up`. All three are normally ended
 turns and return **200**. A question includes `question: { "text": "…" }`; a
-give-up includes `reason: "…"`. Each field is present only for its matching
-outcome. `finalText` carries the human-readable answer, question, or reason in
-every case. An older result without `outcome` means `completed`. When reading
-stored artifacts, an unfamiliar nonempty outcome word also means `completed`, so
-a pin change or rollback does not hide a finished turn's result. Its `finalText`
-remains available. Malformed objects remain invalid; new tool calls and writes
-use the closed three-outcome contract.
+give-up includes `reason: "…"`. A completion the model ended with `finish_task`
+includes `answer: "…"` and, when it named any, `actions`: the client actions the
+host performs in order, each an `open_loom` with a `loomId`, a `command` with a
+slash-command `line`, or an `open_url` with an http or https `url` (the
+[harness README](../README.md) gives their shapes). Each field is present only
+for its matching outcome. `finalText` carries the human-readable answer,
+question, or reason in every case. An older result without `outcome` means
+`completed`. When reading stored artifacts, an unfamiliar nonempty outcome word
+also means `completed`, so a pin change or rollback does not hide a finished
+turn's result. Its `finalText` remains available. Malformed objects remain
+invalid; new tool calls and writes use the closed three-outcome contract.
 
 Optional `usage` contains the run report's cumulative `inputTokens`,
 `outputTokens`, and other reported token/cache/cost fields, including research
@@ -487,23 +606,28 @@ Start. The feed then shows, in the order the harness produces them:
 
 - **`calling <tool>`** as each tool call begins, with its input summary.
 - **`<tool> completed` / `failed`** with the result the model read, truncated.
+- **the model's reasoning**, as the provider summarizes it, before the calls and
+  the text it led to, where the provider gives a summary.
 - **assistant text** between tool calls.
 - **a nested subagent block** under each `delegate_task` entry, headed by the
   child's profile and the goal it was given, holding the child's own tool and
   assistant lines as they happen and closing with the child's status.
 - **the final text** of the turn, in a boxed entry, when it completes.
 
-The `turn_completed` event carries the same `outcome` and its matching question
-or reason at the event level, and the structured object under `result`. Its turn
-attribution is unchanged. Live streams and replayed durable events have the same
-shape, so a caller can open `result.pieces[0].url` without parsing assistant
-prose. Pollers read the same object from `GET /api/turns/<turnId>/result`.
+The `turn_completed` event carries the same `outcome` and its matching answer,
+actions, question, or reason at the event level, and the structured object under
+`result`. Its turn attribution is unchanged. Live streams and replayed durable
+events have the same shape, so a caller can open `result.pieces[0].url` or
+perform `result.actions` without parsing assistant prose. Pollers read the same
+object from `GET /api/turns/<turnId>/result`.
 
-A completed Fabric task produces a named UI piece. A text answer is rendered by
-a small pattern and named through `assign_slug`; a data-only computation is not
-the user-facing result. Revising an existing piece can confirm its existing
-slug. A plain-text completion without a successful naming receipt is returned to
-the model for correction within its current turn budget.
+A completed Fabric task either produces a named UI piece or ends with a
+`finish_task` answer. Something built or shown is named through `assign_slug`; a
+data-only computation is not the user-facing result. Revising an existing piece
+can confirm its existing slug. An answer in words is the `finish_task` message,
+with no pattern built to hold it. A plain-text completion without a successful
+naming receipt is returned to the model for correction within its current turn
+budget.
 
 During the turn, `turn_usage` events carry `{ turnId, usage?, elapsedMs? }`
 after each completed parent, private research, or child model call. `usage` is
@@ -516,11 +640,12 @@ generated in a provider request. The next turn starts its own total, and updates
 stop when a turn is canceled. An older console without `turn_usage` still
 exposes its existing terminal usage when available.
 
-The parent calls `finish_task` alone to ask a question or explain why it cannot
-proceed. This uses the ordinary tool policy and artifact path, then ends the
-turn without another model request. The live pane shows the sentence as "waiting
-for your answer" or "stopped", without a failure badge. Child agents report
-blockers to their parent; they cannot end the user's task themselves.
+The parent calls `finish_task` alone to give its answer, ask a question, or
+explain why it cannot proceed. This uses the ordinary tool policy and artifact
+path, then ends the turn without another model request. The live pane shows the
+sentence as "done", "waiting for your answer", or "stopped", without a failure
+badge. Child agents report blockers to their parent; they cannot end the user's
+task themselves.
 
 When the run names a piece, the `assign_slug` result carries a `slug` and a
 `url`, and the page raises an **Open your piece** link above the feed. That link
@@ -532,6 +657,60 @@ appearing, the Runs view below reads it back.
 Cancel stops the running turn. The session survives a cancel and a page reload
 both — the stream resumes from the last event the page rendered rather than
 replaying the feed.
+
+## Browser hosts
+
+A task body may carry `browserHost`, an object declaring that the caller can
+host the turn's browser — show a web page to the owner and execute the `browser`
+tool's operations in it:
+
+```json
+{
+  "text": "find the book on my list",
+  "browserHost": {}
+}
+```
+
+The declaration is an object so it can grow; the console reads nothing in it
+yet, and leaves alone a field it does not know. The answer carries a
+`browserHostToken` beside `sessionId` and `turnId`, given to the task's starter
+and nobody else.
+
+A task may declare a host only on a console its operator launched with
+`--allow-browser-host`; a console launched without it answers the declaration
+403. A turn with a host runs under its session's policy with browser children
+added to drive the host, and the session's other turns run under its policy as
+it is. The token binds the stream and the results to the caller that declared
+the host, and vouches for nothing else about it.
+
+The holder of the token attaches with `POST /api/browser-host/stream`,
+`{"turnId", "token"}`, answered with Server-Sent Events: each operation arrives
+as a `request` event whose data is `{"id", "operation"}`, and a `close` event
+says the turn is over and the stream ends. Operations sent before the host
+attaches wait for it, and the first attach is the only one: a second answers
+409. Each result goes back with `POST /api/browser-host/result`,
+`{"turnId", "token", "id", "result"}`; a result that is not one answers 400, an
+id nobody waits on 404, and a body over 32 MiB 413 without the rest being read.
+A request whose token does not match answers 404, as one for a turn with no host
+does. The token rides in the body so it appears in no URL and no log line
+between the host and the console.
+
+An operation waits for its result however long it takes, since a hand-off waits
+for the owner. The run can end it early by aborting it. One the host has not
+been sent is simply withdrawn; one it holds is withdrawn with a `withdraw` event
+whose data is `{"id"}`, and the host stops it if it can and answers it as it
+ended. That answer is the acknowledgment: no later operation reaches the host
+until it arrives, so nothing the host does for a withdrawn call overlaps the
+next. A result that is not one settles its operation as failed rather than
+leaving it waiting. When the host's stream ends, every outstanding and later
+operation settles as `session-ended`, and so does every operation when the turn
+ends. The operation and result shapes are `src/contracts/browser-host.ts`.
+
+The `/api/` routes answer only the console's own page and clients that are not
+browsers: a request a browser marks as a navigation, or as made by another
+site's page (`Sec-Fetch-Mode: navigate`, or a `Sec-Fetch-Site` other than
+`same-origin` or `none`), answers 403, so a page an agent opened can neither
+load a route nor reach one from elsewhere.
 
 ## The live pane
 
@@ -580,14 +759,34 @@ come from the turn's own run, which the pane re-reads when one of its tool calls
 completes. The run id of a console turn is the turn id, so no route composes
 that address and no lookup stands between the two.
 
+Before the calls a model makes, and before what it says, the pane shows what it
+was thinking, as the provider's summary of its reasoning sums it up, set in
+italics under the parent or the subagent it came from; the console page shows
+the same summary above the step it led to. A model that reasoned little may have
+no summary, and a gateway model has one only when the run names a reasoning
+effort, since the gateway also serves models that do not reason.
+
 Each step is one line — the tool, how it ended, and what it was about: the
 numbered `run_pattern` attempt and the compiler's word on it, the slug
 `assign_slug` registered, the query a search was given, the question legacy
 `query_docs` asked, or the Common Fabric task `research` investigated. Under a
 line whose run recorded a CFC decision sits the same CFC line the console's
 timeline draws, and a result that held anything back from the model carries the
-same omission block, openable in place. A completed turn ends the pane with the
-piece link the turn produced, which is what the pane is watched for.
+same omission block, openable in place. A completed turn ends the pane with its
+answer, the final text rendered as Markdown in place of the block it streamed
+as, and the piece link the turn produced, if it produced one, which is what the
+pane is watched for. A turn `finish_task` answered keeps the block it streamed,
+since the answer came from the tool rather than from that block, and closes with
+the answer. Raw HTML in the answer is not rendered, and a link is kept only when
+it points at a web address, with the host it goes to shown beside it. The turn's
+result carries the final text as written and, as `revealed`, the string each
+`cfh:v:` return referent it names stands for; the pane shows each such string in
+place of its token, in the answer and in a question or a reason for giving up,
+marked as something an agent found, so the owner sees a value the parent held
+only as a name. A string is only ever text there, and never part of a link: a
+link the parent wrote to a token keeps the token as its destination, and is
+dropped as not a web address, and a token in a link's label stays a token, so a
+found address never labels a link that goes somewhere else.
 
 ## Sessions
 
@@ -612,16 +811,190 @@ survive a restart — says so in the feed when the follow-up is refused.
 
 ### Status route
 
-`GET /api/status` returns the console's absolute `artifactRoot` and a `sessions`
-array. Each session status carries its lifecycle, timestamps, model, workspace,
-capabilities, policy, and, once a run has started, its own `artifactRoot`. A
-`sessionId` query narrows that array to the matching live session. Clients that
-need a run's artifacts use the session's root when it is present and the
-top-level root as the console-wide fallback.
+`GET /api/status` returns the console's absolute `artifactRoot`, its client
+`protocol` (below), and a `sessions` array. Each session status carries its
+lifecycle, timestamps, model, workspace, capabilities, policy, and, once a run
+has started, its own `artifactRoot`. A `sessionId` query narrows that array to
+the matching live session. Clients that need a run's artifacts use the session's
+root when it is present and the top-level root as the console-wide fallback.
 
 Status is read directly, with no preceding request. The top-level fields are
 present even before the console has any sessions, so an unattended client can
 check the route contract before starting a model turn.
+
+### Client actions
+
+A task started with `"clientActions": true` on `POST /api/task` offers the model
+`weaver_action` for that session's turns, and opens the session with guidance on
+using the Weaver's commands, which names the common ones (`looms.list`,
+`loom.inspect`, `loom.open`, `loom.add`, `loom.move`, `page.write`,
+`create.note`) so a simple task invokes one without listing the catalog first.
+The tool takes `actions`, one to eight, in the order they should run:
+
+- `invoke_command` with an `invocation` of
+  `{ command, args, target?, approval }` runs one Weaver command: `command` is a
+  catalog id, `args` its arguments (at most 16 KiB of JSON; a larger call is
+  refused before anything is delivered), `target` `{ loomId, expectedVersion? }`
+  the loom it acts on, and `approval` the one its catalog entry names
+  (`automatic` or `person`).
+- `list_commands` with a `request` of `{ detail? }` asks for the Weaver's
+  catalog, with full descriptions for up to sixteen ids named in `detail`.
+- `open_loom` and `open_url`, the final-action kinds `finish_task` uses, ask the
+  person to open a loom or a web address. A slash-command line (`command`) is a
+  final action only and is refused here.
+
+Each action rides the ordinary `GET /api/events` stream as a
+`client_action_requested` event (`turnId`, `actionId`, `action`), and every
+settlement, whether the host's answer, a timeout, or a cancel, as a
+`client_action_resolved` event (`turnId`, `actionId`, `outcome`, `result?`, and
+for a typed action `settlement`). A reader replaying the log treats a request as
+open until a resolved event names its `actionId`.
+
+`POST /api/client-actions` settles one, with one of two bodies:
+
+- `{ "sessionId", "actionId", "outcome", "result" }` settles `open_loom` or
+  `open_url`. `outcome` is `done`, `declined`, or `failed`; `result` is a string
+  of at most 500 characters, the receipt line or the failure text.
+- `{ "sessionId", "actionId", "settlement" }` settles a typed action, as
+  [`src/contracts/client-command.ts`](../src/contracts/client-command.ts)
+  defines it: `executed` with the command's `outcome` (or, for `list_commands`,
+  the `catalog`), `declined`, or `failed_to_deliver` with
+  `landed: "no" | "unknown"`. A command request is settled by an outcome, a
+  decline, or a failure to deliver; a catalog request by a catalog or a failure
+  to deliver; and a command that asked for the person's approval is never
+  settled as having run without it. Any other pairing answers 400.
+
+It answers 200 `{ "ok": true }`, 404 `{ "error": { "code": "unknown_action" } }`
+for an id the session never issued, 409
+`{ "error": { "code": "action_resolved" } }` for one already settled, and 400
+for a bad body. A typed settlement the host already gave for the same action is
+answered 200 again without effect, so a client that lost the acknowledgment
+resends its answer after reconnecting rather than running the command again; a
+different settlement for that action is `action_resolved`: command answers are
+compared on the reduced event record, and catalog answers on the complete
+admitted catalog. The order of object keys does not matter. An action the
+console settled itself (a timeout, a cancel, or a restart) is `action_resolved`
+to every later answer.
+
+The tool returns the outcomes to the model in input order. For an executed
+command the model gets the outcome's metadata — which executor answered and its
+HTTP status, `ok`, `code`, `error`, `outputs`, `completed`, `mayHaveLanded`,
+`bodyBytes` — and, when the body is retained, the run supplies a holder, and its
+provenance can be derived, a `cfh:v:` handle to the complete JSON body. It is
+held in the session's handle table as a `document` referent with label source
+`command` and a `provenance` record (command, actor, optional Loom actor, target
+loom, the version the command answered with, origin loom). The body and the
+receipt never reach the model: the receipt is the resolved event's `result`, for
+the person, and the event's `settlement` record carries a reduced outcome
+summary and the handle when available; it omits fields such as `outputs` and
+`completed`. A body over 256 KiB arrives omitted, with its size, and is held
+nowhere; its outcome still says whether the command happened. A catalog entry
+the contract refuses (a malformed entry, or an id outside the pattern) is
+dropped and the rest are kept: the model reads `droppedEntries` and the first
+five `droppedCommands`, and the resolved event's `result` names them; only a
+settlement whose envelope is malformed answers 400. A catalog is returned to the
+model, with the schemas and descriptions of entries past 32 KiB left out, except
+for the commands the request named in `detail`, which are kept whole. A version
+conflict is an executed command whose outcome is `ok: false`, not a failure of
+the channel.
+
+Catalog resends are compared against the complete admitted catalog, including
+its schemas and descriptions, with the identity committed beside the resolved
+event in the session store. An older stored catalog whose identity was not
+recorded cannot be verified as a resend after restart and is `action_resolved`.
+
+An answer may arrive while its request is still being delivered, as when a
+client answers from the handler that receives the event: it is kept, its
+resolved event follows the request in the log, and its 200 does not wait for
+that event to be written. If that write then fails, the call fails and a restart
+records the request `interrupted`. Only that answer is exempt: a handler that
+awaits any other request that writes an event (another action's answer, a
+cancel) from inside a delivery waits on itself.
+
+The wait has an idle clock of five minutes, reset whenever any action of the
+call settles; on expiry every unsettled action is settled as timed out (`failed`
+with `result: "timeout"`, or for a typed action
+`{ "status": "interrupted", "reason": "timeout" }`), and one not yet requested
+is never requested. An answer that arrived before the clock ran out or the turn
+was canceled is kept even while its result is still being stored. Canceling the
+turn or closing the session settles every unsettled action as canceled
+(`declined` with `result: "canceled"`, or `interrupted` with reason `canceled`).
+A request a restart left open is never replayed: startup settles it `failed`
+with `result: "interrupted"`, and a typed one with
+`{ "status": "interrupted", "reason": "restart" }`. If a request's delivery
+fails, the call fails: that request settles `failed` with
+`result: "not delivered"` (typed:
+`{ "status": "failed_to_deliver", "landed": "no" }`), a typed request delivered
+before it in the same call settles
+`{ "status": "interrupted", "reason": "delivery_failed" }`, since the Weaver may
+already be running it, and the ones after it are never requested. The stdio
+request `resolve_client_action` (same params, same error codes) reads its params
+with the same reader and calls the same service method, and `start_session` and
+`start_turn` take `clientActions: true` to opt in, off by default.
+
+### Client protocol
+
+A host declares what it needs with `protocol` on `POST /api/task`:
+`{ "protocolVersion": 1, "requires": ["client_actions", "typed_commands"] }`.
+The console checks it before reading anything else and before any session or
+turn starts. Another version, or a required feature it does not serve, answers
+409 with a body such as
+
+```json
+{
+  "error": "this console speaks client protocol 1, not 2",
+  "code": "protocol_mismatch",
+  "protocol": {
+    "protocolVersion": 1,
+    "features": ["client_actions", "typed_commands"]
+  },
+  "requestedVersion": 2,
+  "missing": []
+}
+```
+
+where `protocol` is what the console does serve; a malformed declaration
+answers 400. `requires` names what the console must be able to serve, and turns
+nothing on: a session still opts in to `weaver_action` with
+`clientActions: true`. An accepted task's answer, and `GET /api/status`, carry
+`protocol: { "protocolVersion": 1, "features": [...] }`. A task without a
+declaration requires nothing and is served as before. The stdio `start_session`
+and `start_turn` take the same `protocol` param and refuse with error code
+`protocol_mismatch`, the same fields in `details`; an accepted one carries the
+same `protocol` echo beside the status in its result.
+
+The features are `client_actions`, the final-action kinds above, and
+`typed_commands`, the typed command invocation, catalog, and settlement defined
+in [`src/contracts/client-command.ts`](../src/contracts/client-command.ts). This
+console serves both. A console that answers without a `protocol` serves
+`client_actions` alone, and a host requiring `typed_commands` treats it as
+unable to serve that host. The wire shapes are pinned by the JSON files under
+[`test/fixtures/client-command-wire/`](../test/fixtures/client-command-wire/),
+which the Weaver's Swift tests read too; the two `protocol-mismatch-*` files are
+the answers of a console serving `client_actions` alone.
+
+### Cancel route
+
+`POST /api/cancel` cancels a session's active turn. Its body names the session,
+and optionally the turn and the reason:
+
+```json
+{
+  "sessionId": "…",
+  "turnId": "…",
+  "reason": "canceled from the console page"
+}
+```
+
+A cancel naming a turn is refused unless that turn is the one running, so it
+cannot stop a later turn in the same session. `reason` says what stopped the
+turn. It becomes the reason on the turn's `turn_canceled` event and the `detail`
+the turn's result route answers with, and the run's `cancelReason` quotes it,
+which is how a person reading the run later learns who stopped it. The console
+page sends `canceled from the console page`. A cancel without a reason is
+recorded as `canceled by a request to the console`, because nothing in the
+request says who sent it. A `turnId` that is not a string, or a `reason` that is
+not a non-empty string, is refused with `400`, and the turn keeps running.
 
 ### Policy route
 
@@ -1094,10 +1467,11 @@ what each one's reference is, and records no class. `pieces.json` declares each
 connector piece's `sqlite_sources`, whose table contract carries the per-column
 `ifc` the daemon seeded, and that is where the class is written down. They join
 on the piece, connection, and optional companion key Loom names in both.
-Repeated receipts for the same connection/store, reference, and class set yield
-one grant. Conflicting references or classes for that store are reported and
-withheld. Grants carry the class list as `cfcClasses`; persisted grants with a
-singular `cfcClass` or a class as their name remain readable.
+Repeated receipts for the same connection/store and reference yield one grant,
+described with every class any declaring piece's contract names. Conflicting
+references for that store are reported and withheld. Grants carry the class list
+as `cfcClasses`; persisted grants with a singular `cfcClass` or a class as their
+name remain readable.
 
 The session description carries the receipt's account identity, physical row
 count, and newest record observation time. Counts come from linked `sources`
@@ -1138,10 +1512,17 @@ trusted-side, `describe_handle` answers shape from the cell, and reading
 anything behind the token means running a pattern over it, where CFC rules as it
 does for every other flow.
 
-Three cases the launch printout states rather than resolving silently:
+Four cases the launch printout states rather than resolving silently:
 
-- A handle whose declared contract carries no CFC class is printed as
-  `grant <connection>  (none: <reason>)` and is not granted.
+- A handle whose declared contract declares no confidentiality (no per-column
+  `ifc.confidentiality` and no `rowLabel` confidentiality; integrity alone does
+  not count) is printed as `grant <connection>  (none: <reason>)` and is not
+  granted. A contract that declares confidentiality but names no `Resource`
+  class is granted under its connection, described with no class.
+- A handle whose declared contract carries an invalid `rowLabel` (one the
+  runner's `validateRowLabelSpec` rejects) is printed the same way, with the
+  validator's reason, and is not granted, even when another table declares
+  confidentiality: the runner refuses every read of such a database.
 - An ambiguous store identity or invalid connection name, companion key, or
   class is reported with the deciding record and a remedy.
 - A receipt that does not parse refuses the launch. A console that came up

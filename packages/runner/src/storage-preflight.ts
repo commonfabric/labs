@@ -1,4 +1,8 @@
-import type { FabricExecValue } from "@commonfabric/api";
+import type {
+  FabricExecValue,
+  FabricValue,
+  PatternFactory,
+} from "@commonfabric/api";
 
 import { noteDerivedCopy } from "./builder/pattern-metadata.ts";
 import { replaceArtifacts, type WalkHooks } from "./encodable-form.ts";
@@ -29,7 +33,20 @@ import { replaceArtifacts, type WalkHooks } from "./encodable-form.ts";
  * forged pattern-shaped object never arrives here paired with a trusted
  * original. A copy of a trusted artifact being trusted is the property the
  * side tables exist to preserve; not carrying it was the bug.
+ *
+ * A pattern the builder made comes back as a `FabricValue`, which is a claim
+ * about what the builder produces rather than one the types can derive. Such a
+ * pattern is replaced by its encodable form: a `$patternRef` record, or its
+ * graph, walked. The builder's binding walk emits nothing into that graph but
+ * aliases, links, `FabricValue` leaves, builder artifacts, and modules bound
+ * through their members, refusing any other function. The walk replaces every
+ * artifact in the graph with its own form, and a module's form carries no
+ * function. What is left beyond that is a pattern or module read from a cell,
+ * which is plain data.
  */
+export function flattenBuilderArtifacts<T, R>(
+  value: PatternFactory<T, R>,
+): FabricValue;
 export function flattenBuilderArtifacts(
   value: FabricExecValue,
   hooks?: { isLeaf?: WalkHooks["isLeaf"]; replaceOther?: undefined },

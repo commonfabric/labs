@@ -12,7 +12,8 @@
 //
 // So the fast path does NOT cover every conflict. Two code paths set the bounds:
 //
-//   - commit-conflict (memory engine `validateConfirmedReads` -> `patchOverlapsRead`)
+//   - commit-conflict (memory engine `validateConfirmedReads` -> `findConflictSeq`,
+//     which decides `patchOverlapsRead`)
 //     PARENT-INJECTS before #4220: an `add` of `votes/alice` touches
 //     `[votes/alice, votes]`, and the injected parent `votes` prefix-matches a
 //     read of the disjoint sibling `votes/bob`  ==> CONFLICT.

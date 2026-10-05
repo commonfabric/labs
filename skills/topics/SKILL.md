@@ -77,11 +77,10 @@ reference edge and take no `agentName`.
 
 ## The detail, by task
 
-| Read                               | When you are                                                                                                                                                         |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `references/reading.md`            | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                                         |
-| `references/verbs.md`              | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                                             |
-| `references/naming.md`             | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                                                 |
-| `references/mutating.md`           | creating a Topic and recovering its address, the observation asymmetry, warming a filed Topic, the Topic verbs, references between Topics, the editorial conventions |
-| `references/pattern-updates.md`    | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                                            |
-| `references/namespace-backfill.md` | naming the Topics filed before the namespace: the operator procedure and its traps                                                                                   |
+| Read                            | When you are                                                                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `references/reading.md`         | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                                         |
+| `references/verbs.md`           | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                                             |
+| `references/naming.md`          | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                                                 |
+| `references/mutating.md`        | creating a Topic and recovering its address, the observation asymmetry, warming a filed Topic, the Topic verbs, references between Topics, the editorial conventions |
+| `references/pattern-updates.md` | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                                            |

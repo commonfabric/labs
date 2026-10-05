@@ -11,6 +11,7 @@ import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("protected-initialization-owner");
 const other = await Identity.fromPassphrase("protected-initialization-other");
@@ -399,7 +400,7 @@ describe("protected initialization", () => {
   it("retains the owner gate during initialization", async () => {
     await seed({ note: "saved" });
     const tx = runtime.edit();
-    tx.setCfcTrustSnapshot({ id: "other", actingPrincipal: other.did() });
+    setCfcTrustSnapshot(tx, { id: "other", actingPrincipal: other.did() });
     const cell = runtime.getCell(signer.did(), "argument", schema, tx);
     recordNewProtectedDefaults(
       tx,

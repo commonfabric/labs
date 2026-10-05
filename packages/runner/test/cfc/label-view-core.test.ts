@@ -11,7 +11,7 @@ import {
 
 describe("label-view-core", () => {
   it("orders escaped logical paths and retains observation order at a path", () => {
-    const paths = [["~"], ["/"], ["a"], ["*"], [], ["value", "a"]];
+    const paths = [["~"], ["/"], ["a"], ["*"], [], ["a"], ["value", "a"]];
     const view: CfcLabelView = {
       version: 1,
       entries: paths.map((path, index) => ({
@@ -29,6 +29,7 @@ describe("label-view-core", () => {
         ["*"],
         ["a"],
         ["a"],
+        ["value", "a"],
         ["~"],
         ["/"],
       ]);
@@ -37,6 +38,7 @@ describe("label-view-core", () => {
         ["atom-3"],
         ["atom-2"],
         ["atom-5"],
+        ["atom-6"],
         ["atom-0"],
         ["atom-1"],
       ]);
@@ -107,7 +109,7 @@ describe("label-view-core", () => {
         },
       ],
     };
-    const result = rebaseCfcLabelView(view, ["value", "items", "0"])!;
+    const result = rebaseCfcLabelView(view, ["items", "0"])!;
     expect(result.entries).toHaveLength(3);
     expect(result.entries[0].path).toEqual([]);
     expect(result.entries[0].label.confidentiality).toHaveLength(3);

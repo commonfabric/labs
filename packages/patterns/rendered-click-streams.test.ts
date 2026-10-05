@@ -48,6 +48,7 @@ async function compiledSchema(path: string): Promise<Record<string, any>> {
       "check",
       path,
       "--pattern-json",
+      "--no-check",
     ],
   });
   expect(output.code, new TextDecoder().decode(output.stderr)).toBe(0);

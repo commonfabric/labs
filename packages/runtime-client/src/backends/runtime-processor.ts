@@ -28,11 +28,18 @@ import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
+import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
   dbNeedsColumnProvenance,
+  DEFAULT_BRANCH,
   eventAttentionEntryKey,
   type EventAttentionIndexValue,
   type OperationFieldAddress,
+  resolveScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type SqliteDbRef,
   type StreamEventsDocValue,
@@ -54,7 +61,6 @@ import {
   type Cancel,
   type Cell,
   ContextualFlowControl,
-  convertCellsToLinks,
   encodeSqliteParams,
   entityIdFrom,
   type EventIntentOutcome,
@@ -62,12 +68,13 @@ import {
   getMetaLink,
   getPatternIdentityRef,
   hasOperationStorageCapability,
+  hasPresenceStorageCapability,
+  hostValueOf,
   type IExtendedStorageTransaction,
   type IOperationStorageCapability,
   isCell,
   isCellResult,
   isLoopbackHostname,
-  KeepAsCell,
   markDurableReadTx,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -89,7 +96,9 @@ import {
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForResolvedCell,
+  type CfcModulePolicySource,
   createRenderConfidentialityResolver,
+  createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
@@ -107,6 +116,8 @@ import {
   CUSTODY_SEAL_GESTURE,
   type CustodySealConsent,
   prepareCustodySeal,
+  publishCustodyAnswer,
+  readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
@@ -132,6 +143,7 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
+import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
 import {
@@ -155,6 +167,8 @@ import {
 import {
   type ActionRunTraceResponse,
   BooleanResponse,
+  type CellFieldsRequest,
+  type CellFieldsResponse,
   type CellGetCfcLabelRequest,
   type CellGetRequest,
   type CellGetResponse,
@@ -168,9 +182,16 @@ import {
   type CellSetRequest,
   type CellSubscribeRequest,
   type CellUnsubscribeRequest,
+  type CellValueResponse,
   type CfcLabelViewResponse,
   ClientNotificationType,
+  type CreateSpaceRequest,
+  type CustodyAnswerPublishRequest,
+  type CustodyAnswerPublishResponse,
+  type CustodyAnswerReadRequest,
+  type CustodyAnswerReadResponse,
   type CustodySealCommitRequest,
+  type CustodySealCommitResponse,
   type CustodySealPrepareRequest,
   type CustodySealPreview,
   type DetectNonIdempotentRequest,
@@ -231,11 +252,18 @@ import {
   type PieceSyncedRequest,
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
+  type PresenceJoinRequest,
+  type PresenceJoinResponse,
+  type PresenceLeaveRequest,
+  type PresencePublishRequest,
+  type PresenceWireEvent,
   type RecreateSpaceRootPatternRequest,
+  type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
-  type ResolveSpaceNameRequest,
+  type RetrySpaceAccessRequest,
+  RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
   type SetBreakpointsRequest,
@@ -257,6 +285,7 @@ import {
   type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
+  type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
   type SpaceSetAclEntryRequest,
@@ -357,9 +386,7 @@ function spaceAclResponse(
   acl: ACL | null,
 ): SpaceAclResponse {
   const principal = runtime.userIdentityDID;
-  const capability = principal === space
-    ? "OWNER"
-    : acl?.[principal] ?? acl?.["*"];
+  const capability = acl?.[principal] ?? acl?.["*"];
   return {
     access: {
       space,
@@ -415,23 +442,14 @@ function sqliteParamForRuntime(
 }
 
 /**
- * Converts a runtime cell value into the client wire domain. Each link it
- * mints for a cell carries the display form of that cell's CFC label view,
- * with every caveat's source redacted. A sigil link already in the value is
- * rebuilt as the container it is, view and all; stored data carries no view
- * on a link, the persist seam having stripped it, so the minted links are
- * where a view crosses.
+ * Whether `cell` holds no value: nothing at all, or an empty plain object. A
+ * pull can find a scoped target in either state while the write that creates
+ * its value is still committing, which the commit-aware barrier waits for.
  */
-function cellValueForClient(value: unknown): FabricValue {
-  return convertCellsToLinks(
-    value as Parameters<typeof convertCellsToLinks>[0],
-    {
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-      doNotConvertCellResults: true,
-      includeCfcLabelView: true,
-    },
-  );
+function holdsNoValue(cell: Cell<unknown>): boolean {
+  const raw = cell.getRaw({ lastNode: "value" });
+  return raw === undefined ||
+    (isPlainObject(raw) && Object.keys(raw).length === 0);
 }
 
 function sqliteParamsForRuntime(
@@ -541,31 +559,38 @@ export function browserWorkerParamsFromInitializationData(
  *
  * Reader membership is sourced ONLY from verified facts, never from a cell's
  * mere local residency:
- *  - the acting user's own identity space (space DID == principal DID) — a
- *    principal definitionally reads its own space;
  *  - the current session workspace (`sessionSpace` = the space the session was
  *    authorized to open), while the acting principal is the session's own key
- *    holder — with `createSession({ spaceName })` the home space is a derived
- *    `spaceIdentity` DID distinct from the principal DID, and it is the space
- *    `session.open` gated on, so an own-workspace `Space(...)` label resolves
- *    rather than over-blocking. A principal a host names in the key holder's
- *    place reaches that space through the membership lookup below.
+ *    holder: `session.open` gated on READ there, so an own-workspace
+ *    `Space(...)` label resolves rather than over-blocking. That workspace is
+ *    usually the user's Home space. Being the space's DID is not itself
+ *    evidence: a Home space's user reads it because its ACL says so. A
+ *    principal a host names in the key holder's place reaches that space
+ *    through the membership lookup below.
  *
  * Broader cross-space membership comes from the §4.9.3 membership lookup: a
  * runtime-backed `SpaceMembershipProvider` reads each other space's declared
  * ACL doc and mints a reader fact only when it grants the acting user READ+
  * (never from residency). Its cross-space guarantee is exactly as strong as
- * the deployment `MEMORY_ACL_MODE`. Service DIDs are NOT threaded to the
- * worker today (design §9), so `serviceDids` is `[]` and service principals —
- * which rarely render — fail closed. Returns undefined when no ceiling is
- * configured (no render gating — today's behavior).
+ * the deployment `MEMORY_ACL_MODE`. A label that selects a module policy
+ * (`PolicyOf<...>`) runs that module's exchange rules too, with its manifest
+ * read and verified through `modulePolicySource` from the space the label is
+ * stored in, and the policy's subject space's membership looked up like a
+ * `Space(...)` atom's. The source is required so the caller shares one with
+ * the reconciler, which re-renders through its subscriptions; `undefined`
+ * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
+ * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
+ * and service principals — which rarely render — fail closed. Returns
+ * undefined when no ceiling is configured (no render gating — today's
+ * behavior).
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,
   identity: Identity,
   ceiling: RenderConfidentialityCeiling | undefined,
-  sessionSpace?: string,
-  membershipProvider?: SpaceMembershipProvider,
+  sessionSpace: string | undefined,
+  membershipProvider: SpaceMembershipProvider | undefined,
+  modulePolicySource: CfcModulePolicySource | undefined,
 ): RenderConfidentialityResolver | undefined {
   if (ceiling === undefined) {
     return undefined;
@@ -575,11 +600,10 @@ export function renderConfidentialityResolverFor(
   // `session.open` authorizes the key holder, so the workspace it gated on is
   // a member for that principal's own renders. A host that names somebody else
   // as acting has shown nothing about what that principal reads.
-  const ownSessionWorkspace = actingPrincipal === identity.did() &&
-    sessionSpace !== undefined && sessionSpace !== actingPrincipal;
-  const memberSpaces = ownSessionWorkspace
-    ? [actingPrincipal, sessionSpace]
-    : [actingPrincipal];
+  const memberSpaces = actingPrincipal === identity.did() &&
+      sessionSpace !== undefined
+    ? [sessionSpace]
+    : [];
   return createRenderConfidentialityResolver({
     actingPrincipal,
     trustConfig: runtime.cfcTrustConfig,
@@ -589,6 +613,12 @@ export function renderConfidentialityResolverFor(
     // build a private one — both read the same underlying runtime documents.
     membershipProvider: membershipProvider ??
       createRuntimeSpaceMembershipProvider(runtime, actingPrincipal),
+    // A `PolicyOf` label's module rules run at the display boundary too,
+    // resolved through the runtime's verified manifest read; a manifest that
+    // is missing or fails verification leaves the label sealed. The source is
+    // the reconciler's, so the manifests it watches and the ones this
+    // resolves are one cache.
+    modulePolicyResolver: modulePolicySource?.resolve,
   });
 }
 
@@ -612,6 +642,23 @@ export function renderMembershipProviderFor(
   const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
     identity.did();
   return createRuntimeSpaceMembershipProvider(runtime, actingPrincipal);
+}
+
+/**
+ * The module-policy manifest source for a worker's renders, shared like
+ * {@link renderMembershipProviderFor}'s provider: the resolver reads verified
+ * manifests through it, and the reconciler subscribes to a manifest a sealed
+ * `PolicyOf` cell is still waiting on. Undefined when no ceiling is
+ * configured.
+ */
+export function renderModulePolicySourceFor(
+  runtime: Runtime,
+  ceiling: RenderConfidentialityCeiling | undefined,
+): CfcModulePolicySource | undefined {
+  if (ceiling === undefined) {
+    return undefined;
+  }
+  return createRuntimeCfcModulePolicySource(runtime);
 }
 
 /**
@@ -773,6 +820,32 @@ export function securityContextFrom(
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
 
+/**
+ * The message reporting a host that did not answer the boot-time health
+ * check. The check gives one verdict over the backend and every space host,
+ * so the message names them all where there is more than one. Hosts are
+ * compared as the check compares them, as parsed URLs; one that does not
+ * parse is named as written, since that is what failed the check.
+ */
+function unreachableHostMessage(data: InitializationData): string {
+  const asChecked = (host: string) => {
+    try {
+      return new URL(host).toString();
+    } catch {
+      return host;
+    }
+  };
+  const backend = asChecked(data.apiUrl);
+  const spaceHosts = new Set<string>();
+  for (const host of Object.values(data.spaceHostMap ?? {})) {
+    const checked = asChecked(host);
+    if (checked !== backend) spaceHosts.add(checked);
+  }
+  const quoted = [...spaceHosts].map((host) => `"${host}"`).join(", ");
+  return `Could not connect to "${data.apiUrl}"` +
+    (spaceHosts.size > 0 ? ` or to a space host (${quoted})` : "");
+}
+
 /** Builds the refusal for a detached client's or a disposed runtime's seal. */
 const custodySealingUnavailable = () =>
   new Error("Custody sealing is unavailable");
@@ -786,6 +859,27 @@ type RuntimeOperationTarget = {
   capability: IOperationStorageCapability;
   address: OperationFieldAddress;
 };
+
+/**
+ * One client's membership in one presence room, keyed by the subscription
+ * id the client chose. `membership` is absent while the join is in flight,
+ * and `ended` records a leave or a client departure that arrived before it
+ * settled, so the membership is left as soon as it exists.
+ */
+type RuntimePresenceMembership = {
+  client: WorkerClient;
+  membership: PresenceMembership | undefined;
+  ended: boolean;
+};
+
+/** Reduces a room event to what crosses the worker boundary. */
+const toPresenceWireEvent = (event: PresenceEvent): PresenceWireEvent =>
+  event.kind === "failure"
+    ? {
+      kind: "failure",
+      error: { name: event.error.name, message: event.error.message },
+    }
+    : event;
 
 type RuntimeOperationSession = {
   cellKey: string;
@@ -818,7 +912,13 @@ export class RuntimeProcessor {
   #runtime: Runtime;
   #cc: PiecesController;
   #spaces = new Map<DID, PiecesController>();
+  // The boot-time health check's verdict, and whether `initialize()` waited
+  // for it before returning. A processor built without `initialize()` made
+  // no check and reads as healthy.
+  #health: Promise<boolean> = Promise.resolve(true);
+  #awaitedHealth = false;
   #identity: Identity;
+  #legacySpacesAdopted: Promise<void> | undefined;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -839,6 +939,7 @@ export class RuntimeProcessor {
     }
   >();
   #operationSessions = new Map<string, RuntimeOperationSession>();
+  #presenceMemberships = new Map<string, RuntimePresenceMembership>();
   #pieceSourceConfirmations = new Map<
     string,
     { token: string; prepared: PreparedPieceSourceChange }
@@ -900,6 +1001,20 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderMembershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source shared with the resolver above and
+   * handed to every mount's reconciler, so a `PolicyOf` cell blocked before
+   * its manifest synced re-renders once it arrives. `undefined` when no
+   * ceiling is in force.
+   */
+  #renderModulePolicySource?: CfcModulePolicySource;
+
+  /**
+   * What builds every answer to a host's read of a cell. It is built with no
+   * ceiling, so it returns every read as read.
+   */
+  #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -929,8 +1044,9 @@ export class RuntimeProcessor {
   /**
    * The runtime and home context this processor was built over, the tables
    * it keeps by space, by client, and by session, the disposed flag, the
-   * render policy and ceiling a mount inherits, and the per-space context
-   * step, which a test drives directly.
+   * render policy and ceiling a mount inherits, the boot-time health check's
+   * verdict and whether `initialize()` waited for it, and the per-space
+   * context step, which a test drives directly.
    */
   get accessForTestingOnly(): {
     runtime: Runtime;
@@ -958,6 +1074,8 @@ export class RuntimeProcessor {
     >;
     renderConfidentialityCeiling: RenderConfidentialityCeiling | undefined;
     readonly renderDeclassificationPolicy: RenderDeclassificationPolicy;
+    readonly health: Promise<boolean>;
+    readonly awaitedHealth: boolean;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -968,6 +1086,12 @@ export class RuntimeProcessor {
       },
       set runtime(value) {
         outerThis.#runtime = value;
+      },
+      get health() {
+        return outerThis.#health;
+      },
+      get awaitedHealth() {
+        return outerThis.#awaitedHealth;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -1245,8 +1369,8 @@ export class RuntimeProcessor {
   /**
    * Tears down everything one client owns, leaving the runtime and every other
    * client's work running. This is what a client's departure costs: its cell
-   * and operation subscriptions stop, its VDOM trees unmount, and nothing else
-   * moves.
+   * and operation subscriptions stop, its presence memberships end, its VDOM
+   * trees unmount, and nothing else moves.
    *
    * The runtime itself is never touched here, however the departing client
    * came to leave. Only {@link dispose} ends a runtime, and only the client
@@ -1303,6 +1427,11 @@ export class RuntimeProcessor {
     for (const [sessionId, session] of [...this.#operationSessions]) {
       if (session.clientId !== client.id) continue;
       this.#operationSessions.delete(sessionId);
+    }
+
+    for (const [subscriptionId, membership] of [...this.#presenceMemberships]) {
+      if (membership.client.id !== client.id) continue;
+      void this.#endPresenceMembership(subscriptionId);
     }
   }
 
@@ -1377,72 +1506,53 @@ export class RuntimeProcessor {
           "use `CellHandle.getCfcLabel()` for the redacted display view",
       );
     }
+    const gate = this.#hostReadGate;
     let cell = getCell(this.#runtime, request.cell);
     if (request.meta !== undefined) {
       const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-      if (
-        request.meta === "pattern" || request.meta === "argument" ||
-        request.meta === "result"
-      ) {
-        // For the meta link fields, use the meta linked cell instead
-        const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-        const link = getMetaLink(rootCell, request.meta);
-        if (link === undefined) return { value: undefined };
-        cell = this.#runtime.getCellFromLink({
-          ...link,
-          path: [...link.path, ...request.cell.path],
-        });
-      } else {
-        // For meta cells that aren't link cells, return the raw data
-        return {
-          value: rootCell.getMetaRaw(request.meta) as FabricValue,
-        };
+      if (request.meta !== "argument" && request.meta !== "result") {
+        // A metadata field that is not a link returns the raw data.
+        return gate.readMetadata(rootCell, request.meta);
       }
+      // A metadata link field reads the cell it links to, once its document
+      // admits the read.
+      const refusal = gate.metadataRefusal(rootCell);
+      if (refusal !== undefined) return refusal;
+      const link = getMetaLink(rootCell, request.meta);
+      if (link === undefined) return gate.nothing();
+      cell = this.#runtime.getCellFromLink({
+        ...link,
+        path: [...link.path, ...request.cell.path],
+      });
     }
-    const value = cell.get();
-    // The sigil links inside the response carry each cell's `cfcLabelView`
-    // in its display form, the same redaction the top-level `cfcLabel` below
-    // gets. Display-only: the worker neither persists nor re-imports inbound
-    // views, so a redacted copy cannot round-trip into under-labeled state.
-    //
-    // `convertCellsToLinks()` preserves a `FabricPrimitive` by identity, and
-    // the envelope's encoding carries one to the main thread with its class,
-    // so what the response holds is what the cell held.
-    const converted = cellValueForClient(value);
-    // The resolved cell's own schema-bearing ref, when asked for — for a meta
-    // link read this addresses the linked cell itself, so the caller can
-    // subscribe to it or consult its schema's declarations.
-    const refField = request.includeRef ? { cell: createCellRef(cell) } : {};
-    if (!request.includeCfcLabel) {
-      return { value: converted, ...refField };
-    }
-    // This reads the display label with `cfcLabelViewForResolvedCell()` and
-    // redacts `Caveat.source` from it, as `handleCellGetCfcLabel()` does.
-    // Returning the label with the value saves the caller a second round trip.
-    // The value read above resolved the same links and kicked any cross-space
-    // targets already, so the label read kicks none of its own.
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
-      kickCrossSpaceTargets: false,
+    // The sigil links inside the answer carry each cell's `cfcLabelView` in
+    // its display form, the same redaction the top-level `cfcLabel` gets.
+    // Display-only: the worker neither persists nor re-imports inbound views,
+    // so a redacted copy cannot round-trip into under-labeled state. The
+    // conversion preserves a `FabricPrimitive` by identity, and the
+    // envelope's encoding carries one to the main thread with its class. The
+    // read cell's own ref, when asked for, addresses for a metadata link read
+    // the linked cell itself, so the caller can subscribe to it or consult
+    // its schema's declarations.
+    return gate.read(cell, {
+      includeRef: request.includeRef,
+      includeCfcLabel: request.includeCfcLabel,
     });
-    return {
-      value: converted,
-      ...refField,
-      cfcLabel: cfcLabel === undefined
-        ? undefined
-        : redactCaveatSourcesForDisplay(cfcLabel),
-    };
   }
 
   async handleCellPull(
     request: CellPullRequest,
   ): Promise<CellGetResponse> {
-    await getCell(this.#runtime, request.cell).pull();
-    // A client pull is the freshness barrier, not a cache sample. Reactive
-    // quiescence can expose a lazy scoped target before the commit that creates
-    // its value has registered or landed. Cross the commit-aware fixpoint in
-    // the same request so the returned value and subsequent operations observe
-    // all work causally demanded by this pull.
-    await this.#runtime.scheduler.idleWithPendingCommits();
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.pull();
+    // The durable pull crosses the commit-aware fixpoint so subsequent
+    // operations observe all work causally demanded here. Rendering can read
+    // reactive state while the host continues to report unconfirmed writes,
+    // once there is a value to read. A cell holding none may be waiting on the
+    // very write that creates it, so that pull crosses the barrier too.
+    if (request.awaitDurability !== false || holdsNoValue(cell)) {
+      await this.#runtime.scheduler.idleWithPendingCommits();
+    }
     return this.handleCellGet({
       type: RequestType.CellGet,
       cell: request.cell,
@@ -1452,11 +1562,12 @@ export class RuntimeProcessor {
   /** Atomically stores a default only while the target has no backing value. */
   async handleCellInitialize(
     request: CellInitializeRequest,
-  ): Promise<{ value: FabricValue }> {
+  ): Promise<CellValueResponse> {
     if (request.value === undefined) {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
+    let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
       // Initialization materializes the same backing value a whole-cell write
@@ -1466,25 +1577,29 @@ export class RuntimeProcessor {
       // child write with no durable parent and can replace the visible default.
       // Follow a final write redirect only for this existence check, while
       // retaining the view schema because its scope cap controls whether that
-      // redirect is reachable. Then return the normal projected value when
-      // storage already won.
-      const stored = cell.getRaw({
+      // redirect is reachable. When storage already won, the host is sent
+      // the value this transaction found, read as every host read is, and
+      // read here, before the transaction ends, so that a write landing after
+      // it commits is not mistaken for what it selected. The transaction
+      // wrote nothing, so a read of the runtime's state sees what it saw.
+      const backing = cell.getRaw({
         lastNode: "writeRedirect",
       });
-      if (stored !== undefined) {
-        const projected = cell.get();
-        if (projected === undefined) {
+      if (backing !== undefined) {
+        if (cell.get() === undefined) {
           throw new TypeError(
             "Cell backing value is incompatible with its schema.",
           );
         }
-        return cellValueForClient(projected);
+        stored = this.#hostReadGate.read(getCell(this.#runtime, request.cell));
+        return undefined;
       }
+      stored = undefined;
       cell.set(initial);
-      return cellValueForClient(initial);
+      return hostValueOf(initial);
     });
     if (result.error) throw new Error(result.error.message);
-    return { value: result.ok };
+    return stored ?? this.#hostReadGate.sentByHost(result.ok);
   }
 
   /**
@@ -1518,7 +1633,7 @@ export class RuntimeProcessor {
     try {
       const cell = getCell(this.#runtime, request.cell) as Cell<FabricValue[]>;
       const values = request.values.map(mapCellRefsToSigilLinks);
-      cell.withTx(tx).push(...values);
+      cell.withTx(tx).pushAll(values);
     } finally {
       popFrame(frame);
     }
@@ -1589,6 +1704,123 @@ export class RuntimeProcessor {
     };
     this.#operationSessions.set(sessionKey, session);
     return { ...target, sessionKey, session };
+  }
+
+  /**
+   * Joins a presence room for the client: the one derived from the cell's
+   * resolved field, or the one the request names, under the cell's space.
+   * The first snapshot is the request's response; every later event of the
+   * membership reaches the client as a `presence:update`.
+   */
+  async handlePresenceJoin(
+    request: PresenceJoinRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<PresenceJoinResponse> {
+    if (this.#presenceMemberships.has(request.subscriptionId)) {
+      throw new Error("presence membership id is already in use");
+    }
+    const link = getCell(this.#runtime, request.cell).resolveAsCell()
+      .getAsNormalizedFullLink();
+    const provider = this.#runtime.storageManager.open(link.space);
+    const capability = hasPresenceStorageCapability(provider)
+      ? provider
+      : provider.replica;
+    if (!hasPresenceStorageCapability(capability)) {
+      throw new Error("runtime storage does not support presence");
+    }
+    const room = request.room ?? presenceRoomForField({
+      space: link.space,
+      branch: DEFAULT_BRANCH,
+      id: link.id,
+      scopeKey: resolveScopeKey(
+        link.scope,
+        this.#runtime.storageManager.scopeKeyIdentity(),
+      ),
+      path: toValuePath(link.path),
+    });
+    const state: RuntimePresenceMembership = {
+      client,
+      membership: undefined,
+      ended: false,
+    };
+    this.#presenceMemberships.set(request.subscriptionId, state);
+    let opening: Extract<PresenceEvent, { kind: "snapshot" }> | undefined;
+    let membership: PresenceMembership;
+    try {
+      membership = await capability.joinPresenceRoom(room, (event) => {
+        if (this.#presenceMemberships.get(request.subscriptionId) !== state) {
+          return;
+        }
+        // The membership delivers its opening snapshot before it is handed
+        // back, and that one is the join's response rather than an update.
+        if (opening === undefined && event.kind === "snapshot") {
+          opening = event;
+          return;
+        }
+        queueMicrotask(() =>
+          client.post({
+            type: NotificationType.PresenceUpdate,
+            subscriptionId: request.subscriptionId,
+            event: toPresenceWireEvent(event),
+          })
+        );
+      });
+    } catch (error) {
+      if (this.#presenceMemberships.get(request.subscriptionId) === state) {
+        this.#presenceMemberships.delete(request.subscriptionId);
+      }
+      throw error;
+    }
+    state.membership = membership;
+    if (state.ended || this.#isDisposed) {
+      await membership.leave();
+      throw new Error("presence membership ended while joining");
+    }
+    return {
+      participantId: membership.participantId,
+      room,
+      participants: opening?.participants ?? [],
+    };
+  }
+
+  /**
+   * Replaces the client's record in the room. A publication outside the
+   * relay's bounds throws before anything is sent.
+   */
+  handlePresencePublish(
+    request: PresencePublishRequest,
+    client: WorkerClient = ownerClient,
+  ): BooleanResponse {
+    const state = this.#presenceMemberships.get(request.subscriptionId);
+    if (
+      state === undefined || state.client.id !== client.id ||
+      state.membership === undefined
+    ) {
+      return { value: false };
+    }
+    state.membership.publish({ name: request.name, facets: request.facets });
+    return { value: true };
+  }
+
+  /** Ends the client's membership; a membership is its joiner's to end. */
+  async handlePresenceLeave(
+    request: PresenceLeaveRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<BooleanResponse> {
+    const state = this.#presenceMemberships.get(request.subscriptionId);
+    if (state === undefined || state.client.id !== client.id) {
+      return { value: false };
+    }
+    await this.#endPresenceMembership(request.subscriptionId);
+    return { value: true };
+  }
+
+  async #endPresenceMembership(subscriptionId: string): Promise<void> {
+    const state = this.#presenceMemberships.get(subscriptionId);
+    if (state === undefined) return;
+    this.#presenceMemberships.delete(subscriptionId);
+    state.ended = true;
+    await state.membership?.leave();
   }
 
   async handleOperationCapabilities(
@@ -1839,7 +2071,9 @@ export class RuntimeProcessor {
 
     const cell = getCell(this.#runtime, request.cell);
 
-    const cancel = cell.sink((value, cfcLabel) => {
+    const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
+      includeCfcLabel: request.includeCfcLabel,
+    }, (value) => {
       // Log empty-schema subscriptions that produce CellResult proxies.
       // These are the call sites that need real schemas added.
       const hasSchema = hasExplicitSubscriptionSchema(request.cell.schema);
@@ -1853,27 +2087,10 @@ export class RuntimeProcessor {
             `  schema: ${JSON.stringify(request.cell.schema)}`,
         );
       }
-      const converted = cellValueForClient(value);
-      // The sink read the raw label on its tracked tx (so cfc writes re-fire
-      // it); redact Caveat.source here before it crosses to the main thread.
-      const redactedLabel = request.includeCfcLabel
-        ? (cfcLabel === undefined
-          ? undefined
-          : redactCaveatSourcesForDisplay(cfcLabel))
-        : undefined;
-
-      // `.sink` fires synchronously on invocation. Trigger the notification
-      // in a microtask so that the subscription response returns
-      // before a notification fires.
-      queueMicrotask(() =>
-        client.post({
-          type: NotificationType.CellUpdate,
-          cell: request.cell,
-          value: converted,
-          ...(request.includeCfcLabel ? { cfcLabel: redactedLabel } : {}),
-        })
-      );
-    }, { includeCfcLabel: request.includeCfcLabel === true });
+    }, (update) =>
+      // `.sink` fires synchronously on invocation. Each notification leaves
+      // in a microtask so that the subscription response returns before it.
+      queueMicrotask(() => client.post(update)));
 
     this.#subscriptions.set(key, cancel);
     return { value: true };
@@ -2003,9 +2220,14 @@ export class RuntimeProcessor {
     const terms = this.#hostSelectedCell(request.terms);
     const policy = this.#hostSelectedCell(request.policy);
     const settings = this.#hostSelectedCell(request.allowedSources);
-    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
-      allowedSources: settings,
-    });
+    const box = request.box === undefined
+      ? undefined
+      : this.#hostSelectedCell(request.box);
+    const prepared = await prepareCustodySeal(
+      draft,
+      { terms, policy, ...(box === undefined ? {} : { box }) },
+      { allowedSources: settings },
+    );
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {
@@ -2020,6 +2242,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
+      witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
   }
@@ -2036,7 +2259,7 @@ export class RuntimeProcessor {
   async handleCustodySealCommit(
     request: CustodySealCommitRequest,
     client: WorkerClient = ownerClient,
-  ): Promise<CellResponse> {
+  ): Promise<CustodySealCommitResponse> {
     const key = clientScopedKey(client, request.id);
     const pending = this.#custodySeals.get(key);
     this.#custodySeals.delete(key);
@@ -2062,10 +2285,69 @@ export class RuntimeProcessor {
       const sealed = await commitCustodySeal(pending.consent, event, {
         signal: commit.signal,
       });
-      return { cell: createCellRef(sealed.receipt) };
+      return {
+        receipt: createCellRef(sealed.receipt),
+        box: createCellRef(sealed.box),
+        instance: sealed.instance,
+      };
     } finally {
       this.#custodySealCommits.delete(key);
     }
+  }
+
+  /**
+   * Publishes a custody instance's answer once. The worker reads the room's
+   * terms, policy and projected answer at the addresses the host names, and
+   * the seal decides from what it reads whether the answer is released to the
+   * room's readers and not yet published; nothing in the request vouches for
+   * the answer.
+   */
+  async handleCustodyAnswerPublish(
+    request: CustodyAnswerPublishRequest,
+  ): Promise<CustodyAnswerPublishResponse> {
+    if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
+    const terms = this.#hostSelectedCell(request.terms);
+    const policy = this.#hostSelectedCell(request.policy);
+    const output = this.#hostSelectedCell(request.output);
+    const published = await publishCustodyAnswer({ terms, policy }, output);
+    return { instance: published.instance, answer: published.value };
+  }
+
+  /**
+   * Reads a custody instance's published answer from the slot the seal
+   * derives from the room's terms and policy, verified to be the seal's own
+   * write. A host renders this rather than anything the room holds.
+   */
+  async handleCustodyAnswerRead(
+    request: CustodyAnswerReadRequest,
+  ): Promise<CustodyAnswerReadResponse> {
+    if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
+    const answer = await readCustodyAnswer({
+      terms: this.#hostSelectedCell(request.terms),
+      policy: this.#hostSelectedCell(request.policy),
+    });
+    return answer === undefined ? {} : { answer };
+  }
+
+  /**
+   * The fields a record holds, each as a link to its own cell, as the
+   * host-read gate decides them. Synced first, so that the labels the list
+   * is decided on are the record's.
+   *
+   * @throws When the record's space refused the worker access: a load it
+   *   refused resolves as one that found nothing, and a record the worker
+   *   could not read is not one that holds no record.
+   */
+  async handleCellFields(
+    request: CellFieldsRequest,
+  ): Promise<CellFieldsResponse> {
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.sync();
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(request.cell.space) ??
+      storage.authorizationError?.(request.cell.space);
+    if (denied !== undefined) throw denied;
+    return this.#hostReadGate.fields(cell);
   }
 
   handleCellGetCfcLabel(
@@ -2167,11 +2449,7 @@ export class RuntimeProcessor {
 
   async #pullSqliteDbRef(cell: Cell<unknown>): Promise<SqliteDbRef> {
     await cell.pull();
-    const raw = cell.getRaw({ lastNode: "value" });
-    const missing = raw === undefined ||
-      (isObjectNotArray(raw) &&
-        Object.keys(raw).length === 0);
-    if (missing) {
+    if (holdsNoValue(cell)) {
       // A resolved scoped target can be demanded while its lazy factory write
       // is still committing. Its object schema presents that missing value as
       // an empty object rather than `undefined`. Pull waits for reactive work,
@@ -2263,18 +2541,37 @@ export class RuntimeProcessor {
     // home root. Starting the pattern directly here would skip both, and
     // nothing else heals the root — so no fast path belongs in front of the
     // controller.
+    const homePattern = await this.#ensureHomePattern();
+    return { cell: createCellRef(homePattern) };
+  }
+
+  /**
+   * Ensures the user's Home pattern is running and returns its result cell.
+   * The first time in this worker, it also adopts the Home space list's
+   * name-only entries (see `PiecesController.adoptLegacySpaces`).
+   */
+  async #ensureHomePattern(): Promise<Cell<unknown>> {
+    const homeCC = this.#homeController();
+    await homeCC.synced();
+    const home = (await homeCC.ensureDefaultPattern()).getCell();
+    // Adoption is housekeeping over the Home pattern the user already has; a
+    // failure is reported and tried again on the next ensure, and never keeps
+    // Home from opening.
+    this.#legacySpacesAdopted ??= homeCC.adoptLegacySpaces().catch((error) => {
+      this.#legacySpacesAdopted = undefined;
+      console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
+    });
+    await this.#legacySpacesAdopted;
+    return home;
+  }
+
+  /** A controller over the user's Home space. */
+  #homeController(): PiecesController {
     const homeSession: Session = {
       as: this.#identity,
       space: this.#runtime.userIdentityDID,
     };
-    const homeCC = new PiecesController(homeSession, this.#runtime);
-    await homeCC.synced();
-
-    const homePattern = await homeCC.ensureDefaultPattern();
-
-    return {
-      cell: createCellRef(homePattern.getCell()),
-    };
+    return new PiecesController(homeSession, this.#runtime);
   }
 
   async handleIdle(): Promise<void> {
@@ -2526,8 +2823,7 @@ export class RuntimeProcessor {
           path: [],
         });
       await landing.sync();
-      const hasPattern = getPatternIdentityRef(landing) !== undefined ||
-        landing.getMetaRaw("pattern") !== undefined;
+      const hasPattern = getPatternIdentityRef(landing) !== undefined;
       const viewScoped = this.#runtime.viewScopedReplicationRequested &&
         await this.#runtime.viewReplication.enable(target.space);
       if (viewScoped && (!hasPattern || targetLink.path.length > 0)) {
@@ -2890,10 +3186,29 @@ export class RuntimeProcessor {
     };
   }
 
-  async handleResolveSpaceName(
-    request: ResolveSpaceNameRequest,
+  handleRegisterSpaceHostDetailed(
+    request: RegisterSpaceHostDetailedRequest,
+  ): SpaceHostRegistrationResponse {
+    return {
+      registration: this.#runtime.registerSpaceHostDetailed(
+        request.space,
+        request.host,
+      ),
+    };
+  }
+
+  /** Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. */
+  async handleRetrySpaceAccess(
+    request: RetrySpaceAccessRequest,
+  ): Promise<void> {
+    await this.#runtime.retrySpaceAccess(request.space);
+  }
+
+  async handleCreateSpace(
+    request: CreateSpaceRequest,
   ): Promise<SpaceResponse> {
-    return { space: await this.#runtime.resolveSpaceName(request.name) };
+    await this.#ensureHomePattern();
+    return { space: await this.#homeController().createSpace(request.label) };
   }
 
   /** Convergence across every opened space — no space named, none implied. */
@@ -3180,6 +3495,8 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.CellFields:
+        return await this.handleCellFields(request);
       case RequestType.SnapshotSharePrepare:
         return await this.handleSnapshotSharePrepare(request, client);
       case RequestType.SnapshotShareCommit:
@@ -3194,6 +3511,10 @@ export class RuntimeProcessor {
       case RequestType.CustodySealCancel:
         this.#custodySeals.delete(clientScopedKey(client, request.id));
         return;
+      case RequestType.CustodyAnswerPublish:
+        return await this.handleCustodyAnswerPublish(request);
+      case RequestType.CustodyAnswerRead:
+        return await this.handleCustodyAnswerRead(request);
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:
@@ -3208,6 +3529,12 @@ export class RuntimeProcessor {
         return this.handleOperationUnsubscribe(request, client);
       case RequestType.OperationSessionClose:
         return this.handleOperationSessionClose(request, client);
+      case RequestType.PresenceJoin:
+        return await this.handlePresenceJoin(request, client);
+      case RequestType.PresencePublish:
+        return this.handlePresencePublish(request, client);
+      case RequestType.PresenceLeave:
+        return await this.handlePresenceLeave(request, client);
       case RequestType.SqliteQuery:
         return await this.handleSqliteQuery(request);
       case RequestType.SqliteExec:
@@ -3270,12 +3597,20 @@ export class RuntimeProcessor {
         return await this.handlePieceSynced(request);
       case RequestType.RuntimeSynced:
         return await this.handleRuntimeSynced();
-      case RequestType.ResolveSpaceName:
-        return await this.handleResolveSpaceName(request);
+      case RequestType.CreateSpace:
+        return await this.handleCreateSpace(request);
       case RequestType.RegisterSpaceHost:
         return this.handleRegisterSpaceHost(request);
+      case RequestType.RegisterSpaceHostDetailed:
+        return this.handleRegisterSpaceHostDetailed(request);
+      case RequestType.RetrySpaceAccess:
+        return await this.handleRetrySpaceAccess(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
+      case RequestType.GetStorageDiagnostics:
+        return {
+          diagnostics: this.#runtime.storageManager.getDiagnostics?.() ?? null,
+        };
       case RequestType.GetLoggerCounts:
         return this.getLoggerCounts(request);
       case RequestType.GetPatternCoverage:
@@ -3415,6 +3750,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      modulePolicySource: this.#renderModulePolicySource,
       spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
@@ -3544,10 +3880,12 @@ export class RuntimeProcessor {
    * wires the runtime's console, navigation, piece-creation, and error
    * bridges to `postToClient()`, and starts the home-space site-table watch.
    * Rejects when the runtime's server-execution posture diverges from what
-   * the host declared, or when the API host fails its health check. The
-   * returned processor handles requests at once; a caller that needs storage
-   * and pieces to have converged waits on `synced()`. `clients` resolves the
-   * current authorized recipients of runtime-wide access-loss notifications.
+   * the host declared, or, with `awaitHealth`, when a host fails the health
+   * check. Otherwise the check runs alongside: the returned processor handles
+   * requests at once, and a host the check could not reach is reported to
+   * the clients connected when it answers. A caller that needs storage and
+   * pieces to have converged waits on `synced()`. `clients` resolves the
+   * current authorized recipients of runtime-wide notifications.
    */
   static async initialize(
     data: InitializationData,
@@ -3557,11 +3895,6 @@ export class RuntimeProcessor {
     const identity = await Identity.fromKeyPair(
       data.identity,
     );
-    const spaceIdentity = data.spaceIdentity
-      ? await Identity.fromKeyPair(
-        data.spaceIdentity,
-      )
-      : undefined;
     const space = data.spaceDid;
     const telemetry = new RuntimeTelemetry();
 
@@ -3569,15 +3902,12 @@ export class RuntimeProcessor {
     setPatternEnvironment({ apiUrl: apiUrlObj });
 
     const session = {
-      spaceIdentity,
       as: identity,
       space: data.spaceDid,
-      spaceName: data.spaceName,
     };
 
     const storageManager = StorageManager.open({
       as: identity,
-      spaceIdentity: spaceIdentity,
       memoryHost: apiUrlObj,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap
@@ -3655,8 +3985,17 @@ export class RuntimeProcessor {
 
     assertServerExecutionPostureAgreement(data.experimental, runtime);
 
-    if (!await runtime.healthCheck()) {
-      throw new Error(`Could not connect to "${data.apiUrl}"`);
+    // The check fans out to the default host and every seeded one, so it
+    // answers at the pace of the slowest of them. The reply does not wait for
+    // it: storage reconnects with its own backoff, and a host that stays
+    // unreachable is reported below. The check cannot reject on its own; a
+    // rejection is treated as an unreachable host all the same.
+    const health = runtime.healthCheck().then(
+      (healthy) => healthy,
+      () => false,
+    );
+    if (data.awaitHealth === true && !await health) {
+      throw new Error(unreachableHostMessage(data));
     }
 
     // Allow the worker to acknowledge initialization immediately. Consumers
@@ -3672,6 +4011,24 @@ export class RuntimeProcessor {
       securityContextFrom(data, identity.did()),
       clients,
     );
+    processor.#health = health;
+    processor.#awaitedHealth = data.awaitHealth === true;
+    if (!processor.#awaitedHealth) {
+      // Nothing between the check and the return awaits, so the host has its
+      // reply, and its error listener in place, before this notice can go
+      // out. An `await` added on that path would reorder the two.
+      const built = processor;
+      void health.then((healthy) => {
+        if (healthy || built.#isDisposed) return;
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.HostUnreachable,
+            message: unreachableHostMessage(data),
+          });
+        }
+      });
+    }
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
     // any present-but-unknown value becomes "deny"; absent stays "allow".
@@ -3684,12 +4041,17 @@ export class RuntimeProcessor {
       identity,
       processor.#renderConfidentialityCeiling,
     );
+    processor.#renderModulePolicySource = renderModulePolicySourceFor(
+      runtime,
+      processor.#renderConfidentialityCeiling,
+    );
     processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
       runtime,
       identity,
       processor.#renderConfidentialityCeiling,
       space,
       processor.#renderMembershipProvider,
+      processor.#renderModulePolicySource,
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,

@@ -194,7 +194,7 @@ export function createLiftAppliedInputSchema(
     context,
     captureNameMap,
   );
-  typeElements.push(...captureTypeElements);
+  for (const typeElement of captureTypeElements) typeElements.push(typeElement);
 
   // Create object type literal
   return createRegisteredTypeLiteral(

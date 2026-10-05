@@ -82,9 +82,10 @@ since the branches are unreachable by construction.
 A guard line is one of two cases where an uncovered line is expected to stay
 uncovered; a block that is never invoked at all is the other, below. A third
 case, a line two adjacent callbacks share, is not one of those: it is a count
-that moves with the shard layout, and it has a remedy. Everywhere
-else, a line whose coverage moves between runs or between shard layouts is a
-defect in the tests — see [COVERAGE.md](COVERAGE.md) for what to do about it.
+that moves with how the tests are packed into lanes, and it has a remedy.
+Everywhere else, a line whose coverage moves between runs, or between how tests
+are packed into lanes, is a defect in the tests — see [COVERAGE.md](COVERAGE.md)
+for what to do about it.
 
 ## A line two adjacent callbacks share
 
@@ -147,10 +148,11 @@ opening the callback after it; a block-bodied callback that never ran zeroed
 its own five lines and nothing else.
 
 This one is not an uncovered line that stays uncovered. Both functions run;
-what decides the count is whether one measurement ran both, and continuous
-integration merges one report per shard by adding per-line counts, so the line
-is covered only when both callbacks ran on the same shard. Which test file
-lands on which shard is not something any test asserts.
+what decides the count is whether one measurement ran both. Continuous
+integration merges the reports a run's lanes write, one per suite and workspace
+member in each lane, by adding per-line counts, so the line is covered only when
+both callbacks ran in the same report. Which test file lands in which lane is
+not something any test asserts.
 
 Give the second callback a name of its own and the sharing goes away:
 
@@ -210,7 +212,7 @@ removes one line and leaves five. A block wants the `-start` / `-stop` pair.
 The directive reaches the lcov report and not merely the terminal one, which
 is what makes it usable here: the ignored lines carry no `DA:` records at all,
 so `LF` falls while `LH` stays put — the lines removed were uncovered ones,
-never counted in `LH` to begin with — and the CI ratchet sees nothing
+never counted in `LH` to begin with — and the coverage metric sees nothing
 uncovered rather than seeing a gap it has been told to forgive.
 
 Measure a "before" figure while the source still lacks the directive. The

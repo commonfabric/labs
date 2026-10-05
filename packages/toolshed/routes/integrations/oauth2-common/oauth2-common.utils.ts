@@ -282,21 +282,6 @@ export function createLogoutErrorResponse(
   return c.json({ success: false, error: errorMessage }, status);
 }
 
-export function createBackgroundIntegrationSuccessResponse(
-  c: Context,
-  message: string,
-) {
-  return c.json({ success: true, message }, 200);
-}
-
-export function createBackgroundIntegrationErrorResponse(
-  c: Context,
-  errorMessage: string,
-  status: 400 | 500 = 400,
-) {
-  return c.json({ success: false, error: errorMessage }, status);
-}
-
 //
 // Provider metadata discovery (RFC 8414 / OIDC)
 //

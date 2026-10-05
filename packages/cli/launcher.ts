@@ -189,7 +189,7 @@ export const parseCfLauncherArgs = (
   for (let index = 0; index < options.argv.length; index += 1) {
     const arg = options.argv[index]!;
     if (arg === "--") {
-      cfArgs.push(...options.argv.slice(index + 1));
+      for (const cfArg of options.argv.slice(index + 1)) cfArgs.push(cfArg);
       break;
     }
     if (arg === "--launcher-help") {
@@ -220,7 +220,7 @@ export const parseCfLauncherArgs = (
       index += 1;
       continue;
     }
-    cfArgs.push(...options.argv.slice(index));
+    for (const cfArg of options.argv.slice(index)) cfArgs.push(cfArg);
     break;
   }
 

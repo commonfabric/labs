@@ -678,6 +678,31 @@ Deno.test("Capability analysis classifies push-only usage as writeonly", () => {
   assertEquals(input.readPaths.length, 0);
 });
 
+Deno.test("Capability analysis reads the whole list passed to pushAll", () => {
+  // `xs === input.prev` makes `other` identity-compared, so an element pushed
+  // by `push(xs)` stays an identity use; `pushAll(xs)` stores every element of
+  // the list, so the list is read in full.
+  const analyze = (write: string) =>
+    getPaths(
+      analyzeFunctionCapabilities(parseFirstCallback(
+        `const fn = (input) => {
+          const xs = input.other;
+          if (xs === input.prev) return;
+          input.key("items").${write};
+        };`,
+      )),
+      "input",
+    );
+
+  const pushAll = analyze("pushAll(xs)");
+  assert(pushAll.writePaths.includes("items"));
+  assert(pushAll.fullShapePaths.includes("other"));
+
+  const push = analyze("push(xs)");
+  assert(push.writePaths.includes("items"));
+  assert(!push.fullShapePaths.includes("other"));
+});
+
 Deno.test("Capability analysis classifies removeAll-only usage as writeonly", () => {
   const fn = parseFirstCallback(
     `const fn = (input, item) => {
@@ -3091,6 +3116,85 @@ Deno.test(
   },
 );
 
+/**
+ * The capability summary of `input`, the parameter of the first arrow in
+ * `body`, which is compiled after an import of `equals`, `lift`, `pattern` and
+ * `SELF` and a declaration of `Input` and of `other`, an `Input`.
+ */
+function analyzeInputWithSelf(body: string, patternCallback: boolean) {
+  const { program, sourceFile } = createProgramWithFiles({
+    "/test.ts": `
+      import { equals, lift, pattern, SELF } from "commonfabric";
+
+      type Input = { title: string; [SELF]?: { title: string } };
+      declare const other: Input;
+
+      ${body}
+    `,
+    "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+  });
+  let callback: ts.ArrowFunction | undefined;
+  const visit = (node: ts.Node): void => {
+    if (callback) return;
+    if (ts.isArrowFunction(node)) {
+      callback = node;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (!callback) {
+    throw new Error("Expected a callback in test source.");
+  }
+  return getPaths(
+    analyzeFunctionCapabilities(callback, {
+      checker: program.getTypeChecker(),
+      patternCallback,
+    }),
+    "input",
+  );
+}
+
+const SELF_READS = `(input: Input) => [
+  input.title,
+  input[SELF],
+  input[SELF]?.title,
+]`;
+
+Deno.test(
+  "Capability analysis leaves SELF paths out of a pattern callback's input",
+  () => {
+    const input = analyzeInputWithSelf(`pattern(${SELF_READS});`, true);
+
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["title"]);
+  },
+);
+
+Deno.test(
+  "Capability analysis keeps SELF paths on the input of any other callback",
+  () => {
+    const input = analyzeInputWithSelf(`lift(${SELF_READS});`, false);
+
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths.toSorted(), ["$SELF", "$SELF.title", "title"]);
+  },
+);
+
+Deno.test(
+  "Capability analysis keeps a pattern callback's input identity-only beside a SELF read",
+  () => {
+    const input = analyzeInputWithSelf(
+      `pattern((input: Input) => [equals(input, other), input[SELF]?.title]);`,
+      true,
+    );
+
+    assertEquals(input.capability, "comparable");
+    assertEquals(input.identityOnly, true);
+    assertEquals(input.readPaths, []);
+  },
+);
+
 Deno.test(
   "Capability analysis does not treat arbitrary .equals() methods as identity-only",
   () => {
@@ -3401,6 +3505,31 @@ Deno.test(
     );
 
     assertEquals(findings.length, 0);
+  },
+);
+
+Deno.test(
+  "Mergeable-push misuse: flags a read-then-pushAll to the same collection",
+  () => {
+    const flagged = collectMergeablePushMisuses(
+      `const fn = (input) => {
+        const existing = input.key("users").get();
+        if (existing.length > 0) return;
+        input.key("users").pushAll([{ name: "a" }, { name: "b" }]);
+      };`,
+    );
+
+    assertEquals(flagged.length, 1);
+    assertEquals(flagged[0]!.path.join("."), "users");
+    assertEquals(flagged[0]!.kind, "read-dependent-push");
+
+    const unread = collectMergeablePushMisuses(
+      `const fn = (input) => {
+        input.key("users").pushAll([{ name: "a" }, { name: "b" }]);
+      };`,
+    );
+
+    assertEquals(unread.length, 0);
   },
 );
 

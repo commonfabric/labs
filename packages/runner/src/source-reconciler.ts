@@ -64,6 +64,7 @@ import {
   setPieceReconciliation,
 } from "./runner.ts";
 import type { Runtime } from "./runtime.ts";
+import { schemaRegistryEpoch } from "./schema-registry.ts";
 import { fabricAuthorityMatchesSpaceHost } from "./space-host.ts";
 import type { MemorySpace } from "./storage/interface.ts";
 
@@ -226,11 +227,33 @@ type SourcePass = {
   done: Promise<unknown>;
 };
 
+/**
+ * Resolved source for one supplied origin in one destination space, and the
+ * pattern it compiled to there once an open has verified it.
+ */
+type SuppliedSource = {
+  /** The resolved program, which each compile gets its own containers of. */
+  readonly program: RuntimeProgram;
+
+  /**
+   * The pattern `program` compiled to in the destination space, with the
+   * advertised identity verified and the source closure persisted there, and
+   * the schema registry epoch it was compiled in. Usable only in that epoch:
+   * its serialized graph carries `cid:` references minted from the registry.
+   */
+  compiled?: { pattern: Pattern; epoch: number };
+};
+
 /** Maximum retained source text and key size, measured in UTF-16 code units. */
 const SUPPLIED_SOURCE_MAX_WEIGHT = 4 * 1024 * 1024;
 
-/** The string weight of one resolved program and its lookup key. */
-function suppliedSourceWeight(key: string, program: RuntimeProgram): number {
+/**
+ * The string weight of one resolved program and its lookup key. A compiled
+ * pattern kept beside it is not weighed: this budget bounds retained source
+ * text, and the entry count bounds how many patterns are kept.
+ */
+function suppliedSourceWeight(key: string, source: SuppliedSource): number {
+  const { program } = source;
   let weight = key.length + program.main.length +
     (program.mainExport?.length ?? 0);
   for (const file of program.files) {
@@ -261,16 +284,23 @@ export class SourceReconciler {
   readonly #fabricFollowers = new Map<string, FabricFollower>();
   readonly #stoppedFabricFollowers = new Set<string>();
   readonly #passes = new Set<SourcePass>();
-  readonly #suppliedSources = new LRUCache<string, RuntimeProgram>({
+  readonly #suppliedSources = new LRUCache<string, SuppliedSource>({
     capacity: 32,
     maxWeight: SUPPLIED_SOURCE_MAX_WEIGHT,
     weigh: suppliedSourceWeight,
   });
-  readonly #suppliedSourceFlights = new Map<string, Promise<RuntimeProgram>>();
+  readonly #suppliedSourceFlights = new Map<string, Promise<SuppliedSource>>();
   #disposed = false;
 
   constructor(runtime: Runtime) {
     this.#runtime = runtime;
+  }
+
+  /** The retained supplied sources, which a test reads to see what is kept. */
+  get accessForTestingOnly(): {
+    readonly suppliedSources: LRUCache<string, SuppliedSource>;
+  } {
+    return { suppliedSources: this.#suppliedSources };
   }
 
   /**
@@ -616,9 +646,9 @@ export class SourceReconciler {
   }
 
   /**
-   * A pattern this deployment's toolshed serves. Its `?identity` route reports
-   * the identity the current source compiles to, so one conditional request
-   * settles whether anything moved before any source is downloaded.
+   * Follows a pattern this deployment's toolshed serves. An entry-only identity
+   * match needs no stored-source read; a mismatch loads the retained source
+   * roots and checks their combined identity before downloading an update.
    */
   async #followSystem(
     resultCell: Cell<unknown>,
@@ -629,10 +659,36 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
-    const answer = await this.#advertisedIdentity(target, fetch, signal);
+    let answer = await this.#advertisedIdentity(target, fetch, signal);
     if ("detail" in answer) {
       state.detail = answer.detail;
       return "unavailable";
+    }
+    let sourceRoots: readonly string[] = [];
+    // Attached roots participate in the stored identity. An entry-only match
+    // therefore needs no stored-source verification or compiler-stack load.
+    if (answer.identity !== state.running.identity) {
+      const stored = await this.#runtime.patternManager
+        .getPatternSourceProgramByIdentity(
+          state.running.identity,
+          state.space,
+        );
+      signal.throwIfAborted();
+      // Missing stored source permits rebuilding the entry and recording the
+      // displaced identity. Roots can only be retained from a verified program.
+      sourceRoots = stored?.sourceRoots ?? [];
+      if (sourceRoots.length > 0) {
+        answer = await this.#advertisedIdentity(
+          target,
+          fetch,
+          signal,
+          sourceRoots,
+        );
+        if ("detail" in answer) {
+          state.detail = answer.detail;
+          return "unavailable";
+        }
+      }
     }
     const advertised = answer.identity;
     state.offered = { identity: advertised, symbol: state.running.symbol };
@@ -648,6 +704,7 @@ export class SourceReconciler {
 
     const resolved = await this.#runtime.harness.resolve(
       new HttpProgramResolver(target.href, fetch),
+      { sourceRoots },
     );
     return await this.#adopt(
       resultCell,
@@ -683,9 +740,13 @@ export class SourceReconciler {
     target: URL,
     fetch: typeof globalThis.fetch,
     signal: AbortSignal,
+    sourceRoots: readonly string[] = [],
   ): Promise<{ identity: string } | { detail: string }> {
     const identityUrl = new URL(target);
     identityUrl.searchParams.set("identity", "");
+    for (const root of sourceRoots) {
+      identityUrl.searchParams.append("sourceRoot", root);
+    }
     let response: Response;
     try {
       response = await fetch(identityUrl);
@@ -723,11 +784,12 @@ export class SourceReconciler {
    * The pattern a supplied origin currently names, for a piece that does not
    * exist yet.
    *
-   * Each open revalidates the advertised identity and compiles into its own
-   * destination space, including the source-closure persistence of a compiler
-   * cache hit. Opens for the same destination, target and advertised identity
-   * share resolved source. Each caller verifies that source compiles to the
-   * advertised identity before answering with a pattern.
+   * Each open revalidates the advertised identity. Opens for the same
+   * destination, target and advertised identity share resolved source, and
+   * the first to compile it into that destination verifies that it compiles
+   * to the advertised identity, including the source-closure persistence of a
+   * compiler cache hit. Later opens in the same schema registry epoch answer
+   * with that verified pattern, whose closure the destination already holds.
    */
   async #resolveSupplied(
     space: MemorySpace,
@@ -741,9 +803,6 @@ export class SourceReconciler {
       // resolving for does not exist yet.
       if ("detail" in answer) return undefined;
       const advertised = answer.identity;
-      // The destination must hold the closure behind its creation revision.
-      // A compiler hit still performs the destination's persistence work.
-      await prepareSourceClosureVerification();
       const key = stringTupleKey([space, target.href, advertised]);
       const resolved = await this.#resolveSuppliedSource(
         key,
@@ -751,11 +810,18 @@ export class SourceReconciler {
         fetch,
         signal,
       );
+      // A stopped pass answers with nothing, kept pattern or not.
+      signal.throwIfAborted();
+      const epoch = schemaRegistryEpoch();
+      if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
+      // The destination must hold the closure behind its creation revision.
+      // A compiler hit still performs the destination's persistence work.
+      await prepareSourceClosureVerification();
       try {
         // Compiling writes to storage; a stopped pass must leave it alone.
         signal.throwIfAborted();
         const compiled = await this.#runtime.patternManager.compilePattern(
-          copySourceProgram(resolved),
+          copySourceProgram(resolved.program),
           { space },
         );
         signal.throwIfAborted();
@@ -769,6 +835,11 @@ export class SourceReconciler {
             ref,
           ]);
           return undefined;
+        }
+        // A pattern compiled across a registry clear carries references the
+        // clear retired, so it is answered but not kept.
+        if (schemaRegistryEpoch() === epoch) {
+          resolved.compiled = { pattern: compiled, epoch };
         }
         return compiled;
       } catch (error) {
@@ -784,7 +855,7 @@ export class SourceReconciler {
     target: URL,
     fetch: typeof globalThis.fetch,
     signal: AbortSignal,
-  ): Promise<RuntimeProgram> {
+  ): Promise<SuppliedSource> {
     signal.throwIfAborted();
     const cached = this.#suppliedSources.get(key);
     if (cached !== undefined) return cached;
@@ -794,7 +865,7 @@ export class SourceReconciler {
       new HttpProgramResolver(target.href, fetch),
     ).then((program) => {
       signal.throwIfAborted();
-      const retained = copySourceProgram(program);
+      const retained: SuppliedSource = { program: copySourceProgram(program) };
       // LRUCache retains a single oversized entry; source retention has a hard
       // string budget, so such a program serves only the callers in flight.
       if (suppliedSourceWeight(key, retained) <= SUPPLIED_SOURCE_MAX_WEIGHT) {
@@ -811,8 +882,8 @@ export class SourceReconciler {
   }
 
   /** A late failure may retire only the source used by its own attempt. */
-  #forgetSuppliedSource(key: string, program: RuntimeProgram): void {
-    if (this.#suppliedSources.get(key) === program) {
+  #forgetSuppliedSource(key: string, source: SuppliedSource): void {
+    if (this.#suppliedSources.get(key) === source) {
       this.#suppliedSources.delete(key);
     }
   }

@@ -10,6 +10,14 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # A machine out of memory kills a step's process rather than paging the
+    # runner out; "Step And Job Timeouts" in docs/development/CI_PERFORMANCE.md
+    # describes why. A self-hosted machine keeps its own configuration.
+    - name: 🔧 Turn off swap
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      shell: bash
+      run: sudo swapoff -a
+
     # The repository's Deno version is pinned once, in mise.toml. This step
     # reads it so the rest of the action (and any caller that leaves the
     # deno-version input empty) follows the pin.

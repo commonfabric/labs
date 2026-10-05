@@ -84,7 +84,6 @@ describe("piece-controller", () => {
     let server: ReturnType<typeof newLoopbackServer>;
     let runtime: Runtime;
     let pieces: PiecesController;
-    let spaceName: string;
 
     async function withFreshPiece(
       id: string,
@@ -101,7 +100,7 @@ describe("piece-controller", () => {
       });
       try {
         const freshPieces = new PiecesController(
-          await createSession({ identity: signer, spaceName }),
+          createSession({ identity: signer, spaceDid: pieces.getSpace() }),
           freshRuntime,
         );
         await freshPieces.synced();
@@ -119,9 +118,11 @@ describe("piece-controller", () => {
         apiUrl: new URL("http://toolshed.test"),
         storageManager: storage,
       });
-      spaceName = `source-input-${crypto.randomUUID()}`;
       pieces = new PiecesController(
-        await createSession({ identity: signer, spaceName }),
+        createSession({
+          identity: signer,
+          spaceDid: await runtime.createSpace(),
+        }),
         runtime,
       );
       await pieces.synced();

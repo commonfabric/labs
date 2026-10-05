@@ -152,6 +152,35 @@ Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apar
   );
 });
 
+Deno.test("CfHarnessEngine records no CFC invocation context for a bash call refused over its session", async () => {
+  // The fake runtime has no sessions, as the Docker runtime has none.
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "", stderr: "", exitCode: 0 },
+  ]);
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-refused-session",
+  });
+
+  const refused = await engine.invokeBuiltinTool("bash", {
+    command: "printf one",
+    session: "build",
+  });
+
+  assertEquals(refused.output.exitCode, 125);
+  // The command never ran, so the run holds no record that it was prepared.
+  assertEquals(engine.getRunState().cfcInvocationContexts ?? [], []);
+
+  // The next call that does run is the run's first invocation.
+  await engine.invokeBuiltinTool("bash", { command: "printf two" });
+  assertEquals(
+    engine.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ),
+    [1],
+  );
+});
+
 Deno.test("CfHarnessEngine numbers a resumed run's next CFC invocation context past the highest recorded", async () => {
   const first = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime([

@@ -80,6 +80,55 @@ const secretCell = (
 
 describe("console/steps", () => {
   describe("consoleRunSteps()", () => {
+    it("returns the reasoning behind calls on the first call's step, and behind prose on the prose", () => {
+      const steps = consoleRunSteps([
+        { role: "user", content: "do it" },
+        {
+          role: "assistant",
+          content: "",
+          reasoning: "Read both, then answer.",
+          toolCalls: ["c1", "c2"].map((id) => ({
+            id,
+            type: "function" as const,
+            function: { name: "read_file", arguments: '{"path":"a"}' },
+          })),
+        },
+        result("c1", "read_file", { content: "a" }),
+        result("c2", "read_file", { content: "b" }),
+        { role: "assistant", content: "done", reasoning: "Both say done." },
+      ]);
+
+      expect(steps.map((step) => [step.kind, step.reasoning])).toEqual([
+        ["user", undefined],
+        ["tool", "Read both, then answer."],
+        ["tool", undefined],
+        ["assistant", "Both say done."],
+      ]);
+    });
+
+    it("returns no handle into scope that only a model's reasoning named", () => {
+      const steps = consoleRunSteps([
+        {
+          role: "assistant",
+          content: "",
+          reasoning: "Read cfh:a:aaaaa first.",
+          toolCalls: [{
+            id: "c1",
+            type: "function" as const,
+            function: { name: "read_file", arguments: '{"path":"a"}' },
+          }],
+        },
+        result("c1", "read_file", { content: "a" }),
+        {
+          role: "assistant",
+          content: "done",
+          reasoning: "cfh:a:bbbbb held it.",
+        },
+      ]);
+
+      expect(steps.map((step) => step.handlesInScope)).toEqual([[], []]);
+    });
+
     it("folds a tool call and its result into one step", () => {
       const steps = consoleRunSteps([
         { role: "user", content: "do it" },

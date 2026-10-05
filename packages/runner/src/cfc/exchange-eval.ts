@@ -31,6 +31,7 @@ import {
 import type { IFCLabel } from "./label-view-core.ts";
 import {
   type ExchangeRule,
+  isExactModulePolicyRef,
   lowerCfcPolicyTemplateRules,
   type PolicyArtifactManifestV1,
   type PolicyRecord,
@@ -81,6 +82,20 @@ import type { TrustResolver } from "./trust.ts";
 
 /** Default rule-firing budget per evaluated label. */
 export const DEFAULT_EXCHANGE_FUEL = 64;
+
+/**
+ * The record id a module policy's rule firings carry: its module, symbol and
+ * compiled digest. Code that asks whether a given policy's rule fired (the
+ * custody seal's publication check) compares against this, so the encoding
+ * lives in one place.
+ */
+export const modulePolicyRecordId = (
+  reference: Pick<
+    CfcModulePolicyRefAtom,
+    "moduleIdentity" | "symbol" | "policyDigest"
+  >,
+): string =>
+  `${reference.moduleIdentity}#${reference.symbol}@${reference.policyDigest}`;
 
 /** One state-changing rule application, for observe-mode diagnostics (B5). */
 export type RuleFiring = {
@@ -305,40 +320,11 @@ const policyRefHomeClauses = (
   return homes;
 };
 
-const MODULE_POLICY_REF_KEYS = new Set([
-  "type",
-  "policyRefKind",
-  "moduleIdentity",
-  "symbol",
-  "policyDigest",
-  "subject",
-]);
-
 const isModulePolicyCandidate = (value: Record<string, unknown>): boolean =>
   value.policyRefKind === "module" ||
   ["moduleIdentity", "symbol", "policyDigest"].some((key) =>
     Object.hasOwn(value, key)
   );
-
-const isExactModulePolicyRef = (
-  value: unknown,
-): value is CfcModulePolicyRefAtom => {
-  if (!isObjectNotArray(value)) return false;
-  if (
-    value.type !== CFC_ATOM_TYPE.Policy || value.policyRefKind !== "module" ||
-    typeof value.moduleIdentity !== "string" ||
-    value.moduleIdentity.length === 0 || typeof value.symbol !== "string" ||
-    value.symbol.length === 0 || typeof value.policyDigest !== "string" ||
-    value.policyDigest.length === 0 ||
-    !(
-      (typeof value.subject === "string" && value.subject.length > 0) ||
-      isCfcFieldCommitment(value.subject)
-    )
-  ) {
-    return false;
-  }
-  return Object.keys(value).every((key) => MODULE_POLICY_REF_KEYS.has(key));
-};
 
 const collectSelectedModulePolicyRefs = (
   confidentiality: readonly CfcConfClause[],
@@ -486,8 +472,7 @@ const resolveSelectedModulePolicies = (
     policies.push({
       reference,
       artifact,
-      recordId:
-        `${reference.moduleIdentity}#${reference.symbol}@${reference.policyDigest}`,
+      recordId: modulePolicyRecordId(reference),
     });
   }
   return { policies, failures };

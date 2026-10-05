@@ -1,0 +1,58 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-3",
+  "settlement": {
+    "status": "executed",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "outcome": {
+      "executor": "loom",
+      "transportStatus": 400,
+      "ok": false,
+      "id": "loom.add",
+      "code": "store-error",
+      "error": "database is locked",
+      "outputs": {
+        "loom_id": "loom-0123456789abcdef",
+        "version": 13
+      },
+      "completed": [
+        "op-1"
+      ],
+      "displaced": [
+        {
+          "component_id": "c-0",
+          "title": "Old notes"
+        }
+      ],
+      "partialEcho": "loom.add --component c-3  # partial: op-1",
+      "bodyBytes": 274,
+      "body": {
+        "ok": false,
+        "id": "loom.add",
+        "code": "store-error",
+        "error": "database is locked",
+        "completed": [
+          "op-1"
+        ],
+        "outputs": {
+          "loom_id": "loom-0123456789abcdef",
+          "version": 13
+        },
+        "displaced": [
+          {
+            "component_id": "c-0",
+            "title": "Old notes"
+          }
+        ],
+        "partial_echo": "loom.add --component c-3  # partial: op-1"
+      }
+    },
+    "receipt": "loom.add partly landed (op-1), then failed: database is locked."
+  }
+}

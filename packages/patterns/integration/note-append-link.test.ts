@@ -11,7 +11,7 @@
  * in-pattern assertion can't catch, since it only has the same internal
  * machinery to recompute the id with.
  */
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -25,7 +25,6 @@ import {
 } from "./pieces-controller.ts";
 
 const { API_URL } = env;
-const SPACE_NAME = "note-append-link-" + Date.now().toString(36);
 
 describe("note appendLink integration", () => {
   let identity: Identity;
@@ -37,7 +36,7 @@ describe("note appendLink integration", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
     });

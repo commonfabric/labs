@@ -12,6 +12,7 @@ import { NullLiveEnvironment } from "@commonfabric/data-model/codec-common";
 import {
   fabricFromJsonValue,
   jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
@@ -771,6 +772,15 @@ export type DocumentPath = readonly string[] & {
 export type ValuePath = readonly string[] & {
   readonly __memoryV2ValuePath: unique symbol;
 };
+
+/**
+ * Any path except a {@link DocumentPath}. A parameter of this type takes a
+ * plain path or a {@link ValuePath} and refuses one branded as rooted at the
+ * stored document, which has to be converted before it gets there.
+ */
+export type NonDocumentPath = readonly string[] & {
+  readonly __memoryV2DocumentPath?: never;
+};
 export type ReadPath = DocumentPath;
 export type DocumentSchemaPathSelector =
   & Omit<SchemaPathSelector, "path">
@@ -811,14 +821,16 @@ export type PatchOp =
     add: FabricValue[];
   }
   // A tail-relative append: `values` are inserted at the array's current tail,
-  // with the array (and the path to it) created if absent. Carries no index, so
-  // concurrent appends merge against durable state rather than clobbering via a
-  // position computed from a stale base. `createsKey` — see below.
+  // with the array (and the path to it) created if absent, or if its slot holds
+  // `undefined`. Carries no index, so concurrent appends merge against durable
+  // state rather than clobbering via a position computed from a stale base.
+  // `createsKey` — see below.
   | { op: "append"; path: string; values: FabricValue[]; createsKey?: true }
   // Set-add by identity: each of `values` is appended at the tail only if no
   // existing element of the array equals it (by stored-value equality), with the
-  // array created if absent. Idempotent and commutative, so concurrent adds of
-  // distinct elements merge and a repeated add is a no-op against durable state.
+  // array created where `append` creates it. Idempotent and commutative, so
+  // concurrent adds of distinct elements merge and a repeated add is a no-op
+  // against durable state.
   | { op: "add-unique"; path: string; values: FabricValue[]; createsKey?: true }
   // Remove every element of the array at `path` that equals `value` by
   // stored-value equality. Idempotent (removing an absent value is a no-op) and
@@ -1090,6 +1102,8 @@ export type SessionOpenResult = {
   caughtUpLocalSeq?: number;
   resumed?: boolean;
   sync?: SessionSync;
+
+  /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
 };
 
@@ -1199,6 +1213,38 @@ export type MemoryProtocolFlags = {
    * and the client refuses to open the session.
    */
   sessionReadCeiling?: boolean;
+
+  /**
+   * Server capability: the server relays ephemeral presence rooms under a
+   * space over this connection — `presence.join`, `presence.publish`,
+   * `presence.leave`, and the `presence/upsert` and `presence/remove`
+   * pushes (04-protocol.md §4.13). Build-inherent, so a server of this
+   * version always advertises it. Absent (an older server) parses to
+   * false, and a client then reports presence as unavailable rather than
+   * sending a message the server would refuse.
+   */
+  presenceV1?: boolean;
+
+  /**
+   * Server capability: `session.close` ends one session and leaves the
+   * connection and its other sessions open. Build-inherent, so a server of
+   * this version always advertises it. Absent (an older server) parses to
+   * false, and a client then closes a session locally and leaves it
+   * attached on the server until the connection closes.
+   */
+  sessionClose?: boolean;
+
+  /**
+   * Server capability: a key authenticates once per connection with
+   * `connection.auth`, and `session.open` names the authenticated principal
+   * it opens as in place of carrying a signature (04-protocol.md §4.5).
+   * Advertised by a server whose host verifies `connection.auth`. Absent (an
+   * older server, or a host that verifies only `session.open`) parses to
+   * false, and a client then signs each `session.open`.
+   */
+  connectionAuth?: boolean;
+  /** The peer supports router-scoped binary connection authentication. */
+  routedAuthV1?: boolean;
 };
 
 /**
@@ -1226,6 +1272,10 @@ export type WireMemoryProtocolFlags = {
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
+  presenceV1?: boolean;
+  sessionClose?: boolean;
+  connectionAuth?: boolean;
+  routedAuthV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1249,6 +1299,8 @@ export type SessionOpenChallenge = {
 export type SessionOpenAuthMetadata = {
   challenge: SessionOpenChallenge;
   audience: string;
+  /** Deployment identifier signed when this peer is a Mode A router. */
+  deployment?: string;
 };
 
 export type SessionDescriptor = {
@@ -1321,6 +1373,14 @@ export type SessionOpenRequest = {
   type: "session.open";
   requestId: string;
   space: string;
+
+  /**
+   * The authenticated principal of the connection the session opens as. A
+   * request naming one carries no signature of its own, and the server reads
+   * neither `invocation` nor `authorization` from it.
+   */
+  principal?: string;
+
   session: SessionDescriptor;
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
@@ -1844,6 +1904,72 @@ export type SessionAckRequest = {
   seenSeq: number;
 };
 
+/**
+ * Authenticates one key for the whole connection. The invocation is signed
+ * over a challenge the server issued on this connection, and names no space.
+ */
+export type ConnectionAuthRequest = {
+  type: "connection.auth";
+  requestId: string;
+  invocation?: FabricPlainObject;
+  authorization?: FabricValue;
+  /** Canonical base64url statement when routedAuthV1 is negotiated. */
+  statement?: string;
+};
+
+/** The `ok` of the response to a `connection.auth`. */
+export type ConnectionAuthResult = {
+  /** The DID the connection may now name in its requests. */
+  principal: string;
+
+  /**
+   * The unix second the authentication runs out at: the statement's `exp`,
+   * capped by the server. Requests naming the principal are refused from
+   * then on, and sessions opened as it are sent nothing more, until a new
+   * `connection.auth` renews it.
+   */
+  expiresAt: number;
+};
+
+/** Asks for a challenge a later `connection.auth` on this connection signs. */
+export type ConnectionChallengeRequest = {
+  type: "connection.challenge";
+  requestId: string;
+};
+
+/** The `ok` of the response to a `connection.challenge`. */
+export type ConnectionChallengeResult = {
+  challenge: SessionOpenChallenge;
+};
+
+/**
+ * Ends a principal's authentication on the connection. Sessions it opened
+ * stay open; later requests naming it are refused.
+ */
+export type ConnectionReleaseRequest = {
+  type: "connection.release";
+  requestId: string;
+  principal: string;
+};
+
+/** The `ok` of the response to a `connection.release`. */
+export type ConnectionReleaseResult = Record<PropertyKey, never>;
+
+/**
+ * Ends one session. The server stops sending to it, ends its presence
+ * memberships, and keeps it resumable for as long as it keeps a session
+ * whose connection closed.
+ */
+export type SessionCloseRequest = {
+  type: "session.close";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+};
+
+/** The `ok` of the response to a `session.close`. */
+export type SessionCloseResult = Record<PropertyKey, never>;
+
 export type EventAttentionResolveRequest = {
   type: "event.attention.resolve";
   requestId: string;
@@ -1858,6 +1984,87 @@ export type EventAttentionResolveRequest = {
 export type EventAttentionResolveResult = {
   serverSeq: number;
   resolution: EventAttentionResolution;
+};
+
+/**
+ * Per-kind presence state, keyed by facet name. The relay bounds the map and
+ * treats each value as an opaque plain object; a consumer decodes the facets
+ * it knows and ignores the rest (04-protocol.md §4.13).
+ */
+export type PresenceFacets = Record<string, FabricPlainObject>;
+
+/** What a participant publishes: the envelope fields it owns. */
+export type PresencePublication = {
+  /** Plain-text display name, bounded; never rendered as HTML. */
+  name: string;
+
+  facets: PresenceFacets;
+};
+
+/** Latest published state of one room participant, as the relay holds it. */
+export type PresenceRecord = PresencePublication & {
+  /** Relay-assigned id for the membership; unpredictable and never reused. */
+  participantId: string;
+
+  /**
+   * DID the publishing session was opened as, stamped by the relay from its
+   * session registry. Absent when the session has no bound principal.
+   */
+  principal?: string;
+
+  /** Strictly increasing within one membership. */
+  revision: number;
+};
+
+export type PresenceJoinRequest = {
+  type: "presence.join";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** The `ok` of a `presence.join` response. */
+export type PresenceJoinResult = {
+  participantId: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+export type PresencePublishRequest = PresencePublication & {
+  type: "presence.publish";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  revision: number;
+};
+
+export type PresenceLeaveRequest = {
+  type: "presence.leave";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** A room member's record replaced, pushed to the room's other members. */
+export type PresenceUpsertMessage = {
+  type: "presence/upsert";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participant: PresenceRecord;
+};
+
+/** A room member gone, pushed to the room's other members. */
+export type PresenceRemoveMessage = {
+  type: "presence/remove";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participantId: string;
 };
 
 export type ResponseMessage<Result> = {
@@ -1919,6 +2126,9 @@ export type V2Result<Value> = { ok: Value } | { error: V2Error };
 
 export type ClientMessage =
   | HelloMessage
+  | ConnectionAuthRequest
+  | ConnectionChallengeRequest
+  | ConnectionReleaseRequest
   | SessionOpenRequest
   | TransactRequest
   | GraphQueryRequest
@@ -1930,15 +2140,20 @@ export type ClientMessage =
   | WatchSetRequest
   | WatchAddRequest
   | SessionAckRequest
-  | EventAttentionResolveRequest;
+  | SessionCloseRequest
+  | EventAttentionResolveRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest;
 export type ServerMessage =
   | HelloOkMessage
   | ResponseMessage<FabricValue>
   | SessionEffectMessage
-  | SessionRevokedMessage;
+  | SessionRevokedMessage
+  | PresenceUpsertMessage
+  | PresenceRemoveMessage;
 
 const memoryLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell decoding at the memory boundary",
 );
 
@@ -2149,6 +2364,14 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
+  // Build-inherent: this build's server relays presence rooms.
+  presenceV1: true,
+  // Build-inherent: this build's server ends one session on request.
+  sessionClose: true,
+  // What this build can do. A server advertises it only when its host
+  // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
+  connectionAuth: true,
+  routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2169,6 +2392,11 @@ export const parseMemoryProtocolFlags = (
   value: unknown,
 ): MemoryProtocolFlags | null => {
   if (!isPlainObject(value)) {
+    return null;
+  }
+  if (
+    value.routedAuthV1 !== undefined && typeof value.routedAuthV1 !== "boolean"
+  ) {
     return null;
   }
 
@@ -2311,6 +2539,21 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const presenceV1 = value.presenceV1;
+  if (presenceV1 !== undefined && typeof presenceV1 !== "boolean") {
+    return null;
+  }
+
+  const sessionClose = value.sessionClose;
+  if (sessionClose !== undefined && typeof sessionClose !== "boolean") {
+    return null;
+  }
+
+  const connectionAuth = value.connectionAuth;
+  if (connectionAuth !== undefined && typeof connectionAuth !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2344,6 +2587,16 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
     sessionReadCeiling: sessionReadCeiling === true,
+    // Absent (an older server) parses to false: a client then refuses to
+    // join a presence room rather than send a message the server would
+    // refuse.
+    presenceV1: presenceV1 === true,
+    // Absent (an older server) parses to false: a client then leaves a
+    // session it closes attached until the connection closes.
+    sessionClose: sessionClose === true,
+    // Absent parses to false: a client then signs each `session.open`.
+    connectionAuth: connectionAuth === true,
+    routedAuthV1: value.routedAuthV1 === true,
   };
 };
 
@@ -2373,6 +2626,10 @@ export const wireMemoryProtocolFlags = (
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
+  presenceV1: flags.presenceV1,
+  sessionClose: flags.sessionClose,
+  connectionAuth: flags.connectionAuth,
+  routedAuthV1: flags.routedAuthV1,
 });
 
 /**
@@ -2386,6 +2643,13 @@ export const wireMemoryProtocolFlags = (
  * engine's commit/stored-row probes (v2/engine.ts). A pinning test in
  * test/v2-sync-schema-table.test.ts fails loudly if verbatim embedding ever
  * stops holding.
+ *
+ * The engine's document-cache weigh (`encodedGrowth()` in v2/engine.ts)
+ * depends on a second property, and moves with the codec too: a plain record
+ * with no `/`-prefixed key, and an array with no hole, encode as their members
+ * encode alone, joined by one comma each. Tests in
+ * test/v2-document-cache.test.ts hold the weight it carries to a full encode,
+ * over every patch op and over generated patches.
  */
 export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);
@@ -2393,16 +2657,45 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
 export const commitPreconditionValueHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
+/**
+ * The most slots one memory message from an untrusted sender may stand for:
+ * the places its values fill or leave absent, an array counting as its length
+ * with holes included and a record as its number of members. It bounds the
+ * work that decoding, applying, and re-encoding one message can cost the
+ * server, whatever the message's size on the wire.
+ */
+export const MAX_UNTRUSTED_MESSAGE_SLOTS = 1_000_000;
+
+const untrustedMemoryCodec = newDefaultJsonCodecEngine({
+  slotLimit: MAX_UNTRUSTED_MESSAGE_SLOTS,
+});
+
+/**
+ * Decodes wire text from an untrusted sender. Text standing for more than
+ * {@link MAX_UNTRUSTED_MESSAGE_SLOTS} slots is refused with `SlotLimitError`
+ * before any of it is walked.
+ *
+ * This is the decoder for anything a client sent. Text the memory system wrote
+ * itself -- a stored row, a frame the server sent -- goes through
+ * {@link decodeTrustedMemoryBoundary} instead, which applies no limit.
+ */
 export const decodeMemoryBoundary = <Value extends FabricValue = FabricValue>(
   source: string,
-): Value & FabricValue => {
-  const decoded = fabricFromJsonValue(
-    source,
-    memoryLiveEnvironment,
-  );
+): Value & FabricValue =>
+  untrustedMemoryCodec.decode(source, memoryLiveEnvironment) as Value;
 
-  return decoded as Value;
-};
+/**
+ * Like {@link decodeMemoryBoundary}, except that no slot limit applies: for
+ * text the memory system wrote itself, such as a stored row or a frame the
+ * server sent. A stored document may stand for more slots than one message
+ * may, and refusing to read it would break every reader of that document.
+ */
+export const decodeTrustedMemoryBoundary = <
+  Value extends FabricValue = FabricValue,
+>(
+  source: string,
+): Value & FabricValue =>
+  fabricFromJsonValue(source, memoryLiveEnvironment) as Value;
 
 export const toDocumentPath = (path: readonly string[]): DocumentPath =>
   path as DocumentPath;
@@ -2433,17 +2726,18 @@ export const isEntityDocument = (
  *
  * `decode` is the caller's, because the readers disagree on which payloads they
  * accept and only on that: the engine reads what it wrote, through
- * {@link decodeMemoryBoundary}, while an offline reader over a durable file may
- * also meet untagged plain-JSON rows and route accordingly. Everything else is
- * one rule shared here, since a reader that tests the payload for truthiness
- * instead takes an empty string for an absent one and rebuilds a document the
- * engine would have rejected.
+ * {@link decodeTrustedMemoryBoundary}, while an offline reader over a durable
+ * file may also meet untagged plain-JSON rows and route accordingly.
+ * Everything else is one rule shared here, since a reader that tests the
+ * payload for truthiness instead takes an empty string for an absent one and
+ * rebuilds a document the engine would have rejected.
  *
  * An absent payload never reaches the decoder. Handing one a placeholder string
- * makes the rule depend on which decoder was passed — `decodeMemoryBoundary`
- * refuses any untagged payload, a plain-JSON decoder accepts one — and two
- * readers that disagree about an absent payload do not share a rule at all. An
- * absent document is `null`, which the root check below refuses on its own.
+ * makes the rule depend on which decoder was passed —
+ * `decodeTrustedMemoryBoundary` refuses any untagged payload, a plain-JSON
+ * decoder accepts one — and two readers that disagree about an absent payload
+ * do not share a rule at all. An absent document is `null`, which the root
+ * check below refuses on its own.
  */
 export const decodeStoredDocumentPayload = (
   decode: (source: string) => FabricValue,

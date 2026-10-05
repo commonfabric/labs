@@ -2,7 +2,7 @@ import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
-import { hashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
@@ -18,18 +18,39 @@ import {
   getPropertyNameText,
   isEmptyObjectDefaultType,
   resolveWrapperNode,
+  soleNonNullishMember,
   TypeWithInternals,
 } from "../type-utils.ts";
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { extractLiteralValueOfSymbol } from "../typescript/literal-value.ts";
 import {
   getTypeAliasDeclaration,
+  readUnionMemberNodes,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 
 // Simple primitive schemas only have these keys (possibly just one)
 const PRIMITIVE_SCHEMA_KEY_SET = new Set(["type", "enum"]);
+
+/**
+ * The base type `schema`'s literal values widen to: their shared `typeof`, read
+ * from its `enum`, or from its `const`, when every value is a string, every
+ * value a number, or every value a boolean. `undefined` when the schema holds
+ * no literal values, or holds values of more than one type or of another.
+ */
+function widenedLiteralType(
+  schema: MutableJSONSchemaObj,
+): "string" | "number" | "boolean" | undefined {
+  const values: readonly unknown[] | undefined = schema.enum ??
+    ("const" in schema ? [schema.const] : undefined);
+  const types = new Set(values?.map((value) => typeof value));
+  if (types.size !== 1) return undefined;
+  const [type] = types;
+  return type === "string" || type === "number" || type === "boolean"
+    ? type
+    : undefined;
+}
 
 type DefaultUnionKind = "Default" | "DeepDefault";
 
@@ -88,35 +109,125 @@ function orderMemberNodesBySemanticType(
   });
 }
 
+/**
+ * Whether a written union member is read as one alternative, retaining the
+ * information in `node` for every semantic member of `type`. `context` is
+ * the enclosing union's.
+ */
+export type ReadsWhole = (
+  type: ts.Type,
+  node: ts.TypeNode,
+  context: GenerationContext,
+) => boolean;
+
+/** A union member node read whole, and the type it stands for. */
+export interface WholeMemberNode {
+  readonly node: ts.TypeNode;
+  readonly type: ts.Type;
+}
+
+/**
+ * The nodes the members of a union are read at, `members` its members and
+ * `unionNode` the union node spelling it:
+ *
+ * - `ordered` holds, for each member, the node whose type it is
+ *   (`orderMemberNodesBySemanticType()`). A member node that writes a union,
+ *   through parentheses and aliases without type parameters, is read for the
+ *   members it writes (`readUnionMemberNodes()`), since the checker folds
+ *   those into `members`.
+ * - `wholeNodes` holds, by each member they stand for, the nodes `readsWhole`
+ *   accepts, in the order they are written. A node can stand for several
+ *   members, as `Confidential<A | B, …>` does, and several nodes for the same
+ *   member: two whose labels differ only in the policy a `typeof` names have
+ *   one type where the policies' bindings have one type.
+ */
+export function pairUnionMemberNodes(
+  members: readonly ts.Type[],
+  unionNode: ts.UnionTypeNode,
+  checker: ts.TypeChecker,
+  readsWhole: (type: ts.Type, node: ts.TypeNode) => boolean,
+): {
+  ordered: Array<ts.TypeNode | undefined>;
+  wholeNodes: Map<ts.Type, WholeMemberNode[]>;
+} {
+  const read = new Set<ts.TypeNode>();
+  const memberNodes = unionNode.types.flatMap((node) =>
+    readUnionMemberNodes(node, checker, read)
+  );
+  const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
+  const wholeNodes = new Map<ts.Type, WholeMemberNode[]>();
+  for (const node of memberNodes) {
+    const type = getTypeNodeMemberType(node, checker);
+    if (!type || !readsWhole(type, node)) continue;
+    for (const member of type.isUnion() ? type.types : [type]) {
+      wholeNodes.set(member, [...wholeNodes.get(member) ?? [], { node, type }]);
+    }
+  }
+  return { ordered, wholeNodes };
+}
+
 export class UnionFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
 
-  constructor(schemaGenerator: SchemaGenerator) {
+  /**
+   * Whether a written union member is read as one alternative for all the
+   * semantic members it denotes (`pairUnionMemberNodes()`).
+   */
+  #readsWhole: ReadsWhole;
+
+  constructor(schemaGenerator: SchemaGenerator, readsWhole: ReadsWhole) {
     this.#schemaGenerator = schemaGenerator;
+    this.#readsWhole = readsWhole;
   }
 
   supportsType(type: ts.Type, _context: GenerationContext): boolean {
     return (type.flags & ts.TypeFlags.Union) !== 0;
   }
 
+  /**
+   * Formats a written union whose CFC alternatives share a semantic member.
+   * Each alternative carries its own binding identities even when the checker
+   * reduces the entire union to one type. Returns `undefined` for other types.
+   */
+  formatCollapsedUnion(
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    const node = this.#getUnionTypeNode(context.typeNode, context.typeChecker);
+    if (!node) return undefined;
+    const members = type.isUnion() ? type.types : [type];
+    const paired = pairUnionMemberNodes(
+      members,
+      node,
+      context.typeChecker,
+      (member, at) => this.#readsWhole(member, at, context),
+    );
+    return members.some((member) =>
+        (paired.wholeNodes.get(member)?.length ?? 0) > 1
+      )
+      ? this.formatType(type, context)
+      : undefined;
+  }
+
   formatType(
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
-    const union = type as ts.UnionType;
-    const members = union.types ?? [];
+    const members = type.isUnion() ? type.types : [type];
     const unionNode = this.#getUnionTypeNode(
       context.typeNode,
       context.typeChecker,
     );
     const memberNodes = unionNode ? unionNode.types : undefined;
-    const orderedMemberNodes = memberNodes
-      ? orderMemberNodesBySemanticType(
+    const paired = unionNode
+      ? pairUnionMemberNodes(
         members,
-        memberNodes,
+        unionNode,
         context.typeChecker,
+        (union, node) => this.#readsWhole(union, node, context),
       )
       : undefined;
+    const orderedMemberNodes = paired?.ordered;
 
     if (members.length === 0) {
       throw new Error("UnionFormatter received empty union type");
@@ -148,6 +259,15 @@ export class UnionFormatter implements TypeFormatter {
     // nonNull excludes only null; undefined members are kept because undefined is
     // now represented explicitly as { type: "undefined" } rather than being stripped.
     const nonNull = members.filter((m) => (m.flags & ts.TypeFlags.Null) === 0);
+    // The one member that is neither `null` nor `undefined` is read at the
+    // union's instantiation less those (`GenerationContext.instantiatedAs`);
+    // any other member has none.
+    const valued = nonNull.filter((m) =>
+      (m.flags & ts.TypeFlags.Undefined) === 0
+    );
+    const soleInstantiated = valued.length === 1 && context.instantiatedAs
+      ? soleNonNullishMember(context.instantiatedAs)
+      : undefined;
 
     const generate = (
       t: ts.Type,
@@ -169,6 +289,7 @@ export class UnionFormatter implements TypeFormatter {
         t,
         context,
         memberNode,
+        t === valued[0] ? soleInstantiated : undefined,
       );
     };
 
@@ -178,7 +299,10 @@ export class UnionFormatter implements TypeFormatter {
     // null OR the other type, never both. anyOf is more easily supported.
     // Note: if undefined is also present (T | null | undefined), nonNull.length > 1,
     // so we fall through to the anyOf path which emits { type: "undefined" } explicitly.
-    if (hasNull && nonNull.length === 1) {
+    if (
+      hasNull && nonNull.length === 1 &&
+      (paired?.wholeNodes.get(nonNull[0]!)?.length ?? 0) < 2
+    ) {
       const item = generate(nonNull[0]!, members.indexOf(nonNull[0]!));
       return { anyOf: [item, { type: "null" }] };
     }
@@ -231,8 +355,29 @@ export class UnionFormatter implements TypeFormatter {
       return { enum: values };
     }
 
-    // Fallback: anyOf of member schemas (excluding null/undefined handled above)
-    let unionOptions = members.map((m, index) => generate(m, index));
+    // Fallback: anyOf of member schemas (excluding null/undefined handled above).
+    // Each accepted node is read once, as one alternative for all the members
+    // it denotes. The node retains what their types cannot, such as a policy
+    // binding in `Confidential<A | B, …>`. Nodes sharing even a single member
+    // remain separate alternatives.
+    const readWholeNodes = new Set<ts.TypeNode>();
+    let unionOptions = members.flatMap((m, index) => {
+      const wholeNodes = paired?.wholeNodes.get(m);
+      if (!wholeNodes) return [generate(m, index)];
+      return wholeNodes.filter(({ node }) => !readWholeNodes.has(node)).map(
+        ({ node, type }) => {
+          readWholeNodes.add(node);
+          return this.#schemaGenerator.formatChildType(
+            type,
+            wholeNodes.length > 1
+              ? { ...context, inlineUnionMember: node }
+              : context,
+            node,
+            type === valued[0] ? soleInstantiated : undefined,
+          );
+        },
+      );
+    });
     // When widenLiterals is true, try to merge structurally identical schemas
     // that only differ in literal enum values
     if (context.widenLiterals && unionOptions.length > 1) {
@@ -954,7 +1099,9 @@ export class UnionFormatter implements TypeFormatter {
   /**
    * Merge schemas that are structurally identical except for literal enum values.
    * Used when widenLiterals is true to collapse unions like
-   * {x: {enum: [10]}} | {x: {enum: [20]}} into {x: {type: "number"}}
+   * {x: {enum: [10]}} | {x: {enum: [20]}} into {x: {type: "number"}}.
+   * Schemas that differ in any other keyword, at any depth, stay apart, and
+   * a merged schema keeps every keyword its members share.
    */
   #mergeIdenticalSchemas(
     schemas: MutableJSONSchema[],
@@ -966,7 +1113,7 @@ export class UnionFormatter implements TypeFormatter {
 
     for (const schema of schemas) {
       const normalized = this.#normalizeSchemaForComparison(schema);
-      const key = JSON.stringify(normalized);
+      const key = hashStringOf(normalized as FabricValue);
       const group = groups.get(key) ?? [];
       group.push(schema);
       groups.set(key, group);
@@ -1085,59 +1232,46 @@ export class UnionFormatter implements TypeFormatter {
   }
 
   /**
-   * Normalize a schema for structural comparison by removing enum values
-   * and converting them to base types
+   * What two schemas must share to merge: every keyword of `schema`, with
+   * literal values that `widenedLiteralType()` widens read as their base type,
+   * and `properties` and `items` read the same way.
    */
   #normalizeSchemaForComparison(
     schema: MutableJSONSchema,
   ): Record<string, unknown> {
     if (typeof schema === "boolean") return { _bool: schema };
 
-    const result: Record<string, unknown> = {};
-
-    // Convert enum to base type for comparison
-    if ("enum" in schema && schema.enum) {
-      const firstValue = schema.enum[0];
-      if (typeof firstValue === "string") {
-        result.type = "string";
-      } else if (typeof firstValue === "number") {
-        result.type = "number";
-      } else if (typeof firstValue === "boolean") {
-        result.type = "boolean";
-      }
-    } else if ("type" in schema) {
-      result.type = schema.type;
+    const { properties, items, ...rest } = schema;
+    const result: Record<string, unknown> = { ...rest };
+    const widened = widenedLiteralType(schema);
+    if (widened !== undefined) {
+      delete result.enum;
+      delete result.const;
+      result.type = widened;
     }
-
-    // Recursively normalize properties
-    if ("properties" in schema && isObjectOrArray(schema.properties)) {
-      const props: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(schema.properties)) {
-        props[key] = this.#normalizeSchemaForComparison(
-          value as MutableJSONSchema,
-        );
-      }
-      result.properties = props;
+    if (isObjectNotArray(properties)) {
+      result.properties = Object.fromEntries(
+        Object.entries(properties).map(([key, value]) => [
+          key,
+          this.#normalizeSchemaForComparison(value as MutableJSONSchema),
+        ]),
+      );
+    } else if (properties !== undefined) {
+      result.properties = properties;
     }
-
-    // Recursively normalize items
-    if ("items" in schema && schema.items) {
+    if (items !== undefined) {
       result.items = this.#normalizeSchemaForComparison(
-        schema.items as MutableJSONSchema,
+        items as MutableJSONSchema,
       );
     }
-
-    // Copy other structural fields
-    if ("required" in schema) result.required = schema.required;
-    if ("additionalProperties" in schema) {
-      result.additionalProperties = schema.additionalProperties;
-    }
-
     return result;
   }
 
   /**
-   * Merge a group of structurally identical schemas by widening their enums
+   * Merge a group of schemas that `#normalizeSchemaForComparison()` reads
+   * alike, widening their literal values to the base type they share. Every
+   * other keyword is the same across the group, so the first schema's stands
+   * for all of them, in the order it writes them.
    */
   #mergeSchemaGroup(
     schemas: MutableJSONSchema[],
@@ -1149,62 +1283,39 @@ export class UnionFormatter implements TypeFormatter {
     const first = schemas[0]!;
     if (typeof first === "boolean") return first;
 
-    const result: MutableJSONSchemaObj = {};
-
-    // Handle enum -> base type conversion
-    if ("enum" in first && first.enum) {
-      const firstValue = first.enum[0];
-      if (typeof firstValue === "string") {
-        result.type = "string";
-      } else if (typeof firstValue === "number") {
-        result.type = "number";
-      } else if (typeof firstValue === "boolean") {
-        result.type = "boolean";
-      }
-    } else if ("type" in first) {
-      result.type = first.type;
-    }
-
-    // Recursively merge properties
-    if ("properties" in first && isObjectOrArray(first.properties)) {
-      const props: Record<string, MutableJSONSchema> = {};
-      for (const key of Object.keys(first.properties)) {
-        const propSchemas = schemas
-          .map((s) =>
-            isObjectOrArray(s) && isObjectOrArray(s.properties)
-              ? s.properties[key]
-              : undefined
-          )
-          .filter((p): p is MutableJSONSchema => p !== undefined);
-
-        if (propSchemas.length > 0) {
-          props[key] = this.#mergeSchemaGroup(propSchemas);
-        }
-      }
-      result.properties = props;
-    }
-
-    // Recursively merge items
-    if ("items" in first && first.items !== undefined) {
-      const itemSchemas = schemas
-        .map((s) =>
-          isObjectOrArray(s) && "items" in s && s.items !== undefined
-            ? s.items
-            : undefined
-        )
-        .filter((i): i is MutableJSONSchema => i !== undefined);
-
-      if (itemSchemas.length > 0) {
-        result.items = this.#mergeSchemaGroup(itemSchemas);
+    const widened = widenedLiteralType(first);
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(first)) {
+      if (
+        widened !== undefined &&
+        (key === "type" || key === "enum" || key === "const")
+      ) {
+        result.type = widened;
+      } else if (key === "properties" && isObjectNotArray(value)) {
+        result.properties = Object.fromEntries(
+          Object.keys(value).map((property) => [
+            property,
+            this.#mergeSchemaGroup(
+              schemas.flatMap((schema) =>
+                isObjectOrArray(schema) && isObjectNotArray(schema.properties)
+                  ? [schema.properties[property] as MutableJSONSchema]
+                  : []
+              ),
+            ),
+          ]),
+        );
+      } else if (key === "items" && value !== undefined) {
+        result.items = this.#mergeSchemaGroup(
+          schemas.flatMap((schema) =>
+            isObjectOrArray(schema) && schema.items !== undefined
+              ? [schema.items as MutableJSONSchema]
+              : []
+          ),
+        );
+      } else {
+        result[key] = value;
       }
     }
-
-    // Copy other structural fields from first schema
-    if ("required" in first) result.required = first.required;
-    if ("additionalProperties" in first) {
-      result.additionalProperties = first.additionalProperties;
-    }
-
-    return result;
+    return result as MutableJSONSchemaObj;
   }
 }

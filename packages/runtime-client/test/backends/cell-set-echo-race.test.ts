@@ -30,6 +30,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "@commonfabric/runner";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
+import { newLoopbackServer } from "@commonfabric/runner/storage/cache.deno";
 
 import type { RuntimeProcessor } from "@/backends/runtime-processor.ts";
 import { createCellRef } from "@/backends/utils.ts";
@@ -51,7 +52,6 @@ import { buildProcessor } from "./build-processor.ts";
 
 const signer = await Identity.fromPassphrase("cell-set-echo-race");
 const space = signer.did();
-const testSessionOpenAudience = "did:key:z6Mk-cell-set-echo-race-audience";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -84,16 +84,7 @@ class SharedV2SessionFactory implements V2Storage.SessionFactory {
 }
 
 const createRuntime = () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: {
-      audience: testSessionOpenAudience,
-    },
-  });
+  const server = newLoopbackServer();
   const storageManager = new (class extends V2Storage.StorageManager {
     constructor() {
       super(
@@ -230,7 +221,7 @@ describe("CellSet / CellUpdate echo race over IPC", () => {
       const seen: unknown[] = [];
       const cancel = handle.subscribe((value) => {
         seen.push(value === undefined ? undefined : { ...value });
-      });
+      }, { onRefused: () => {} });
       await flush();
       transport.pump();
       expect(seen).toEqual([undefined, { color: "red" }]);

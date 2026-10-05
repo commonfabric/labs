@@ -1,13 +1,14 @@
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
+/** The meta fields whose value is a link to another cell. */
 export const META_LINK_FIELDS = Object.freeze(
   [
-    "pattern",
     "argument",
     "result",
   ] as const,
 );
 
+/** A meta field whose value is a link to another cell. */
 export type MetaLinkField = typeof META_LINK_FIELDS[number];
 
 /**
@@ -16,13 +17,19 @@ export type MetaLinkField = typeof META_LINK_FIELDS[number];
  * from it, and {@link isMetaField} tests membership at runtime.
  *
  * The seam is the runtime's, to read as well as to write, so none of this
- * reaches the cell surface a pattern compiles against. `pattern` links a
- * result cell to its pattern, and `argument` to its argument cell. `internal`
- * holds a manifest of links to derived internal cells. `schema` stores the
- * schema for a result cell. `patternSetupIdentity` records the pattern
- * identity whose complete setup state was installed on a result cell.
- * `result` lets a result cell link to its parent result cell, and lets the
- * argument and derived internal cells link back to the result cell.
+ * reaches the cell surface a pattern compiles against. `argument` links a
+ * result cell to its argument cell. `internal` holds a manifest of links to
+ * derived internal cells. `schema` stores the schema for a result cell.
+ * `patternSetupIdentity` records the pattern identity whose complete setup
+ * state was installed on a result cell. `result` lets a result cell link to
+ * its parent result cell, and lets the argument and derived internal cells
+ * link back to the result cell.
+ *
+ * `pattern` is retired: no runtime code writes it or decides anything by it,
+ * and `patternIdentity` is what names a result cell's pattern. Documents in
+ * older spaces can still carry a `pattern` field, and it stays on this list so
+ * that the write guard refuses an unauthorized write to it, as it does for
+ * every other field here.
  *
  * `cfc` is deliberately NOT a meta field: the `["cfc"]` document field holds
  * raw label metadata (Caveat.source and other principal identities), which
@@ -33,6 +40,7 @@ export type MetaLinkField = typeof META_LINK_FIELDS[number];
 export const META_FIELDS = Object.freeze(
   [
     ...META_LINK_FIELDS,
+    "pattern", // retired; see above
     "patternIdentity", // content-addressed {identity, symbol} pattern reference
     "patternSetupIdentity", // setup-completion {identity, symbol} marker
     "patternSource", // active web or `cf:` source origin

@@ -1,4 +1,7 @@
-import { CompilerStackLoadError } from "@commonfabric/runner";
+import {
+  CompilerStackLoadError,
+  SpaceNotFoundError,
+} from "@commonfabric/runner";
 import {
   type ErrorNotification,
   NotificationType,
@@ -6,9 +9,12 @@ import {
 } from "@/protocol/mod.ts";
 import { postToClient } from "./post-to-client.ts";
 
-function runtimeErrorCode(error: Error): RuntimeErrorCode | undefined {
+/** The code a runtime error crosses to the client with, if it has one. */
+export function runtimeErrorCode(error: unknown): RuntimeErrorCode | undefined {
   return error instanceof CompilerStackLoadError
     ? RuntimeErrorCode.CompilerStackLoadFailed
+    : error instanceof SpaceNotFoundError
+    ? RuntimeErrorCode.SpaceNotFound
     : undefined;
 }
 

@@ -1090,7 +1090,9 @@ export async function replayAll(
     servedRoute += report.servedRoute;
     for (const key of report.covered) covered.add(key);
     for (const key of report.dropsApplied) dropsApplied.add(key);
-    capturesSuperseded.push(...report.capturesSuperseded);
+    for (const capture of report.capturesSuperseded) {
+      capturesSuperseded.push(capture);
+    }
     for (const key of report.recorded) {
       // From `recorded`, NOT `covered`: a pattern that was credited needs no
       // attribution, because it never reaches an uncovered report. The one
@@ -1108,7 +1110,7 @@ export async function replayAll(
         coveredBy.set(key, { testKey: vintage.testKey, pinned });
       }
     }
-    failures.push(...report.failures);
+    for (const failure of report.failures) failures.push(failure);
   }
   recordsFragment?.close();
   return {

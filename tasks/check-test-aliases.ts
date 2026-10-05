@@ -107,7 +107,7 @@ export function aliasDirectoryProblems(
       aliases.push(parsed);
     }
   }
-  problems.push(...aliasGraphProblems(aliases));
+  for (const problem of aliasGraphProblems(aliases)) problems.push(problem);
 
   return { problems, aliases };
 }

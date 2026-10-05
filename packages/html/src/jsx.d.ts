@@ -2894,6 +2894,7 @@ type EventHandler<T> =
 type Piece = any;
 
 interface CFCellLinkElement extends CFHTMLElement {}
+interface CFSpaceCreateElement extends CFHTMLElement {}
 interface CFSpaceLinkElement extends CFHTMLElement {}
 interface CFLoaderElement extends CFHTMLElement {}
 interface CFInputElement extends CFHTMLElement {}
@@ -2954,7 +2955,6 @@ interface CFChatElement extends CFHTMLElement {}
 interface CFMessageBeadsElement extends CFHTMLElement {}
 interface CFAttachmentsBarElement extends CFHTMLElement {}
 interface CFFragmentElement extends CFHTMLElement {}
-interface CFUpdaterElement extends CFHTMLElement {}
 interface CFGoogleOAuthElement extends CFHTMLElement {}
 interface CFOAuthElement extends CFHTMLElement {}
 interface CFCanvasElement extends CFHTMLElement {}
@@ -3007,9 +3007,12 @@ interface CFAvatarElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
 interface CFShareSnapshotElement extends CFHTMLElement {}
 interface CFCustodySealElement extends CFHTMLElement {}
+interface CFCustodyAnswerElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
+interface CFHoverCardElement extends CFHTMLElement {}
+interface CFHoverRevealElement extends CFHTMLElement {}
 interface CFProgressElement extends CFHTMLElement {}
 interface CFSkeletonElement extends CFHTMLElement {}
 interface CFSeparatorElement extends CFHTMLElement {}
@@ -3079,11 +3082,6 @@ interface CFSecretViewerAttributes<T> extends CFHTMLAttributes<T> {
   "label"?: string;
   "value"?: string;
   "trailing-chars"?: number;
-}
-
-interface CFUpdaterAttributes<T> extends CFHTMLAttributes<T> {
-  "integration"?: string;
-  "$state"?: CellLike<any>;
 }
 
 interface CFPieceAttributes<T> extends CFHTMLAttributes<T> {
@@ -3401,6 +3399,11 @@ interface CFCellLinkAttributes<T> extends CFHTMLAttributes<T> {
   "$cell"?: CellLike<any>;
   "spaceName"?: string;
   "static"?: boolean;
+}
+
+interface CFSpaceCreateAttributes<T> extends CFHTMLAttributes<T> {
+  "placeholder"?: string;
+  "oncf-space-created"?: EventHandler<{ did: string; label: string }>;
 }
 
 interface CFSpaceLinkAttributes<T> extends CFHTMLAttributes<T> {
@@ -4034,7 +4037,6 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "collaborative"?: boolean;
   "presenceRoom"?: string;
   "participantName"?: string;
-  "presenceUrl"?: string;
   "placeholder"?: string;
   "timingStrategy"?: string;
   "timingDelay"?: number;
@@ -4062,6 +4064,7 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-error"?: any;
   "oncf-collaboration-reconcile"?: any;
   "oncf-presence-error"?: any;
+  "oncf-presence-join"?: any;
   "onbacklink-click"?: any;
   "onbacklink-create"?: any;
   "onmention-ref-label-changed"?: any;
@@ -4347,7 +4350,21 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
   "$policy"?: CellLike<unknown>;
   /** The actor's source policy, in the actor's home space. */
   "$sources"?: CellLike<unknown>;
-  "oncf-sealed"?: EventHandler<{}>;
+  /** Writable cell receiving a link to the instance's box once sealed. */
+  "$box"?: CellLike<unknown>;
+  /** Fires once sealed; `instance` is the digest of the resolved terms. */
+  "oncf-sealed"?: EventHandler<{ instance: string }>;
+}
+
+interface CFCustodyAnswerAttributes<T> extends CFHTMLAttributes<T> {
+  /** The room's terms document; its space is the room space. */
+  "$terms"?: CellLike<unknown>;
+  /** A cell holding the room's custody policy reference. */
+  "$policy"?: CellLike<unknown>;
+  /** The room's projected answer, which the host publishes once and shows. */
+  "$output"?: CellLike<unknown>;
+  /** Fires once the answer is published; `instance` names it when known. */
+  "oncf-published"?: EventHandler<{ instance?: string }>;
 }
 
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
@@ -4384,6 +4401,10 @@ interface CFChipAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFEmptyStateAttributes<T> extends CFHTMLAttributes<T> {
   "message"?: string | CellLike<string>;
+}
+
+interface CFHoverRevealAttributes<T> extends CFHTMLAttributes<T> {
+  "revealed"?: boolean | CellLike<boolean>;
 }
 
 interface CFProgressAttributes<T> extends CFHTMLAttributes<T> {
@@ -5016,6 +5037,10 @@ declare global {
         CFCellLinkAttributes<CFCellLinkElement>,
         CFCellLinkElement
       >;
+      "cf-space-create": CFDOM.DetailedHTMLProps<
+        CFSpaceCreateAttributes<CFSpaceCreateElement>,
+        CFSpaceCreateElement
+      >;
       "cf-space-link": CFDOM.DetailedHTMLProps<
         CFSpaceLinkAttributes<CFSpaceLinkElement>,
         CFSpaceLinkElement
@@ -5272,10 +5297,6 @@ declare global {
         CFIframeAttributes<CFIFrameElement>,
         CFIFrameElement
       >;
-      "cf-updater": CFDOM.DetailedHTMLProps<
-        CFUpdaterAttributes<CFUpdaterElement>,
-        CFUpdaterElement
-      >;
       "cf-google-oauth": CFDOM.DetailedHTMLProps<
         CFGoogleOAuthAttributes<CFGoogleOAuthElement>,
         CFGoogleOAuthElement
@@ -5408,6 +5429,10 @@ declare global {
         CFCustodySealAttributes<CFCustodySealElement>,
         CFCustodySealElement
       >;
+      "cf-custody-answer": CFDOM.DetailedHTMLProps<
+        CFCustodyAnswerAttributes<CFCustodyAnswerElement>,
+        CFCustodyAnswerElement
+      >;
       "cf-owner-view": CFDOM.DetailedHTMLProps<
         CFOwnerViewAttributes<CFHTMLElement>,
         CFHTMLElement
@@ -5431,6 +5456,14 @@ declare global {
       "cf-empty-state": CFDOM.DetailedHTMLProps<
         CFEmptyStateAttributes<CFEmptyStateElement>,
         CFEmptyStateElement
+      >;
+      "cf-hover-card": CFDOM.DetailedHTMLProps<
+        CFHTMLAttributes<CFHoverCardElement>,
+        CFHoverCardElement
+      >;
+      "cf-hover-reveal": CFDOM.DetailedHTMLProps<
+        CFHoverRevealAttributes<CFHoverRevealElement>,
+        CFHoverRevealElement
       >;
       "cf-tile": CFDOM.DetailedHTMLProps<
         CFTileAttributes<CFTileElement>,

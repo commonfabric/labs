@@ -131,7 +131,7 @@ Deno.bench({
 // was the SUM of two K-dependent things: structural-sharing cost
 // (`{ ...obj, sub0: newSub0 }` rebuilding the K-wide `value` container)
 // AND cache invalidation cost (the sibling sweep). Post-#3704 the
-// production write path uses `applyMutablePathWrite()` with
+// production write path applies a planned write, by way of
 // `cloneForMutation()`, which does per-spine shallow thaw and then
 // in-place mutates -- so the structural-sharing-of-K-wide-container
 // cost is gone, and PathKeyMap brings invalidation to O(D). The bench

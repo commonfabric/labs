@@ -10,6 +10,7 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import {
   type PatternUpdateReceipt,
   type PieceController,
@@ -22,6 +23,7 @@ import {
   parseExternalSchemaRef,
   recomposeSchema,
   schemaToTypeString,
+  SpaceNotFoundError,
 } from "@commonfabric/runner";
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
@@ -2508,6 +2510,20 @@ export class CellBridge {
     let state: SpaceState | undefined;
     try {
       pieces = await this.#createSpacePieces(spaceName);
+      // A name that reaches no space is reported rather than opened: the
+      // mount never brings a space into being. The one exception is the
+      // user's Home space, whose DID is the user's own, which comes into
+      // being on its first open.
+      const space = pieces.getSpace();
+      if (
+        space !== pieces.runtime.userIdentityDID &&
+        !(await pieces.runtime.spaceExists(space))
+      ) {
+        throw new SpaceNotFoundError(
+          space,
+          isDID(spaceName) ? undefined : spaceName,
+        );
+      }
       await this.#verifyPiecesConnection(pieces);
       state = this.#buildSpaceTree(spaceName, pieces);
 
@@ -3376,7 +3392,9 @@ export class CellBridge {
     const node = this.#tree.getNode(ino);
     if (node?.kind === "dir") {
       for (const [, childIno] of this.#tree.getChildren(ino)) {
-        result.push(...this.#collectDescendantInos(childIno));
+        for (const descendantIno of this.#collectDescendantInos(childIno)) {
+          result.push(descendantIno);
+        }
       }
     }
     return result;
@@ -3406,7 +3424,9 @@ export class CellBridge {
     const staleInos: bigint[] = [];
     const propIno = this.#tree.lookup(rootIno, propName);
     if (propIno !== undefined) {
-      staleInos.push(...this.#collectDescendantInos(propIno));
+      for (const descendantIno of this.#collectDescendantInos(propIno)) {
+        staleInos.push(descendantIno);
+      }
       this.#tree.clear(propIno);
     }
     const jsonIno = this.#tree.lookup(rootIno, `${propName}.json`);
@@ -3423,7 +3443,9 @@ export class CellBridge {
           invalidatedNames.add(name);
           const fsIno = this.#tree.lookup(rootIno, name);
           if (fsIno !== undefined) {
-            staleInos.push(...this.#collectDescendantInos(fsIno));
+            for (const descendantIno of this.#collectDescendantInos(fsIno)) {
+              staleInos.push(descendantIno);
+            }
           }
         }
       }

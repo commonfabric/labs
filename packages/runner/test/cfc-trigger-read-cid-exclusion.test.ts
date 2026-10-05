@@ -37,13 +37,12 @@ const replicaEntries = (
 describe("CFC trigger reads: cid: exclusion", () => {
   it("keeps cid: trigger reads out of the flow derivation even when they bypass ingest filtering", async () => {
     // §8.9.2 trigger reads name runtime-surface documents only by accident or
-    // forgery: `addCfcTriggerReads` drops them at ingest (`flowReadExcluded` on
-    // the raw notification path), and `forEachFlowObservation` keeps an
-    // id-based `cid:` skip as defense in depth for entries that arrive by other
-    // construction paths. That second layer matters because `cid:` schema docs
-    // live on an unverified write path any same-space writer can reach (audit
-    // S5): a poisoned labelMap on one must not join the flow derivation through
-    // a smuggled trigger entry.
+    // forgery: `addCfcTriggerReads` drops them at ingest, and
+    // `forEachFlowObservation` keeps an id-based `cid:` skip as defense in
+    // depth for entries that arrive by other construction paths. That second
+    // layer matters because `cid:` schema docs live on an unverified write
+    // path any same-space writer can reach (audit S5): a poisoned labelMap on
+    // one must not join the flow derivation through a smuggled trigger entry.
 
     const storageManager = StorageManager.emulate({ as: signer });
     // The legitimate source's confidentiality names this space's

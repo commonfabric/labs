@@ -16,12 +16,17 @@ import {
 } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+  TransactionWrapper,
+} from "../src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { interceptTransaction } from "./support/intercept-transaction.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-external-content-observation",
@@ -81,7 +86,7 @@ const withRuntime = async (
 const identifyProducer = (
   tx: ReturnType<Runtime["edit"]>,
 ): void => {
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PRODUCER,
   });
@@ -100,32 +105,15 @@ const interceptObservationProbeState = (
   const edit = runtime.edit.bind(runtime);
   runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
     runtime.edit = edit as Runtime["edit"];
-    const tx = edit(...args);
     let phase: ObservationProbePhase | undefined;
-    return new Proxy(tx, {
-      get(target, property) {
-        if (property === "prepareForCommit") {
-          return () => {
-            target.prepareForCommit();
-            phase = "initial";
-          };
-        }
-        if (property === "prepareCfc") {
-          return () => {
-            const digest = target.prepareCfc();
-            phase = "traversal";
-            return digest;
-          };
-        }
-        if (property === "getCfcState") {
-          return () => {
-            const state = target.getCfcState();
-            return phase === undefined ? state : transform(phase, state);
-          };
-        }
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
+    return interceptTransaction(edit(...args), (method, _args, proceed) => {
+      const result = proceed();
+      if (method === "prepareForCommit") phase = "initial";
+      if (method === "prepareCfc") phase = "traversal";
+      if (method === "getCfcState" && phase !== undefined) {
+        return transform(phase, result as Readonly<CfcTxState>);
+      }
+      return result;
     });
   }) as Runtime["edit"];
 };
@@ -246,25 +234,15 @@ describe("external content observation", () => {
       const edit = runtime.edit.bind(runtime);
       runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
         runtime.edit = edit as Runtime["edit"];
-        const tx = edit(...args);
-        return new Proxy(tx, {
-          get(target, property) {
-            if (property === "getCachedReadResult") {
-              return (...cacheArgs: [string, string]) => {
-                const cached = target.getCachedReadResult?.(...cacheArgs);
-                if (afterSettle && cached !== undefined) cacheHitsAfterSettle++;
-                return cached;
-              };
-            }
-            if (property === "setCachedReadResult") {
-              return (...cacheArgs: [string, string, unknown]) => {
-                if (afterSettle) cacheSetsAfterSettle++;
-                return target.setCachedReadResult?.(...cacheArgs);
-              };
-            }
-            const value = Reflect.get(target, property, target);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
+        return interceptTransaction(edit(...args), (method, _args, proceed) => {
+          const result = proceed();
+          if (afterSettle && method === "getCachedReadResult") {
+            if (result !== undefined) cacheHitsAfterSettle++;
+          }
+          if (afterSettle && method === "setCachedReadResult") {
+            cacheSetsAfterSettle++;
+          }
+          return result;
         });
       }) as Runtime["edit"];
       let pendingChecks = 0;
@@ -883,7 +861,7 @@ describe("external content observation", () => {
         value: { title: "private row" },
         producer: PRODUCER,
       });
-      targetTx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(targetTx, {
         id: "changed-trust",
         actingPrincipal: space,
       });

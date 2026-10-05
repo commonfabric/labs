@@ -6,6 +6,7 @@
 
 import type { Document, Line } from "../../model.ts";
 import type { Highlighter } from "../language.ts";
+import { createRecoloringHighlighter } from "../classes.ts";
 
 /** Render every source line as one plain span. */
 export function plainTextLines(text: string): Line[] {
@@ -30,17 +31,5 @@ export function plainTextDocument(text: string): Document {
 
 /** Rebuild the inexpensive plain lines after each edit. */
 export function createPlainTextHighlighter(initial: string): Highlighter {
-  let text = initial;
-  let lines = plainTextLines(initial);
-  return {
-    get lines() {
-      return lines;
-    },
-    update(next: string): readonly Line[] {
-      if (next === text) return lines;
-      text = next;
-      lines = plainTextLines(next);
-      return lines;
-    },
-  };
+  return createRecoloringHighlighter(initial, plainTextLines);
 }

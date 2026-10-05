@@ -1,6 +1,6 @@
 /**
- * Reports the types a generated schema could not read, which it describes as
- * accepting any value.
+ * Reports unread schema types and CFC recursions whose nesting limit would
+ * discard policies.
  */
 
 import { getLogger } from "@commonfabric/utils/logger";
@@ -63,8 +63,34 @@ export function reportUnreadTypes(
       "may accept values the type refuses.",
     ...(node && { node }),
   };
+  report(context, diagnostic);
+}
+
+/** Reports a CFC alias chain whose nesting limit would discard its policies. */
+export function reportUnreadCfcRecursion(
+  context: GenerationContext,
+  node: ts.Node | undefined,
+): void {
+  report(context, {
+    severity: "error",
+    type: "cfc-schema:recursion-limit",
+    message: "The CFC alias chain reached the schema's recursion limit. " +
+      "Its remaining confidentiality and write policies could not be read, " +
+      "so this schema cannot be used. Write a recursive reference whose " +
+      "type arguments and writer bindings settle to the same reading.",
+    ...(node && { node }),
+  });
+}
+
+/** Delivers a diagnostic to the caller, or logs it at its severity. */
+function report(
+  context: GenerationContext,
+  diagnostic: SchemaGenerationDiagnostic,
+): void {
   if (context.onDiagnostic) {
     context.onDiagnostic(diagnostic);
+  } else if (diagnostic.severity === "error") {
+    logger.error("schema-gen", () => diagnostic.message);
   } else {
     logger.warn("schema-gen", () => diagnostic.message);
   }

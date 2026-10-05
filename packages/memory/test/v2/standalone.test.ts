@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { defer } from "@commonfabric/utils/defer";
 
 import {
   decodeMemoryBoundary,
@@ -14,8 +15,89 @@ import {
 } from "../../v2.ts";
 import { StandaloneMemoryServer } from "../../v2/standalone.ts";
 import { alice, space } from "../principal.ts";
+import { principalOf } from "../support/connection-auth.ts";
 
 describe("StandaloneMemoryServer", () => {
+  it("hands a frame for one space over while a frame for another is being handled", async () => {
+    // What the socket delivers is handed to the connection frame by frame
+    // without waiting for the handling, so the connection's per-space turns
+    // reach a client on a real socket.
+
+    const standalone = StandaloneMemoryServer.start({ connectionAuth: true });
+    const slowSpace = "did:key:z6Mk-standalone-turns-slow";
+    const fastSpace = "did:key:z6Mk-standalone-turns-fast";
+    const gate = defer<void>();
+    const address = new URL(standalone.url);
+    address.protocol = "ws:";
+    const socket = new WebSocket(address);
+    const frames = frameReader(socket);
+    try {
+      await new Promise((resolve) =>
+        socket.addEventListener("open", resolve, { once: true })
+      );
+      socket.send(encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: { ...getMemoryProtocolFlags(), messageCompressionV1: false },
+      }));
+      const hello = decodeMemoryBoundary<HelloOkMessage>(await frames.next());
+      const context = hello.sessionOpen!;
+      socket.send(encodeMemoryBoundary({
+        type: "connection.auth",
+        requestId: "auth",
+        ...await principalOf(alice).authorizeConnection(context),
+      }));
+      const authenticated = decodeMemoryBoundary<{ error?: FabricValue }>(
+        await frames.next(),
+      );
+      expect(authenticated.error).toBeUndefined();
+      const sessions = new Map<string, string>();
+      for (const space of [slowSpace, fastSpace]) {
+        socket.send(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: `open-${space}`,
+          space,
+          principal: alice.did(),
+          session: {},
+        }));
+        const opened = decodeMemoryBoundary<{ ok?: { sessionId: string } }>(
+          await frames.next(),
+        );
+        sessions.set(space, opened.ok!.sessionId);
+      }
+      standalone.server.accessForTestingOnly.engineOpener = (opening, open) =>
+        opening === slowSpace
+          ? gate.promise.then(() => open(opening))
+          : open(opening);
+      for (const space of [slowSpace, fastSpace]) {
+        socket.send(encodeMemoryBoundary({
+          type: "graph.query",
+          requestId: `query-${space}`,
+          space,
+          sessionId: sessions.get(space),
+          query: { roots: [] },
+        }));
+      }
+      const first = decodeMemoryBoundary<{ requestId: string }>(
+        await frames.next(),
+      );
+      expect(first.requestId).toBe(`query-${fastSpace}`);
+      gate.resolve();
+      const second = decodeMemoryBoundary<{ requestId: string }>(
+        await frames.next(),
+      );
+      expect(second.requestId).toBe(`query-${slowSpace}`);
+    } finally {
+      gate.resolve();
+      const closed = new Promise((resolve) =>
+        socket.addEventListener("close", resolve, { once: true })
+      );
+      socket.close();
+      await closed;
+      await standalone.close();
+    }
+  });
+
   describe("instance members", () => {
     describe("server", () => {
       it("is the server a session opened over the websocket reaches", async () => {

@@ -8,7 +8,12 @@ import { createSession, Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { type Cell, Runtime, runtimePresets } from "@commonfabric/runner";
+import {
+  type Cell,
+  type MemorySpace,
+  Runtime,
+  runtimePresets,
+} from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -48,6 +53,8 @@ const report = {
   reactiveUpdates: 0,
 };
 let previousPieceId: string | undefined;
+/** The one space every session opens, created by the first. */
+let space: MemorySpace | undefined;
 const db = {
   id: "of:interactive-session-runtime",
   tables: { messages: table({ id: "integer primary key", body: "text" }) },
@@ -98,8 +105,9 @@ async function fabric() {
     experimental: { serverExecution: false },
     onPatternInstantiated: recorder.observe,
   }));
+  space ??= await runtime.createSpace();
   const pieces = new PiecesController(
-    await createSession({ identity: signer, spaceName: "fixture" }),
+    createSession({ identity: signer, spaceDid: space }),
     runtime,
   );
   const record: typeof refs[number] = {

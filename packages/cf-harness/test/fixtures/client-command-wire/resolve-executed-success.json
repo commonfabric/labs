@@ -1,0 +1,62 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-1",
+  "settlement": {
+    "status": "executed",
+    "attribution": {
+      "approval": "automatic",
+      "actor": "agent",
+      "loomActor": "agent:cf-harness",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "outcome": {
+      "executor": "loom",
+      "transportStatus": 200,
+      "ok": true,
+      "id": "loom.inspect",
+      "echo": "loom.inspect",
+      "quiet": true,
+      "outputs": {
+        "loom_id": "loom-0123456789abcdef",
+        "version": 12
+      },
+      "bodyBytes": 378,
+      "body": {
+        "ok": true,
+        "id": "loom.inspect",
+        "echo": "loom.inspect",
+        "quiet": true,
+        "result": {
+          "kind": "manifest",
+          "manifest": {
+            "loom_id": "loom-0123456789abcdef",
+            "title": "Reading",
+            "version": 12,
+            "components": [
+              {
+                "id": "c-1",
+                "kind": "page",
+                "title": "Notes"
+              },
+              {
+                "id": "c-2",
+                "kind": "pattern",
+                "title": "Reading list"
+              }
+            ],
+            "selection": [
+              "c-1"
+            ]
+          },
+          "displaced": []
+        },
+        "outputs": {
+          "loom_id": "loom-0123456789abcdef",
+          "version": 12
+        }
+      }
+    },
+    "receipt": "Read Reading: 2 panels, version 12."
+  }
+}

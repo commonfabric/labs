@@ -3,7 +3,12 @@ import { expect } from "@std/expect";
 import type { MutableJSONSchemaObj } from "@commonfabric/api";
 import {
   combineIfcLabels,
+  declaredIfcLabels,
+  holdsIfcLabels,
+  joinMemberIfcLabels,
+  labeledValueMember,
   stateReferencedIfcLabels,
+  withIfcLabels,
 } from "../src/ifc-labels.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "./utils.ts";
@@ -69,6 +74,184 @@ describe("ifc-labels", () => {
         .toThrow(
           'One value declares `ifc.integrity` twice, as `["a"]` and as `["b"]`.',
         );
+    });
+  });
+
+  describe("holdsIfcLabels()", () => {
+    it("returns `true` for labels whose every confidentiality atom it holds", () => {
+      expect(
+        holdsIfcLabels(
+          { confidentiality: ["a", { anyOf: ["x"] }] },
+          { confidentiality: [{ anyOf: ["x"] }] },
+        ),
+      ).toBe(true);
+    });
+
+    it("returns `false` for a confidentiality atom it does not hold", () => {
+      expect(
+        holdsIfcLabels({ confidentiality: ["a"] }, { confidentiality: ["b"] }),
+      ).toBe(false);
+    });
+
+    it("returns `true` for another key it holds alike, and a key declared as `undefined`", () => {
+      expect(
+        holdsIfcLabels(
+          { integrity: [{ kind: "k" }] },
+          { integrity: [{ kind: "k" }], addIntegrity: undefined },
+        ),
+      ).toBe(true);
+    });
+
+    it("returns `false` for another key it holds differently or not at all", () => {
+      expect(holdsIfcLabels({ integrity: ["i"] }, { integrity: ["j"] })).toBe(
+        false,
+      );
+      expect(holdsIfcLabels({}, { integrity: ["i"] })).toBe(false);
+    });
+  });
+
+  describe("withIfcLabels()", () => {
+    it("returns the schema with the labels combined into its own", () => {
+      expect(
+        withIfcLabels({ type: "string", ifc: { confidentiality: ["a"] } }, {
+          confidentiality: ["b"],
+        }),
+      ).toEqual({ type: "string", ifc: { confidentiality: ["a", "b"] } });
+    });
+
+    it("returns a schema of the labels alone for `true`, and one refusing everything for `false`", () => {
+      const ifc = { confidentiality: ["a"] };
+
+      expect(withIfcLabels(true, ifc)).toEqual({ ifc });
+      expect(withIfcLabels(false, ifc)).toEqual({ not: true, ifc });
+    });
+  });
+
+  describe("joinMemberIfcLabels()", () => {
+    it("returns the union's labels with every member's confidentiality", () => {
+      expect(
+        joinMemberIfcLabels({ confidentiality: ["outer"] }, [
+          { confidentiality: ["x"] },
+          { confidentiality: ["y", "outer"] },
+        ]),
+      ).toEqual({ confidentiality: ["outer", "x", "y"] });
+    });
+
+    it("returns another label only where every member declares it alike", () => {
+      expect(
+        joinMemberIfcLabels({}, [
+          { integrity: ["i"], addIntegrity: ["a"] },
+          { integrity: ["i"], addIntegrity: ["b"] },
+        ]),
+      ).toEqual({ integrity: ["i"] });
+    });
+
+    it("returns the union's own label over the members' others", () => {
+      expect(
+        joinMemberIfcLabels({ integrity: ["outer"] }, [
+          { integrity: ["i"] },
+          { integrity: ["i"] },
+        ]),
+      ).toEqual({ integrity: ["outer"] });
+    });
+
+    it("returns `undefined` where nothing declares a label", () => {
+      expect(joinMemberIfcLabels({}, [{}, { integrity: undefined }]))
+        .toBeUndefined();
+    });
+  });
+
+  describe("declaredIfcLabels()", () => {
+    it("returns the labels along a reference chain, the farthest first", () => {
+      expect(
+        declaredIfcLabels(
+          { $ref: "#/$defs/A", ifc: { confidentiality: ["near"] } },
+          {
+            A: { $ref: "#/$defs/B", ifc: { confidentiality: ["middle"] } },
+            B: { type: "string", ifc: { confidentiality: ["far"] } },
+          },
+        ),
+      ).toEqual({ confidentiality: ["far", "middle", "near"] });
+    });
+
+    it("returns `undefined` for a schema that declares no label", () => {
+      expect(declaredIfcLabels({ type: "string" }, {})).toBeUndefined();
+      expect(declaredIfcLabels(true, {})).toBeUndefined();
+    });
+  });
+
+  describe("labeledValueMember()", () => {
+    const value: MutableJSONSchemaObj = {
+      type: "string",
+      ifc: { confidentiality: ["a"] },
+    };
+
+    it("returns the value member of a nullable union whose member alone declares labels", () => {
+      expect(
+        labeledValueMember({ anyOf: [{ type: "undefined" }, value] }, {}),
+      ).toBe(value);
+      expect(
+        labeledValueMember(
+          { anyOf: [value, { type: ["null", "undefined"] }] },
+          {},
+        ),
+      ).toBe(value);
+    });
+
+    it("returns the value member whose labels its reference reaches", () => {
+      const reference: MutableJSONSchemaObj = { $ref: "#/$defs/A" };
+      expect(
+        labeledValueMember({ anyOf: [{ type: "null" }, reference] }, {
+          A: value,
+        }),
+      ).toBe(reference);
+    });
+
+    it("returns the value member beside a reference to a nullish definition", () => {
+      expect(
+        labeledValueMember({ anyOf: [{ $ref: "#/$defs/Nothing" }, value] }, {
+          Nothing: { type: "null" },
+        }),
+      ).toBe(value);
+      expect(
+        labeledValueMember({ anyOf: [{ $ref: "#/$defs/Gone" }, value] }, {
+          Gone: { $ref: "#/$defs/Nothing" },
+          Nothing: { type: ["null", "undefined"] },
+        }),
+      ).toBe(value);
+    });
+
+    it("counts a reference it cannot resolve to a nullish definition as a value member", () => {
+      const unresolved: Record<string, MutableJSONSchemaObj>[] = [
+        {},
+        { Nothing: { type: "null", description: "none" } },
+      ];
+      for (const definitions of unresolved) {
+        expect(
+          labeledValueMember({
+            anyOf: [{ $ref: "#/$defs/Nothing" }, value, { type: "null" }],
+          }, definitions),
+        ).toBeUndefined();
+      }
+    });
+
+    it("returns `undefined` for a union that declares labels, holds no nullish member, or whose member declares none", () => {
+      expect(labeledValueMember({
+        anyOf: [{ type: "undefined" }, value],
+        ifc: { confidentiality: ["b"] },
+      }, {})).toBeUndefined();
+      expect(labeledValueMember({ anyOf: [value, value] }, {}))
+        .toBeUndefined();
+      expect(
+        labeledValueMember({
+          anyOf: [{ type: "undefined" }, { type: "string" }],
+        }, {}),
+      ).toBeUndefined();
+      expect(labeledValueMember(value, {})).toBeUndefined();
+      // `true` accepts any value, so it is a value member beside `value`.
+      expect(
+        labeledValueMember({ anyOf: [true, { type: "null" }, value] }, {}),
+      ).toBeUndefined();
     });
   });
 

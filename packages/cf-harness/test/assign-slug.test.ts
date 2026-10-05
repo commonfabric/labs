@@ -38,6 +38,7 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   CfHarnessEngine,
   type CreateHarnessEngineOptions,
@@ -63,6 +64,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 
 const signer = await Identity.fromPassphrase("cf-harness assign-slug tool");
 
@@ -144,12 +146,10 @@ describe("assign-slug", () => {
       storageManager,
       fetch: patternFetch,
     });
-    pieces = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `assign-slug-${crypto.randomUUID()}`,
-      }),
+    pieces = await openLegacySpace(
+      signer,
       runtime,
+      `assign-slug-${crypto.randomUUID()}`,
     );
     await pieces.synced();
   });
@@ -193,9 +193,9 @@ describe("assign-slug", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: "pending-served-page",
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -1142,7 +1142,7 @@ describe("assign-slug", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () =>
           Promise.reject(new Error("storage unavailable"));
         return cell;
@@ -1179,7 +1179,7 @@ describe("assign-slug", () => {
       runtime.getCellFromEntityId = ((
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
-        const cell = originalGetCell(...args);
+        const cell = patchableCell(originalGetCell(...args));
         if (String(args[1]) !== slugEntity) {
           return cell;
         }
@@ -1231,7 +1231,7 @@ describe("assign-slug", () => {
       runtime.getCellFromEntityId = ((
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
-        const cell = originalGetCell(...args);
+        const cell = patchableCell(originalGetCell(...args));
         if (String(args[1]) !== counterEntity) {
           return cell;
         }
@@ -1301,7 +1301,7 @@ describe("assign-slug", () => {
         `assign-slug-did-${crypto.randomUUID()}`,
       );
       const didPieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
           spaceDid: spaceIdentity.did(),
         }),

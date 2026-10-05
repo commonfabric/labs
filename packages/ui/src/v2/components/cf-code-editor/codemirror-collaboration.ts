@@ -226,7 +226,7 @@ export function codeMirrorIntegratedUpdates(
           operation.cursor.version,
       );
     }
-    updates.push(...decodePayload(operation.payload));
+    for (const update of decodePayload(operation.payload)) updates.push(update);
     expectedVersion++;
   }
   if (expectedVersion - 1 !== snapshot.cursor.version) {
@@ -282,6 +282,11 @@ export class CodeMirrorCollaborationController {
 
   get active(): boolean {
     return this.#canProcess() && !this.#closing;
+  }
+
+  /** The Cell handle whose field this controller synchronizes. */
+  get cell(): CellHandle<string> {
+    return this.#cell;
   }
 
   get synchronizationSnapshot(): CodeMirrorSynchronizationSnapshot | null {
