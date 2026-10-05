@@ -49,23 +49,23 @@ type-check until it says how it stands.
 claiming who wrote it, the handles a render binds as `$value` and `$author` on
 `cf-cfc-authorship`, and calls `onState` with an `AuthorshipObservation`. Its
 `state` is the verdict: `verified` when the value's `authored-by` names the
-principal the author's label represents, `unverified` when it names another,
-and `unknown` when the labels establish no authorship. It also carries the
-value's label as read, and the author claim. `onState` is not called
-until both labels have loaded, so a verdict never passes through `unknown` on
-its way to `verified`, and is called again after each later read of either
-label. `observeAuthorship()` returns a function that ends the observation.
+principal the author's label represents, `unverified` when it names another, and
+`unknown` when the labels establish no authorship. It also carries the value's
+label as read, and the author claim. `onState` is not called until both labels
+have loaded, so a verdict never passes through `unknown` on its way to
+`verified`, and is called again after each later read of either label.
+`observeAuthorship()` returns a function that ends the observation.
 
 A label counts as loaded once a read of it has finished with nothing left to
 wait for. When the cell a handle resolves to reads as having no label, the
 observation watches that cell and reads again once an update or a read of it
 shows its document has loaded; a read that still finds none then is final. A
 refused read is not a cell holding nothing, as [Refused reads](#refused-reads)
-says, and it carries no attestation: a refusal ends the wait for that label,
-and the verdict is reached without it. A read that fails for any other reason
-decides nothing, and no verdict is reported while it stands.
-`cf-cfc-authorship` draws its badge from this helper, and a host that draws no
-Lit component calls it directly.
+says, and it carries no attestation: a refusal ends the wait for that label, and
+the verdict is reached without it. A read that fails for any other reason
+decides nothing, and no verdict is reported while it stands. `cf-cfc-authorship`
+draws its badge from this helper, and a host that draws no Lit component calls
+it directly.
 
 ## Diagnosing pending writes
 
