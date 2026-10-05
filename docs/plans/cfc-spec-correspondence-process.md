@@ -316,6 +316,9 @@ they were found:
   pull request that settles a question, so that who ruled and who reviewed is
   recorded for every ruling and not only the §13.11 set.
 
+The `lake build` and architecture-check workflow is independent of the rest
+and goes in with stage 1.
+
 ## Where a document goes
 
 The triage rule: a labs document under `docs/specs/` cites the spec section it
@@ -352,12 +355,13 @@ disposition proposed and not yet confirmed by each document's owner:
 Each stage is a pull request or a short series, and each ends with a check
 that did not exist before it.
 
-**Stage 1: instruction surfaces.** The `AGENTS.md` paragraph, `.claude/rules/cfc.md`,
+**Stage 1: instruction surfaces.** In place since 2026-10-05: the `AGENTS.md`
+paragraph, `.claude/rules/cfc.md` as a pointer, the live procedure in
 `docs/development/cfc-spec-correspondence.md`, the `cf-review` subsection, and
-the `docs/specs/README.md` split between host-arrangement and conformance
-documents. Done when `deno task check-skill-facts` passes with the new
-citations and a fresh agent asked to change a CFC rule opens the specification
-first.
+the `docs/specs/README.md` preamble. The rule is Claude Code's mechanism and
+carries nothing the `AGENTS.md` paragraph does not; the Codex-side equivalent
+is a follow-up made from Codex. Done when a fresh agent asked to change a CFC
+rule opens the specification first.
 
 **Stage 2: visibility.** The snapshot task, the manifest with a row per critical
 function marked `missing` where no kernel exists yet, `check-cfc-correspondence`
@@ -417,8 +421,7 @@ Taken by the CFC owner on 2026-10-05:
 5. **Specs CI** is wanted, as it is cheap: `lake build`, the architecture
    check, the pseudocode check, and the cross-repository correspondence job.
 
-Open, needed before stage 4 and not before:
-
-- **Publishing the pseudocode.** Verbatim extraction makes the critical
-  blocks public as the runner's source. Accept, or keep those functions
-  hand-written and hash-pinned.
+6. **Publishing the pseudocode.** Verbatim extraction makes the critical
+   blocks public as the runner's source; accepted.
+7. **Reviewer.** Ian Hickson reviews the pull requests that change the
+   procedure or the machinery behind it.

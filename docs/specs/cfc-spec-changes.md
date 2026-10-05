@@ -2,8 +2,11 @@
 
 Changes `~/src/specs/cfc` needs so the spec can answer the questions that came
 up while designing implementation work. Started 2026-06-10 during the S16
-(default transition) design; intended to grow as later sessions hit new gaps.
-Each item: where, what's missing or contradictory, proposed edit. Tags:
+(default transition) design. **Closed to new entries since 2026-10-05:** a new
+gap is filed as a specs pull request, as
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+describes, and the `open` entries below are being migrated to specs pull
+requests one group at a time, after which this list is archived. Each item: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
