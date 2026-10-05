@@ -1129,6 +1129,27 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("refuses a destination holding an array hole or negative zero, which the record's JSON text would rewrite under its digest", async () => {
+      const fixture = await setup();
+      try {
+        const values: [string, JSONValue][] = [
+          // deno-lint-ignore no-sparse-arrays
+          ["contact-holey", { numbers: [, "tel:+15550100"] } as JSONValue],
+          ["contact-negative-zero", { extension: -0 }],
+        ];
+        for (const [cause, address] of values) {
+          const destination = await fixture.entry(cause, address);
+          await expect(
+            prepareReviewedIntent(
+              fixture.bindings({ parameters: { to: [destination] } }),
+            ),
+          ).rejects.toThrow(/destination to be JSON that JSON text carries/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("counts only the integrity the runtime derived from who wrote the value, which another writer takes away", async () => {
       const fixture = await setup();
       try {

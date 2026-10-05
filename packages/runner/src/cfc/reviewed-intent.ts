@@ -578,20 +578,32 @@ const locationOf = (link: NormalizedFullLink): ReviewedLocation => ({
 });
 
 /**
- * `value` as a JSON copy.
+ * `value` as a JSON copy that JSON text carries unchanged.
  *
- * @throws If `value` holds a cell reference, a cycle, or anything else that
- *   is not JSON, naming `what` it was read as.
+ * A record stores its parameters as JSON text and its `payloadDigest` over
+ * them, so a value whose text parses back as a different value (an array
+ * hole becomes `null`, `-0` becomes `0`) would land a record its own digest
+ * refuses. It is refused here, before any consent is issued.
+ *
+ * @throws If `value` holds a cell reference, a cycle, anything else that is
+ *   not JSON, or anything JSON text rewrites, naming `what` it was read as.
  */
 const reviewedJson = (value: unknown, what: string): JSONValue => {
+  let copy: JSONValue;
   try {
-    return snapshotJsonValue(value);
+    copy = snapshotJsonValue(value);
   } catch (error) {
     throw new Error(
       `Reviewed intent requires its ${what} to be JSON without cell references`,
       { cause: error },
     );
   }
+  if (hashStringOf(JSON.parse(canonicalJson(copy))) !== hashStringOf(copy)) {
+    throw new Error(
+      `Reviewed intent requires its ${what} to be JSON that JSON text carries unchanged (no array holes, no negative zero)`,
+    );
+  }
+  return copy;
 };
 
 /**

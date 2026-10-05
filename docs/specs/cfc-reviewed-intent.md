@@ -164,7 +164,9 @@ authenticated acting principal it:
   shows of a destination is that stored value and nothing else, never a string
   the pattern supplies. A value holding a link is refused rather than followed,
   because the destination's integrity covers its own document and not one it
-  links to; so is an absent or `null` value;
+  links to; so is an absent or `null` value, and one JSON text would rewrite
+  (an array hole, `-0`), since the record stores its parameters as that text
+  and its digest over them;
 - takes each destination's integrity from the `derived` label entries at or
   above its path, and requires it to satisfy the parameter's patterns. Only
   the runtime writes a `derived` entry, and its `TransformedBy` is taken away
