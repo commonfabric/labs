@@ -59,7 +59,10 @@ with `wish<ChatManagerOutput>({ query: "#chatManager" })` and uses the wish's
 `result`. `#chatManager` is a home target, like `#agent_queue` and `#profile`,
 and names the role rather than the pattern that fills it. On a serving runtime,
 it resolves against the demanding identity's home space and never the service's
-([server-side builtins](../server-side-execution/builtins.md)).
+([server-side builtins](../server-side-execution/builtins.md)). A home set up
+before its pattern held a manager holds none until the home space is next
+opened, and until then the wish reports an error naming that remedy, with no
+`result`.
 
 Everything a manager holds is private to its user, as the home space is: nobody
 else learns whom a user talks to by reading it.
