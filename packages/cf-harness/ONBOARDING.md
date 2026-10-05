@@ -58,12 +58,15 @@ first run does without.
    `Warning Ignored build scripts for packages: npm:fuse-native@2.2.6` box on
    stderr. It is noise; the command's output is on stdout.
 
-2. **Docker with the `runsc-cfc` runtime.** By default the console runs every
-   sandboxed tool in a container under that runtime. Every entrypoint, the
-   console included, can instead invoke `runsc` directly, with no Docker, where
-   `CF_HARNESS_SANDBOX_RUNTIME` selects it; the package README's
-   [Sandbox runtimes](README.md#sandbox-runtimes) covers that driver, and this
-   walkthrough follows the Docker one. On macOS, follow the gVisor
+2. **Docker with the `runsc-cfc` runtime.** This walkthrough runs every
+   sandboxed tool in a container under that runtime, and names it with
+   `CF_HARNESS_SANDBOX_RUNTIME=docker` wherever it starts something. Naming it
+   matters on macOS, where an entrypoint that names no runtime invokes `runsc`
+   directly, with no Docker, from the native cfc-vm store, and refuses to start
+   where that store is not set up; on every other platform Docker is what an
+   unnamed runtime gets. The package README's
+   [Sandbox runtimes](README.md#sandbox-runtimes) covers the direct driver and
+   the default. On macOS, follow the gVisor
    [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);
    it owns installation and registration. Confirm the result:
 
@@ -188,6 +191,7 @@ the toolshed's CFC posture to match what this checkout documents.
 | `CF_HARNESS_FABRIC_API_URL`                   | The toolshed API URL from above.                                                               |
 | `CF_HARNESS_FABRIC_IDENTITY`                  | The absolute path to the keyfile from prerequisite 3.                                          |
 | `CF_HARNESS_FABRIC_SPACE`                     | A space name. A new name is fine; a `did:key` is refused.                                      |
+| `CF_HARNESS_SANDBOX_RUNTIME`                  | `docker`, the driver this walkthrough follows; macOS does not default to it.                   |
 | `CF_HARNESS_RUNSC_CFC_RESULT_DIR`             | The host side of `--cfc-result-dir` from prerequisite 2.                                       |
 | `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` | The host side of `--cfc-invocation-context-dir` from prerequisite 2.                           |
 | `MEMORY_DIR`                                  | The toolshed's store directory from above, as a plain path.                                    |
@@ -204,6 +208,7 @@ export CF_HARNESS_FABRIC_SPACE=<space-name>
 export CF_HARNESS_FABRIC_CFC_POSTURE=max-enforcement
 export CF_HARNESS_FABRIC_CFC_FLOW_LABELS=persist
 export CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE=enforce-strict
+export CF_HARNESS_SANDBOX_RUNTIME=docker
 export CF_HARNESS_RUNSC_CFC_RESULT_DIR=<absolute-host-result-directory>
 export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR=<absolute-host-invocation-context-directory>
 export MEMORY_DIR=<absolute-toolshed-cache-directory>
@@ -214,8 +219,9 @@ The three CFC exports are the console's defaults, written out so the posture a
 run ran under is never a guess. Success is a startup summary naming the space,
 the toolshed, `(not configured)` or a URL for the index and skills,
 `cfc:
-max-enforcement, flow labels persist, enforce-strict`, and the two sidecar
-directories; then HTTP `200` here:
+max-enforcement, flow labels persist, enforce-strict`, the sandbox as
+`docker` named by `CF_HARNESS_SANDBOX_RUNTIME`, and the two sidecar directories;
+then HTTP `200` here:
 
 ```sh
 curl -sS http://127.0.0.1:<free-console-port>/api/health | jq
@@ -604,11 +610,12 @@ is a real problem.
 The batch CLI and the console resolve the same session configuration, and the
 same sandbox runtime selection: the CLI from `--sandbox-runtime` or
 `CF_HARNESS_SANDBOX_RUNTIME`, the console from the variable alone. On the Docker
-driver, which is the default, the CLI refuses an enforcing run unless both
-runsc-cfc transports are named:
+driver, which the first export names, the CLI refuses an enforcing run unless
+both runsc-cfc transports are named:
 
 ```sh
 cd <labs>/packages/cf-harness
+export CF_HARNESS_SANDBOX_RUNTIME=docker
 export CF_HARNESS_RUNSC_CFC_RESULT_DIR=<absolute-host-result-directory>
 export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR=<absolute-host-invocation-context-directory>
 

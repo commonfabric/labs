@@ -88,16 +88,29 @@ deno task --cwd packages/cf-harness console:launch --instance <instance>
 ```
 
 It resolves the identity, the space and the toolshed URL from the instance's
-`pieces.json`, the store from `loom toolshed-store-dir`, and the two sidecar
-directories from the `runsc-cfc` registration `docker info` reports. A console
-whose environment selects the direct driver (`CF_HARNESS_SANDBOX_RUNTIME=runsc`,
-which a Loom that offers its native runtime sets for an instance that chose it)
-needs no sidecar directory and reads no Docker registration; the printout names
-its `runsc` binary, rootfs and CFC policy instead. It prints every value beside
-the record that decided it, and serves on 8135 — the port Weaver's harness
-console setting and loom's proxy both address. Read the printout before opening
-Weaver: a value that is wrong names where to fix it, and those are three
-different places.
+`pieces.json`, the store from `loom toolshed-store-dir`, and, on the Docker
+driver, the two sidecar directories from the `runsc-cfc` registration
+`docker info` reports. It prints every value beside the record that decided it,
+and serves on 8135 — the port Weaver's harness console setting and loom's proxy
+both address. Read the printout before opening Weaver: a value that is wrong
+names where to fix it, and those are three different places.
+
+Which sandbox driver the console runs on comes from its environment, and the
+printout's `sandbox` row says which and why:
+
+- `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`. Loom sets the
+  variable for the instances it starts, so a console that came up with a loom
+  instance is on the driver that instance chose.
+- With the variable unset, a Mac runs the native runtime, the direct driver over
+  the cfc-vm store at `CFC_VM_HOME` or `~/Library/Application Support/cfc-vm`,
+  and the launch is refused where that store is not set up, naming the store and
+  what it lacks. Every other platform runs Docker. Nothing falls back from one
+  to the other: to put a Mac's console on Docker, set
+  `CF_HARNESS_SANDBOX_RUNTIME=docker` in the environment the fabric starts from.
+
+A console on the direct driver needs no sidecar directory and reads no Docker
+registration; the printout names its `runsc` binary, rootfs and CFC policy
+instead, each beside the variable or the store it came from.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
@@ -119,11 +132,14 @@ deno task --cwd packages/cf-harness console:launch --instance <instance> \
 ```
 
 **A console that cannot start does not take the fabric down.** It needs its
-sandbox runtime (Docker, unless the direct driver is selected) and a connected
-model provider, and when either is missing the flag reports it in the script's
-output and in `packages/cf-harness/local-dev-console.log`, and the shell and
-toolshed keep running. That is the shape to expect: the pair is the fabric, and
-the console is a surface on it.
+sandbox runtime (on a Mac the native store, elsewhere Docker, unless
+`CF_HARNESS_SANDBOX_RUNTIME` names one) and a connected model provider, and when
+either is missing the flag reports it in the script's output and in
+`packages/cf-harness/local-dev-console.log`, and the shell and toolshed keep
+running. A Mac whose native store is not set up is one such case: the log holds
+the refusal, with the store, what it lacks, and the variable that selects
+Docker. That is the shape to expect: the pair is the fabric, and the console is
+a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and

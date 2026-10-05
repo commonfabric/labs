@@ -24,19 +24,20 @@ The runtime has four main boundaries:
    state and are restored on resume.
 2. The prompt loop performs bounded turns through the selected model provider
    and invokes only the configured tool/profile surface.
-3. Most tool execution runs in a gVisor sandbox through one of two drivers: the
-   default drives Docker with a configurable Docker-registered runtime, normally
+3. Most tool execution runs in a gVisor sandbox through one of two drivers: one
+   drives Docker with a configurable Docker-registered runtime, normally
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
-   [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
-   constrained host-adjacent profile whose typed `browser` tool the harness
-   sends to a browser host attached to the run, such as the Weaver, or else
-   binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
-   is a distinct trusted-host path whose Fabric identity stays outside the
-   sandbox. It runs pieces in the configured space and admits input references
-   from that space or foreign DIDs the operator lists with their hosts. The
-   agent result writer is a second such path, invoked by a host caller rather
-   than by the model, writing a run's structured result into the configured
-   space.
+   A run names one, and where it names none macOS takes the direct driver and
+   every other platform takes Docker. [Sandbox runtimes](#sandbox-runtimes)
+   describes both. The browser child is a constrained host-adjacent profile
+   whose typed `browser` tool the harness sends to a browser host attached to
+   the run, such as the Weaver, or else binds to a leased local CDP endpoint
+   itself. The optional `run_pattern` tool is a distinct trusted-host path whose
+   Fabric identity stays outside the sandbox. It runs pieces in the configured
+   space and admits input references from that space or foreign DIDs the
+   operator lists with their hosts. The agent result writer is a second such
+   path, invoked by a host caller rather than by the model, writing a run's
+   structured result into the configured space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -64,10 +65,10 @@ string that is not `runsc`'s spelling of the empty label. The Docker driver
 reads that output as `observed`, and the direct driver withholds it. A blank
 label string beside an empty structured label is withheld under both.
 
-- The **Docker driver** is the default. It shells out to Docker and names a
-  Docker-registered runtime, normally `runsc-cfc`. Where they are configured,
-  the CFC invocation context and the result travel through two host sidecar
-  directories that the runtime's registration names.
+- The **Docker driver** shells out to Docker and names a Docker-registered
+  runtime, normally `runsc-cfc`. Where they are configured, the CFC invocation
+  context and the result travel through two host sidecar directories that the
+  runtime's registration names.
 - The **direct driver** writes an OCI bundle and invokes a `runsc` binary
   itself, with the same command line on Linux and on macOS. On Linux that binary
   is expected to be gVisor's `runsc`. On macOS it is expected to be the darwin
@@ -83,8 +84,51 @@ label string beside an empty structured label is withheld under both.
 
 `CF_HARNESS_SANDBOX_RUNTIME` selects the driver, `docker` or `runsc`. On the
 batch CLI `--sandbox-runtime <docker|runsc>` selects it too, and the flag wins
-over the environment. Any other value is refused, and a run that names neither
-uses Docker.
+over the environment. Any other value is refused. A named driver is taken as
+named on every platform: `docker` is Docker whatever the machine holds, and
+`runsc` is the direct driver with the settings named beside it.
+
+Where neither names a driver, the platform decides, and nothing falls back from
+one driver to the other:
+
+- On macOS the selection is the direct driver with the **native runtime**: the
+  `runsc` shim, rootfs image and VM of the cfc-vm store that gVisor's macOS
+  installer writes. The store is the directory `CFC_VM_HOME` names, which must
+  be an absolute path, and otherwise `Library/Application Support/cfc-vm` under
+  the home. Where the store cannot provide the runtime the entrypoint is refused
+  before it runs, serves, or launches anything.
+- On every other platform the selection is Docker. The native runtime is the
+  macOS `runsc`, which runs in a VM only macOS has, so the platform alone
+  decides this; no other platform has a default direct driver.
+
+The store provides the runtime when it holds each of these, and the refusal
+lists every one that is not there:
+
+| In the store            | What has to be there | Not needed where                     |
+| ----------------------- | -------------------- | ------------------------------------ |
+| `bin/runsc`             | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one  |
+| `bin/cfc-vm`            | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one  |
+| `config.json`           | a file               | never                                |
+| `images/kitchensink`    | a directory          | a rootfs is named                    |
+| `ext4/kitchensink.ext4` | a file               | a rootfs is named                    |
+| a CFC policy            | a file, see below    | a policy is named, the empty one too |
+
+The shim is what the driver executes, and it starts the daemon from beside
+itself. The shim reads `config.json` to start the VM. The driver names
+`images/kitchensink` as each container's rootfs, and the shim runs that from
+`ext4/kitchensink.ext4`. A piece that cannot be examined counts as not there,
+and the refusal carries the reason.
+
+The refusal is a `HarnessControlError` with the code `invalid-request`. Its
+message says that no runtime is named and the default on macOS is the native
+runtime, names the store and each thing in the way, and says how Docker is
+selected: by `--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`
+on the batch CLI and the batch lane of the Loom local host, and by the variable
+alone on the entrypoints that take no selection flag. `cf agent` runs the batch
+CLI with an argument list it writes itself, so its operator can pass no flag,
+and it asks for the variable alone too. Through the Loom local host's batch lane
+the refusal is a host failure carrying that message, and through its interactive
+lane a chat-protocol `internal_error` carrying it.
 
 `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
 the batch CLI, which the batch lane of the Loom local host also hands its
@@ -104,22 +148,42 @@ registration, with its rootfs and whether its CFC policy reads and parses as a
 JSON object. The console takes no enforcement mode, so its turns run at
 `enforce-strict`; with no CFC policy the snapshot reports the runtime failed,
 since the engine refuses each turn before any tool runs, and the launcher and
-the server both print that every turn is refused. The console's `bash` takes no
-`session`, as on Docker.
+the server both print that every turn is refused. That is a console on a named
+`runsc`: one on the native runtime macOS defaulted to has a policy or does not
+start. The console's `bash` takes no `session`, as on Docker.
+
+Both say how the driver was selected. The launcher's report has a `sandbox` row
+on either driver, whose source is the variable that named it or the harness
+default with its platform and, for the native runtime, its store; on the direct
+driver each of the `runsc`, `rootfs` and `cfc policy` rows names the variable,
+the native store, or the harness default it came from. The console's startup
+banner opens its sandbox lines with the driver and the same account, its
+`config.sandbox` row carries the account as its detail, and its
+`sandbox.runtime` row ends its detail with it, on the direct driver once the
+driver's configuration has resolved. A sidecar directory flag given to the
+launcher on the direct driver is refused with the way to Docker, which is to set
+`CF_HARNESS_SANDBOX_RUNTIME=docker`.
 
 The selection belongs to a run. The direct driver registers nothing with Docker
 and keeps its `runsc` state under the run's own scratch directory, so runs on
 either driver coexist on one machine.
 
 The settings below describe the direct driver and are read only when it is
-selected:
+selected, by name or by the macOS default. A setting that is named means the
+same under both; what an unnamed one falls to differs:
 
-| Setting        | Batch CLI flag         | Environment                      | When neither names one                                                                                       |
-| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the VM's image store. On Linux, the run is refused.                      |
-| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                       |
-| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it. |
-| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                   |
+| Setting        | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                 | Unnamed, for the macOS default                                                                                       |
+| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store under the home. On Linux, the run is refused.                  | `images/kitchensink` in the store.                                                                                   |
+| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                       | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. |
+| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it. | `bin/runsc` in the store.                                                                                            |
+| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                   | `sandbox`.                                                                                                           |
+
+The macOS default requires a policy because a run enforces CFC unless told
+otherwise, and an enforcing run with none is refused as it starts. The store's
+own `policy.json` is what the macOS installer writes, so an installed store is
+usable with nothing else on the machine. The file under the home is taken first
+so that both drivers label the same files the same way.
 
 The harness writes the rootfs path into the bundle as the container's root. On
 Linux `runsc` is expected to find a directory there. On macOS the path is a
@@ -129,7 +193,9 @@ passed `--cfc` exactly when a CFC policy is configured. An empty
 nothing, so the default applies. An enforcing run with no policy is refused as
 it starts, before any command executes in the sandbox and before the first model
 turn. A runtime built outside an engine has no such check in front of it, and
-refuses each enforcing call instead.
+refuses each enforcing call instead. Under the macOS default, an empty
+`--sandbox-cfc-policy` is a policy that was named, so the default is not refused
+for want of one and the run starts only in a mode that does not enforce.
 
 `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
 `--cfc-invocation-context-dir` configure the Docker driver. The direct driver
@@ -152,6 +218,19 @@ Each driver describes itself, and the description is recorded in
 | `cfc.extraDockerArgsCount`                | the count of extra Docker arguments                     | absent                                         |
 | `cfc.invocationContextTransport`          | `sidecar`, where an invocation-context directory is set | `fd`                                           |
 | `cfc.invocationContextTransportReadiness` | the registration reading, or `unverified` before one    | `intrinsic`                                    |
+| `selection`                               | how an entrypoint selected the driver; see below        | the same                                       |
+
+`selection` is not the driver's own account of itself: the engine adds it from
+the selection its entrypoint derived, and a child run carries its parent's. It
+holds `runtime`, `docker` or `runsc`, and `source`, which is `flag`,
+`environment`, or `default`. A default also holds the `platform` whose default
+applied, and the native runtime macOS defaulted to holds `nativeStore`, its
+store. It is absent for an engine a caller built without a selection. The batch
+CLI prints the same account on the `sandbox` line of its operator summary, as
+`runsc (default on macOS: the native store at <store>)`,
+`docker (default on linux: the native runtime is macOS only)`, or the runtime
+followed by `(named by --sandbox-runtime)` or
+`(named by CF_HARNESS_SANDBOX_RUNTIME)`.
 
 `runsc-cfc` therefore names two different things, and the field it appears in
 says which. As a `kind` it is the direct driver. As a `cfc.runtimeName` it is
@@ -415,8 +494,8 @@ The current package provides:
   durable bounded Codex refresh health;
 - workspace, Fabric, and explicit host mounts with path containment;
 - sandboxed shell, file, image, web-fetch, skills, edit/write, and delegation
-  tools, over the Docker driver by default or the direct `runsc` driver where a
-  run selects it, with named `bash` sessions on the direct driver; see
+  tools, over the Docker driver or the direct `runsc` driver as a run names or
+  its platform defaults, with named `bash` sessions on the direct driver; see
   [Sandbox runtimes](#sandbox-runtimes);
 - children through `default`, `browser`, `web_fetch`, `web_search`, and
   `pattern-author` profiles, of which the ones a turn starts together run
@@ -994,9 +1073,11 @@ mode.
   call's output. An enforcing run on the direct driver runs every command in a
   container of its own.
 - A resumed run does not take its sandbox driver from the run it resumes. It
-  uses the driver that the flags and environment select when it resumes, while
-  `capabilities.json` and `policy-snapshot.json` keep the runtime description
-  recorded when the run first started.
+  uses the driver that the flags, the environment and the platform's default
+  select when it resumes, while `capabilities.json` and `policy-snapshot.json`
+  keep the runtime description, its `selection` included, recorded when the run
+  first started. A run started on Docker and resumed on macOS with no runtime
+  named therefore resumes on the native runtime.
 - A signal that interrupts a batch CLI run closes the root run's sandbox runtime
   and not the runtimes of its children. A child's sessions still end, because
   they end with the harness process; nothing takes down a container of a child's

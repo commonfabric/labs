@@ -391,10 +391,16 @@ wait_for_http \
 # The cf-harness console, on the fabric the toolshed above is now serving.
 #
 # It never fails this script. The toolshed and the shell are the stack; the
-# console is a surface on top of it, and a person whose Docker is off or whose
-# model provider is not connected should still get a working fabric. So every
-# way the console can fail to come up is reported here and written to its log,
-# and none of them stops the servers that did come up.
+# console is a surface on top of it, and a person whose sandbox runtime is not
+# set up or whose model provider is not connected should still get a working
+# fabric. So every way the console can fail to come up is reported here and
+# written to its log, and none of them stops the servers that did come up.
+#
+# The console's sandbox runtime is not this script's to choose. It is the one
+# `CF_HARNESS_SANDBOX_RUNTIME` names in this script's environment, which loom
+# sets for the instances it starts. With none named, a Mac serves on its native
+# runtime and refuses to start where that is not set up, and every other
+# platform serves on Docker.
 CONSOLE_STATUS=""
 
 console_unavailable() {
