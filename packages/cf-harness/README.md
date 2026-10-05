@@ -134,6 +134,8 @@ What works today:
 - read-only Loom retrieval through a separately configured host transport, with
   every row measured against the run's observation ceiling; see
   [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
+- the commands a host admits, listed and run through the host's own scoped
+  broker; see [Host commands](docs/LOOM_COMMANDS.md);
 - built-in tools:
   - `bash`
   - `browser` (structured browser control for the browser subagent profile only,
@@ -196,6 +198,9 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
+  - `list_commands` and `run_command` (present only with
+    `--loom-commands-config`; the commands the host's broker admits for this
+    run, run as the agent, each answer measured like a retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,

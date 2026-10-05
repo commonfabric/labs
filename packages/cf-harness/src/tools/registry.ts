@@ -10,6 +10,7 @@ import {
   loomComposeTool,
   loomInspectTool,
 } from "./loom-authoring.ts";
+import { LOOM_COMMAND_TOOLS } from "./loom-commands.ts";
 import { LOOM_RETRIEVAL_TOOLS } from "./loom-retrieval.ts";
 import { bashTool } from "./bash.ts";
 import { browserTool } from "./browser.ts";
@@ -62,6 +63,7 @@ export const BUILTIN_TOOLS = [
   loomInspectTool,
   loomAuthoringContextTool,
   ...LOOM_RETRIEVAL_TOOLS,
+  ...LOOM_COMMAND_TOOLS,
   submitResultTool,
 ] as const;
 
