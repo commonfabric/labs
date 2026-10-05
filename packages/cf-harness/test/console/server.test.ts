@@ -1374,6 +1374,52 @@ describe("console/server", () => {
   });
 
   describe("the module", () => {
+    // `deno run` can credit unexecuted top-level code from V8's code cache.
+    // The program cases disable it so their coverage measures the entry
+    // block they execute.
+
+    it("prints help and exits successfully when run as a program", async () => {
+      const repoRoot = resolve(import.meta.dirname!, "..", "..", "..", "..");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repoRoot,
+        args: (lock) => [
+          "run",
+          "--no-code-cache",
+          `--lock=${lock}`,
+          "--allow-env",
+          "packages/cf-harness/console/server.ts",
+          "--help",
+        ],
+      });
+
+      expect(output.code).toBe(0);
+      expect(new TextDecoder().decode(output.stdout)).toBe(
+        consoleHelpText(["--help"]) + "\n",
+      );
+      expect(output.stderr.length).toBe(0);
+    });
+
+    it("prints the startup error without a stack and exits 1 when a flag has no value", async () => {
+      const repoRoot = resolve(import.meta.dirname!, "..", "..", "..", "..");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repoRoot,
+        args: (lock) => [
+          "run",
+          "--no-code-cache",
+          `--lock=${lock}`,
+          "--allow-env",
+          "packages/cf-harness/console/server.ts",
+          "--port",
+        ],
+      });
+
+      expect(output.code).toBe(1);
+      expect(new TextDecoder().decode(output.stderr)).toBe(
+        "`--port` was given no value\n",
+      );
+      expect(output.stdout.length).toBe(0);
+    });
+
     it("loads on a host with no FFI permission", async () => {
       // The console promises a machine without the SQLite native library can
       // serve its page: a run reads its space through that library only as
