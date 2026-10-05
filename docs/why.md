@@ -111,16 +111,16 @@ is the physics and the hardware.
 
 Most of what is here is early, and all of it is readable. What runs
 today: the compiler; the checker, enforcing at its strictest rung by
-default in every host, where a test that wants a laxer rung names one; a hundred and twenty-odd
-patterns with recorded baselines; labels that survive into the store;
-row-level clearance on shared tables; and access control on spaces,
-enforced on the production server. Every dial the flow checker has is
-built, every enforcement dial defaults to its strictest sound rung, and the harness that
-dogfoods it goes further still. What is left: one dial still observes
-rather than refuses, a space still has a host that
-can revoke a participant, and the machine that would prove which
-runtime it is before your data arrives is provisioned but not yet
-proving anything. Robustness and performance are not there yet. The
+default in every host, where a test that wants a laxer rung names one;
+a hundred and twenty-odd patterns with recorded baselines; labels that
+survive into the store; row-level clearance on shared tables; and
+access control on spaces, enforced on the production server. Every
+dial the flow checker has is built, every enforcement dial defaults to
+its strictest sound rung, and the harness that dogfoods it goes further
+still. What is left: one dial still observes rather than refuses, a
+space still has a host that can revoke a participant, and the machine
+that would prove which runtime it is before your data arrives is
+provisioned but not yet proving anything. Robustness and performance are not there yet. The
 claim is never perfection. It is checkability: here is the mechanism,
 here is how to check it, here is what it does not cover. A promise of
 perfection is destroyed by its first counterexample; a guarantee built
