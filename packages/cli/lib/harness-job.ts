@@ -17,6 +17,7 @@
 import { join } from "@std/path";
 
 import {
+  type CfHarnessStructuredResultValidation,
   runCfHarnessCli,
   type RunCfHarnessCliDependencies,
 } from "@commonfabric/cf-harness/cli";
@@ -31,6 +32,7 @@ import {
 import type { JSONSchema } from "@commonfabric/api";
 import {
   type AgentRunErrorCode,
+  INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
@@ -198,9 +200,10 @@ const argvOf = (
 /**
  * Runs one job. It ends `completed` with the value the model submitted and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
- * `LIMIT_REACHED` when the model-turn limit ended it, and as
- * `PROVIDER_FAILURE` when the model or a tool failed, or when the job
- * finished without a readable result.
+ * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`
+ * when the loop completed without a result satisfying its schema, and as
+ * `PROVIDER_FAILURE` when the model or a tool failed, or when a validated
+ * result could not be read back.
  */
 export const runHarnessJob = async (
   spec: HarnessJobSpec,
@@ -226,6 +229,7 @@ export const runHarnessJob = async (
   // harness persists, and hands back the loop's full result.
   let loopResult: HarnessPromptLoopResult | undefined;
   let loopError: unknown;
+  let resultValidation: CfHarnessStructuredResultValidation | undefined;
   const createInnerLoop = options.harnessDeps?.createPromptLoop ??
     ((loopOptions: CreateHarnessPromptLoopOptions) =>
       new CfHarnessPromptLoop(loopOptions));
@@ -238,6 +242,10 @@ export const runHarnessJob = async (
     // The caller owns the process's signals and its exit.
     registerSignalHandler: () => () => {},
     exit: () => {},
+    onStructuredResultValidation: (validation) => {
+      resultValidation = validation;
+      options.harnessDeps?.onStructuredResultValidation?.(validation);
+    },
     createPromptLoop: (loopOptions) => {
       const loop = createInnerLoop(loopOptions);
       return {
@@ -274,14 +282,20 @@ export const runHarnessJob = async (
   }
   const report = reportOf(loopResult);
   if (exitCode !== 0) {
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+    return {
+      outcome: "failed",
+      errorCode: resultValidation?.status === "invalid"
+        ? INVALID_RESULT
+        : PROVIDER_FAILURE,
+      report,
+    };
   }
 
   let structuredResult: unknown;
   try {
     structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
   } catch {
-    // The job finished without the result file it was asked for.
+    // A result the harness validated became unreadable before it was read.
     return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
   }
   return {

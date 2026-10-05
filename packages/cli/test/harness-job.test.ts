@@ -338,7 +338,7 @@ describe("runHarnessJob()", () => {
       });
     });
 
-    it("ends `failed` with its report when the model submitted no result", async () => {
+    it("ends `failed` as `INVALID_RESULT`, with its report, when the model submitted no result", async () => {
       const reported: string[] = [];
       const { result } = await runScripted(
         plainSpec(),
@@ -348,7 +348,7 @@ describe("runHarnessJob()", () => {
 
       expect(result.outcome).toBe("failed");
       if (result.outcome !== "failed") throw new Error("unreachable");
-      expect(result.errorCode).toBe("PROVIDER_FAILURE");
+      expect(result.errorCode).toBe("INVALID_RESULT");
       expect(result.report?.modelTurns).toBe(2);
       expect(reported.join("\n")).not.toBe("");
     });

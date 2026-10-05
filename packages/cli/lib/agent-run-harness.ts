@@ -28,7 +28,10 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
-import { PROVIDER_FAILURE } from "@commonfabric/runner/agent-run";
+import {
+  INVALID_RESULT,
+  PROVIDER_FAILURE,
+} from "@commonfabric/runner/agent-run";
 import { addressKey, renderCellReference } from "@commonfabric/runner/shared";
 import type { Cell } from "@commonfabric/runner";
 import {
@@ -124,8 +127,8 @@ export async function agentRunObservationCeiling(
  * A run ends `completed` with a link to the result document; `cancelled`
  * when its signal aborted; `refused` when the space's policy refused the
  * result write; `failed` as `LIMIT_REACHED` when the model-turn limit ended
- * it, and as `PROVIDER_FAILURE` when the model, a tool, or the result it
- * produced failed any other way.
+ * it; `INVALID_RESULT` when the completed loop supplied no result satisfying
+ * its schema; and `PROVIDER_FAILURE` for other model, tool, or storage errors.
  */
 export const createHarnessAgentRunExecutor = (
   options: HarnessAgentRunExecutorOptions,
@@ -239,7 +242,14 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
         error instanceof Error ? error.message : String(error)
       }${detail}`,
     );
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+    return {
+      outcome: "failed",
+      errorCode: error instanceof AgentResultWriteError &&
+          error.code === "invalid_result"
+        ? INVALID_RESULT
+        : PROVIDER_FAILURE,
+      report,
+    };
   } finally {
     if (ownsSession) await session?.pieces.runtime.dispose().catch(() => {});
   }

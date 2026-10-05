@@ -950,6 +950,32 @@ function searchByHashtag(
 }
 
 /**
+ * Throws a `WishError` naming the remedies when the home pattern in
+ * `homeSpaceCell` holds nothing at `field`, which it names to the user as
+ * `what`. The system home pattern gains a field its current source adds only
+ * when the home space is next opened, since nothing updates a piece nobody
+ * opens, so a home set up before the field existed lacks it until then. A
+ * custom home pattern follows no source of the system's, and holds the field
+ * only if it says so. The wish does not open the home itself.
+ */
+function requireHomeField(
+  homeSpaceCell: Cell<unknown>,
+  field: string,
+  what: string,
+  ctx: WishContext,
+): void {
+  const held = resolvePath(homeSpaceCell, ["defaultPattern", field], ctx);
+  if (held.getRaw() === undefined) {
+    throw new WishError(
+      `The home space holds no ${what}. If its home pattern is the system ` +
+        `one, set up before it had one, open the home space once, which ` +
+        `brings it up to date. A custom home pattern needs to hold the ` +
+        `${what} itself.`,
+    );
+  }
+}
+
+/**
  * Resolve well-known targets that map to home space paths.
  */
 function resolveHomeSpaceTarget(
@@ -1053,8 +1079,10 @@ function resolveHomeSpaceTarget(
           "User identity DID not available for #chatManager",
         );
       }
+      const homeSpaceCell = getHomeSpaceCell(ctx);
+      requireHomeField(homeSpaceCell, "chatManager", "chat manager", ctx);
       return [{
-        cell: getHomeSpaceCell(ctx),
+        cell: homeSpaceCell,
         pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }

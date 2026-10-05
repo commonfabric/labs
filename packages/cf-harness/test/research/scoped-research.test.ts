@@ -132,6 +132,52 @@ const record = (id: string): HarnessResearchRunSummary => ({
 });
 
 describe("scoped research", () => {
+  describe("an orientation's refined task", () => {
+    it("asks orientation for the intersection of the request and what it verified", async () => {
+      const trial = run([(request) => {
+        expect(request.transcript[0].content).toContain(
+          "In refinedTask, restate the user's request as the intersection",
+        );
+        return final({ ...brief(), leads: [], questions: [] });
+      }]);
+      await trial.result;
+    });
+
+    it("carries the refined task and leaves the unsupported part under missing", async () => {
+      const trial = run([() =>
+        final({
+          ...brief(),
+          status: "incomplete",
+          leads: [],
+          questions: [],
+          refinedTask:
+            "  Show this month's bank transactions in a sortable table with a count on top.  ",
+          missing: [
+            "Emailing the table weekly: no send capability is granted.",
+          ],
+        })]);
+      const reply = await trial.result;
+      expect(reply.kit.purpose).toBe("orient");
+      if (reply.kit.purpose !== "orient") return;
+      expect(reply.kit.refinedTask).toBe(
+        "Show this month's bank transactions in a sortable table with a count on top.",
+      );
+      expect(reply.kit.missing).toContain(
+        "Emailing the table weekly: no send capability is granted.",
+      );
+      expect(reply.kit.status).toBe("incomplete");
+    });
+
+    it("admits an orientation that gives no refined task, without one", async () => {
+      const trial = run([
+        () => final({ ...brief(), leads: [], questions: [] }),
+      ]);
+      const reply = await trial.result;
+      expect(reply.kit.status).toBe("complete");
+      expect(reply.kit).not.toHaveProperty("refinedTask");
+    });
+  });
+
   describe("a final answer that is not JSON", () => {
     // The bills answer is incomplete, so admission follows the re-ask; the
     // pomodoro answer is complete and cites a read this test call never

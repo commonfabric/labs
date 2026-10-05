@@ -23,6 +23,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -106,6 +107,86 @@ describe("pull() and the first sync of an unseen doc", () => {
 
       expect(await pullPromise).toEqual(RECEIPT_VALUE);
     } finally {
+      await readerRt.dispose();
+      await readerStorage.close();
+    }
+  });
+
+  it("waits for pending commits after a durable pull's required load completes", async () => {
+    const readerStorage = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const readerRt = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: readerStorage,
+    });
+    const loadEntered = Promise.withResolvers<void>();
+    const loadBarrier = Promise.withResolvers<void>();
+    const releaseLoad = Promise.withResolvers<void>();
+    const commitEntered = Promise.withResolvers<void>();
+    const commitBarrier = Promise.withResolvers<void>();
+    const releaseCommit = Promise.withResolvers<void>();
+    let committing: Promise<unknown> | undefined;
+    let pulling: Promise<unknown> | undefined;
+    try {
+      const target = readerRt.getCell<typeof RECEIPT_VALUE>(
+        space,
+        RECEIPT_CAUSE,
+      );
+      const otherSpace = (await Identity.fromPassphrase("pull-later-commit"))
+        .did();
+      const other = readerRt.getCell<number>(otherSpace, "later-write");
+      await other.sync();
+      const targetId = target.getAsNormalizedFullLink().id;
+      const sync = readerStorage.syncCell.bind(readerStorage);
+      using _sync = stub(readerStorage, "syncCell", async (cell, options) => {
+        if (cell.getAsNormalizedFullLink().id === targetId) {
+          loadEntered.resolve();
+          await releaseLoad.promise;
+        }
+        return sync(cell, options);
+      });
+      const loadsSettled = readerStorage.crossSpaceSettled.bind(readerStorage);
+      using _loads = stub(readerStorage, "crossSpaceSettled", () => {
+        loadBarrier.resolve();
+        return loadsSettled();
+      });
+      const commitsSettled = readerStorage.pendingCommitsSettled.bind(
+        readerStorage,
+      );
+      using _commits = stub(readerStorage, "pendingCommitsSettled", () => {
+        commitBarrier.resolve();
+        return commitsSettled();
+      });
+      const transact = server.transact.bind(server);
+      using _transact = stub(server, "transact", async (...args) => {
+        commitEntered.resolve();
+        await releaseCommit.promise;
+        return transact(...args);
+      });
+      pulling = target.pull({ awaitDurability: true });
+      await loadEntered.promise;
+      // The initial durability pass is over, but the required load is held.
+      await loadBarrier.promise;
+      const tx = readerRt.edit();
+      other.withTx(tx).set(7);
+      committing = tx.startCommit().settled;
+      await commitEntered.promise;
+      releaseLoad.resolve();
+      expect(
+        await Promise.race([
+          pulling.then(() => "read"),
+          commitBarrier.promise.then(() => "commit-barrier"),
+        ]),
+      ).toBe("commit-barrier");
+      expect(readerStorage.hasPendingCommits()).toBe(true);
+      releaseCommit.resolve();
+      await expect(pulling).resolves.toEqual(RECEIPT_VALUE);
+    } finally {
+      releaseLoad.resolve();
+      releaseCommit.resolve();
+      await committing;
+      await pulling;
       await readerRt.dispose();
       await readerStorage.close();
     }

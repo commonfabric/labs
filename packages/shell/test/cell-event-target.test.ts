@@ -36,6 +36,7 @@ const runtime = {
     request: () => Promise.resolve({}),
     subscribe: () => Promise.resolve(),
     unsubscribe: () => Promise.resolve(),
+    peersOf: () => [],
     signal: new AbortController().signal,
   }),
 } as unknown as RuntimeClient;

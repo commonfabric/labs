@@ -1218,6 +1218,23 @@ export interface TransactionCommitOptions {
   resolveAt?: "coverage" | "verdict";
 }
 
+/** The independently observable completion stages of one commit attempt. */
+export interface TransactionCommitReceipt {
+  /**
+   * The commit's fate. A separate backend verdict signal can report it before
+   * subscription coverage or rejection repair; otherwise it resolves with
+   * settlement.
+   * A sealed contribution's fate follows its seal destination's contract.
+   */
+  readonly verdict: Promise<Result<Unit, CommitError>>;
+
+  /**
+   * The default `commit()` completion: coverage or rejection repair, commit
+   * callbacks, and inline post-commit effects.
+   */
+  readonly settled: Promise<Result<Unit, CommitError>>;
+}
+
 /**
  * Representation of a storage transaction, which can be used to query state and
  * assert / retract while maintaining consistency guarantees. Storage ensures
@@ -1855,6 +1872,15 @@ export interface TransactionSealDestination {
 
 export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
+   * Starts committing and returns a receipt synchronously. Valid ordinary
+   * single-space writes apply locally before this returns; multi-space
+   * writes start each space in sequence. Readiness does not require awaiting
+   * the receipt. Observe `.verdict` for the commit's fate or `.settled` for
+   * coverage, rejection repair, and inline post-commit effects.
+   */
+  startCommit(): TransactionCommitReceipt;
+
+  /**
    * Stages `cid:<rootHash>` and its referenced closure into this
    * transaction from the realm registry, with per-transaction dedupe and
    * the confirmed-persistence elision (see ExtendedStorageTransaction).
@@ -1957,8 +1983,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * Commit-time preconditions attached to this transaction's commit in
-   * the given space (scheduler-v2 §7.6). Violations surface as
-   * IPreconditionFailedError (permanent — never retried).
+   * the given space (scheduler-v2 §7.6). An `origin-committed` violation
+   * surfaces as IPreconditionFailedError of kind `origin-committed`, and an
+   * `entity-absent` violation as one of kind `receipt-exists`; both are
+   * permanent and never retried. An `entity-value-hash` violation surfaces as
+   * a `ConflictError`, which an event handler's commit retries against fresh
+   * state as it does any conflict, when its delivery retries at all (the
+   * default).
    */
   addCommitPrecondition?(
     space: MemorySpace,

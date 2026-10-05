@@ -80,6 +80,7 @@ describe("CFIframe", () => {
             : Promise.resolve({ value: {} }),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     } as unknown as RuntimeClient;
@@ -115,6 +116,7 @@ describe("CFIframe", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     } as unknown as RuntimeClient;
@@ -156,6 +158,7 @@ describe("CFIframe", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     } as unknown as RuntimeClient;

@@ -127,6 +127,32 @@ describe("loom-retrieval", () => {
   });
 
   describe("loomRetrievalArgv()", () => {
+    it("passes each accepted Page kind and leaves the default to the host", () => {
+      for (const kind of ["all", "project", "projects", "entity", "entities"]) {
+        expect(loomRetrievalArgv("page.discover", { kind })).toEqual([
+          "page",
+          "discover",
+          "--json",
+          "--concise",
+          "--kind",
+          kind,
+        ]);
+      }
+      expect(loomRetrievalArgv("page.discover", {})).toEqual([
+        "page",
+        "discover",
+        "--json",
+        "--concise",
+      ]);
+    });
+
+    it("throws for an unknown Page kind and names every valid kind", () => {
+      expect(() => loomRetrievalArgv("page.discover", { kind: "loom" }))
+        .toThrow(
+          "`kind` must be one of all, project, projects, entity, entities.",
+        );
+    });
+
     it("builds each command's argv with `--json`, and `--concise` where `page` takes it", () => {
       const cases: Record<LoomRetrievalCommand, [unknown, string[]]> = {
         search: [

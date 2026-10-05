@@ -3657,6 +3657,7 @@ function statefulPiece(
       counters.unsubscribes++;
       return Promise.resolve();
     },
+    peersOf: () => [],
     request: (request: Record<string, unknown>) => {
       requests.push(request);
       if (request.type === RequestType.CellGet) {
