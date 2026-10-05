@@ -1957,8 +1957,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * Commit-time preconditions attached to this transaction's commit in
-   * the given space (scheduler-v2 §7.6). Violations surface as
-   * IPreconditionFailedError (permanent — never retried).
+   * the given space (scheduler-v2 §7.6). An `origin-committed` or
+   * `entity-absent` violation surfaces as IPreconditionFailedError (permanent
+   * — never retried). An `entity-value-hash` violation surfaces as a
+   * `ConflictError`, which an event handler's commit retries against fresh
+   * state.
    */
   addCommitPrecondition?(
     space: MemorySpace,

@@ -324,6 +324,27 @@ export interface IReadable<T> {
    * contract from {@link IReadable} applies.
    */
   sample(): Readonly<StripDefaultBrand<T>>;
+
+  /**
+   * Commit the running handler only if the document this cell's value lives
+   * in still holds, when the commit lands, the value it holds now. Otherwise
+   * the commit is refused as a conflict and the handler runs again against
+   * fresh state, so a handler that reads a document and writes nothing to it
+   * cannot report an observation a concurrent commit has already made stale.
+   *
+   * The pin covers the whole document, wherever in it this cell points, and
+   * not the documents a link was followed through to reach it. The first pin
+   * of a document holds for the rest of the run, and calling again is a
+   * no-op. It is a read of the whole document, with the same consequences
+   * for the handler's labels as `get()` of the document's root.
+   *
+   * @throws Error outside a handler; for a document that is not
+   *   space-scoped; and for a document the handler has already written
+   *   without pinning it first, since the run would then pin its own
+   *   uncommitted write. The document must also be in the space the handler
+   *   writes.
+   */
+  pinDocument(): void;
 }
 
 /**

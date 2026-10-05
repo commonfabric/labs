@@ -37,7 +37,8 @@ commit succeed — that is, whether the rejection is a **stale basis**:
 
 - **Retry through the window — a stale basis.** Two rejections mean the confirmed
   timeline moved under the commit, so re-reading it fresh can resolve it: a
-  server-side `ConflictError` (another writer advanced the entity's sequence) and
+  server-side `ConflictError` (another writer advanced the entity's sequence, or
+  changed a document the handler pinned with `pinDocument()`) and
   the local `StorageTransactionInconsistent` guard (a value the transaction read
   changed on this replica between the read and the commit). These are exactly what
   a contention burst — a space rehydrating while a handler writes to it — produces.

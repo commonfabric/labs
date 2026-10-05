@@ -39,6 +39,7 @@ import {
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import {
+  commitPreconditionValueHash,
   type ScopeKeyIdentity,
   type SqliteDbRef,
   type SqliteParamsWire,
@@ -1752,6 +1753,73 @@ export class CellImpl<T extends FabricValue>
     const nonReactiveTx = createNonReactiveTransaction(readTx);
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
+  }
+
+  /** @inheritDoc */
+  pinDocument(): void {
+    const tx = this.#tx;
+    if (!tx || getTopFrame()?.inHandler !== true) {
+      throw new Error(
+        "`Cell.pinDocument()` is available only in a handler, on a cell bound " +
+          "to the handler's transaction.",
+      );
+    }
+    if (!tx.addCommitPrecondition || !tx.getReactivityLog) {
+      // Fail closed: a pin is a commit gate, and one dropped here would let
+      // the gated commit through.
+      throw new Error(
+        "`Cell.pinDocument()` needs a transaction that carries commit " +
+          "preconditions.",
+      );
+    }
+    const link = resolveLink(this.#runtime, tx, this.#link, "value", {
+      markIfcCrossings: true,
+    });
+    if (link.scope !== "space") {
+      // A wave carries a precondition without resolving its scope against
+      // the acting identity, so a scoped pin would be checked against the
+      // serving principal's instance of the document.
+      throw new Error(
+        "`Cell.pinDocument()` pins only a space-scoped document, " +
+          debugStr`not the ${link.scope}-scoped $quote${link.id}.`,
+      );
+    }
+    const sameDocument = (
+      address: { space?: MemorySpace; id: string; scope?: unknown },
+    ) =>
+      address.id === link.id &&
+      (address.space ?? link.space) === link.space &&
+      (address.scope ?? "space") === link.scope;
+    // The first pin of a document holds the baseline, so a later call is a
+    // no-op, and a write in between does not move it.
+    const pinned = tx.getCommitPreconditions?.(link.space)?.some(
+      (precondition) =>
+        precondition.kind === "entity-value-hash" && sameDocument(precondition),
+    ) ?? false;
+    if (pinned) return;
+    // Past a write, this transaction reads its own uncommitted value back,
+    // and a pin over that would hold the write rather than what was observed.
+    if (tx.getReactivityLog().writes.some(sameDocument)) {
+      throw new Error(
+        "`Cell.pinDocument()` must precede every write to the document it " +
+          debugStr`pins, and this transaction has written $quote${link.id}.`,
+      );
+    }
+    const stored = tx.readOrThrow({
+      space: link.space,
+      id: link.id,
+      scope: link.scope,
+      type: "application/json",
+      path: ["value"],
+    });
+    tx.addCommitPrecondition(link.space, {
+      kind: "entity-value-hash",
+      id: link.id,
+      scope: link.scope,
+      valueHash: stored === undefined
+        ? null
+        : commitPreconditionValueHash(stored),
+    });
   }
 
   /**

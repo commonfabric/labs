@@ -1279,6 +1279,16 @@ the classes never share a commit. Whole-wave CAS failure is FORBIDDEN
 (livelock under sustained authored traffic), as are blind derived
 writes (clobber).
 
+A failed commit precondition resolves per owner too. The store checks
+a batch's preconditions one at a time inside the wave's transaction and
+names each failure by its index; the commit step maps the index to the
+contribution that carried it, requeues that contribution when it is an
+event handler and drops it whole otherwise, and commits the rest. A
+create-only receipt that already exists fails this way, and so does a
+value pin (`entity-value-hash`, which `Cell.pinDocument()` takes). The
+batch carries no confirmed reads, so a value pin is how a handler brings
+a document it read and did not write into the wave's concurrency check.
+
 **Recomputation after a drop arrives by DEPENDENCY ONLY (Q1, RULED
 2026-08-05).** A dropped superseded write has no recompute trigger of
 its own: basis rows are reads-only, so an intrusion on a producer's
