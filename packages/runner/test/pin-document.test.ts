@@ -6,6 +6,7 @@ import {
   type CommitPrecondition,
   commitPreconditionValueHash,
 } from "@commonfabric/memory/v2";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/utils/defer";
 
@@ -214,12 +215,15 @@ describe("pinDocument()", () => {
     type Client = { runtime: Runtime; storage: EmulatedStorageManager };
 
     let clients: Client[];
+    let stops: Array<() => void>;
 
     beforeEach(() => {
       clients = [];
+      stops = [];
     });
 
     afterEach(async () => {
+      for (const stop of stops) stop();
       for (const { runtime, storage } of clients.reverse()) {
         await runtime.dispose();
         await storage.close();
@@ -298,11 +302,27 @@ describe("pinDocument()", () => {
         .toBeUndefined();
     };
 
-    /** What a client that never ran the pattern reads from document `cause`. */
-    const durable = async (runtime: Runtime, cause: string) => {
-      const cell = runtime.getCell<unknown>(space, cause);
-      await cell.sync();
-      return cell.get();
+    /**
+     * Each value `server` stores for the document `cause` names, in the order
+     * the commits writing it were admitted, which `afterEach` stops recording.
+     */
+    const admitted = async (
+      server: MemoryV2Server.Server,
+      runtime: Runtime,
+      cause: string,
+    ): Promise<unknown[]> => {
+      const engine = await server.engineForSpace(space);
+      const id = runtime.getCell(space, cause).getAsNormalizedFullLink().id;
+      const values: unknown[] = [];
+      stops.push(server.watchAdmittedCommits((notice) => {
+        if (
+          notice.space === space &&
+          notice.writes.some((write) => write.id === id)
+        ) {
+          values.push(Engine.read(engine, { id })?.value);
+        }
+      }));
+      return values;
     };
 
     it("re-runs a handler whose observation went stale, with server execution off", async () => {
@@ -313,6 +333,7 @@ describe("pinDocument()", () => {
       try {
         const runtime = connect(server, false);
         const streams = await standUp(runtime);
+        const outcomes = await admitted(server, runtime, "pin-outcome");
 
         const held = new ArrivalLog<void>();
         const release = defer<void>();
@@ -344,9 +365,7 @@ describe("pinDocument()", () => {
           await acks.reached(1);
 
           expect(acks.entries).toEqual(["done"]);
-          expect(await durable(connect(server, false), "pin-outcome")).toEqual(
-            archived,
-          );
+          expect(outcomes).toEqual([archived]);
         } finally {
           release.resolve();
           runtime.edit = edit;
@@ -378,6 +397,7 @@ describe("pinDocument()", () => {
       try {
         const runtime = connect(serving.server, true);
         const streams = await standUp(runtime);
+        const outcomes = await admitted(serving.server, runtime, "pin-outcome");
 
         const acks = new ArrivalLog<string>();
         sendEvent(streams.confirm, {}, (tx) => acks.record(tx.status().status));
@@ -387,8 +407,7 @@ describe("pinDocument()", () => {
         await acks.reached(1);
 
         expect(acks.entries).toEqual(["done"]);
-        expect(await durable(connect(serving.server, true), "pin-outcome"))
-          .toEqual(archived);
+        expect(outcomes).toEqual([archived]);
       } finally {
         release.resolve();
       }
@@ -432,6 +451,8 @@ describe("pinDocument()", () => {
       try {
         const runtime = connect(serving.server, true);
         const streams = await standUp(runtime);
+        const outcomes = await admitted(serving.server, runtime, "pin-outcome");
+        const tallies = await admitted(serving.server, runtime, "pin-tally");
 
         const acks = new ArrivalLog<string>();
         const appends = new ArrivalLog<boolean>();
@@ -474,9 +495,8 @@ describe("pinDocument()", () => {
           "second count done",
           "confirm done",
         ]);
-        const reader = connect(serving.server, true);
-        expect(await durable(reader, "pin-tally")).toBe(2);
-        expect(await durable(reader, "pin-outcome")).toEqual(archived);
+        expect(tallies).toEqual([1, 2]);
+        expect(outcomes).toEqual([archived]);
       } finally {
         for (const release of releases) release.resolve();
       }
