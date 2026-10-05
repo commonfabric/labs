@@ -65,6 +65,19 @@ alone decides from then on. A `cf-` component honors `hidden` the same way.
 FabriChat (`packages/patterns/fabrichat/`) hides per-viewer and per-session
 controls this way, for the reason its `FabriChatMessageRow` states.
 
+The element stays hidden for as long as the computed has no value for the
+viewer. A computed that reads per-user or per-session state has a value for a
+viewer only once something runs the pattern for that viewer, and a page that
+only renders a piece, through `cf-render` for instance, does not run it. With
+server execution off, nothing runs it for the viewer until an event of theirs
+reaches it. An element every viewer must see takes its
+display from a computed that reads shared state alone, which whichever runtime
+runs the pattern computes for everyone. When the element is shown in one place
+by shared state and in another by per-session state, as a FabriChat message is
+in the conversation and in a thread, give each its own computed and choose
+between them with a ternary on the prop, so that the shared case never reads
+the per-session one.
+
 ## Keep `computed()` for Data, Not UI Gating
 
 Inside a `computed()` body, ternaries and logical operators stay plain

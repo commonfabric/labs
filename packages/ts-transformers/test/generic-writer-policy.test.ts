@@ -409,6 +409,48 @@ export default ${
       ]);
     });
 
+    it(`keeps an optional recursive policy payload's labels on the property in the ${position} schema`, async () => {
+      // The runtime's policy merge refuses a labeled branch beside an
+      // `undefined` branch it cannot prove type-disjoint, as a `$ref` is not.
+      const diagnostics: TransformationDiagnostic[] = [];
+      const output = await transformSource(
+        `import { Confidential, handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+type Identity<X> = X;
+interface Node<W> { value: W; next?: Sec<Identity<W>> }
+type Sec<W> = Confidential<Node<W>, readonly []>;
+type Payload = { recursive: Sec<WriteAuthorizedBy<string, typeof f>> };
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      );
+      expect(diagnostics.filter((item) => item.severity === "error")).toEqual(
+        [],
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      const recursive = valueSchema(
+        valueSchema(schema, schema).properties?.recursive,
+        schema,
+      );
+      const next = recursive.properties?.next as JSONSchemaObj;
+      expect(next.anyOf).toBeUndefined();
+      expect(next.ifc).toEqual({ confidentiality: [] });
+      expect(recursive.required).toEqual(["value"]);
+      expect(valueSchema(next, schema).properties?.value).toMatchObject({
+        type: "string",
+        ifc: { writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["f"] } } },
+      });
+    });
+
     for (
       const [name, declarations, spelling, field] of [
         ["a direct member", "", "{ value: POLICY }", "value"],
