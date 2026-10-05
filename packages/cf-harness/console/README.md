@@ -870,29 +870,38 @@ for an id the session never issued, 409
 for a bad body. A typed settlement the host already gave for the same action is
 answered 200 again without effect, so a client that lost the acknowledgment
 resends its answer after reconnecting rather than running the command again; a
-different settlement for that action is `action_resolved`, compared on what the
-resolved event records, so the order of its keys does not matter. An action the
+different settlement for that action is `action_resolved`: command answers are
+compared on the reduced event record, and catalog answers on the complete
+admitted catalog. The order of object keys does not matter. An action the
 console settled itself (a timeout, a cancel, or a restart) is `action_resolved`
 to every later answer.
 
 The tool returns the outcomes to the model in input order. For an executed
 command the model gets the outcome's metadata — which executor answered and its
 HTTP status, `ok`, `code`, `error`, `outputs`, `completed`, `mayHaveLanded`,
-`bodyBytes` — and a `cfh:v:` handle to the complete JSON body, held in the
-session's handle table as a `document` referent with label source `command` and
-a `provenance` record (command, actor, target loom, the version the command
-answered with, origin loom). The body and the receipt never reach the model: the
-receipt is the resolved event's `result`, for the person, and the event's
-`settlement` record carries the same metadata and handle. A body over 256 KiB
-arrives omitted, with its size, and is held nowhere; its outcome still says
-whether the command happened. A catalog entry the contract refuses (a malformed
-entry, or an id outside the pattern) is dropped and the rest are kept: the model
-reads `droppedEntries` and the first five `droppedCommands`, and the resolved
-event's `result` names them; only a settlement whose envelope is malformed
-answers 400. A catalog is returned to the model, with the schemas and
-descriptions of entries past 32 KiB left out, except for the commands the
-request named in `detail`, which are kept whole. A version conflict is an
-executed command whose outcome is `ok: false`, not a failure of the channel.
+`bodyBytes` — and, when the body is retained, the run supplies a holder, and its
+provenance can be derived, a `cfh:v:` handle to the complete JSON body. It is
+held in the session's handle table as a `document` referent with label source
+`command` and a `provenance` record (command, actor, optional Loom actor, target
+loom, the version the command answered with, origin loom). The body and the
+receipt never reach the model: the receipt is the resolved event's `result`, for
+the person, and the event's `settlement` record carries a reduced outcome
+summary and the handle when available; it omits fields such as `outputs` and
+`completed`. A body over 256 KiB arrives omitted, with its size, and is held
+nowhere; its outcome still says whether the command happened. A catalog entry
+the contract refuses (a malformed entry, or an id outside the pattern) is
+dropped and the rest are kept: the model reads `droppedEntries` and the first
+five `droppedCommands`, and the resolved event's `result` names them; only a
+settlement whose envelope is malformed answers 400. A catalog is returned to the
+model, with the schemas and descriptions of entries past 32 KiB left out, except
+for the commands the request named in `detail`, which are kept whole. A version
+conflict is an executed command whose outcome is `ok: false`, not a failure of
+the channel.
+
+Catalog resends are compared against the complete admitted catalog, including
+its schemas and descriptions, with the identity committed beside the resolved
+event in the session store. An older stored catalog whose identity was not
+recorded cannot be verified as a resend after restart and is `action_resolved`.
 
 An answer may arrive while its request is still being delivered, as when a
 client answers from the handler that receives the event: it is kept, its

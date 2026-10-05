@@ -171,7 +171,12 @@ export interface HarnessClientActionCoordinatorHooks {
   emit(
     turnId: string,
     event: HarnessClientActionEvent,
-    options?: { onCommitted?: () => void },
+    options?: {
+      onCommitted?: () => void;
+
+      /** Admitted catalog identity, persisted with its resolved event. */
+      answerFingerprint?: string;
+    },
   ): Promise<void>;
 
   /** Mints an action id. */
@@ -530,7 +535,14 @@ export class HarnessClientActionCoordinator {
         ? this.#hooks.emit(
           turnId,
           resolvedEvent(turnId, entry.actionId, settlement, handle),
-          { onCommitted: () => committed = true },
+          {
+            onCommitted: () => committed = true,
+            ...(settlement.form === "settlement" &&
+                settlement.settlement.status === "executed" &&
+                "catalog" in settlement.settlement
+              ? { answerFingerprint: settled.answer }
+              : {}),
+          },
         )
         : Promise.resolve();
       // A failed write is not swallowed: it fails the tool call through
@@ -636,6 +648,7 @@ export class HarnessClientActionCoordinator {
    */
   async restore(
     events: readonly HarnessChatStructuredEvent[],
+    catalogAnswers: Readonly<Record<string, string>> = {},
   ): Promise<void> {
     const open = new Map<
       string,
@@ -653,7 +666,12 @@ export class HarnessClientActionCoordinator {
           event.actionId,
           event.settlement !== undefined &&
             event.settlement.status !== "interrupted"
-            ? { answer: recordFingerprint(event.settlement) }
+            ? "catalogEntries" in event.settlement
+              ? Object.hasOwn(catalogAnswers, event.actionId) &&
+                  typeof catalogAnswers[event.actionId] === "string"
+                ? { answer: catalogAnswers[event.actionId] }
+                : {}
+              : { answer: recordFingerprint(event.settlement) }
             : {},
         );
       }
@@ -686,11 +704,20 @@ const recordFingerprint = (record: HarnessCommandSettlementRecord): string => {
   return hashStringOf(rest as FabricValue);
 };
 
-/** {@link recordFingerprint} of the record a host's settlement writes. */
+/**
+ * Identifies the admitted catalog, or the reduced record of another answer.
+ * Catalog identity is persisted beside the log, whose wire record holds only
+ * the entry count. A catalog from a log without that identity cannot be
+ * recognized as a resend after restart.
+ */
 const settlementFingerprint = (settlement: HarnessCommandSettlement): string =>
-  recordFingerprint(
-    projectHarnessCommandSettlement(settlement, undefined).record,
-  );
+  settlement.status === "executed" && "catalog" in settlement
+    ? hashStringOf({
+      entries: settlement.catalog.entries.map((entry) => ({ ...entry })),
+    })
+    : recordFingerprint(
+      projectHarnessCommandSettlement(settlement, undefined).record,
+    );
 
 /** The resolved event one settlement writes. */
 const resolvedEvent = (

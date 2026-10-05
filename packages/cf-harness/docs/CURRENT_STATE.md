@@ -561,8 +561,9 @@ The current package provides:
   `resolve_client_action` request or the console's `POST /api/client-actions`,
   both read by one reader and handed to the session's one client-action
   coordinator (`src/client-actions/coordinator.ts`). An executed command's JSON
-  body is held as a `document` handle with label source `command` and its
-  provenance; the model gets the outcome metadata and the token;
+  body, when retained, is held as a `document` handle with label source
+  `command` if the run supplies a holder and its provenance can be derived. The
+  model gets outcome metadata and a token when available;
 - parent-only `finish_task` for a completed answer, a question, or a give-up
   reason, admitted through ordinary policy and artifacts as the sole call in a
   model turn. A completed answer satisfies the Fabric piece contract and may

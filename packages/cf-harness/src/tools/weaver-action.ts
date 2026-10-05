@@ -25,6 +25,7 @@ import {
   HARNESS_COMMAND_ID_MAX_LENGTH,
   HARNESS_COMMAND_ID_PATTERN,
   harnessCommandJsonBytes,
+  isHarnessCommandJsonValue,
 } from "../contracts/client-command.ts";
 import {
   type HarnessMidTurnClientAction,
@@ -89,7 +90,7 @@ const hasOversizedArgs = (value: unknown): boolean => {
   const invocation = record.invocation;
   if (typeof invocation !== "object" || invocation === null) return false;
   const args = (invocation as Record<string, unknown>).args;
-  return args !== undefined &&
+  return isHarnessCommandJsonValue(args) &&
     harnessCommandJsonBytes(args) > HARNESS_COMMAND_ARGS_MAX_BYTES;
 };
 

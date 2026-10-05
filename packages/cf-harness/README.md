@@ -155,9 +155,10 @@ What works today:
   - `weaver_action` (parent-only, present only when the host opts the session
     in: asks the person's Weaver mid-turn to run up to eight actions — a typed
     command invocation, a catalog request, or opening a loom or web address —
-    and waits for each to settle; an executed command's JSON body is held as a
-    `command`-labeled `document` handle and the model gets its outcome metadata
-    and token; never a default tool, never offered to a subagent; see
+    and waits for each to settle; a retained JSON body (at most 256 KiB) is held
+    as a `command`-labeled `document` handle when the run supplies a holder and
+    its provenance can be derived. The model gets outcome metadata and a token
+    when available; never a default tool, never offered to a subagent; see
     [Client actions](console/README.md#client-actions))
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the

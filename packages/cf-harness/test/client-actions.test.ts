@@ -7,7 +7,7 @@ import {
   HARNESS_CLIENT_URL_MAX_LENGTH,
   readHarnessClientAction,
 } from "../src/contracts/client-action.ts";
-import type { HarnessClientActionRequester } from "../src/client-actions/coordinator.ts";
+import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
 import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,

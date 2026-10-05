@@ -602,6 +602,9 @@ const isWithinJsonDepth = (value: unknown, depth = 0): boolean => {
   );
 };
 
+/** Bounded JSON-data validation used before serializing untrusted command args. */
+export { isJsonValue as isHarnessCommandJsonValue };
+
 /** Whether a value is JSON data that ordinary JSON carries unchanged. */
 const isJsonValue = (value: unknown): value is JSONValue =>
   isWithinJsonDepth(value) && isPureJson(value);

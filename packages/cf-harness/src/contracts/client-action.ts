@@ -264,6 +264,9 @@ export interface HarnessClientActionOutcome {
   result?: string;
 }
 
+/** The in-process requester supplied by a host that opted in to client actions. */
+export type { HarnessClientActionRequester } from "../client-actions/coordinator.ts";
+
 /** Whether a value is an outcome a client may report. */
 export const isHarnessClientActionOutcomeKind = (
   value: unknown,

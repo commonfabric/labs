@@ -213,9 +213,15 @@ interface HarnessInteractiveChatSessionRecord {
    * session first asks for one or is restored with requests in its log.
    */
   clientActionCoordinator?: HarnessClientActionCoordinator;
+
+  /** Durable catalog resend identities, separate from the wire event record. */
+  clientActionCatalogAnswers?: Readonly<Record<string, string>>;
 }
 
 interface HarnessInteractiveChatEmitOptions {
+  /** Admitted catalog identity to commit atomically with a resolved event. */
+  answerFingerprint?: string;
+
   turnRecord?: HarnessChatTurnRecord;
   createTurn?: boolean;
 
@@ -980,6 +986,9 @@ export class HarnessInteractiveChatService {
     }
     for (const snapshot of await this.#sessionStore.listSessions()) {
       this.#sessions.set(snapshot.session.sessionId, {
+        ...(snapshot.clientActionCatalogAnswers === undefined ? {} : {
+          clientActionCatalogAnswers: snapshot.clientActionCatalogAnswers,
+        }),
         status: snapshot.session,
         transcript: [...snapshot.transcript],
         ...(snapshot.researchContext === undefined
@@ -1140,7 +1149,10 @@ export class HarnessInteractiveChatService {
     if (!events.some((event) => event.kind.startsWith("client_action_"))) {
       return;
     }
-    await this.#clientActionCoordinator(record).restore(events);
+    await this.#clientActionCoordinator(record).restore(
+      events,
+      record.clientActionCatalogAnswers,
+    );
   }
 
   /** The session's client-action coordinator, created on first use. */
@@ -2585,6 +2597,17 @@ export class HarnessInteractiveChatService {
       : { assignedPieces };
     const handleTable = options.handleTable ?? record?.handleTable;
     const handleSnapshot = handleTable === undefined ? {} : { handleTable };
+    const clientActionCatalogAnswers =
+      options.answerFingerprint !== undefined &&
+        event.kind === "client_action_resolved"
+        ? {
+          ...record?.clientActionCatalogAnswers,
+          [event.actionId]: options.answerFingerprint,
+        }
+        : record?.clientActionCatalogAnswers;
+    const answerSnapshot = clientActionCatalogAnswers === undefined
+      ? {}
+      : { clientActionCatalogAnswers };
     const nextStatus = record === undefined
       ? undefined
       : reduceHarnessChatSessionStatus(record.status, envelope);
@@ -2601,6 +2624,7 @@ export class HarnessInteractiveChatService {
             ...researchSnapshot,
             ...pieceSnapshot,
             ...handleSnapshot,
+            ...answerSnapshot,
           },
           turn: nextTurn,
           event: envelope,
@@ -2616,6 +2640,7 @@ export class HarnessInteractiveChatService {
           ...researchSnapshot,
           ...pieceSnapshot,
           ...handleSnapshot,
+          ...answerSnapshot,
         }, envelope);
       }
     } else {
@@ -2641,6 +2666,9 @@ export class HarnessInteractiveChatService {
     }
     if (record !== undefined && nextTurn !== undefined) {
       record.turns.set(nextTurn.turn.turnId, nextTurn);
+    }
+    if (record !== undefined && clientActionCatalogAnswers !== undefined) {
+      record.clientActionCatalogAnswers = clientActionCatalogAnswers;
     }
     options.onCommitted?.();
     try {

@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { fromFileUrl, toFileUrl } from "@std/path";
 
-import type { HarnessClientActionRequester } from "../../src/client-actions/coordinator.ts";
+import type { HarnessClientActionRequester } from "../../mod.ts";
 import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   type HarnessCommandResolveBody,
@@ -535,6 +535,118 @@ describe("coordinator", () => {
   });
 
   describe("settlement", () => {
+    it("shares one held result between concurrent identical answers", async () => {
+      const minting = Promise.withResolvers<void>();
+      const held = Promise.withResolvers<void>();
+      let mints = 0;
+      const h = harness({
+        beforeMint: () => {
+          mints++;
+          minting.resolve();
+          return held.promise;
+        },
+      });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      const body = settle("resolve-executed-success", "id-1");
+      const first = h.answer(body);
+      await minting.promise;
+      const second = h.answer(body);
+      held.resolve();
+      const answers = await Promise.all([first, second]);
+      await h.callsDone;
+      await h.finish();
+      expect(answers.map((a) => a.ok)).toEqual([true, true]);
+      expect(mints).toBe(1);
+      expect(h.resolved()).toHaveLength(1);
+    });
+
+    it("applies an overdue timeout when holding a host's result fails", async () => {
+      using time = new FakeTime();
+      const minting = Promise.withResolvers<void>();
+      const held = Promise.withResolvers<void>();
+      const h = harness({
+        idleMs: 10,
+        beforeMint: () => {
+          minting.resolve();
+          return held.promise;
+        },
+      });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      const answered = h.answer(settle("resolve-executed-success", "id-1"));
+      const rejected = expect(answered).rejects.toThrow("holder failed");
+      await minting.promise;
+      await time.tickAsync(10);
+      held.reject(new Error("holder failed"));
+      await rejected;
+      await h.callsDone;
+      await h.finish();
+      expect(h.resolved()).toMatchObject([{
+        settlement: { status: "interrupted", reason: "timeout" },
+      }]);
+      const late = await h.answer(settle("resolve-executed-success", "id-1"));
+      expect(late.ok === false && late.error.code).toBe("action_resolved");
+    });
+
+    for (const restart of [false, true]) {
+      it(`refuses a changed catalog of the same size ${restart ? "after SQLite restart" : "on reconnect"}`, async () => {
+        const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+        let store = await openSqliteHarnessChatSessionStore({
+          url: toFileUrl(path),
+        });
+        try {
+          const h = harness({
+            sessionStore: store,
+            calls: [{ actions: [catalog] }],
+          });
+          await h.start();
+          await h.delivered(requestFor("id-1"));
+          const body = settle("resolve-executed-catalog", "id-1");
+          expect((await h.answer(body)).ok).toBe(true);
+          await h.callsDone;
+          await h.finish();
+          let service = h.service;
+          if (restart) {
+            await store.close?.();
+            store = await openSqliteHarnessChatSessionStore({
+              url: toFileUrl(path),
+            });
+            service = new HarnessInteractiveChatService({
+              sessionStore: store,
+            });
+            await service.initializeFromStore();
+          }
+          expect((await service.resolveClientAction("same", body)).ok).toBe(
+            true,
+          );
+          const changed = structuredClone(body);
+          if (
+            changed.settlement.status !== "executed" ||
+            !("catalog" in changed.settlement)
+          ) {
+            throw new Error("Expected a catalog fixture");
+          }
+          changed.settlement.catalog.entries[0].summary += " changed";
+          const answer = await service.resolveClientAction(
+            "different",
+            changed,
+          );
+          expect(answer.ok === false && answer.error.code).toBe(
+            "action_resolved",
+          );
+          expect(
+            (await store.listEvents({ sessionId: "s" })).filter((e) =>
+              e.event.kind === "client_action_resolved"
+            ),
+          ).toHaveLength(1);
+        } finally {
+          await store.close?.();
+          await Deno.remove(path);
+        }
+      });
+    }
+
     it("takes an answer given while its request is still being delivered, with one resolved event", async () => {
       const answered = Promise.withResolvers<{ ok: boolean }>();
       const h: ReturnType<typeof harness> = harness({
@@ -667,10 +779,21 @@ describe("coordinator", () => {
     });
 
     it("refuses an answer of the wrong form, or one that ran a person's command automatically", async () => {
-      const h = harness({ calls: [{ actions: [mutation, catalog] }] });
+      const h = harness({
+        calls: [{
+          actions: [mutation, catalog, {
+            kind: "open_url",
+            url: "https://example.com",
+          }],
+        }],
+      });
       await h.start();
       await h.delivered(requestFor("id-2"));
       const refusals = [
+        null,
+        [],
+        // A typed answer cannot settle a final-action kind.
+        settle("resolve-executed-catalog", "id-3"),
         // A final-action outcome for a typed request.
         { sessionId: "s", actionId: "id-1", outcome: "done" },
         // An automatic read's answer for a command that asked for the person.
@@ -698,6 +821,10 @@ describe("coordinator", () => {
       );
       expect((await h.answer(settle("resolve-executed-catalog", "id-2"))).ok)
         .toBe(true);
+      expect(
+        (await h.answer({ sessionId: "s", actionId: "id-3", outcome: "done" }))
+          .ok,
+      ).toBe(true);
       await h.callsDone;
       await h.finish();
     });
@@ -810,6 +937,104 @@ describe("coordinator", () => {
   });
 
   describe("request", () => {
+    it("refuses non-object actions and invocations before delivery", async () => {
+      let delivered = false;
+      const context = {
+        nextOutputId: () => "out",
+        requestClientActions: () => {
+          delivered = true;
+          return Promise.resolve([]);
+        },
+      } as unknown as HarnessToolContext;
+      for (
+        const action of [null, 0, [], {
+          kind: "invoke_command",
+          invocation: null,
+        }]
+      ) {
+        const result = await weaverActionTool.invoke(context, {
+          actions: [action],
+        } as never);
+        expect(result).toMatchObject({
+          status: "error",
+          message: expect.stringContaining("weaver_action requires"),
+        });
+        expect(delivered).toBe(false);
+      }
+    });
+
+    it("refuses a held answer when a later delivery already interrupted its command", async () => {
+      const delivery = Promise.withResolvers<void>();
+      const minting = Promise.withResolvers<void>();
+      const held = Promise.withResolvers<void>();
+      const h = harness({
+        calls: [{ actions: [query, mutation] }],
+        deliver: (event) =>
+          requestFor("id-2")(event) ? delivery.promise : undefined,
+        beforeMint: () => {
+          minting.resolve();
+          return held.promise;
+        },
+      });
+      await h.start();
+      await h.delivered(requestFor("id-2"));
+      const answer = h.answer(settle("resolve-executed-success", "id-1"));
+      await minting.promise;
+      delivery.reject(new Error("sink down"));
+      await h.delivered((event) =>
+        event.kind === "client_action_resolved" && event.actionId === "id-1"
+      );
+      held.resolve();
+      const refused = await answer;
+      expect(refused.ok === false && refused.error.code).toBe(
+        "action_resolved",
+      );
+      await h.delivered((event) =>
+        event.kind === "client_action_resolved" && event.actionId === "id-2"
+      );
+      expect(h.resolved()).toHaveLength(2);
+      expect(h.resolved()[0].settlement).toEqual({
+        status: "interrupted",
+        reason: "delivery_failed",
+      });
+      await h.finish();
+    });
+
+    it("refuses deeply nested and non-JSON args without throwing or delivering an action", async () => {
+      let deep: Record<string, unknown> = {};
+      for (let i = 0; i < 20000; i++) deep = { child: deep };
+      const cycle: Record<string, unknown> = {};
+      cycle.self = cycle;
+      for (
+        const args of [deep, cycle, { value: 1n }, { value: NaN }, {
+          value: new Date(),
+        }]
+      ) {
+        let delivered = false;
+        const result = await weaverActionTool.invoke({
+          nextOutputId: () => "out",
+          requestClientActions: () => {
+            delivered = true;
+            return Promise.resolve([]);
+          },
+        } as unknown as HarnessToolContext, {
+          actions: [{
+            kind: "invoke_command",
+            invocation: {
+              command: "loom.inspect",
+              args,
+              approval: "automatic",
+            },
+          }],
+        });
+        expect(result.status).toBe("error");
+        expect(result).toMatchObject({
+          message: expect.stringContaining("weaver_action requires"),
+        });
+        expect(delivered).toBe(false);
+      }
+    });
+
     it("settles a delivered command as interrupted when a later delivery in its batch fails, and the failed one as not delivered", async () => {
       const h = harness({
         calls: [{ actions: [mutation, query, catalog] }],
@@ -869,6 +1094,47 @@ describe("coordinator", () => {
   });
 
   describe("restart", () => {
+    it("refuses to recognize a catalog resend from a legacy log without its identity", async () => {
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      const store = await openSqliteHarnessChatSessionStore({
+        url: toFileUrl(path),
+      });
+      try {
+        const h = harness({
+          sessionStore: store,
+          calls: [{ actions: [catalog] }],
+        });
+        await h.start();
+        await h.delivered(requestFor("id-1"));
+        const body = settle("resolve-executed-catalog", "id-1");
+        expect((await h.answer(body)).ok).toBe(true);
+        await h.callsDone;
+        await h.finish();
+        const snapshot = await store.getSession("s");
+        if (snapshot === undefined) {
+          throw new Error("Expected a stored session");
+        }
+        const { clientActionCatalogAnswers: _answers, ...legacy } = snapshot;
+        await store.saveSession(legacy);
+        const restored = new HarnessInteractiveChatService({
+          sessionStore: store,
+        });
+        await restored.initializeFromStore();
+        const answer = await restored.resolveClientAction("legacy", body);
+        expect(answer.ok === false && answer.error.code).toBe(
+          "action_resolved",
+        );
+        expect(
+          (await store.listEvents({ sessionId: "s" })).filter((e) =>
+            e.event.kind === "client_action_resolved"
+          ),
+        ).toHaveLength(1);
+      } finally {
+        await store.close?.();
+        await Deno.remove(path);
+      }
+    });
+
     it("settles a command left open as interrupted, never replaying it, and keeps a host's settlement resendable", async () => {
       const path = await Deno.makeTempFile({ suffix: ".sqlite" });
       const store = await openSqliteHarnessChatSessionStore({
