@@ -945,11 +945,13 @@ host has its browser children drive the page that host shows the owner, under
 the confinements the [browser host section](../README.md#a-browser-host)
 describes. Only such a console lists `browser_host` among the client protocol
 features its `GET /api/status` publishes, so a host learns before a task whether
-to declare itself; the stdio transport never lists it. What a host shows enters
-the model's context under the unscreened prompt-injection caveat, sourced to the
-page's origin, and is withheld from a run whose read ceiling does not admit it.
-A child's return brings the child's model-context label into its parent's, for
-every child, so the caveat reaches the parent with whatever crosses.
+to declare itself; the stdio transport never lists it. What a host shows, a
+screenshot included, enters the model's context under the unscreened
+prompt-injection caveat, sourced to the page's origin, and joined with the
+labels of every value a handle sent the session; it is withheld from a run whose
+read ceiling does not admit it. A child's return brings the child's
+model-context label into its parent's, for every child, so the caveat reaches
+the parent with whatever crosses.
 
 Loom currently forces autonomous `cf-harness` runs to `observe` mode while
 trusted `runsc-cfc` observation metadata is not wired through every local tool

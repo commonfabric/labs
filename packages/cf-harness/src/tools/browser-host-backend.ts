@@ -25,7 +25,9 @@ import {
 import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
 import {
   cfcObservationFitsCeiling,
+  type CfcObservedConfidentiality,
   type IFCLabel,
+  joinCfcObservedConfidentiality,
 } from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
@@ -37,7 +39,7 @@ import type {
   BrowserToolInput,
   BrowserToolOutput,
 } from "./browser.ts";
-import { httpOriginOf, resolveHandleValue } from "./handle-values.ts";
+import { httpOriginOf, resolveReturnReferent } from "./handle-values.ts";
 import type { HarnessToolContext } from "./types.ts";
 
 const MAX_HOST_OUTPUT_CHARS = 20_000;
@@ -52,8 +54,8 @@ const REFUSAL_CODES: Record<BrowserHostRefusal, BrowserToolErrorCode> = {
 };
 
 /**
- * The actions refused once the owner finishes a hand-off: each changes the
- * page, leaves it for an address no one checked, or sends it again.
+ * The actions refused once a hand-off was sent: each changes the page, leaves
+ * it for an address no one checked, or sends it again.
  */
 const ACTING_ACTIONS: ReadonlySet<BrowserToolAction> = new Set([
   "back",
@@ -67,54 +69,64 @@ const ACTING_ACTIONS: ReadonlySet<BrowserToolAction> = new Set([
   "select",
 ]);
 
-/**
- * What the harness keeps about each host's session: the values it sent the
- * host, by value, with the handle each was sent as, so the host's answers
- * carry the handle where they would carry the value; and, once the owner
- * finished a hand-off, the origin they finished on, which confines the
- * session from then on.
- */
-const sessions = new WeakMap<
-  HarnessBrowserHost,
-  { sent: Map<string, string>; handedOffAt?: string }
->();
+/** What the harness keeps about each host's session. */
+interface HostSession {
+  /**
+   * The session label: the join of the labels of every value sent to the
+   * host, since what a page shows from then on may be derived from any of
+   * them.
+   */
+  label: CfcObservedConfidentiality;
 
-const sessionOf = (host: HarnessBrowserHost) => {
+  /**
+   * The web origin of the page the run last saw a result on, or `undefined`
+   * before any or when that page had none.
+   */
+  origin?: string | undefined;
+
+  /**
+   * Set when the first hand-off is sent, however it ends: from then on a page
+   * may hold the owner's sign-in. `origin` is the web origin the page was on
+   * when it was handed off, which confines the session, or `undefined` when
+   * it was on none the run knew.
+   */
+  handedOff?: { origin: string | undefined };
+}
+
+const sessions = new WeakMap<HarnessBrowserHost, HostSession>();
+
+const sessionOf = (host: HarnessBrowserHost): HostSession => {
   let session = sessions.get(host);
   if (session === undefined) {
-    session = { sent: new Map() };
+    session = { label: [] };
     sessions.set(host, session);
   }
   return session;
 };
 
 /**
- * Whether the owner finished a hand-off in `host`'s session, after which a
- * page may hold their signed-in account rather than the public web.
+ * Whether a hand-off was sent in `host`'s session, after which a page may
+ * hold the owner's signed-in account rather than the public web.
  */
 export const browserHostHandedOff = (host: HarnessBrowserHost): boolean =>
-  sessions.get(host)?.handedOffAt !== undefined;
+  sessions.get(host)?.handedOff !== undefined;
+
+/** Where the page was handed off, as the messages that cite it say it. */
+const handedOffOn = (handedOff: { origin: string | undefined }): string =>
+  handedOff.origin === undefined
+    ? "the page was handed to the owner on no web origin this run knows"
+    : `the page was handed to the owner on ${handedOff.origin}`;
 
 /**
- * `text` with each value sent to `host` replaced by its handle, in one pass
- * over `text` alone, so a value is never found inside a handle put in place
- * of another. At each position the longest value that starts there wins, so a
- * value that contains another is replaced whole.
+ * How a page with no web origin is reported and labeled: the serialization
+ * the web gives an opaque origin, so nothing of such a page's URL, which the
+ * page may have chosen, reaches a label or a result's page.
  */
-const withHandles = (host: HarnessBrowserHost, text: string): string => {
-  const sent = sessionOf(host).sent;
-  if (sent.size === 0) {
-    return text;
-  }
-  const pattern = new RegExp(
-    [...sent.keys()]
-      .sort((a, b) => b.length - a.length)
-      .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("|"),
-    "g",
-  );
-  return text.replace(pattern, (value) => sent.get(value) ?? value);
-};
+const OPAQUE_ORIGIN = "null";
+
+/** The URL a result reports for a page the host committed at `url`. */
+const reportedUrl = (url: string): string =>
+  httpOriginOf(url) === undefined ? OPAQUE_ORIGIN : url;
 
 /** The name suffixes that resolve on this device or its network. */
 const LOCAL_NAME_SUFFIXES = [
@@ -139,8 +151,8 @@ const isLocalHost = (hostname: string): boolean => {
 
 /**
  * Why the page may not go to `url`, or `undefined` when it may: an http(s)
- * address on the open web, and after a finished hand-off, on the origin the
- * owner finished on.
+ * address on the open web, and after a hand-off, on the web origin it ended
+ * on.
  */
 const destinationError = (
   host: HarnessBrowserHost,
@@ -153,9 +165,13 @@ const destinationError = (
   if (isLocalHost(new URL(url).hostname)) {
     return "open only reaches the open web: not this device, its network, or an IP address";
   }
-  const handedOffAt = sessionOf(host).handedOffAt;
-  if (handedOffAt !== undefined && origin !== handedOffAt) {
-    return `the owner finished a hand-off on ${handedOffAt}, and the page stays there`;
+  const handedOff = sessionOf(host).handedOff;
+  if (handedOff !== undefined && origin !== handedOff.origin) {
+    return `${handedOffOn(handedOff)}, so it ${
+      handedOff.origin === undefined
+        ? "may open no site"
+        : "stays on that origin"
+    }`;
   }
   return undefined;
 };
@@ -235,13 +251,12 @@ const planHostOperation = (
   const done = (operation: BrowserHostOperation): PlanResult => ({
     plan: { operation },
   });
-  if (
-    ACTING_ACTIONS.has(action) && sessionOf(host).handedOffAt !== undefined
-  ) {
+  const handedOff = sessionOf(host).handedOff;
+  if (ACTING_ACTIONS.has(action) && handedOff !== undefined) {
     return {
-      error: `the owner finished a hand-off on ${
-        sessionOf(host).handedOffAt
-      }, so the page may hold their sign-in, and only reading it and opening that site are allowed: ${action} is refused`,
+      error: `${
+        handedOffOn(handedOff)
+      }, so it may hold their sign-in, and only reading it and opening that site are allowed: ${action} is refused`,
     };
   }
   switch (action) {
@@ -460,30 +475,38 @@ const truncateTitle = (title: string): string => {
 };
 
 /**
- * The label of what a page at `url` shows: the unscreened prompt-injection
- * caveat, sourced to the page's origin, since a page's text and pixels may
- * carry instructions.
+ * The confidentiality of what a page at `url` shows: the unscreened
+ * prompt-injection caveat, sourced to the page's origin, since a page's text
+ * and pixels may carry instructions.
  */
-const pageLabel = (url: string): IFCLabel => ({
-  confidentiality: [
-    cfcAtom.caveat(
-      CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
-      cfcAtom.resource("WebPage", httpOriginOf(url) ?? url),
-    ),
-  ],
-});
+const pageConfidentiality = (url: string): CfcObservedConfidentiality => [
+  cfcAtom.caveat(
+    CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+    cfcAtom.resource("WebPage", httpOriginOf(url) ?? OPAQUE_ORIGIN),
+  ),
+];
 
 /**
- * The label of a browser host's successful result, or `undefined` for an
- * output that is not one.
+ * The label of the `browser` tool's `output` on a run with `host`, or
+ * `undefined` when the output shows nothing labeled: the session label, joined
+ * for a successful result with the page's caveat.
  */
 export const browserHostResultLabel = (
+  host: HarnessBrowserHost,
   output: unknown,
-): IFCLabel | undefined =>
-  isObjectNotArray(output) && output.status === "ok" &&
-    isObjectNotArray(output.page) && typeof output.page.url === "string"
-    ? pageLabel(output.page.url)
-    : undefined;
+): IFCLabel | undefined => {
+  const page = isObjectNotArray(output) && output.status === "ok" &&
+      isObjectNotArray(output.page) && typeof output.page.url === "string"
+    ? pageConfidentiality(output.page.url)
+    : [];
+  const confidentiality = joinCfcObservedConfidentiality([
+    page,
+    sessions.get(host)?.label,
+  ]);
+  return confidentiality.length === 0
+    ? undefined
+    : { confidentiality: [...confidentiality] };
+};
 
 /** Whether the run enforces CFC rather than observing it or not at all. */
 const enforcing = (context: HarnessToolContext): boolean =>
@@ -519,15 +542,20 @@ export const invokeBrowserOnHost = async (
     );
   }
   // Before a hand-off, the host is a fresh browser with no sign-in, and what
-  // it shows is the public web, whose label is public. Once the owner
-  // finishes one, a page may show their account, which no CFC label
-  // describes, so a run under enforcement gives the page back to the owner
-  // and observes nothing more of it.
-  const handedOffAt = sessionOf(host).handedOffAt;
-  if (handedOffAt !== undefined && action !== "handoff" && enforcing(context)) {
+  // it shows is the public web, whose label is public. Once one is sent, a
+  // page may show the owner's account, which no CFC label describes, so a
+  // run under enforcement gives the page back to the owner and observes
+  // nothing more of it.
+  const session = sessionOf(host);
+  if (
+    session.handedOff !== undefined && action !== "handoff" &&
+    enforcing(context)
+  ) {
     return errorOutput(
       "invalid_input",
-      `the owner finished a hand-off on ${handedOffAt}, so the page may show their account, which no CFC label describes; a run under ${context.cfcEnforcementMode} can only hand the page back to them`,
+      `${
+        handedOffOn(session.handedOff)
+      }, so it may show their account, which no CFC label describes; a run under ${context.cfcEnforcementMode} can only hand the page back to them`,
     );
   }
   // The whole call is planned before anything is read, so a call that cannot
@@ -541,11 +569,10 @@ export const invokeBrowserOnHost = async (
     operation = planned.plan.operation;
   } else {
     const { binding } = planned.plan;
-    const resolution = await resolveHandleValue(
+    const resolution = resolveReturnReferent(
       context,
       binding.handle,
       binding.field === "url" ? "browser urlHandle" : "browser valueHandle",
-      { returnReferents: true },
     );
     if (resolution.error !== undefined) {
       return errorOutput("invalid_input", resolution.error);
@@ -557,10 +584,16 @@ export const invokeBrowserOnHost = async (
     if (typeof completed === "string") {
       return errorOutput("invalid_input", completed);
     }
-    if (resolution.value !== "") {
-      sessionOf(host).sent.set(resolution.value, binding.handle.trim());
-    }
+    session.label = joinCfcObservedConfidentiality([
+      session.label,
+      resolution.label.confidentiality,
+    ]);
     operation = completed;
+  }
+  // The owner may sign in whether the hand-off ends finished, declined, or
+  // not at all, so the session is confined from the moment it is sent.
+  if (operation.action === "handoff") {
+    session.handedOff ??= { origin: session.origin };
   }
   let result: BrowserHostResult;
   try {
@@ -576,22 +609,35 @@ export const invokeBrowserOnHost = async (
     context.signal?.throwIfAborted();
     return errorOutput(
       "host_unavailable",
-      `the browser host could not be reached: ${
-        withHandles(host, errorMessage(error))
-      }`,
+      `the browser host could not be reached: ${errorMessage(error)}`,
     );
   }
   if (result.status !== "ok") {
     return errorOutput(
       REFUSAL_CODES[result.status],
-      truncate(withHandles(host, result.message), "message"),
+      truncate(result.message, "message"),
     );
+  }
+  // An open or a read checks where the page is meant to be; this checks
+  // where the engine committed it, which the owner, a redirect, or the page
+  // itself may have moved.
+  const origin = httpOriginOf(result.page.url);
+  const elsewhere = session.handedOff !== undefined &&
+    (origin === undefined || origin !== session.handedOff.origin);
+  if (elsewhere && operation.action !== "handoff") {
+    return errorOutput(
+      "command_failed",
+      "the action ran, but the page is not on the web origin it was handed to the owner on, so none of it is returned",
+    );
+  }
+  if (!elsewhere) {
+    session.origin = origin;
   }
   // A run whose read ceiling admits nothing a web page shows is told the
   // action ran, and given none of the page.
   if (
     !cfcObservationFitsCeiling(
-      pageLabel(result.page.url).confidentiality ?? [],
+      pageConfidentiality(result.page.url),
       context.cfcReadMaxConfidentiality,
     )
   ) {
@@ -600,21 +646,17 @@ export const invokeBrowserOnHost = async (
       "the action ran, but this run's read ceiling admits nothing a web page shows: a page's text and pixels may carry instructions",
     );
   }
-  if (operation.action === "handoff" && result.handoff === "done") {
-    const origin = httpOriginOf(result.page.url) ?? result.page.url;
-    sessionOf(host).handedOffAt = origin;
-    // The page the owner finished on may already show their account, so a
-    // run under enforcement learns how the hand-off ended and where, and
-    // nothing the page shows.
-    if (enforcing(context)) {
-      return {
-        outputId,
-        status: "ok",
-        output: "done",
-        page: { url: origin, title: "" },
-        handoff: "done",
-      };
-    }
+  // The page a hand-off ended on may already show the owner's account, so a
+  // run under enforcement, or one whose page the owner left the origin on,
+  // learns how the hand-off ended and where, and nothing the page shows.
+  if (operation.action === "handoff" && (enforcing(context) || elsewhere)) {
+    return {
+      outputId,
+      status: "ok",
+      output: result.handoff ?? "the hand-off ended",
+      page: { url: origin ?? OPAQUE_ORIGIN, title: "" },
+      ...(result.handoff !== undefined ? { handoff: result.handoff } : {}),
+    };
   }
   let imageAttachment;
   if (result.image !== undefined) {
@@ -640,10 +682,10 @@ export const invokeBrowserOnHost = async (
   return {
     outputId,
     status: "ok",
-    output: truncate(withHandles(host, result.text ?? "done"), "output"),
+    output: truncate(result.text ?? "done", "output"),
     page: {
-      url: withHandles(host, result.page.url),
-      title: truncateTitle(withHandles(host, result.page.title)),
+      url: reportedUrl(result.page.url),
+      title: truncateTitle(result.page.title),
     },
     ...(result.handoff !== undefined ? { handoff: result.handoff } : {}),
     ...(imageAttachment !== undefined ? { imageAttachment } : {}),

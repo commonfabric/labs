@@ -72,9 +72,12 @@ const view = recommendation.pending
   the run has completed. Reading through it resolves that document, and every
   reference in it keeps its own label.
 - `error` carries the run's error code when it ended any other way —
-  `INVALID_INPUT`, `LIMIT_REACHED`, `PROVIDER_FAILURE`, `RUNNER_LOST`,
+  `INVALID_INPUT`, `INVALID_RESULT`, `LIMIT_REACHED`, `PROVIDER_FAILURE`, `RUNNER_LOST`,
   `CANCELLED`, `REFUSED` — or the refusal text when the request never left
   the graph.
+- `INVALID_RESULT` means the model loop completed without a structured result
+  satisfying `resultSchema`: the result was missing, malformed JSON, or
+  schema-invalid. Model and tool failures use `PROVIDER_FAILURE`.
 - `run` is a link to the run's `AgentRun` record: its `state`, `stateSince`,
   and, once finished, `outcome`, `usage`, `modelTurns`, and `toolCalls`, for
   a pattern that wants to show progress or cost. `host` is the origin of the

@@ -8,6 +8,9 @@
 /** A request the builtin or a runner cannot act on as submitted. */
 export const INVALID_INPUT = "INVALID_INPUT";
 
+/** A completed model loop that supplied no result satisfying its schema. */
+export const INVALID_RESULT = "INVALID_RESULT";
+
 /** A run ended by a model-turn, wall-time, or budget limit. */
 export const LIMIT_REACHED = "LIMIT_REACHED";
 
@@ -26,6 +29,7 @@ export const REFUSED = "REFUSED";
 /** Every code, in the order the record schema enumerates them. */
 export const AGENT_RUN_ERROR_CODES = [
   INVALID_INPUT,
+  INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
   RUNNER_LOST,
