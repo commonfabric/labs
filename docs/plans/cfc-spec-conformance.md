@@ -32,9 +32,24 @@ fetched skill (CT-2091) or two connectors joined into one dashboard (CT-2189).
   sink-fit disposition (harness-5). Otherwise every command output after the
   first fetched skill becomes opaque.
 
+## Status on 2026-10-05
+
+- **Landed:** runner-7 (#8081).
+- **In review:** fuse-1 (#8079), runner-1 (#8083), runner-3 (#8085), and
+  runner-8 + harness-9 (#8084).
+- **Changed underneath the plan:** #8452 makes a builtin's implementation
+  identity come only from the module registry. That closes a forgery route
+  beside runner-3b; it does not make `codeHash` cover the shipped
+  implementation, so runner-3b stays open. #8354 (SC-54) makes the default
+  display ceiling admit the whole prompt-caveat family without discharging
+  it, so text carrying a prompt caveat is already shown to a person.
+  display-1 and display-3 were written before that ruling and are rescoped
+  against it before either starts.
+
 ## Wave 0: floors
 
-Independent of each other; each changes one seam.
+Independent of each other except where an item names the one it follows
+(runner-3b and runner-3c follow runner-3); each changes one seam.
 
 - [ ] **fuse-1 · Read-only Fabric mount** (CT-2313). A harness-provisioned
   `fabric-fuse` bind is always read-only; an explicit writable request is
@@ -58,9 +73,9 @@ Independent of each other; each changes one seam.
   single-identity transaction with a confidential observation. The
   integrity-gated consumers it reaches, such as profile-home's verified
   identity publish, are checked in the same change.
-- [ ] **runner-7 · Untrusted-label parser** (CT-2314). One runner-owned parse of
-  a label from untrusted JSON; unparseable refuses rather than reads as
-  unlabeled. No callers in this change.
+- [x] **runner-7 · Untrusted-label parser** (CT-2314, #8081). One runner-owned
+  parse of a label from untrusted JSON; unparseable refuses rather than reads
+  as unlabeled. No callers in this change.
 - [ ] **runner-8 + harness-9 · One sink decision** (CT-2314). The host-side
   release check and the committed sink share one exchange-aware decision. The
   host check never consumes single-use grants, so rules that need one fail
@@ -91,10 +106,11 @@ Independent of each other; each changes one seam.
   with `Origin`, both prompt caveats on free text, and `NetworkProvenance`
   beside `ExternalIngest`; recognized legacy caveat spellings are normalized or
   refused.
-- [ ] **harness-2 · Connector sources** (with the Service). Rows arrive in an
-  authenticated envelope carrying `User{subject}`, a stable source reference,
-  the full label, and the owner-release policy reference of display-2; rows
-  without one are refused.
+- [ ] **harness-2 · Connector sources** (with the Service, in one change with
+  display-2). Rows arrive in an authenticated envelope carrying
+  `User{subject}`, a stable source reference, the full label, and the
+  owner-release policy reference of display-2; rows without one are refused.
+  The refusal needs the policy to exist, so the two land together.
 
 ## Wave 1c: a visible dashboard (CT-2189)
 
@@ -107,9 +123,10 @@ so the release of connector data is arranged where its label is created.
 - [ ] **display-1 · Disclosure evidence.** Trusted UI that shows a disclosure
   mints `DisclosureRendered` bound to that display, and the prompt-influence
   caveat is released by the discharge rule rather than by kind.
-- [ ] **display-2 · Owner-release policy at the source.** A standard module
-  policy, guarded on the owner's role, whose reference the Service attaches to
-  each `Resource` and `Origin` clause at source entry.
+- [ ] **display-2 · Owner-release policy at the source** (in one change with
+  harness-2). A standard module policy, guarded on the owner's role, whose
+  reference the Service attaches to each `Resource` and `Origin` clause at
+  source entry.
 - [ ] **display-3 · Screened display text.** Releasing an injection-risk caveat
   requires `InjectionSafe` on the exact value (§10.1). Amounts, dates and counts
   get it from trusted schema sanitization; free text is shown redacted until an
@@ -149,5 +166,6 @@ so the release of connector data is arranged where its label is created.
 ## Not in this plan
 
 A writable Fabric mount and the rest of the FUSE writeback path, full path and
-namespace mediation in the sandbox, and the two §8.10.6 questions open in
-`commonfabric/specs#33`.
+namespace mediation in the sandbox (gvisor-6, the create and namespace
+transitions, which is why Wave 3 has no item of that number), and the two
+§8.10.6 questions open in `commonfabric/specs#33`.
