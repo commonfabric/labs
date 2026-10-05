@@ -25,7 +25,6 @@ import {
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
   HARNESS_COMMAND_ID_MAX_LENGTH,
   HARNESS_COMMAND_ID_PATTERN,
-  HARNESS_COMMAND_LIST_LIMIT,
   HARNESS_COMMAND_SCHEMA_MAX_BYTES,
   HARNESS_COMMAND_SUMMARY_MAX_LENGTH,
   harnessCommandJsonBytes,
@@ -102,6 +101,9 @@ export type LoomCommandRunOutput =
     message: string;
     landed: "unknown";
   };
+
+/** Most output names an entry carries from a manifest row. */
+export const LOOM_COMMAND_OUTPUTS_LIMIT = 32;
 
 /** Whether a decoded JSON value is an object with named properties. */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -206,9 +208,12 @@ export const loomCommandEntryOfRow = (
       harnessCommandJsonBytes(inputs) <= HARNESS_COMMAND_SCHEMA_MAX_BYTES
     ? inputs as JSONObject
     : true;
+  // A compacted entry keeps its target and output names, so both are cut
+  // to an identifier's length and the names to a few dozen.
   const outputNames = Array.isArray(outputs)
     ? outputs.filter((name): name is string => typeof name === "string")
-      .slice(0, HARNESS_COMMAND_LIST_LIMIT)
+      .slice(0, LOOM_COMMAND_OUTPUTS_LIMIT)
+      .map((name) => name.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH))
     : [];
   return {
     name: id,
@@ -218,7 +223,9 @@ export const loomCommandEntryOfRow = (
     ...(effect === "read" || effect === "change"
       ? { effect: effect as HarnessCallableEffect }
       : {}),
-    target: typeof scope === "string" && scope.length > 0 ? scope : "global",
+    target: typeof scope === "string" && scope.length > 0
+      ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
+      : "global",
     ...(outputNames.length > 0 ? { outputs: outputNames } : {}),
   };
 };
@@ -274,25 +281,25 @@ export const listLoomCommands = async (
   runner: ProcessRunner,
 ): Promise<LoomCommandListOutput> => {
   validateLoomCommandsConfig(config);
-  let stdout: string;
+  const unread: LoomCommandListOutput = {
+    status: "error",
+    code: "command_failed",
+    message: "The host's command list could not be read.",
+  };
+  let response;
   try {
-    ({ stdout } = await runCli(config, ["command", "list", "--json"], runner));
+    response = await runCli(config, ["command", "list", "--json"], runner);
   } catch {
-    return {
-      status: "error",
-      code: "command_failed",
-      message: "The host's command list could not be read.",
-    };
+    return unread;
   }
+  // A listing the CLI did not finish is not the host's catalog, whatever it
+  // printed.
+  if (response.exitCode !== 0) return unread;
   let manifest: unknown;
   try {
-    manifest = JSON.parse(stdout);
+    manifest = JSON.parse(response.stdout);
   } catch {
-    return {
-      status: "error",
-      code: "command_failed",
-      message: "The host's command list could not be read.",
-    };
+    return unread;
   }
   if (!isRecord(manifest) || !Array.isArray(manifest.commands)) {
     return {

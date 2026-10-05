@@ -22,8 +22,7 @@ import {
   HARNESS_COMMAND_CATALOG_DETAIL_LIMIT,
   HARNESS_COMMAND_ID_MAX_LENGTH,
   HARNESS_COMMAND_ID_PATTERN,
-  HARNESS_COMMAND_LIST_LIMIT,
-  HARNESS_COMMAND_TEXT_MAX_LENGTH,
+  HARNESS_LOOM_ID_PATTERN,
   harnessCommandJsonBytes,
   type HarnessCommandResultProvenance,
   isHarnessCommandJsonValue,
@@ -61,6 +60,9 @@ const NOT_GRANTED_HOST_CODES: ReadonlySet<string> = new Set([
   "forbidden",
   "refused",
 ]);
+
+/** Most operation ids an outcome summary names from an answer's `completed`. */
+export const LOOM_COMMAND_COMPLETED_LIMIT = 32;
 
 /** Serialized size reserved for the label join beside a command's answer. */
 const LABEL_JOIN_ALLOWANCE = 2_000;
@@ -271,18 +273,18 @@ export const listCommandsTool: HarnessToolDefinition<
   },
 };
 
-/** Canonical identifier of a durable Loom record. */
-const LOOM_ID = /^loom-[a-f0-9]{16}$/;
-
 /** Helper for `run_command`, which reads the summary out of an answer. */
 const outcomeOf = (body: JSONObject, bodyBytes: number): LoomCommandOutcome => {
+  // Each field is cut to an identifier's length, and `completed` to a few
+  // dozen ids, so the summary stays a small fraction of the output bound the
+  // answer's entry is measured against; the whole answer is in the entry.
   const hostCode = typeof body.code === "string"
-    ? body.code.slice(0, HARNESS_COMMAND_TEXT_MAX_LENGTH)
+    ? body.code.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
     : undefined;
   const completed = Array.isArray(body.completed)
     ? body.completed.filter((entry) => typeof entry === "string")
-      .slice(0, HARNESS_COMMAND_LIST_LIMIT)
-      .map((entry) => entry.slice(0, HARNESS_COMMAND_TEXT_MAX_LENGTH))
+      .slice(0, LOOM_COMMAND_COMPLETED_LIMIT)
+      .map((entry) => entry.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH))
     : [];
   const notGranted = body.ok === false && hostCode !== undefined &&
     NOT_GRANTED_HOST_CODES.has(hostCode);
@@ -324,7 +326,7 @@ export const runCommandTool: HarnessToolDefinition<
       properties: {
         command: COMMAND_NAME_SCHEMA,
         args: { type: "object" },
-        loomId: { type: "string", pattern: LOOM_ID.source },
+        loomId: { type: "string", pattern: HARNESS_LOOM_ID_PATTERN.source },
         expectedVersion: { type: "integer", minimum: 0 },
       },
     },
@@ -358,7 +360,8 @@ export const runCommandTool: HarnessToolDefinition<
       !HARNESS_COMMAND_ID_PATTERN.test(command) ||
       !isRecord(args) || !isHarnessCommandJsonValue(args) ||
       (loomId !== undefined &&
-        (typeof loomId !== "string" || !LOOM_ID.test(loomId))) ||
+        (typeof loomId !== "string" ||
+          !HARNESS_LOOM_ID_PATTERN.test(loomId))) ||
       (expectedVersion !== undefined &&
         (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0))
     ) {

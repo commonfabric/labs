@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   HARNESS_COMMAND_CATALOG_LIMIT,
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
+  HARNESS_COMMAND_ID_MAX_LENGTH,
   HARNESS_COMMAND_SCHEMA_MAX_BYTES,
   HARNESS_COMMAND_SUMMARY_MAX_LENGTH,
 } from "../src/contracts/client-command.ts";
@@ -11,6 +12,7 @@ import {
   type HarnessLoomCommandsConfig,
   isHiddenFromAgents,
   listLoomCommands,
+  LOOM_COMMAND_OUTPUTS_LIMIT,
   loomCommandCatalogOf,
   loomCommandEntryOfRow,
   readLoomCommandsConfig,
@@ -254,6 +256,23 @@ describe("loom-commands", () => {
       );
     });
 
+    it("cuts the target and each output name to an identifier's length, and keeps at most the output-name limit", () => {
+      const entry = loomCommandEntryOfRow({
+        id: "a.b",
+        scope: "s".repeat(HARNESS_COMMAND_ID_MAX_LENGTH + 5),
+        outputs: Array.from(
+          { length: LOOM_COMMAND_OUTPUTS_LIMIT + 3 },
+          (_, index) =>
+            `${index}`.padEnd(HARNESS_COMMAND_ID_MAX_LENGTH + 5, "x"),
+        ),
+      });
+      expect(entry?.target).toHaveLength(HARNESS_COMMAND_ID_MAX_LENGTH);
+      expect(entry?.outputs).toHaveLength(LOOM_COMMAND_OUTPUTS_LIMIT);
+      for (const name of entry?.outputs ?? []) {
+        expect(name).toHaveLength(HARNESS_COMMAND_ID_MAX_LENGTH);
+      }
+    });
+
     it("shows an argument schema that is not an object, or is too large, as open", () => {
       expect(loomCommandEntryOfRow({ id: "a.b", inputs: [1] })?.inputSchema)
         .toBe(true);
@@ -316,6 +335,17 @@ describe("loom-commands", () => {
         code: "command_failed",
       });
       const { runner } = runnerAnswering("Error: broker refused", 1);
+      expect(await listLoomCommands(config, runner)).toMatchObject({
+        status: "error",
+        code: "command_failed",
+      });
+    });
+
+    it("returns `command_failed` for a manifest the CLI printed but exited nonzero on", async () => {
+      const { runner } = runnerAnswering(
+        JSON.stringify({ commands: [{ id: "a.b" }] }),
+        1,
+      );
       expect(await listLoomCommands(config, runner)).toMatchObject({
         status: "error",
         code: "command_failed",

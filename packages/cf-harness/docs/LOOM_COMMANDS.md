@@ -86,8 +86,10 @@ host call per command.
 Its answer has three shapes:
 
 - `executed`: the command layer answered. `outcome` holds `ok`, `id`, `code`,
-  `mayHaveLanded`, `completed`, and `bodyBytes`. A refusal by the broker
-  (`forbidden`) or by the command layer (`refused`) reads as
+  `mayHaveLanded`, `completed`, and `bodyBytes`, each text cut to an
+  identifier's length and `completed` to its first 32 operation ids, so the
+  summary stays small beside the answer's measured entry. A refusal by the
+  broker (`forbidden`) or by the command layer (`refused`) reads as
   `code: "not_granted"`, with the host's code beside it as `hostCode` and a
   `hint` telling the model to offer the command to the person in its result
   rather than retry it.
@@ -117,8 +119,8 @@ measured against the run's observation ceiling.
   naming the command, the agent actor, the loom, and the version the outputs
   report. A structured result that names the handle links a document minted from
   it.
-- A withheld answer shows nothing of itself; the `outcome` summary is all the
-  model reads.
+- A withheld answer shows none of its content: the model reads the `outcome`
+  summary and the entry's `status` and `reasonCode`.
 - An answer that alone passes the output bound is left out and the result is
   marked truncated.
 

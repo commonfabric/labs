@@ -4,7 +4,10 @@ import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
 import { HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES } from "../../src/client-actions/command-result.ts";
-import { HARNESS_COMMAND_ARGS_MAX_BYTES } from "../../src/contracts/client-command.ts";
+import {
+  HARNESS_COMMAND_ARGS_MAX_BYTES,
+  HARNESS_COMMAND_ID_MAX_LENGTH,
+} from "../../src/contracts/client-command.ts";
 import {
   LOOM_COMMAND_TOOL_IDS,
   parentToolIdsForBacking,
@@ -27,6 +30,7 @@ import { harnessSessionToolBacking } from "../../src/session-assembly.ts";
 import {
   type ListCommandsOutput,
   listCommandsTool,
+  LOOM_COMMAND_COMPLETED_LIMIT,
   LOOM_COMMAND_TOOLS,
   LOOM_COMMAND_UNTRUSTED_NOTICE,
   LOOM_COMMANDS_EFFECT_NOTICE,
@@ -631,6 +635,33 @@ describe("loom-commands tools", () => {
         command: "loom.compose",
         actor: "agent",
       });
+    });
+
+    it("cuts the outcome's code and operation ids to an identifier's length, and names at most the limit of them", async () => {
+      const long = "c".repeat(HARNESS_COMMAND_ID_MAX_LENGTH + 5);
+      const { context } = contextWith({
+        answer: JSON.stringify({
+          ok: false,
+          code: long,
+          completed: Array.from(
+            { length: LOOM_COMMAND_COMPLETED_LIMIT + 4 },
+            () => long,
+          ),
+        }),
+      });
+      const output = executed(
+        await runCommandTool.invoke(context, {
+          command: "loom.compose",
+          args: {},
+        }),
+      );
+      expect(output.outcome.code).toHaveLength(HARNESS_COMMAND_ID_MAX_LENGTH);
+      expect(output.outcome.completed).toHaveLength(
+        LOOM_COMMAND_COMPLETED_LIMIT,
+      );
+      for (const id of output.outcome.completed ?? []) {
+        expect(id).toHaveLength(HARNESS_COMMAND_ID_MAX_LENGTH);
+      }
     });
 
     it("leaves out an answer that alone passes the output bound, marking the result truncated", async () => {
