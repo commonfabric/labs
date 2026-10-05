@@ -117,7 +117,16 @@ The vocabulary:
 3. **For a semantic gap, open the specs pull request first.** It carries the
    prose delta, the pseudocode delta, and the Lean delta together: the model
    and the theorems that make the new rule a proved property land in the same
-   change, so the three artifacts never disagree at a commit. Deferring a
+   change, so the three artifacts never disagree at a commit. The Lean delta
+   is what the specs repository's `formal/docs/CONTRIBUTING.md` lists under
+   its required documentation updates: the model and proof modules,
+   `FORMALIZATION.md`, `THEOREM-MAP.md`, `COVERAGE.md`, `MODULE-INDEX.md`
+   when the module map changes, `PROOF-ROADMAP.md` when the frontier does, and
+   the chapter's own formal-correspondence note, which is where a reader of
+   the prose meets the proof. A residual the ruling accepts is a theorem under
+   an explicit hypothesis; a cryptographic assumption is prose beside an
+   abstracted definition, never a theorem; a variant the ruling rejects is a
+   `decide`-checked counterexample in the examples module. Deferring a
    proof is the exception, taken when the model the rule needs does not exist
    yet; the body says why, and the deferral is an entry in
    `cfc/notes/FUTURE-SPEC-WORK.md` in that file's shape (a
@@ -197,9 +206,12 @@ ruling to a runner change, and are not examples of the form.
 - One pull request per group the plan names. Entries in a group can depend on
   one another, and the body says which depends on which.
 - Commit subjects follow the house style visible in `git log` (`cfc: …`);
-  your harness's attribution trailers apply. A pull request that touches no
-  file under `cfc/formal/` needs no local `lake build`; the specs workflow
-  runs it regardless.
+  your harness's attribution trailers apply. Before pushing a change that
+  touches `cfc/formal/` or a chapter, run `lake build`,
+  `scripts/check-architecture.py` and
+  `scripts/check-input-requirement-pseudocode.py` in `cfc/formal/`; they take
+  under a minute on a warm build, and the specs repository's `cfc-formal`
+  workflow runs the same three on every such pull request.
 - When the pull request is open, the labs row's status becomes `proposed`,
   naming the request and the option applied; when it merges, `adopted` or
   `applied` as the change list's legend defines them.
