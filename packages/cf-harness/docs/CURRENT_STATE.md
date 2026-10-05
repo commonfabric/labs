@@ -563,7 +563,11 @@ The current package provides:
   coordinator (`src/client-actions/coordinator.ts`). An executed command's JSON
   body, when retained, is held as a `document` handle with label source
   `command` if the run supplies a holder and its provenance can be derived. The
-  model gets outcome metadata and a token when available;
+  model gets outcome metadata and a token when available. A settlement is final,
+  so a catalog entry marked `startsRun` (a service command that answers once its
+  work is accepted, sent only to a console serving the `starts_run` feature)
+  tells the model to follow the run named in `outputs.run_id` with the service's
+  `command.run-outcome` before reporting it;
 - parent-only `finish_task` for a completed answer, a question, or a give-up
   reason, admitted through ordinary policy and artifacts as the sole call in a
   model turn. A completed answer satisfies the Fabric piece contract and may

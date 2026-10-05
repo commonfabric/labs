@@ -956,7 +956,7 @@ turn starts. Another version, or a required feature it does not serve, answers
   "code": "protocol_mismatch",
   "protocol": {
     "protocolVersion": 1,
-    "features": ["client_actions", "typed_commands"]
+    "features": ["client_actions", "typed_commands", "starts_run"]
   },
   "requestedVersion": 2,
   "missing": []

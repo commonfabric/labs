@@ -398,7 +398,7 @@ describe("client command contract", () => {
         .toBeUndefined();
     });
 
-    it("reads a run-starting entry, and refuses startsRun on a read or as anything but true", () => {
+    it("reads a run-starting entry, and refuses startsRun off a service mutation or as anything but true", () => {
       const catalog = (fixture("resolve-executed-catalog-starts-run")
         .settlement as {
           catalog: { entries: Record<string, unknown>[] };
@@ -411,6 +411,9 @@ describe("client command contract", () => {
           { ...outcome, startsRun: true },
           { ...deploy, startsRun: false },
           { ...deploy, startsRun: "yes" },
+          { ...deploy, startsRun: null },
+          // The run is the service's: a Weaver-local command has none.
+          { ...deploy, executes: "weaver" },
         ]
       ) {
         expect(readHarnessCommandCatalog({ entries: [entry] }))

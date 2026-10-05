@@ -354,7 +354,7 @@ export interface HarnessCommandCatalogEntry {
    * Present, and true, when the command answers once its work is accepted
    * and names, in `outputs.run_id`, a run that can still fail afterwards.
    * The service's `command.run-outcome` reads how that run stands. Only a
-   * mutation starts a run.
+   * mutation the service executes starts a run.
    */
   startsRun?: true;
 }
@@ -800,8 +800,10 @@ const readCatalogEntry = (
     harnessCommandJsonBytes(inputSchema) > HARNESS_COMMAND_SCHEMA_MAX_BYTES ||
     (description !== undefined &&
       !isBoundedText(description, HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH)) ||
-    // Absent unless declared; a read starts nothing.
-    (startsRun !== undefined && (startsRun !== true || effect !== "mutation"))
+    // Absent unless declared. A read starts nothing, and the run is the
+    // service's, so a Weaver-local command has none.
+    (startsRun !== undefined &&
+      (startsRun !== true || effect !== "mutation" || executes !== "loom"))
   ) {
     return undefined;
   }
