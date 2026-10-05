@@ -1,0 +1,1918 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/home.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "A group room's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "AgentQueueEntry": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "run": {
+            "asCell": [
+              "cell"
+            ],
+            "scope": "user"
+          }
+        },
+        "required": [
+          "run",
+          "host"
+        ],
+        "type": "object"
+      },
+      "AgentQueueOutput": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          "agentRunner": {
+            "$ref": "#/$defs/AgentRunnerEntry",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/agent-queue.tsx",
+                  "moduleIdentity": "SEujS_7ipQsvMj44d8OiaVaDYObe2QZZOhBdJgxw1hM",
+                  "path": [
+                    "setAgentRunner"
+                  ]
+                }
+              }
+            }
+          },
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AgentQueueEntry"
+            },
+            "type": "array"
+          },
+          "setAgentRunner": {
+            "$ref": "#/$defs/SetAgentRunnerEvent",
+            "asCell": [
+              "stream"
+            ]
+          }
+        },
+        "required": [
+          "entries",
+          "setAgentRunner",
+          "$NAME",
+          "$UI"
+        ],
+        "type": "object"
+      },
+      "AgentRun": {
+        "properties": {
+          "attempts": {
+            "type": "number"
+          },
+          "cancelRequestedAt": {
+            "type": "string"
+          },
+          "claim": {
+            "properties": {
+              "leaseUntil": {
+                "type": "string"
+              },
+              "runner": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runner",
+              "leaseUntil"
+            ],
+            "type": "object"
+          },
+          "errorCode": {
+            "$ref": "#/$defs/AgentRunErrorCode"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "type": "unknown"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "maxConfidentiality": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "modelTurns": {
+            "type": "number"
+          },
+          "outcome": {
+            "$ref": "#/$defs/AgentRunOutcome"
+          },
+          "piece": {
+            "type": "unknown"
+          },
+          "request": {
+            "type": "unknown"
+          },
+          "requestHash": {
+            "type": "string"
+          },
+          "result": {
+            "type": "unknown"
+          },
+          "resultSchema": {
+            "type": "unknown"
+          },
+          "runRef": {
+            "type": "string"
+          },
+          "space": {
+            "type": "unknown"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/AgentRunState"
+          },
+          "stateSince": {
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "toolCalls": {
+            "type": "number"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/$defs/AgentRunUsage"
+          },
+          "usageCoverage": {
+            "enum": [
+              "direct",
+              "including-descendants"
+            ]
+          }
+        },
+        "required": [
+          "requestHash",
+          "request",
+          "piece",
+          "space",
+          "task",
+          "inputs",
+          "resultSchema",
+          "submittedAt",
+          "state",
+          "stateSince"
+        ],
+        "type": "object"
+      },
+      "AgentRunErrorCode": {
+        "enum": [
+          "INVALID_INPUT",
+          "LIMIT_REACHED",
+          "PROVIDER_FAILURE",
+          "RUNNER_LOST",
+          "CANCELLED",
+          "REFUSED"
+        ]
+      },
+      "AgentRunOutcome": {
+        "enum": [
+          "refused",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "AgentRunState": {
+        "enum": [
+          "refused",
+          "queued",
+          "claimed",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "AgentRunUsage": {
+        "properties": {
+          "cacheWriteTokens": {
+            "type": "number"
+          },
+          "cachedInputTokens": {
+            "type": "number"
+          },
+          "costUsd": {
+            "type": "number"
+          },
+          "estimateWithheldReason": {
+            "type": "string"
+          },
+          "estimatedCostUsd": {
+            "type": "number"
+          },
+          "inputTokens": {
+            "type": "number"
+          },
+          "outputTokens": {
+            "type": "number"
+          },
+          "reasoningTokens": {
+            "type": "number"
+          },
+          "totalTokens": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "AgentRunnerEntry": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "lastClaimAt": {
+            "type": "string"
+          },
+          "registeredAt": {
+            "type": "string"
+          },
+          "registrationId": {
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "host",
+          "tools",
+          "registeredAt"
+        ],
+        "type": "object"
+      },
+      "BackwardsCompatibleProfile": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "type": "unknown"
+          },
+          "addElement": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "addExternalLink": {
+            "$ref": "#/$defs/MutateExternalProfileLinksEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "addPiece": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "avatar": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "setAvatar"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "bio": {
+            "default": "",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "setBio"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "elements": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "mutateElements"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/ProfileElement"
+            },
+            "type": "array"
+          },
+          "externalLinks": {
+            "default": [],
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "mutateExternalProfileLinks"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/ExternalProfileLink"
+            },
+            "type": "array"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "setInbox"
+                  ]
+                }
+              }
+            }
+          },
+          "initialNameApplied": {
+            "type": "string"
+          },
+          "isEditing": {
+            "default": false,
+            "type": "boolean"
+          },
+          "name": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "setName"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "publishVerifiedIdentities": {
+            "$ref": "#/$defs/MutateVerifiedIdentitiesEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "removeElement": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "removeExternalLink": {
+            "$ref": "#/$defs/MutateExternalProfileLinksEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "revokeVerifiedIdentities": {
+            "$ref": "#/$defs/MutateVerifiedIdentitiesEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setAvatar": {
+            "$ref": "#/$defs/SetProfileAvatarEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setBio": {
+            "$ref": "#/$defs/SetProfileBioEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setInbox": {
+            "$ref": "#/$defs/SetProfileInboxEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setName": {
+            "$ref": "#/$defs/SetProfileNameEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "toggleEditing": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "verifiedIdentities": {
+            "default": [],
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "path": [
+                    "publishVerifiedIdentities"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/VerifiedExternalIdentity"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "$NAME",
+          "$UI",
+          "name",
+          "avatar",
+          "bio",
+          "externalLinks",
+          "verifiedIdentities",
+          "elements",
+          "setName",
+          "setAvatar",
+          "addElement",
+          "removeElement",
+          "isEditing",
+          "initialNameApplied"
+        ],
+        "type": "object"
+      },
+      "ChatInbox": {
+        "properties": {
+          "offers": {
+            "description": "The offers received, readable by the inbox's owner alone.",
+            "items": {
+              "$ref": "#/$defs/ChatInboxOffer"
+            },
+            "type": "array"
+          },
+          "receive": {
+            "$ref": "#/$defs/ChatRoomOfferEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Appends an offer."
+          }
+        },
+        "type": "object"
+      },
+      "ChatInboxOffer": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The piece offered, if the sender named one."
+          },
+          "from": {
+            "description": "The DID of the principal who sent the offer, as the inbox recorded it.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The offer's id, unique in its inbox, which the inbox chose when it\nreceived the offer.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered; a room's offer is `fabrichat-room`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "from"
+        ],
+        "type": "object"
+      },
+      "ChatIndexEntry": {
+        "properties": {
+          "counterpart": {
+            "description": "A direct room's other member, by principal.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "The room's kind, as its `about.kind` says."
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room."
+          },
+          "since": {
+            "description": "When this user created or accepted it.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ChatManagerNotice": {
+        "properties": {
+          "id": {
+            "description": "The notice's id, unique in the manager.",
+            "type": "string"
+          },
+          "recipient": {
+            "description": "The DID of the person admitted.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room the recipient was admitted to."
+          }
+        },
+        "required": [
+          "id",
+          "room",
+          "recipient"
+        ],
+        "type": "object"
+      },
+      "ChatManagerOffer": {
+        "properties": {
+          "from": {
+            "description": "The DID of the principal who offered it.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The offer's key, which `accept` and `dismissOffer` name it by.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room offered."
+          }
+        },
+        "required": [
+          "key",
+          "room",
+          "from"
+        ],
+        "type": "object"
+      },
+      "ChatManagerProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "inbox": {
+            "description": "Where the person's offers are delivered: a link to their private inbox,\nabsent while they have none.",
+            "properties": {
+              "piece": {
+                "$ref": "#/$defs/ChatInbox"
+              }
+            },
+            "type": "object"
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "description": "The request has not finished.",
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/ChatIndexEntry",
+                "description": "The entry it produced; absent for `forget`."
+              },
+              "status": {
+                "description": "The request finished.",
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "description": "Why.",
+                "type": "string"
+              },
+              "status": {
+                "description": "The request was refused.",
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created; absent for a space's own chat.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "`\"direct\"` if created as a direct room; `\"group\"` otherwise."
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "description": "The room's policy, stated correctly, in a document of its own."
+          },
+          "record": {
+            "$ref": "#/$defs/AboutRecord",
+            "description": "The record the room's creator wrote, whose label names them; absent for a\nspace's own chat, which no one created as a room."
+          },
+          "title": {
+            "description": "A group room's title. A direct room, and a space's own chat, have none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "group",
+          "direct"
+        ]
+      },
+      "ChatRoomLink": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself."
+          },
+          "messages": {
+            "description": "Where the conversation stands: what of `messages` every member shares.",
+            "properties": {
+              "count": {
+                "description": "How many messages the room holds, obliterated tombstones included.",
+                "type": "number"
+              },
+              "newestAt": {
+                "description": "The newest message's `sentAt`; absent while there are none.",
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRoomOfferEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room offered."
+          },
+          "kind": {
+            "description": "What is offered; a room's offer is `fabrichat-room`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "entry"
+        ],
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "description": "Whether a sender's deletion of their own message obliterates it.",
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "description": "Whether an edit or a plain deletion keeps the version it replaces.",
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "description": "The most message windows a session can have open.",
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "description": "The most messages a message window holds.",
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "description": "Whether an OWNER may obliterate messages.",
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "description": "How far before the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "description": "How far after the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "description": "How long an entry stays in `recentActivity`, in ns.",
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "CreateProfileEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ExternalIdentityAssertion": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value",
+          "verifiedAt"
+        ],
+        "type": "object"
+      },
+      "ExternalProfileLink": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "FabriChatManagerOutput": {
+        "properties": {
+          "$NAME": {
+            "description": "The manager's name, for lists of pieces.",
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json",
+            "description": "The manager's rendering."
+          },
+          "$VIEWS": {
+            "description": "The manager's data face, as one group.",
+            "properties": {
+              "chats": {
+                "$ref": "#/$defs/FabriChatManagerView"
+              }
+            },
+            "required": [
+              "chats"
+            ],
+            "type": "object"
+          },
+          "accept": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Records a room this user has been admitted to."
+          },
+          "createGroup": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Creates a group room."
+          },
+          "delivered": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Reports a notice delivered."
+          },
+          "direct": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "description": "The direct room this user shares with each counterpart, by principal.",
+            "properties": {},
+            "type": "object"
+          },
+          "dismissOffer": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Sets an offer aside without accepting it."
+          },
+          "forget": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Removes a room from this user's list."
+          },
+          "offers": {
+            "description": "The rooms offered to this user that they haven't acted on, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerOffer"
+            },
+            "type": "array"
+          },
+          "openDirect": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Finds or creates the direct room with a person."
+          },
+          "outgoingNotices": {
+            "description": "Notices this user's requests have produced that no one has delivered.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerNotice"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatRequestOutcome"
+            },
+            "description": "The outcome of each request, by the `requestId` its caller chose.",
+            "properties": {},
+            "type": "object"
+          },
+          "rooms": {
+            "description": "Every room this user belongs to and hasn't forgotten, newest first.",
+            "items": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rooms",
+          "direct",
+          "requests",
+          "outgoingNotices",
+          "offers",
+          "openDirect",
+          "createGroup",
+          "accept",
+          "forget",
+          "delivered",
+          "dismissOffer",
+          "$NAME",
+          "$UI",
+          "$VIEWS"
+        ],
+        "type": "object"
+      },
+      "FabriChatManagerView": {
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Records a room this user has been admitted to."
+          },
+          "createGroup": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Creates a group room."
+          },
+          "delivered": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Reports a notice delivered."
+          },
+          "direct": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "description": "The direct room this user shares with each counterpart, by principal.",
+            "properties": {},
+            "type": "object"
+          },
+          "dismissOffer": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Sets an offer aside without accepting it."
+          },
+          "forget": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Removes a room from this user's list."
+          },
+          "offers": {
+            "description": "The rooms offered to this user that they haven't acted on, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerOffer"
+            },
+            "type": "array"
+          },
+          "openDirect": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Finds or creates the direct room with a person."
+          },
+          "outgoingNotices": {
+            "description": "Notices this user's requests have produced that no one has delivered.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerNotice"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatRequestOutcome"
+            },
+            "description": "The outcome of each request, by the `requestId` its caller chose.",
+            "properties": {},
+            "type": "object"
+          },
+          "rooms": {
+            "description": "Every room this user belongs to and hasn't forgotten, newest first.",
+            "items": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rooms",
+          "direct",
+          "requests",
+          "outgoingNotices",
+          "offers",
+          "openDirect",
+          "createGroup",
+          "accept",
+          "forget",
+          "delivered",
+          "dismissOffer"
+        ],
+        "type": "object"
+      },
+      "Favorite": {
+        "properties": {
+          "cell": {
+            "properties": {
+              "$NAME": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "spaceName": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cell",
+          "tags",
+          "userTags"
+        ],
+        "type": "object"
+      },
+      "JournalEntry": {
+        "properties": {
+          "eventType": {
+            "type": "string"
+          },
+          "narrative": {
+            "type": "string"
+          },
+          "narrativePending": {
+            "type": "boolean"
+          },
+          "snapshot": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "schemaTag": {
+                "type": "string"
+              },
+              "valueExcerpt": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "space": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "unknown"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ManagerStreamEvent": {
+        "properties": {
+          "counterpart": {
+            "description": "The DID of a direct room's other member.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The id of a notice delivered.",
+            "type": "string"
+          },
+          "joinableByLink": {
+            "description": "Whether a new group room admits anyone who has its link; absent for a room\nadmitting its members alone.",
+            "type": "boolean"
+          },
+          "members": {
+            "description": "The DIDs of a new group room's other members.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "offer": {
+            "description": "The key of the offer accepted or dismissed.",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/ChatManagerProfile",
+            "description": "A direct room's other member's profile, through whose private inbox a new\nroom is offered to them."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the outcome is recorded under it.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "A room to accept or forget."
+          },
+          "target": {
+            "description": "A rendered control's text.",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "title": {
+            "description": "A new group room's title.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MutateExternalProfileLinksEvent": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MutateProfileElementsEvent": {
+        "properties": {
+          "catalogId": {
+            "type": "string"
+          },
+          "cell": true,
+          "patternUrl": {
+            "type": "string"
+          },
+          "pieceId": {
+            "type": "string"
+          },
+          "pieceSpace": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MutateVerifiedIdentitiesEvent": {
+        "properties": {
+          "identities": {
+            "items": {
+              "$ref": "#/$defs/VerifiedExternalIdentity"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PrivateInboxHolder": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/PrivateInboxPiece",
+            "description": "The inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "PrivateInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ProfileElement": {
+        "properties": {
+          "cell": true,
+          "source": {
+            "enum": [
+              "piece",
+              "url",
+              "catalog"
+            ]
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cell",
+          "tag",
+          "userTags"
+        ],
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "SetAgentRunnerEvent": {
+        "properties": {
+          "expectedRegistrationId": {
+            "type": "string"
+          },
+          "runner": {
+            "$ref": "#/$defs/AgentRunnerEntry"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileAvatarEvent": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileBioEvent": {
+        "properties": {
+          "bio": {
+            "type": "string"
+          },
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileInboxEvent": {
+        "properties": {
+          "inbox": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The inbox piece to point at; absent clears the pointer."
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileNameEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SpaceEntry": {
+        "properties": {
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TrustedDefaultProfile": {
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/BackwardsCompatibleProfile",
+            "ifc": {
+              "addIntegrity": [
+                "profile-link"
+              ],
+              "uiContract": {
+                "action": "SetDefaultProfile",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ProfilePickerSurface"
+                ],
+                "trustedPattern": "ProfilePickerSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-create.tsx",
+                  "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                  "path": [
+                    "setDefaultProfile"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "type": "object"
+      },
+      "TrustedProfileLink": {
+        "$ref": "#/$defs/BackwardsCompatibleProfile",
+        "ifc": {
+          "addIntegrity": [
+            "profile-link"
+          ],
+          "uiContract": {
+            "action": "CreateProfile",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "ProfileCreateSurface"
+            ],
+            "trustedPattern": "ProfileCreateSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/profile-create.tsx",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "path": [
+                "submitProfileCreation"
+              ]
+            }
+          }
+        }
+      },
+      "TrustedProfileList": {
+        "ifc": {
+          "addIntegrity": [
+            "profile-link"
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/profile-create.tsx",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "path": [
+                "submitProfileCreation"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/TrustedProfileLink"
+        },
+        "type": "array"
+      },
+      "TrustedProfileMru": {
+        "ifc": {
+          "addIntegrity": [
+            "profile-link"
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/profile-create.tsx",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "path": [
+                "setMruProfile"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/BackwardsCompatibleProfile",
+          "ifc": {
+            "addIntegrity": [
+              "profile-link"
+            ],
+            "uiContract": {
+              "action": "SetMruProfile",
+              "helper": "UiAction",
+              "requiredEventIntegrity": [
+                "ProfilePickerSurface"
+              ],
+              "trustedPattern": "ProfilePickerSurface"
+            },
+            "writeAuthorizedBy": {
+              "__ctWriterIdentityOf": {
+                "file": "/packages/patterns/system/profile-create.tsx",
+                "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                "path": [
+                  "setMruProfile"
+                ]
+              }
+            }
+          }
+        },
+        "type": "array"
+      },
+      "VerifiedExternalIdentity": {
+        "$ref": "#/$defs/ExternalIdentityAssertion",
+        "ifc": {
+          "requiredIntegrity": [
+            "loom-verified-external-identity"
+          ]
+        }
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addFavorite": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "piece": {
+            "properties": {
+              "$NAME": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "spaceName": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "addJournalEntry": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/JournalEntry"
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "type": "object"
+      },
+      "addSpace": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          },
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "adoptSpace": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "did"
+        ],
+        "type": "object"
+      },
+      "agentQueue": {
+        "$ref": "#/$defs/AgentQueueOutput"
+      },
+      "chatManager": {
+        "$ref": "#/$defs/FabriChatManagerOutput"
+      },
+      "createProfile": {
+        "$ref": "#/$defs/CreateProfileEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "defaultAppUrl": {
+        "default": "",
+        "type": "string"
+      },
+      "defaultProfile": {
+        "$ref": "#/$defs/TrustedDefaultProfile"
+      },
+      "ensurePrivateInbox": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "favorites": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Favorite"
+        },
+        "type": "array"
+      },
+      "journal": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/JournalEntry"
+        },
+        "type": "array"
+      },
+      "legacyDefaultProfile": {
+        "$ref": "#/$defs/BackwardsCompatibleProfile"
+      },
+      "mru": {
+        "$ref": "#/$defs/TrustedProfileMru",
+        "default": []
+      },
+      "privateInbox": {
+        "$ref": "#/$defs/PrivateInboxHolder"
+      },
+      "profiles": {
+        "$ref": "#/$defs/TrustedProfileList",
+        "default": []
+      },
+      "removeFavorite": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "type": "object"
+      },
+      "removeSpace": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "renameSpace": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "did",
+          "name"
+        ],
+        "type": "object"
+      },
+      "spaces": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SpaceEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "favorites",
+      "journal",
+      "spaces",
+      "defaultAppUrl",
+      "profiles",
+      "mru",
+      "agentQueue",
+      "chatManager",
+      "privateInbox",
+      "createProfile",
+      "ensurePrivateInbox",
+      "addFavorite",
+      "removeFavorite",
+      "addJournalEntry",
+      "addSpace",
+      "removeSpace",
+      "adoptSpace",
+      "renameSpace",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
