@@ -33,9 +33,15 @@ working here keeps them, and what fails when one does not.
   Coverage Matrix" in `cfc/formal/FORMALIZATION.md`, narrowed to the ones a
   reactive runtime executes (the §18.6 profile). The initial set is listed
   under stage 3.
-- **Kernel.** The runtime's copies of the critical functions:
-  `packages/runner/src/cfc/kernel/`, one file per function, pure, with the
-  pseudocode's argument list and return type. A kernel function takes no
+- **Kernel.** The runtime's copies of the critical functions under
+  `packages/runner/src/cfc/kernel/`, grouped as the spec groups them: one
+  file per chapter that contributes critical functions (`label.ts` for §3.1,
+  `exchange.ts` for §4.4, `propagation.ts` for §8.9, `boundary.ts` for §8.10,
+  `store-labels.ts` for §8.12, and so on), each function in chapter order.
+  Every kernel function opens with a header naming its chapter file, section,
+  pseudocode name, and the hash of the block it was derived from; the checks
+  work per function, so the files can stay readable. A kernel function is
+  pure, with the pseudocode's argument list and return type: it takes no
   transaction, reads no dial, calls no hook, and records no diagnostic.
 - **Adapter.** Everything else under `packages/runner/src/cfc/`. An adapter
   gathers a kernel function's inputs from the transaction, calls it, and
@@ -44,7 +50,8 @@ working here keeps them, and what fails when one does not.
   adapter.
 - **Pin.** The specs commit the kernel was last derived from, recorded once in
   the spec snapshot. The snapshot is the only thing that crosses the repository
-  boundary; it is committed here so CI can read it without the specs tree.
+  boundary; it is committed here so CI can read it without the specs tree,
+  and it holds no spec text (see "Two repositories, one of them public").
 - **Ruling.** A specs pull request that settles a question the specification
   did not answer, in the form `13-11-decisions.md` uses: the question, the
   options, the proposed text, who ruled, who reviewed.
@@ -92,14 +99,19 @@ checkable.
    the new pin in the same change. Where waiting would block other work, the
    code may land first behind a dial that defaults to the current behavior,
    with the deciding site marked `// SPEC-PENDING <specs PR url>`. The
-   correspondence check counts those markers and fails above a budget, so the
-   backlog cannot grow silently; a marker is removed by the change that
-   re-derives the kernel at the merged pin.
+   correspondence check counts those markers and fails above a budget of
+   three, so the backlog cannot grow silently; a marker is removed by the
+   change that re-derives the kernel at the merged pin. Marked code may run at
+   the `enforce-strict` default only when it is fail-closed, refusing more
+   than the ruled behavior would and persisting nothing new, since a ruling
+   can then only loosen it; anything that admits more or changes what is
+   stored waits behind a dial until ruled.
 
 5. **Keep the pin current.** When `specs` main changes a critical function's
-   pseudocode, the next CFC pull request here regenerates the snapshot, and the
-   correspondence check names every kernel file whose recorded hash no longer
-   matches. Each is re-derived or the change is argued in review as a
+   pseudocode, the specs repository's own check (below) goes red against labs
+   main, and the next CFC pull request here regenerates the snapshot, after
+   which the correspondence check names every kernel function whose recorded
+   hash no longer matches. Each is re-derived or the change is argued in review as a
    conforming divergence and recorded in the manifest with its reason. Nothing
    lands against a stale snapshot while a mismatch is open.
 
@@ -110,6 +122,40 @@ checkable.
    and cites the section it arranges. The conformance statement (stage 2) is
    where this runtime answers §18.6.4's checklist, and is the one labs document
    the spec asks for by name.
+
+## Two repositories, one of them public
+
+`commonfabric/labs` is public and `commonfabric/specs` is private. A comment
+here may cite the private spec, but nothing the public build runs may read it.
+That fixes where each check lives:
+
+- **Labs CI reads only what labs commits.** The snapshot holds the specs
+  commit, section numbers, pseudocode function names, and one SHA-256 per
+  pseudocode block. Function names already appear in the runner, section
+  numbers already appear in its comments, and a hash is not reversible, so
+  the file carries no spec text. Someone with a specs checkout regenerates it
+  locally. Against it, labs CI checks that every kernel function matches the
+  hash it claims, that every citation names a section that exists, and that
+  pending markers stay under budget.
+- **Specs CI reads both.** The private repository may depend on the public
+  one. Its workflow clones labs main, regenerates the snapshot from the specs
+  head, and runs the same labs check: a ruling that changes a critical block
+  turns that job red until a labs change re-derives the kernel. The checks
+  that need the spec's text, that every critical block type-checks and that
+  the coverage matrix's runtime column names symbols that exist in labs, run
+  there too.
+
+Each direction of drift is therefore caught in CI, in the repository that can
+see the inputs. What no check can do is make a spec change land in labs; it can
+only refuse to let labs claim a pin it no longer matches.
+
+Verbatim extraction (stage 4) is where the boundary bites: a pseudocode block
+that is the runner's source is public. The case for accepting that is that the
+block states nothing its public implementation does not already reveal, and
+that the private value is in the prose, the proofs and the paper. The owner
+decides this before stage 4; if the answer is no, the affected functions stay
+hand-written and hash-pinned, with equivalence a review obligation that the
+specs-side check can still assist against the private text.
 
 ## What enforces it
 
@@ -141,11 +187,12 @@ labs document as a blocking finding.
 
 Two committed files and one task make correspondence a thing CI can see.
 
-`packages/runner/src/cfc/kernel/spec-snapshot.json` is generated from the specs
-tree by `deno task cfc-spec-snapshot` and holds: the specs commit; every
-section heading in `cfc/*.md` with its number; and, for every critical
-function, its chapter file, section, name, and the SHA-256 of its pseudocode
-block. It holds no spec prose, so it carries no copy of the spec to drift.
+`packages/runner/src/cfc/kernel/spec-snapshot.json` is generated from a local
+specs checkout by `deno task cfc-spec-snapshot` and holds: the specs commit;
+every section number in `cfc/*.md`; and, for every critical function, its
+chapter file, section, name, and the SHA-256 of its pseudocode block. It holds
+no spec prose, so it carries no copy of the spec to drift and nothing the
+public repository may not hold.
 
 `packages/runner/src/cfc/kernel/manifest.ts` is hand-maintained in the shape of
 `packages/cf-harness/audit/citations.ts`: one row per critical function with
@@ -156,8 +203,8 @@ acceptable.
 
 `deno task check-cfc-correspondence` fails when:
 
-- a kernel file's recorded pseudocode hash differs from the snapshot's (the
-  spec moved; re-derive);
+- a kernel function's recorded pseudocode hash differs from the snapshot's
+  (the spec moved; re-derive);
 - a critical function in the snapshot has no manifest row, or a manifest row
   names a kernel symbol that does not exist;
 - a `§` citation anywhere under `packages/runner/src/cfc/` names a section the
@@ -195,9 +242,25 @@ pull request (a ruling, or a direct edit when the answer is not in doubt), with
 the labs pull request linking it.
 
 Migration: each of the eighteen open entries becomes a specs pull request;
-`cfc-spec-changes.md` is reduced to an index from `SC-n` to the specs pull
-request that holds it and then archived to `docs/history/specs/` once every
-row points somewhere. New gaps do not get an `SC` number.
+`cfc-spec-changes.md` closes to new entries when stage 1 lands, is reduced to
+an index from `SC-n` to the specs pull request that holds it, and is archived
+to `docs/history/specs/` once every row points somewhere. New gaps do not get
+an `SC` number.
+
+The migration is also the test drive of the process. Three groups of entries
+stand alone and between them exercise every leg:
+
+- `SC-49`, `SC-50`, `SC-51`: three items on §8.17.6 rule 4, prose only, from
+  one build. The ruling form is the whole exercise.
+- `SC-52`: a space's own DID is not a member of the space (§4.9.3, §18.4.5,
+  `Cfc/Membership.lean`). The one open entry that names a Lean file, so prose
+  and proof move in one ruling.
+- `SC-54` with `SC-56`: the default display ceiling and remote loads at render
+  (§8.10.6, §8.10.5.2). Both sit on `defaultDisplayCeiling`, a named
+  pseudocode block, so the ruling moves a hash and the kernel re-derives.
+
+`SC-53`, `SC-47` with `SC-48`, and `SC-44` depend on other entries or open new
+sections and go after the three groups.
 
 ### The kernel (stage 3)
 
@@ -303,9 +366,9 @@ entries to specs pull requests. Done when the check is green with every
 critical function accounted for, `cfc-spec-changes.md` is an index, and the
 labs pin is a single committed value.
 
-**Stage 3: the kernel.** Critical functions move into `kernel/` one at a time,
-each with its red test from the pseudocode's cases and its manifest row turned
-from `missing` to `exact` or `adapted`. Suggested order, by how close today's
+**Stage 3: the kernel.** Critical functions move into the chapter files under
+`kernel/` one at a time, each with its red test from the pseudocode's cases and
+its manifest row turned from `missing` to `exact` or `adapted`. Suggested order, by how close today's
 code already is: `atomLe`, `isMoreRestrictiveCNF`, `canUpdateStoreLabel`
 (§8.12.1); `joinLabels`, `canAccess` (§3.1); `matchRuleWithBindings`,
 `applyExchangeRule`, `evaluateExchangeRules` (§4.4.5); `pathsOverlap`,
@@ -338,16 +401,24 @@ about which specification it implements precise, re-stated on every change,
 and failed by a machine when it stops being true. Proof of the runtime itself
 remains out of scope, as the specification says of every §18 profile.
 
-## Open decisions
+## Decisions
 
-For the CFC owner before stage 1 lands:
+Taken by the CFC owner on 2026-10-05:
 
-1. **Kernel end state.** Hand-written and hash-pinned, or extracted verbatim
-   from the spec? The plan is written to reach the second through the first.
-2. **The initial critical set.** The stage 3 list, or a narrower set to start.
-3. **The `SPEC-PENDING` budget**, and whether marked code may ship at the
-   `enforce-strict` default or must sit behind a dial until ruled.
-4. **When `cfc-spec-changes.md` freezes.** At stage 2, or now, with the
-   eighteen open entries migrated first.
-5. **Specs CI.** Whether the owner wants the `lake build` gate added to
-   `commonfabric/specs`, and by whom.
+1. **Kernel end state.** Verbatim extraction, reached incrementally through
+   hand-written hash-pinned functions; files grouped by spec chapter, not one
+   per function.
+2. **Test drive.** The process is proven by migrating the open entries,
+   starting with the three self-contained groups named under "One tracker".
+3. **The `SPEC-PENDING` budget** is three; marked code ships at the strict
+   default only when fail-closed, otherwise behind a dial.
+4. **The spec-change list** closes to new entries when stage 1 lands and
+   drains through the test drive.
+5. **Specs CI** is wanted, as it is cheap: `lake build`, the architecture
+   check, the pseudocode check, and the cross-repository correspondence job.
+
+Open, needed before stage 4 and not before:
+
+- **Publishing the pseudocode.** Verbatim extraction makes the critical
+  blocks public as the runner's source. Accept, or keep those functions
+  hand-written and hash-pinned.
