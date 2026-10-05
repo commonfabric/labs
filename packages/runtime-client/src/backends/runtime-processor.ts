@@ -143,11 +143,6 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
-import {
-  changeSharedSpaceMembership,
-  getSharedSpaceCatalog,
-  registerSharedSpace,
-} from "../shared-space-catalog.ts";
 import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
@@ -3546,44 +3541,6 @@ export class RuntimeProcessor {
         return await this.handleSqliteExec(request);
       case RequestType.GetCell:
         return this.handleGetCell(request);
-      case RequestType.GetSharedSpaceCatalog:
-        return await getSharedSpaceCatalog(
-          this.#runtime,
-          request.home,
-          (cell) => {
-            if ("refused" in this.#hostReadGate.read(cell)) {
-              throw new Error(
-                "The host cannot read this shared-space catalog.",
-              );
-            }
-          },
-        );
-      case RequestType.RegisterSharedSpace:
-        return await registerSharedSpace(
-          this.#runtime,
-          request.home,
-          request.registration,
-          (cell) => {
-            if ("refused" in this.#hostReadGate.read(cell)) {
-              throw new Error(
-                "The host cannot read this shared-space catalog.",
-              );
-            }
-          },
-        );
-      case RequestType.ChangeSharedSpaceMembership:
-        return await changeSharedSpaceMembership(
-          this.#runtime,
-          request.home,
-          request.change,
-          (cell) => {
-            if ("refused" in this.#hostReadGate.read(cell)) {
-              throw new Error(
-                "The host cannot read this shared-space catalog.",
-              );
-            }
-          },
-        );
       case RequestType.GetHomeSpaceCell:
         return this.handleGetHomeSpaceCell(request);
       case RequestType.EnsureHomePatternRunning:

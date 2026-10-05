@@ -1,10 +1,10 @@
 # Shared-space catalog in Home
 
 The Home pattern owns the shared-space catalog and exposes its operations as
-handlers. Other patterns and host applications use the same interface. The
-[direct host SDK](../features/shared-space-catalog.md) supplies tested catalog
-rules; completing the Home implementation includes moving those rules into Home
-and replacing direct host mutation with handler invocation.
+handlers. Other patterns and host applications use the same
+[catalog interface](../features/shared-space-catalog.md). Its state, validation,
+and transitions belong to authored Home code; the remaining integration work
+must make ordinary subscriptions and handler invocation reliable for consumers.
 
 ## State and operations
 
@@ -61,36 +61,37 @@ committed outcome or valid durable evidence of that action. Observing an
 optimistic matching state is insufficient. A later action may supersede an
 earlier successful one without making its historical success false.
 
-The direct SDK's whole-catalog value pin can remain a stronger implementation
-check while it exists. An authored pin API is not a prerequisite merely to make
-a reply's copied membership current at commit: even that value can be stale by
-the time a consumer receives it.
+An authored pin API is not a prerequisite merely to make a reply's copied
+membership current at commit: even that value can be stale by the time a
+consumer receives it. Home returns operation outcomes without copied entries.
+The result receipt is durable action evidence, and the reactive catalog is the
+current membership observation.
 
 ## Implementation sequence
 
-1. Align the base contract with the distinction between operation outcome and
-   observed state. Keep the direct SDK provisional until the Home and host paths
-   use one implementation.
-2. Add the catalog to the real Home pattern, with authored handlers and tests.
-   Use ordinary pattern imports, validation before a typed projection, stable
-   event identities, and normal handler results. Preserve unknown fields, kinds,
-   states, and incompatible action evidence on untouched entries.
-3. Adapt the host client to discover Home, invoke its handlers, and subscribe to
-   its catalog. Remove the independent mutation implementation. A thin wrapper
-   may coordinate these existing operations without owning catalog rules.
+1. Establish the catalog in the real Home pattern, with authored handlers and
+   tests. Use ordinary pattern imports, validation before a typed projection,
+   stable event identities, and normal handler results. Preserve unknown fields,
+   kinds, states, and incompatible action evidence on untouched entries.
+2. Prove Home creation, source upgrades, and explicit root recovery preserve the
+   catalog authority. Recreating a Home root must not silently publish an empty
+   replacement catalog to consumers.
+3. Adapt consumers to discover Home, invoke its handlers, and subscribe to its
+   catalog. A thin wrapper may coordinate these existing operations without
+   owning catalog rules.
 4. Connect the native projection and shared-loom flows to that interface, then
    rehearse recovery across fresh devices, reconnect, and sidecar restart.
 
-Each slice must be reviewable against its immediate dependency. The base and
-Home/host integration remain drafts until they form a coherent interface; a
-tested direct SDK alone is not the completed feature.
+Each slice must be reviewable against its immediate dependency. The Home
+implementation remains a draft until its storage lifecycle is safe. Consumer
+integration must provide evidence of recovery and failure handling before the
+catalog becomes the native collection authority.
 
 ## Required evidence
 
 - Real Home creation and source upgrades expose the same catalog and handlers
-  without resetting membership. Resolve the storage identity deliberately:
-  either Home retains the dedicated backing document or its owned cells replace
-  the unpublished direct-SDK addressing. No two writable catalogs may coexist.
+  without resetting membership. Home's owned backing cell is the authority;
+  there is no independent SDK writer or second catalog to reconcile.
 - Root recreation either preserves the catalog reference or requires an explicit
   recovery that preserves its data; it must not silently create an empty
   membership authority.
@@ -108,11 +109,34 @@ tested direct SDK alone is not the completed feature.
   not substitute the service identity or a pattern-compilation origin for the
   owner or Home route.
 
+Controlled held-commit and rejected-predecessor tests remain required in
+addition to the concurrent registration and membership races. Those ordinary
+races do not establish behavior under every optimistic rollback ordering.
+
+## Home replacement
+
+Ordinary source updates and automatic roll-forward repair retain the Home root
+identity. Explicit recreation, including the debugger action and CLI
+`space recreate-root` and `space set-home`, creates a different root. Recreation
+also unlinks the current root before compiling its replacement, so a failure
+can leave Home detached.
+
+The next lifecycle slice should guard existing Home state before stopping or
+unlinking it, and use the existing in-place source-update mechanism for changing
+the Home application. Preserving account data by default avoids a catalog-only
+transfer that silently discards profiles, favorites, or other Home data. A true
+account-data reset, if needed, requires an explicitly destructive contract.
+Tests must cover compilation failure and concurrent root changes as well as
+successful source updates.
+
 For every proposed shim, record the required behavior, the ordinary platform
 operation attempted, the failing example, and whether a small general platform
 change would suffice. Keep any retained shim's responsibility explicit. This
-includes stable backing-cell discovery, host normalization, and result receipt
-access if the production path demonstrates a gap in one of them.
+includes stable backing-cell discovery and result receipt access if a production
+consumer demonstrates a gap. `normalizeSpaceHost` is a general authoring helper
+backed by the runtime's canonical routing validator. The direct-runtime Loom
+sidecar can use existing `sendEvent` receipts; a new runtime-client invocation
+API is not a prerequisite for that consumer.
 
 Coordination with FabriChat is recorded in the
 [consumer Topic](https://estuary.saga-castor.ts.net/topics-dev-476ea34f/of:fid1:LWFAKJVz0hlcUUz6hlo9gGwYXajuXpUyblkS_MFOwlg).

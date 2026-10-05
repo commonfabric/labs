@@ -40,6 +40,7 @@ import { renderCellReference } from "../cell-reference.ts";
 import { getEntityId } from "../create-ref.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { freezeVerifiedPlainData } from "../sandbox/plain-data.ts";
+import { normalizeSpaceHost } from "../space-host.ts";
 import {
   registerUnsafeHostTrustedValue,
   type UnsafeHostTrust,
@@ -281,6 +282,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     eventKey,
     // The DID Core syntax guard the runtime itself decides by.
     isWellFormedDID,
+    normalizeSpaceHost,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):

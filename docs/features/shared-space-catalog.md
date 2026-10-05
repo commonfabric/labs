@@ -1,10 +1,18 @@
 # Shared-space catalog
 
-The shared-space catalog records which shared spaces a person keeps in their
-collection. Its schema and deterministic cause are exported by
-`@commonfabric/runtime-client/shared-space-catalog-contract`. One document lives in the principal's Home under
-`sharedSpaceCatalogCause(principal)`. Reading or updating it does not require
-the Home UI pattern to run.
+The Home pattern owns the shared-space catalog: which shared spaces a person
+keeps in their collection. It exposes reactive `sharedSpaceCatalog` data and the
+`registerSharedSpace` and `changeSharedSpaceMembership` handlers. Authored
+patterns and host applications use these same operations. Catalog types,
+validation, and transitions live in
+`packages/patterns/system/shared-space-catalog.ts`.
+
+The catalog's backing cell has Home's stable `sharedSpaceCatalog` cause. An
+in-place source update retains that identity. Replacing the Home root creates a
+different owner for its internal cells; preserving or explicitly recovering the
+catalog across that operation remains a prerequisite for production integration.
+The [integration plan](../plans/shared-space-catalog-pattern-access.md) lists
+the remaining deployment and consumer requirements.
 
 ## Identity and routing
 
@@ -14,42 +22,45 @@ provide a display title. The space DID is its identity; the host is a routing
 fact. Registration refuses an existing entry with a different host or kind.
 Applications resolve the current root from the space when opening it.
 
-Every operation supplies `{ principal, host }` for Home. This configuration
-must come from the person's identity and deployment configuration,
-independently of the host of a shared space or profile. The runtime checks both
-the authenticated identity and its effective route for Home before accessing
-the catalog. It refuses a mismatch rather than writing another host's Home or
-changing a live route. Configuring two clients with the same principal but
-different Home hosts still names two separate stores; this API does not choose
-a canonical host on their behalf.
+Consumers discover the authenticated person's Home using their identity and
+configured Home host, independently of an offered space's host or profile.
+Pattern consumers can follow Home through the ordinary default-pattern link;
+host consumers use the same link in the configured Home space. Home's ACL
+controls access to its data and handlers. A serving runtime executes the
+addressed handler on behalf of the event's authenticated actor; it must not
+substitute the service identity's Home. Configuring two clients with different
+Home hosts still names two stores; this interface does not choose a canonical
+host on their behalf. Consumers must verify their identity and route before
+invoking handlers or accepting a catalog observation.
 
 ## Registration and membership
 
-`RuntimeClient.registerSharedSpace(home, registration)` accepts an
-application-validated kind, such as `loom` or `fabrichat-room`. The caller first validates the target's root kind and
-the recipient's access. Registration grants no access and makes no claim that
-the target remains accessible. Kinds are nonempty strings of at most 32
-characters, not an SDK-owned enumeration. An intake consumer must leave offers
-whose kinds it does not understand unconsumed. Readers retain entries of other
-kinds and filter explicitly for the kinds their application understands.
+Home's `registerSharedSpace` handler accepts an application-validated kind, such
+as `loom` or `fabrichat-room`. The caller first validates the target's root kind
+and the recipient's access. Registration grants no access and makes no claim
+that the target remains accessible. Kinds are nonempty strings of at most 32
+characters, not a fixed enumeration. An intake consumer must leave offers whose
+kinds it does not understand unconsumed. Readers retain entries of other kinds
+and filter explicitly for the kinds their application understands.
 
 Registration is insert-if-absent. An existing entry keeps its title, revision,
 and membership, including when a new offer names it. The returned status is
 `registered`, `existing`, or `conflict`. Separate registrations run through
 Fabric's transaction conflict handling so one client cannot replace another's
-entry with its stale collection. A legacy binding may supply `initialState:
-"archived"` to insert an archived entry in the same commit; omitted
-`initialState` means saved. This hint never overrides an existing Home entry.
+entry with its stale collection. A legacy binding may supply
+`initialState: "archived"` to insert an archived entry in the same commit;
+omitted `initialState` means saved. This hint never overrides an existing Home
+entry.
 
 New entries record `since`, the recipient's admission time in epoch
-milliseconds. Registration captures it once before transaction retries; a
-migration may supply a historical value. It is a client-clock display hint,
-not a revision, server timestamp, or ordering authority. An offer-backed first
-registration also records `from`, that offer's validated sender DID. A direct
-save has no sender. Subsequent offers and membership changes preserve both
-fields, even if the initial save had no sender. Older entries may lack either
-field; lists must handle that absence. The sender's `sharedAt` claim is not
-substituted for recipient admission time.
+milliseconds. Registration records it when admitting the entry; a migration may
+supply a historical value. It is a handler-clock display hint, not a revision,
+server timestamp, or ordering authority. An offer-backed first registration also
+records `from`, that offer's validated sender DID. A direct save has no sender.
+Subsequent offers and membership changes preserve both fields, even if the
+initial save had no sender. Older entries may lack either field; lists must
+handle that absence. The sender's `sharedAt` claim is not substituted for
+recipient admission time.
 
 `saved` entries belong in the ordinary collection. `archived` entries belong in
 the archived collection with an explicit restore action. Both states retain the
@@ -63,81 +74,63 @@ writer must define the additional state's transitions.
 
 The catalog uses additive evolution without a root version gate. Readers
 preserve extra root and entry fields and opaque `lastAction` evidence. A writer
-that cannot interpret an entry's action evidence, or finds that its action
-state differs from the entry's state, returns an `action` conflict for that
-entry. Other entries remain readable and writable. The type and meaning of
-every existing field, including optional fields, are fixed. A different
-representation needs a new field name: changing the admission timestamp from
-epoch milliseconds to an ISO string makes the
-stored document invalid to readers of this contract. Incompatible changes to
-required fields need an explicit migration contract; changing an ignored
-`version` extension does not enable incompatible semantics.
+that cannot interpret an entry's action evidence, or finds that its action state
+differs from the entry's state, returns an `action` conflict for that entry.
+Other entries remain readable and writable. The type and meaning of every
+existing field, including optional fields, are fixed. A different representation
+needs a new field name: changing the admission timestamp from epoch milliseconds
+to an ISO string makes the stored document invalid to readers of this contract.
+Incompatible changes to required fields need an explicit migration contract;
+changing an ignored `version` extension does not enable incompatible semantics.
 
-`RuntimeClient.changeSharedSpaceMembership(home, change)` takes the space DID,
-a durable action ID, the membership revision the user observed, and the desired
-state. Each applied action creates a new revision, including a choice that
-names the same state. The local loom version and a timestamp are not catalog
-revisions. An action based on an older revision returns `conflict` and does not
-rebase itself onto a newer choice.
+Home's `changeSharedSpaceMembership` handler takes the space DID, a durable
+action ID, the membership revision the user observed, and the desired state.
+Each applied action creates a new revision, including a choice that names the
+same state. The local loom version and a timestamp are not catalog revisions. An
+action based on an older revision returns `conflict` and does not rebase itself
+onto a newer choice.
 
 The entry retains the last action's ID, observed revision, and requested state.
 Repeating that exact action returns `confirmed` while its evidence remains
 current. Reusing its ID with different arguments conflicts. A later action can
-make an older action impossible to confirm; clients surface that conflict
-rather than replaying it. These records are application confirmation metadata,
-not a general command queue or a complete action history.
+make an older action impossible to confirm; clients surface that conflict rather
+than replaying it. These records are application confirmation metadata, not a
+general command queue or a complete action history.
 
-An operation result describes the request. Its returned entry is the observation
-made by that operation, and can already have been superseded when the caller
-receives it. Consumers obtain current membership from the catalog's reactive
-read surface; they never install membership from an operation reply.
-`confirmed` means the action was applied, not that it remains the latest choice.
+An operation result describes the request and contains only its outcome and
+identifiers. Consumers obtain current membership from the catalog's reactive
+read surface. They never install membership from an operation reply. `confirmed`
+means the action was applied, not that it remains the latest choice.
 
 ## Confirmation and unavailable data
 
-Mutation methods resolve after their Fabric transaction completes. The
-transaction's result carries the entry it selected, rather than a subsequent
-local read that may already reflect another action. A read-only transaction can
-complete locally, so an `existing` or `confirmed` result additionally pins the
-catalog's value at the memory server with an `entity-value-hash` precondition.
-That SDK check remains active independently of the optional commit-preconditions
-flag. A failed value pin returns `conflict` with reason `catalog-changed`.
-The pin is an implementation guarantee of these direct SDK methods, rather
-than a requirement that every catalog consumer expose a value-pinning API.
-An ordinary transaction conflict may re-evaluate the same action against a
-fresh snapshot; that action still carries its original observed revision.
+Handlers read and write in the platform-supplied transaction. Their returned
+outcomes use ordinary handler result receipts, committed with the handler's
+consequences. Even a registration of an existing entry has a result receipt;
+local event enqueue or an optimistic subscription update alone is not durable
+completion. Host callers that need that guarantee use the normal `sendEvent`
+completion callback and its handling receipt, distinguishing an appended event
+from its completed handling. Authored consumers use the ordinary handler stream.
 
-The value pin covers the entire catalog. An unrelated entry changing during a
-confirmation can therefore cause a conservative conflict. The caller may read
-the catalog again and confirm the same action and expected revision. It must
-not substitute the newly read revision into the old action.
+A receipt can outlive the membership it reports. Replaying the same durable
+event after a later action can return the original successful outcome while the
+catalog shows the later choice. A new membership invocation carrying a stale
+observed revision conflicts. An ordinary transaction conflict can rerun the
+handler, but the request retains its original action ID and revision.
+`eventKey()` supplies a revision stable across retries and client/server
+execution of the same event.
 
-`RuntimeClient.getSharedSpaceCatalog(home)` returns a validated snapshot:
-`{ status: "ready", catalog }` or `{ status: "absent" }`. It checks the storage
-read result and the Home access status before reporting absence. Failed,
-refused, malformed, or unsupported reads reject. Neither failure nor an
-unfinished load is an empty collection. Clients retain their last confirmed
-projection and expose freshness separately. Ordinary native collection reads
-can use that projection without waiting for Fabric.
+Consumers subscribe through ordinary cells: reactive reads in patterns and
+`Cell.sink` in direct-runtime hosts. Updates may be optimistic and may roll
+back. Failed, refused, malformed, or unfinished reads are not empty collections.
+The catalog validator reads a broad object shape before selecting known fields
+so a typed link cannot hide a malformed optional value. Only a valid initialized
+catalog is usable; an unavailable value is never defaulted to an empty catalog.
 
-The low-level `sharedSpaceCatalogCell()` supplies a reference for invalidation
-signals. Generic cell reads may represent load failures as undefined, so they
-must not decide catalog availability or clear a local collection. Refresh the
-projection through `getSharedSpaceCatalog()` when an invalidation arrives.
-
-An operation first waits for this runtime's earlier optimistic writes to settle
-so an unconfirmed local value cannot become its baseline. The scheduler barrier
-covers the whole runtime and can therefore wait on unrelated work. It is a
-correctness barrier for confirmed SDK operations, not a list-rendering API.
-A future narrower barrier must prove the same guarantee for the catalog.
-
-The direct-runtime equivalents are exported through
-`@commonfabric/runtime-client/shared-space-catalog`. They require a client
-runtime with the Home principal's identity. Serving runtimes are refused so an
-unscoped call cannot write the service identity's catalog. The browser worker
-uses these same transaction functions and applies its host-read gate before
-admitting the operation. Its read policy is described in the runtime-client
-README.
+Native consumers must retain their last confirmed projection and expose load and
+failure status separately. A generic subscription supplies values, not a
+complete load/error or operation-acknowledgment protocol. Consumer integration
+must demonstrate that distinction before replacing a durable local collection.
 
 ## Offer receipts
 
@@ -159,8 +152,8 @@ inbox or changing its ACL is a separate operation.
 Host, kind, title, and admission provenance describe the first accepted
 registration. A title is a display hint; applications read the space's root for
 its current name. Repeated registration does not refresh that hint. Host and
-kind conflicts require investigation rather than an automatic rewrite. There
-is no supported route-migration, retitle, or repair operation in this API.
+kind conflicts require investigation rather than an automatic rewrite. There is
+no supported route-migration, retitle, or repair operation in this API.
 
 An exceptional owner-authorized repair must preserve a backup and compare its
 observed catalog at commit. Changing a target's host or kind also requires
@@ -171,30 +164,28 @@ stale offer to recreate the entry. Archive is the supported removal from the
 ordinary collection; it retains the membership and receipt evidence.
 
 Receipts are retained indefinitely. The catalog is one document, so reads,
-validation, copies, value-hash pins, and writes grow with the collection and
-its receipt history. TTL deletion is not safe without another retained deduplication
-record. Large-scale retention or compaction needs a separate design that
-preserves replay refusal and existing membership. This API implements neither
-automatic compaction nor a size-based reset.
+validation, and receipt storage grow with the collection and its receipt
+history. Handlers update individual entry paths and preserve unknown fields. TTL
+deletion is not safe without another retained deduplication record. Large-scale
+retention or compaction needs a separate design that preserves replay refusal
+and existing membership. This API implements neither automatic compaction nor a
+size-based reset.
 
-## Pattern access
+## Consumer integration
 
-Authored patterns cannot import this host SDK, and it exposes no pattern-facing
-catalog capability. A raw cell link does not supply the SDK's registration,
-receipt, revision, or confirmation semantics. The
-[pattern integration plan](../plans/shared-space-catalog-pattern-access.md)
-specifies Home-owned state and handlers as the intended public interface.
-It includes replacing direct SDK mutation with calls to that interface and
-using ordinary cell subscriptions for observation. The direct SDK access
-described here is the implemented surface pending that integration.
+Home provides the catalog contract and its handlers. Product clients still need
+to adopt them for explicit save/join, registration of durable shared bindings,
+reconstruction, archive/restore, and their lists. Private, unshared hosted looms
+are excluded from catalog migration. `Home.spaces` remains the navigation list,
+the site table holds routing hints, and browser recents are local navigation
+history; none automatically populates this catalog.
 
-## Client integration
-
-The SDK provides the storage contract. Product clients still need to adopt it
-for explicit save/join, background registration of durable bindings,
-reconstruction, archive/restore, and their lists. `Home.spaces`, the site table,
-and browser recents do not automatically populate this catalog. A successful
-SDK test does not establish deployed web-to-native recovery.
+The catalog has no independent SDK mutation implementation. A host consumer
+follows Home's cells and invokes its handlers using normal runtime facilities. A
+wrapper may coordinate discovery, invocation, subscriptions, or errors, but must
+not own a second copy of the catalog rules. Any new platform adapter must name
+the demonstrated gap it closes. The direct-runtime Loom sidecar can use existing
+handler receipts without adding a runtime-client protocol.
 
 Registration pending in CFS can be derived from a durable local binding without
 a new retry journal. Membership changes require the durable action ID and

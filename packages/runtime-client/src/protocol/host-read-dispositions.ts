@@ -137,21 +137,6 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.SqliteExec]: write,
   [RequestType.GetCell]: reference,
   [RequestType.GetHomeSpaceCell]: reference,
-  [RequestType.GetSharedSpaceCatalog]: {
-    kind: "trusted-operation",
-    why:
-      "validated Home catalog snapshot; its source passes the host-read gate before admission",
-  },
-  [RequestType.RegisterSharedSpace]: {
-    kind: "trusted-operation",
-    why:
-      "Home catalog transaction; its backing value passes the host-read gate before admission",
-  },
-  [RequestType.ChangeSharedSpaceMembership]: {
-    kind: "trusted-operation",
-    why:
-      "Home catalog transaction; its backing value passes the host-read gate before admission",
-  },
   [RequestType.EnsureHomePatternRunning]: lifecycle,
   [RequestType.Idle]: lifecycle,
   [RequestType.ListEventAttention]: {

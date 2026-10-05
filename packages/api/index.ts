@@ -3354,6 +3354,13 @@ export type DID = `did:${string}`;
 export declare function isWellFormedDID(value: unknown): value is DID;
 
 /**
+ * Parses a space host as an HTTP or HTTPS origin. Credentials, paths, query
+ * strings, and fragments are refused. The returned URL exposes the canonical
+ * origin used for storage and compute routing.
+ */
+export declare function normalizeSpaceHost(host: string | URL): URL;
+
+/**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.
  * Nothing in the event's payload can choose the value.
