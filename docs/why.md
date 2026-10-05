@@ -117,10 +117,11 @@ survive into the store; row-level clearance on shared tables; and
 access control on spaces, enforced on the production server. Every
 dial the flow checker has is built, every enforcement dial defaults to
 its strictest sound rung, and the harness that dogfoods it goes further
-still. What is left: one dial still observes rather than refuses, a
-space still has a host that can revoke a participant, and the machine
-that would prove which runtime it is before your data arrives is
-provisioned but not yet proving anything. Robustness and performance are not there yet. The
+still. What is left: one dial still observes rather than refuses, the
+default sink ceiling is empty, a browser profile can opt out of the
+render ceiling, a space still has a host that can revoke a participant,
+and the machine that would prove which runtime it is before your data
+arrives is provisioned but not yet proving anything. Robustness and performance are not there yet. The
 claim is never perfection. It is checkability: here is the mechanism,
 here is how to check it, here is what it does not cover. A promise of
 perfection is destroyed by its first counterexample; a guarantee built
