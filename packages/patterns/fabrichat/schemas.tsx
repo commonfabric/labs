@@ -2,9 +2,11 @@
  * The FabriChat records, and the parts of the contracts that don't depend on
  * how a room stores its messages: the reviewed surfaces, recorded times,
  * profiles, a room's records and requests, how a message's reactions tally,
- * the manager's records, and the displays an element shown by a prop takes. `docs/specs/fabrichat/` states each of them, and
- * the names here are the spec's. `room-records.tsx` defines the records a room
- * stores, and `room.tsx` the room's own output types over them.
+ * and the manager's records, which `docs/specs/fabrichat/` states under the
+ * same names; and the displays an element shown by a prop takes, as
+ * `docs/common/patterns/conditional.md` describes. `room-records.tsx` defines
+ * the records a room stores, and `room.tsx` the room's own output types over
+ * them.
  *
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
  * compared through `nsecOf()`.
@@ -362,11 +364,12 @@ export const reactionTalliesOf = (
  * its messages alone. It leaves out the rest of the room's data face. A
  * room's `canSend` is decided per reader, from their own profile, and its
  * `messages.windows` are each session's own, so both reach documents of a
- * member's own. Its `messages.latest` is shared, but holds up to
- * `maxWindowCount` messages and their reactions, which every manager handler
- * would then load for every room; a reader that wants the messages reads them
- * through the room. `cf-render` still draws the room through the link, since a
- * render reads the rendering whatever the link declares.
+ * member's own, as the room's rendering does. Its `messages.latest` is
+ * shared, but holds up to `maxWindowCount` messages and their reactions, which
+ * every manager handler would then load for every room; a reader that wants
+ * the messages reads them through the room. The rendering is not part of the
+ * link either, and `cf-render` still draws the room through it, since a render
+ * reads the rendering whatever the link declares.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */
