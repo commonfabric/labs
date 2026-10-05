@@ -10,7 +10,12 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { admitPanel, externalUrl, insertionIndex } from "./admission.tsx";
+import {
+  admitPanel,
+  assertRemovable,
+  externalUrl,
+  insertionIndex,
+} from "./admission.tsx";
 import type {
   LoomInput,
   LoomOutput,
@@ -41,7 +46,13 @@ function withoutPiece(
 
 const removePiece = handler<{ piece: Writable<unknown> }, State>(
   ({ piece }, { panels, presentation }) => {
-    const next = withoutPiece(panels.get(), piece);
+    const list = panels.get();
+    const next = withoutPiece(list, piece);
+    // Every occurrence of the piece goes or none does: one that another
+    // principal added refuses the whole unregistration.
+    for (const panel of list) {
+      if (!next.some((kept) => kept.equals(panel))) assertRemovable(panel);
+    }
     panels.set(next);
     const current = presentation.get();
     presentation.set({
@@ -59,6 +70,7 @@ const removePiece = handler<{ piece: Writable<unknown> }, State>(
 const removePanel = handler<{ panel: Writable<Panel> }, State>(
   ({ panel }, { panels, presentation }) => {
     const list = panels.get();
+    if (list.some((existing) => existing.equals(panel))) assertRemovable(panel);
     panels.set(list.filter((existing) => !existing.equals(panel)));
     const current = presentation.get();
     presentation.set({

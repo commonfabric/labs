@@ -1,9 +1,11 @@
 import type { DID } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
+import { resolveLink } from "../link-resolution.ts";
 import {
   exactPrincipalAttestations,
   PRINCIPAL_CLAIM_KINDS,
@@ -36,14 +38,23 @@ import { cellOfTarget } from "./space-access.ts";
  * adds no confidentiality to the result. If that classification ever made the
  * subject protected, this throws, since no label could be carried for it.
  *
+ * With `options.followLink` of `false`, the read is of the label where a
+ * write to `target` lands instead: links on the way to `target` are followed,
+ * and so is a redirect stored there, but a link `target` holds as its value is
+ * not. That reads what the runtime stamped on a field holding a link, such as
+ * who wrote the link, where the default reads the document the link leads to.
+ * The claims a link carries from that document are not counted either way.
+ *
  * The DID returned is data. Written into a label as a claim's subject, it is a
  * literal like any other, which the runtime refuses from a pattern unless the
  * schema declares it as the `ownerPrincipal` and it is the principal the write
  * acts for.
  *
  * @throws If called outside a handler or a reactive computation, with a
- *   `kind` that is not a principal claim kind, or with a `target` that is
- *   neither a cell nor `undefined`; if the target's label cannot be read,
+ *   `kind` that is not a principal claim kind, with a `target` that is
+ *   neither a cell nor `undefined`, or with `options` that is not an object
+ *   whose `followLink`, if present, is a boolean; if the target's label cannot
+ *   be read,
  *   including one stored in a form this build cannot interpret
  *   (`StoredCfcMetadataError`); and if the label-metadata classification
  *   makes a claim's subject anything but public.
@@ -53,11 +64,13 @@ export function principalOf(
   // runtime checks below have cases to catch from untyped callers.
   target: unknown,
   kind: unknown,
+  options?: unknown,
 ): DID | undefined {
   const principals = attestedPrincipals(
     "principalOf(target, kind)",
     target,
     kind,
+    options,
   );
   return principals?.length === 1 ? principals[0] : undefined;
 }
@@ -71,7 +84,8 @@ export function principalOf(
  * order they first appear, when it attests one or more. Returns `undefined`
  * when a claim there is in any form but the one a runtime mints, since no
  * principal can then be read from it, and for a `target` passed as
- * `undefined`. The claims are read where, and as, `principalOf()` reads them.
+ * `undefined`. The claims are read where, and as, `principalOf()` reads them,
+ * `options.followLink` included.
  *
  * @throws In every case `principalOf()` throws.
  */
@@ -80,20 +94,27 @@ export function principalsOf(
   // runtime checks below have cases to catch from untyped callers.
   target: unknown,
   kind: unknown,
+  options?: unknown,
 ): DID[] | undefined {
-  return attestedPrincipals("principalsOf(target, kind)", target, kind);
+  return attestedPrincipals(
+    "principalsOf(target, kind)",
+    target,
+    kind,
+    options,
+  );
 }
 
 /**
  * Helper for `principalOf()` and `principalsOf()`, which checks the calling
  * frame and `kind`, then reads the claims of `kind` on `target`'s label as
  * `exactPrincipalAttestations()` reads them. `name` is the caller, as its
- * errors name it.
+ * errors name it. `options` is the caller's third argument, unchecked.
  */
 function attestedPrincipals(
   name: string,
   target: unknown,
   kind: unknown,
+  options: unknown,
 ): DID[] | undefined {
   const frame = topFrame();
   if (frame?.frameKind !== "lift" && frame?.frameKind !== "handler") {
@@ -101,8 +122,8 @@ function attestedPrincipals(
       `\`${name}\` can only be called from a handler or a reactive computation.`,
     );
   }
-  const { tx } = frame;
-  if (tx === undefined) {
+  const { runtime, tx } = frame;
+  if (runtime === undefined || tx === undefined) {
     throw new Error(`\`${name}\` requires an executing runtime.`);
   }
   if (typeof kind !== "string" || !PRINCIPAL_CLAIM_KINDS.has(kind)) {
@@ -116,12 +137,32 @@ function attestedPrincipals(
       debugStr`\`${name}\` cannot carry a label for the subject of a $quote${claimKind} claim, which is not classified public.`,
     );
   }
+  let followLink = true;
+  if (options !== undefined) {
+    const given = isObjectNotArray(options) ? options.followLink : null;
+    if (given !== undefined && typeof given !== "boolean") {
+      throw new Error(
+        debugStr`\`${name}\` takes \`options\` of \`{ followLink?: boolean }\`, not $quote${options}`,
+      );
+    }
+    followLink = given ?? true;
+  }
   if (target === undefined) return undefined;
 
   // Resolution follows the link chain, which reads pointers and not the
   // value they lead to.
-  const link = cellOfTarget(target, name).withTx(tx).resolveAsCell()
-    .getAsNormalizedFullLink();
+  const cell = cellOfTarget(target, name).withTx(tx);
+  const link = !followLink
+    // Stops where a write to the cell lands: a link stored there as its value
+    // is left unfollowed, so the label read is the one on the field itself.
+    ? resolveLink(
+      runtime,
+      runtime.readTx(tx),
+      cell.getAsNormalizedFullLink(),
+      "writeRedirect",
+      { markIfcCrossings: true },
+    )
+    : cell.resolveAsCell().getAsNormalizedFullLink();
   // The default read policy journals the read as a dependency, so a label
   // change runs the calling computation again.
   const metadata = readStoredCfcMetadata(tx, {

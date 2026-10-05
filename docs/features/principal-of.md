@@ -41,6 +41,25 @@ link carries from the document it points to (an entry observed as `followRef`).
 `target` is followed through any links it holds first, so a cell holding a
 link to a profile returns the profile's principal.
 
+## The label on a field that holds a link
+
+A field that links another document has a label of its own, on the document
+holding the link: what the runtime stamped there when the link was written,
+such as `represents-principal` for whoever wrote a field typed
+`RepresentsCurrentUser`. That is a different fact from what the linked
+document's label says. A panel's `addedByProfile` in the Loom root links the
+profile its adder acted under, and any participant may link any profile, so
+the profile's label names its owner while the field's names who acted.
+
+`principalOf(target, kind, { followLink: false })` and the same call of
+`principalsOf()` read the field's label. Links on the way to `target` are
+followed, and so is a redirect stored there, which is where a write to `target`
+would land; a link `target` holds as its value is not. The claims are read in
+the same places relative to that field, and the copies of the linked document's
+claims that the link carries are not counted, as in the default read. For a
+field holding no link, the two reads are the same. `options` in any other form
+throws.
+
 ## What it returns
 
 | Result | When |

@@ -430,6 +430,10 @@ const inviteBaker = handler<
 - `principalsOf(target, kind)` returns every principal the label attests: `[]`
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
+- A field that links a document has its own label, separate from the linked
+  document's. `principalOf(field, kind, { followLink: false })` reads the
+  field's: who wrote the link, where the default reads whom the linked
+  document represents.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 

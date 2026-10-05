@@ -4246,10 +4246,15 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * subject is refused, like any other literal DID a pattern writes there,
  * unless the schema declares it as the `ownerPrincipal` and it is the
  * principal the write acts for.
+ *
+ * `options` is a {@link PrincipalReadOptions}: with `followLink` of `false`,
+ * the label read is the one on the field `target` addresses, not the one on
+ * the document a link stored there leads to.
  */
 export declare function principalOf(
   target: AnyCell<unknown> | undefined,
   kind: PrincipalClaimKind,
+  options?: PrincipalReadOptions,
 ): DID | undefined;
 
 /**
@@ -4267,7 +4272,22 @@ export declare function principalOf(
 export declare function principalsOf(
   target: AnyCell<unknown> | undefined,
   kind: PrincipalClaimKind,
+  options?: PrincipalReadOptions,
 ): DID[] | undefined;
+
+/** Where `principalOf()` and `principalsOf()` read a label. */
+export type PrincipalReadOptions = {
+  /**
+   * Whether a link `target` holds as its value is followed. By default it is,
+   * and the label read is the one on the document the link leads to: for a
+   * field linking a profile, whom the profile represents. With `false` the
+   * label read is the one on the field itself, where a write to `target`
+   * lands: what the runtime stamped there, such as who wrote the link. Links
+   * on the way to `target` are followed either way, and so is a redirect
+   * stored there.
+   */
+  readonly followLink?: boolean;
+};
 
 /**
  * Returns the event key of the event the running handler handles: a string

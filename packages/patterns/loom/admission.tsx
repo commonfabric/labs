@@ -166,6 +166,39 @@ function attestedAdders(panel: Writable<Panel>): string[] | undefined {
   return principalsOf(panel.key("addedBy"), "authored-by");
 }
 
+/**
+ * Throws unless the principal the running event acts for may remove `panel`
+ * for everyone: an occurrence nobody is attested to have added, or one
+ * attested to that principal alone. The adder is read from the runtime's
+ * stamps on the occurrence's own fields, `authored-by` at `addedBy` and
+ * `represents-principal` at `addedByProfile`, where the stamp names whoever
+ * acted under the profile, never the linked profile's owner. An `addedBy`
+ * value no stamp names is its writer's claim, and protects nothing.
+ */
+export function assertRemovable(panel: Writable<Panel>): void {
+  const direct = attestedAdders(panel);
+  const underProfile = principalsOf(
+    panel.key("addedByProfile"),
+    "represents-principal",
+    { followLink: false },
+  );
+  // A claim in a form no runtime mints, or stamps naming two principals,
+  // settle on no adder, so nobody is the one who may remove the occurrence.
+  const adders = direct === undefined || underProfile === undefined
+    ? undefined
+    : [...new Set([...direct, ...underProfile])];
+  if (adders === undefined || adders.length > 1) {
+    throw new Error(
+      "A panel whose label contests who added it cannot be removed",
+    );
+  }
+  if (adders.length === 1 && adders[0] !== currentPrincipal()) {
+    throw new Error(
+      "Only the principal who added a panel can remove it",
+    );
+  }
+}
+
 /** A copy of `source` that keeps its target and title and takes a new adder. */
 function copyOf(source: Panel, event: PanelAdmission): Panel {
   // A copy is added by whoever duplicates it: the adder comes from the event,
