@@ -661,14 +661,19 @@ describe("legacy-envelope tolerance on cold load", () => {
   });
 
   afterEach(async () => {
-    for (const rt of runtimes.splice(0)) {
+    // Every runtime's write-backs drain before any runtime is disposed. They
+    // share one storage manager, and a loader's cold-load write-back still in
+    // flight when the runtime that persisted the closure is disposed never
+    // settles, so flushing it afterwards would wait forever.
+    const finished = runtimes.splice(0);
+    for (const rt of finished) {
       try {
         await rt.patternManager.flushCompileCacheWrites();
       } catch {
         // Dispose regardless; individual tests assert on write-back success.
       }
-      await rt.dispose();
     }
+    for (const rt of finished) await rt.dispose();
     await storageManager?.close();
   });
 
