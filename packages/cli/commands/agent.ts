@@ -11,6 +11,11 @@ import { openAgentStorageHost } from "../lib/agent-connections.ts";
 
 import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
 import {
+  type LocalJobsConfig,
+  type LocalJobsService,
+  startLocalJobs,
+} from "../lib/local-jobs/service.ts";
+import {
   type AgentRunInspection,
   cancelAgentRun,
   readAgentRun,
@@ -59,6 +64,11 @@ export interface AgentRunnerCommandOptions {
   workRoot?: string;
   leaseSeconds: number;
   model?: string;
+  localJobsSocket?: string;
+  localJobProfiles?: string;
+  localJobsStore?: string;
+  maxConcurrentLocal?: number;
+  localOnly?: boolean;
 }
 
 /** The tool names a runner offers: `--tools`, or what its configuration backs. */
@@ -118,6 +128,12 @@ export interface AgentRunnerCommandDeps {
   untilStopped: () => Promise<void>;
 
   report: (message: string) => void;
+
+  /** Starts serving local jobs; `startLocalJobs` unless a test replaces it. */
+  startLocal?: (
+    config: LocalJobsConfig,
+    report: (message: string) => void,
+  ) => Promise<Pick<LocalJobsService, "setFabricLane" | "stop">>;
 }
 
 /** Helper for the config, which reads an API URL option as an origin. */
@@ -379,10 +395,122 @@ export const defaultAgentRunnerCommandDeps: AgentRunnerCommandDeps = {
   report: (message) => console.error(message),
 };
 
-/** Runs a runner until the process is asked to stop. */
+/**
+ * Resolves the local job options to a configuration, or `undefined` when the
+ * runner serves no local jobs.
+ *
+ * @throws ValidationError for a local option without `--local-jobs-socket`,
+ * a socket without `--local-job-profiles`, or a concurrency below one.
+ */
+export function resolveLocalJobsConfig(
+  options: AgentRunnerCommandOptions,
+  deps: Pick<AgentRunnerCommandDeps, "env">,
+): LocalJobsConfig | undefined {
+  if (options.localJobsSocket === undefined) {
+    const stray = [
+      ["--local-job-profiles", options.localJobProfiles],
+      ["--local-jobs-store", options.localJobsStore],
+      ["--local-only", options.localOnly],
+    ].find(([, value]) => value !== undefined);
+    if (stray !== undefined) {
+      throw new ValidationError(
+        `"${stray[0]}" needs "--local-jobs-socket".`,
+        { exitCode: 1 },
+      );
+    }
+    return undefined;
+  }
+  if (options.localJobProfiles === undefined) {
+    throw new ValidationError(
+      `"--local-jobs-socket" needs "--local-job-profiles".`,
+      { exitCode: 1 },
+    );
+  }
+  const maxConcurrent = options.maxConcurrentLocal ?? 2;
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
+    throw new ValidationError(
+      `"--max-concurrent-local" takes a whole number of 1 or more.`,
+      { exitCode: 1 },
+    );
+  }
+  return {
+    socketPath: absPath(options.localJobsSocket),
+    profilesPath: absPath(options.localJobProfiles),
+    ...(options.localJobsStore !== undefined
+      ? { storePath: absPath(options.localJobsStore) }
+      : {}),
+    maxConcurrent,
+    workRoot: join(
+      absPath(
+        options.workRoot ??
+          join(
+            deps.env("CF_HARNESS_HOME") ||
+              join(deps.env("HOME") || ".", ".cf-harness"),
+            "agent-runs",
+          ),
+      ),
+      "local",
+    ),
+    ...(options.loomRetrievalConfig !== undefined
+      ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
+      : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
+  };
+}
+
+/**
+ * Runs a runner until the process is asked to stop. With local jobs, they
+ * are served first; the Fabric lane then starts unless `--local-only` says
+ * not to, and a Fabric lane that fails to start leaves the local jobs
+ * served rather than stopping the runner.
+ */
 export async function agentRunnerAction(
   options: AgentRunnerCommandOptions,
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
+): Promise<void> {
+  const localConfig = resolveLocalJobsConfig(options, deps);
+  if (localConfig === undefined) return await runFabricLane(options, deps);
+  const local = await (deps.startLocal ?? startLocalJobs)(
+    localConfig,
+    deps.report,
+  );
+  let fabric: { stop(): Promise<void> } | undefined;
+  try {
+    if (options.localOnly) {
+      deps.report("agent runner: serving local jobs only (--local-only)");
+    } else {
+      const config = await resolveAgentRunnerConfig(options, deps);
+      try {
+        fabric = await deps.start(config, deps.report);
+        local.setFabricLane(true);
+        deps.report(
+          `agent runner: following ${config.home} on ${config.homeHost}, offering ${
+            config.tools.join(", ")
+          }`,
+        );
+      } catch (error) {
+        deps.report(
+          `agent runner: the Fabric lane did not start, so this runner serves local jobs only: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    await deps.untilStopped();
+    deps.report("agent runner: stopping");
+  } finally {
+    try {
+      await fabric?.stop();
+    } finally {
+      await local.stop();
+    }
+  }
+}
+
+/** Helper for `agentRunnerAction`, which runs the Fabric lane alone. */
+async function runFabricLane(
+  options: AgentRunnerCommandOptions,
+  deps: AgentRunnerCommandDeps,
 ): Promise<void> {
   const config = await resolveAgentRunnerConfig(options, deps);
   const running = await deps.start(config, deps.report);
@@ -613,6 +741,27 @@ export const createAgentCommand = (
       { default: DEFAULT_LEASE_SECONDS },
     )
     .option("--model <name:string>", "Model name passed to cf-harness.")
+    .option(
+      "--local-jobs-socket <path:string>",
+      "Serve local jobs on this Unix socket, with a bearer token beside it " +
+        "(<path>.token). Off unless named.",
+    )
+    .option(
+      "--local-job-profiles <path:string>",
+      "Host-owned JSON file naming the profiles local jobs run under.",
+    )
+    .option(
+      "--local-jobs-store <path:string>",
+      "The local job store. Defaults to jobs.sqlite beside the socket.",
+    )
+    .option(
+      "--max-concurrent-local <n:integer>",
+      "How many local jobs run at once. Defaults to 2.",
+    )
+    .option(
+      "--local-only",
+      "Serve local jobs and start no Fabric lane; needs no identity or API URL.",
+    )
     .action((options) => agentRunnerAction(options, deps));
 
   return new Command()
