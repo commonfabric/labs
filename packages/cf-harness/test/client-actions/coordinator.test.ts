@@ -5,6 +5,11 @@ import { fromFileUrl, toFileUrl } from "@std/path";
 
 import type { HarnessClientActionRequester } from "../../mod.ts";
 import {
+  HarnessClientActionCoordinator,
+  readHarnessClientActionAnswer,
+  readHarnessMidTurnClientAction,
+} from "../../src/client-actions/coordinator.ts";
+import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   type HarnessCommandResolveBody,
 } from "../../src/contracts/client-command.ts";
@@ -201,6 +206,52 @@ const outcomesOf = (h: ReturnType<typeof harness>) =>
 
 describe("coordinator", () => {
   describe("a typed command", () => {
+    it("keeps an in-process answer's body out of the model when its provenance cannot be derived", async () => {
+      const requested = Promise.withResolvers<void>();
+      const events: Event[] = [];
+      const coordinator = new HarnessClientActionCoordinator({
+        newActionId: () => "id-1",
+        idleTimeoutMs: 300_000,
+        emit: (_turnId, event, options) => {
+          events.push(event);
+          options?.onCommitted?.();
+          if (event.kind === "client_action_requested") requested.resolve();
+          return Promise.resolve();
+        },
+      });
+      const action = readHarnessMidTurnClientAction(query);
+      const answer = readHarnessClientActionAnswer(
+        settle("resolve-executed-success", "id-1"),
+      );
+      if (
+        action === undefined || answer === undefined ||
+        answer.form !== "settlement" ||
+        answer.params.settlement.status !== "executed" ||
+        !("outcome" in answer.params.settlement)
+      ) {
+        throw new Error("Expected an executed command fixture");
+      }
+      // In-process callers can supply strings the wire reader would refuse.
+      // Such provenance must never be handed to a document holder.
+      answer.params.settlement.attribution.loomActor = "agent:InvalidSlug";
+      let held = false;
+      const result = coordinator.request("t", [action], undefined, () => {
+        held = true;
+        return Promise.resolve("unexpected-handle");
+      });
+      await requested.promise;
+      expect(await coordinator.resolve(answer)).toEqual({ status: "accepted" });
+      const outcomes = await result;
+      expect(held).toBe(false);
+      expect(outcomes[0]).toMatchObject({
+        settlement: { status: "executed", outcome: { ok: true } },
+      });
+      expect(JSON.stringify(outcomes)).not.toContain("Reading list");
+      expect(outcomes[0]).not.toHaveProperty("settlement.handle");
+      expect(events).toHaveLength(2);
+      expect(events[1]).not.toHaveProperty("settlement.handle");
+    });
+
     for (
       const { title, action, fixtureName, loomActor } of [
         {
