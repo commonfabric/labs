@@ -2643,6 +2643,12 @@ the file directly; both ways end at the same path. With `--allow-tool`, name
 retained in run state, so a resumed root run keeps the same result contract
 without repeating the command-line flags; a conflicting restatement is refused.
 
+The system prompt includes the complete result schema for both batch and
+operator runs, whether the result is submitted through the tool or written to
+the file. Object schemas are closed by default, including nested objects: a
+result includes only properties the schema declares unless that schema allows
+additional properties explicitly.
+
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from
 `--structured-result-schema-file`. After the run, cf-harness reads the sidecar,
