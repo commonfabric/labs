@@ -724,6 +724,53 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("refuses a destination whose labels changed after review", async () => {
+      const fixture = await setup();
+      // A ceiling with room above Alice's label, so a strengthened label still
+      // fits it and only the stale check can refuse the commit. (A label can
+      // only strengthen: the runtime refuses a weakened one.)
+      const wide = fixture.runtimeFor(sender, [
+        cfcAtom.user(sender.did()),
+        ADDRESS_BOOK_CLAUSE,
+        "address-book-pinned",
+      ]);
+      try {
+        const local = (cell: Cell<unknown>) =>
+          wide.getCellFromLink(cell.getAsNormalizedFullLink());
+        const prepared = await prepareReviewedIntent({
+          descriptor: local(fixture.descriptor),
+          parameters: { to: [local(fixture.recipient)] },
+          result: local(fixture.result),
+        });
+        // The descriptor, rewritten by its consumer with the same value under
+        // a stronger label: everything the review compares is equal except
+        // the labels the preview read, which the record would carry
+        // unreviewed. (A label can only strengthen: the runtime refuses a
+        // weakened one.)
+        const tx = wide.edit();
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: CONSUMER_WRITER,
+        });
+        local(fixture.notes).withTx(tx).get();
+        wide.getCell(sender.did(), "messaging-descriptor", {
+          type: "object",
+          ifc: {
+            confidentiality: [cfcAtom.user(sender.did()), "address-book-pinned"],
+            writeAuthorizedBy: [CONSUMER_WRITER],
+          },
+        } as never, tx).set(DESCRIPTOR as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await fixture.storage.synced();
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/review is stale/);
+        expect(fixture.result.get()).toBeNull();
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a destination the pattern rebound after review", async () => {
       const fixture = await setup();
       try {
