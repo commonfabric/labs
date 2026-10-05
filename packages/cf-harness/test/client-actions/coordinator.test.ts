@@ -4,6 +4,7 @@ import { FakeTime } from "@std/testing/time";
 import { fromFileUrl, toFileUrl } from "@std/path";
 
 import type { HarnessClientActionRequester } from "../../mod.ts";
+import { HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES } from "../../src/client-actions/command-result.ts";
 import {
   HarnessClientActionCoordinator,
   readHarnessClientActionAnswer,
@@ -11,7 +12,12 @@ import {
 } from "../../src/client-actions/coordinator.ts";
 import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
+  HARNESS_COMMAND_CATALOG_LIMIT,
+  HARNESS_COMMAND_ID_PATTERN,
+  type HarnessCommandCatalogEntry,
+  harnessCommandJsonBytes,
   type HarnessCommandResolveBody,
+  readHarnessCommandCatalog,
 } from "../../src/contracts/client-command.ts";
 import type { HarnessDocumentReferentDraft } from "../../src/contracts/handle-table.ts";
 import {
@@ -411,21 +417,43 @@ describe("coordinator", () => {
 
       const settlement = outcomesOf(h)[0].settlement as {
         catalog: { entries: { command: string }[] };
+        compacted?: number;
         droppedEntries?: number;
         droppedCommands?: string[];
       };
       // Every id the Weaver sends, mixed-case and underscored ones
       // included, is one the contract admits, so nothing is dropped.
-      expect(settlement.catalog.entries).toHaveLength(241);
-      expect(settlement.droppedEntries).toBeUndefined();
-      expect(settlement.droppedCommands).toBeUndefined();
+      expect(settlement.catalog.entries).toHaveLength(15);
+      expect(settlement.catalog.entries.map((entry) => entry.command)).toEqual([
+        "looms.list",
+        "loom.open",
+        "artifact.fetch-image",
+        "calendar.day",
+        "connector.connectDevice",
+        "connector.msgvaultRetireLegacy",
+        "create.chat",
+        "epic-fhir.refresh-endpoints",
+        "loom.add",
+        "loom.inspect",
+        "loom.move",
+        "person-entry.find",
+        "revert",
+        "wish.choose_facet",
+        "wish.delivery_retry",
+      ]);
+      expect(settlement.catalog.entries).toEqual(
+        posted.settlement.catalog.entries,
+      );
+      expect(settlement.droppedEntries ?? 0).toBe(0);
+      expect(settlement.droppedCommands ?? []).toEqual([]);
+      expect(settlement.compacted).toBeUndefined();
       const [event] = h.resolved() as {
         settlement: unknown;
         result?: string;
       }[];
       expect(event.settlement).toEqual({
         status: "executed",
-        catalogEntries: 241,
+        catalogEntries: 15,
       });
       expect(event.result).toBeUndefined();
       await h.finish();
@@ -439,11 +467,31 @@ describe("coordinator", () => {
         settlement: { catalog: { entries: Record<string, unknown>[] } };
       };
       const entries = body.settlement.catalog.entries;
+      const refused = [
+        {
+          reason: "invalid command id",
+          entry: { ...entries[0], command: "loom invalid" },
+        },
+        {
+          reason: "missing required fields",
+          entry: { command: "page.broken" },
+        },
+      ];
+      expect(HARNESS_COMMAND_ID_PATTERN.test(refused[0].entry.command)).toBe(
+        false,
+      );
+      expect(Object.keys(refused[1].entry)).toEqual(["command"]);
+      for (const { reason, entry } of refused) {
+        expect(readHarnessCommandCatalog({ entries: [entry] }), reason)
+          .toBeUndefined();
+      }
       const broken = {
         ...body,
         settlement: {
           status: "executed",
-          catalog: { entries: [...entries, { command: "page.broken" }] },
+          catalog: {
+            entries: [...entries, ...refused.map(({ entry }) => entry)],
+          },
         },
       };
       // The envelope is the contract's to refuse.
@@ -462,8 +510,95 @@ describe("coordinator", () => {
         droppedCommands?: string[];
       };
       expect(settlement.catalog.entries).toEqual(entries);
-      expect(settlement.droppedEntries).toBe(1);
-      expect(settlement.droppedCommands).toEqual(["page.broken"]);
+      expect(settlement.catalog.entries).toHaveLength(3);
+      expect(settlement.droppedEntries).toBe(2);
+      expect(settlement.droppedCommands).toEqual([
+        "loom invalid",
+        "page.broken",
+      ]);
+      expect(h.resolved()[0]).toMatchObject({
+        settlement: { status: "executed", catalogEntries: 3 },
+        result:
+          "2 catalog entries were dropped as malformed: loom invalid, page.broken",
+      });
+      await h.finish();
+    });
+
+    it("compacts a generated maximum-size catalog while retaining requested details", async () => {
+      const entries: HarnessCommandCatalogEntry[] = Array.from(
+        { length: HARNESS_COMMAND_CATALOG_LIMIT },
+        (_, index) => ({
+          command: `generated.command-${index}`,
+          summary: "Generated catalog entry",
+          scope: "global",
+          executes: "weaver",
+          effect: "read",
+          approval: "automatic",
+          inputSchema: { type: "object", description: "x".repeat(256) },
+        }),
+      );
+      expect(harnessCommandJsonBytes({ entries })).toBeGreaterThan(
+        HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES,
+      );
+      const detail = entries.at(-1)!;
+      const h = harness({
+        calls: [{
+          actions: [{
+            kind: "list_commands",
+            request: { detail: [detail.command] },
+          }],
+        }],
+      });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      const body = {
+        sessionId: "s",
+        actionId: "id-1",
+        settlement: { status: "executed", catalog: { entries } },
+      };
+      const oversized = await h.answer({
+        ...body,
+        settlement: {
+          status: "executed",
+          catalog: {
+            entries: [...entries, { ...detail, command: "generated.overflow" }],
+          },
+        },
+      });
+      expect(oversized.ok === false && oversized.error.code).toBe(
+        "invalid_request",
+      );
+      expect(h.resolved()).toEqual([]);
+      expect((await h.answer(body)).ok).toBe(true);
+      await h.callsDone;
+      const settlement = outcomesOf(h)[0].settlement as {
+        catalog: { entries: HarnessCommandCatalogEntry[] };
+        compacted: number;
+      };
+      expect(settlement.catalog.entries).toHaveLength(
+        HARNESS_COMMAND_CATALOG_LIMIT,
+      );
+      expect(settlement.catalog.entries.map((entry) => entry.command)).toEqual(
+        entries.map((entry) => entry.command),
+      );
+      expect(settlement.compacted).toBeGreaterThan(0);
+      expect(settlement.catalog.entries.at(-1)).toEqual(detail);
+      expect(
+        settlement.catalog.entries.some((entry) => !("inputSchema" in entry)),
+      )
+        .toBe(true);
+      const whole = settlement.catalog.entries.filter((entry) =>
+        "inputSchema" in entry
+      );
+      expect(harnessCommandJsonBytes(whole)).toBeLessThanOrEqual(
+        HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES,
+      );
+      expect(h.resolved()[0]).toMatchObject({
+        settlement: {
+          status: "executed",
+          catalogEntries: HARNESS_COMMAND_CATALOG_LIMIT,
+        },
+      });
       await h.finish();
     });
 
