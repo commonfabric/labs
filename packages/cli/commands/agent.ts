@@ -1,10 +1,7 @@
 import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
-import {
-  LOOM_COMMAND_TOOL_IDS,
-  LOOM_RETRIEVAL_TOOL_IDS,
-} from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -48,9 +45,6 @@ const LOOM_TOOLS = [...LOOM_RETRIEVAL_TOOL_IDS];
 /** The harness tools every runner offers. */
 const BASE_TOOLS = ["describe_handle", "web_fetch"];
 
-/** The host-command tools a runner offers when it has a command broker. */
-const COMMAND_TOOLS = [...LOOM_COMMAND_TOOL_IDS];
-
 /** How long a claim's lease reaches past the run's last durable write. */
 const DEFAULT_LEASE_SECONDS = 300;
 
@@ -60,7 +54,6 @@ export interface AgentRunnerCommandOptions {
   apiUrl?: string;
   localApiUrl?: string;
   loomRetrievalConfig?: string;
-  loomCommandsConfig?: string;
   maxConcurrent: number;
   tools?: string;
   workRoot?: string;
@@ -70,10 +63,7 @@ export interface AgentRunnerCommandOptions {
 
 /** The tool names a runner offers: `--tools`, or what its configuration backs. */
 export function resolveRunnerTools(
-  options: Pick<
-    AgentRunnerCommandOptions,
-    "tools" | "loomRetrievalConfig" | "loomCommandsConfig"
-  >,
+  options: Pick<AgentRunnerCommandOptions, "tools" | "loomRetrievalConfig">,
 ): string[] {
   if (options.tools !== undefined) {
     const tools = options.tools.split(",").map((tool) => tool.trim()).filter((
@@ -89,23 +79,11 @@ export function resolveRunnerTools(
         { exitCode: 1 },
       );
     }
-    const unbrokered = tools.find((tool) =>
-      (LOOM_COMMAND_TOOL_IDS as ReadonlySet<string>).has(tool)
-    );
-    if (unbrokered !== undefined && options.loomCommandsConfig === undefined) {
-      throw new ValidationError(
-        `Tool \`${unbrokered}\` requires "--loom-commands-config" or ` +
-          "CF_HARNESS_LOOM_COMMANDS_CONFIG.",
-        { exitCode: 1 },
-      );
-    }
     return tools;
   }
-  return [
-    ...(options.loomRetrievalConfig !== undefined ? LOOM_TOOLS : []),
-    ...BASE_TOOLS,
-    ...(options.loomCommandsConfig !== undefined ? COMMAND_TOOLS : []),
-  ];
+  return options.loomRetrievalConfig !== undefined
+    ? [...LOOM_TOOLS, ...BASE_TOOLS]
+    : [...BASE_TOOLS];
 }
 
 /** What the flags and environment resolve to. */
@@ -122,7 +100,6 @@ export interface AgentRunnerCommandConfig {
   leaseMs: number;
   workRoot: string;
   loomRetrievalConfigPath?: string;
-  loomCommandsConfigPath?: string;
   model?: string;
 }
 
@@ -221,9 +198,6 @@ export async function resolveAgentRunnerConfig(
     ),
     ...(options.loomRetrievalConfig !== undefined
       ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
-      : {}),
-    ...(options.loomCommandsConfig !== undefined
-      ? { loomCommandsConfigPath: absPath(options.loomCommandsConfig) }
       : {}),
     ...(options.model !== undefined ? { model: options.model } : {}),
   };
@@ -348,9 +322,6 @@ export async function startAgentRunner(
         allowedTools: config.tools,
         ...(config.loomRetrievalConfigPath !== undefined
           ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
-          : {}),
-        ...(config.loomCommandsConfigPath !== undefined
-          ? { loomCommandsConfigPath: config.loomCommandsConfigPath }
           : {}),
         ...(config.model !== undefined ? { model: config.model } : {}),
         report,
@@ -620,17 +591,6 @@ export const createAgentCommand = (
     .option(
       "--loom-retrieval-config <path:string>",
       "Host-owned JSON file backing the read-only Loom tools.",
-    )
-    .env(
-      "CF_HARNESS_LOOM_COMMANDS_CONFIG=<path:string>",
-      "Host-owned JSON file naming the command broker behind list_commands " +
-        "and run_command.",
-      { prefix: "CF_HARNESS_" },
-    )
-    .option(
-      "--loom-commands-config <path:string>",
-      "Host-owned JSON file naming the command broker behind list_commands " +
-        "and run_command.",
     )
     .option(
       "--max-concurrent <n:integer>",

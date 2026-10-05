@@ -238,66 +238,6 @@ describe("cf agent runner", () => {
     expect(started).toEqual([]);
   });
 
-  it("offers the two command tools and passes the broker configuration on with `--loom-commands-config`", async () => {
-    const { deps, started } = stubDeps();
-
-    await run(deps, [
-      "runner",
-      "-i",
-      "/keys/me.key",
-      "-a",
-      "http://localhost:8100",
-      "--loom-commands-config",
-      "/etc/loom/commands.json",
-    ]);
-
-    expect(started[0].loomCommandsConfigPath).toBe("/etc/loom/commands.json");
-    expect(started[0].tools).toEqual([
-      "describe_handle",
-      "web_fetch",
-      "list_commands",
-      "run_command",
-    ]);
-  });
-
-  it("reads the command broker configuration from its harness environment variable", async () => {
-    const { deps, started } = stubDeps();
-
-    await withEnv(
-      "CF_HARNESS_LOOM_COMMANDS_CONFIG",
-      "/etc/loom/commands.json",
-      async () => {
-        await run(deps, [
-          "runner",
-          "-i",
-          "/keys/me.key",
-          "-a",
-          "http://localhost:8100",
-        ]);
-      },
-    );
-
-    expect(started[0].loomCommandsConfigPath).toBe("/etc/loom/commands.json");
-    expect(started[0].tools).toContain("run_command");
-  });
-
-  it("throws a validation error for an explicit command tool without the broker configuration", async () => {
-    const { deps, started } = stubDeps();
-
-    await expect(
-      run(deps, [
-        "runner",
-        "-i",
-        "/keys/me.key",
-        "-a",
-        "http://localhost:8100",
-        "--tools",
-        "describe_handle,run_command",
-      ]),
-    ).rejects.toThrow(/--loom-commands-config/);
-    expect(started).toEqual([]);
-  });
-
   it("throws a validation error, and starts nothing, for a missing identity or API URL", async () => {
     const { deps, started } = stubDeps();
 

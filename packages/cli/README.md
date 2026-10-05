@@ -1243,7 +1243,6 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--api-url`, `CF_API_URL`   | The toolshed serving that user's home space.                                                                                      |
 | `--local-api-url`           | The toolshed the runner sits beside, recorded as the runner's `host`. Defaults to `--api-url`.                                    |
 | `--loom-retrieval-config`   | The host-owned JSON file backing the read-only Loom tools. Without it the runner offers no `loom_*` tool.                         |
-| `--loom-commands-config`    | The host-owned JSON file naming the host's command broker. With it the runner offers `list_commands` and `run_command`.           |
 | `--tools`                   | Comma-separated tool names the runner offers. Defaults to what its configuration backs.                                           |
 | `--max-concurrent`          | How many runs the process holds at once. Defaults to 1.                                                                           |
 | `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                                               |
@@ -1252,15 +1251,8 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 
 The model provider is the one `cf-harness` is configured with under its harness
 home directory. The runner uses the `context` prompt role, so the default
-`enforce-strict` mode admits only `submit_result` and, with a command broker,
-`run_command`, whose authority is the host's grant; set
+`enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
-
-With `--loom-commands-config`, every run the runner claims reaches the host
-through the one broker the file names, so two limits hold until the host starts
-a broker per run: the broker's run identity and actor are the runner's rather
-than the request's, and every request the runner accepts holds the same grant.
-See `packages/cf-harness/docs/LOOM_COMMANDS.md`.
 
 What the runner does, in order:
 

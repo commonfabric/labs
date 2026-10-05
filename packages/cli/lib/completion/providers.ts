@@ -1052,11 +1052,9 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   remote: () => Promise.resolve(apiUrlCandidates()),
   identity: () => Promise.resolve(directive({ kind: "files", glob: "*.key" })),
   // `cf agent runner`: the toolshed it sits beside, the host-owned Loom tool
-  // configurations it reads, and the directory its runs' workspaces go under.
+  // configuration it reads, and the directory its runs' workspaces go under.
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
   "loom-retrieval-config": () =>
-    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
-  "loom-commands-config": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   "work-root": () => Promise.resolve(directive({ kind: "dirs" })),
   // A source directory on the commands that compile one, and an entity on

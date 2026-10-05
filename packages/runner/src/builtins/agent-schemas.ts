@@ -20,10 +20,8 @@ import { LLM_DERIVED_RESULT_STAMP_SCHEMA } from "./llm-schemas.ts";
  * The tool names a request may select from. A deployment publishes this
  * list; the requester's registered runner offers a subset of it, and a
  * request naming a tool outside that subset fails before it is staged. The
- * `loom_*` names are the read-only Loom retrieval tools; `list_commands` and
- * `run_command` reach the commands the runner's host admits through the
- * host's broker; the rest are the harness tools a run over handles observes
- * the fabric and the web through.
+ * `loom_*` names are the read-only Loom retrieval tools; the rest are the
+ * harness tools a run over handles observes the fabric and the web through.
  */
 export const AGENT_TOOL_NAMES = [
   "loom_search",
@@ -34,8 +32,6 @@ export const AGENT_TOOL_NAMES = [
   "loom_calendar_list",
   "loom_context",
   "loom_profile",
-  "list_commands",
-  "run_command",
   "describe_handle",
   "run_pattern",
   "web_fetch",

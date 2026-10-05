@@ -79,9 +79,6 @@ export interface HarnessAgentRunExecutorOptions {
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
-  /** The host-owned file naming the broker behind the command tools. */
-  loomCommandsConfigPath?: string;
-
   /** Model name passed to `cf-harness`. */
   model?: string;
 
@@ -229,18 +226,6 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     JSON.stringify(maxConfidentiality),
     ...(options.loomRetrievalConfigPath !== undefined
       ? ["--loom-retrieval-config", options.loomRetrievalConfigPath]
-      : []),
-    // SHORTCUT: every run this runner claims reaches the host through the one
-    // broker this file names. Two limits follow. The broker's run identity
-    // and actor are the runner's, fixed when the host started it, so the
-    // host's ledger cannot tell one request's commands from another's, and a
-    // grant keyed to a run (a loom revision bound to its conversation) cannot
-    // be scoped to a request. And every request the runner accepts holds the
-    // same grant: a Weaver ask and any other pattern's request alike. To
-    // harden, the runner asks the host for a broker per claimed run, keyed to
-    // the record, whose scope the host chooses for that request.
-    ...(options.loomCommandsConfigPath !== undefined
-      ? ["--loom-commands-config", options.loomCommandsConfigPath]
       : []),
     ...Object.entries(inputs).flatMap(([name, cell]) => [
       "--input-cell",
