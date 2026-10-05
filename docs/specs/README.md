@@ -80,7 +80,6 @@ decision is reversed or superseded).
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
 - [Sealed custody](cfc-custody-seal.md)
-- [Reviewed intents](cfc-reviewed-intent.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)
