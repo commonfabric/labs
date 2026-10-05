@@ -63,6 +63,10 @@ const view = recommendation.pending
   `packages/runner/src/builtins/agent-schemas.ts`). A name the user's
   registered runner does not offer fails the request with `INVALID_INPUT`
   before it is staged; with no runner registered the request queues.
+  `list_commands` and `run_command` reach the commands the runner's host
+  admits, as the agent, through the host's broker; which commands those are
+  is the host's grant, and every request the runner accepts holds the same
+  one.
 
 ## Reading the result
 
