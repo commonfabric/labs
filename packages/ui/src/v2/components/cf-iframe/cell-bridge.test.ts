@@ -106,6 +106,7 @@ describe("cf-iframe cell bridge", () => {
     await count.cell!.set!(3);
     expect(requests).toEqual([{
       type: RequestType.CellPull,
+      awaitDurability: false,
       cell: {
         ...ref,
         path: ["count"],

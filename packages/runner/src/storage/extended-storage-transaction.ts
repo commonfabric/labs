@@ -153,6 +153,7 @@ import {
   type StorageTransactionStatus,
   toThrowable,
   type TransactionCommitOptions,
+  type TransactionCommitReceipt,
   type TransactionReactivityLog,
   type TransactionSealDestination,
   type TransactionWriteDetail,
@@ -469,6 +470,42 @@ let unwrapTransaction: (
   tx: object,
 ) => IExtendedStorageTransaction | undefined;
 let isExtendedStorageTransaction: (value: object) => boolean;
+
+/** Pairs an attempt's completion with its optional earlier verdict signal. */
+function transactionCommitReceipt(
+  settled: Promise<Result<Unit, CommitError>>,
+  signal?: Promise<Result<Unit, CommitError>>,
+): TransactionCommitReceipt {
+  const verdict = signal === undefined
+    ? settled
+    : Promise.race([signal, settled]);
+  let reported = false;
+  const report = (error: unknown) => {
+    if (reported) return;
+    reported = true;
+    // This module's logger is opt-in. Internal commit failures must remain
+    // visible even when local-only callers observe neither receipt stage.
+    console.error("[storage] transaction commit failed internally:", error);
+  };
+  // Settlement can reject after an accepted verdict. Observe both promises
+  // so either failure is reported, while callers still receive the rejection.
+  void settled.catch(report);
+  if (verdict !== settled) void verdict.catch(report);
+  return Object.freeze({ verdict, settled });
+}
+
+/** Finds the verdict signal through wrappers that expose only settlement. */
+function transactionCommitVerdict(
+  tx: IExtendedStorageTransaction,
+): Promise<Result<Unit, CommitError>> | undefined {
+  let current: IExtendedStorageTransaction | undefined = tx;
+  while (current !== undefined) {
+    const verdict = current.commitVerdict?.();
+    if (verdict !== undefined) return verdict;
+    current = unwrapTransaction(current);
+  }
+  return undefined;
+}
 
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #commitCallbacks = new Set<
@@ -3669,6 +3706,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return result;
   }
 
+  /** Starts this commit attempt and exposes its verdict and settlement. */
+  startCommit(): TransactionCommitReceipt {
+    const ready = this.status().status === "ready";
+    const settled = this.commit();
+    return transactionCommitReceipt(
+      settled,
+      ready ? this.commitVerdict() : undefined,
+    );
+  }
+
   async commit(
     options?: TransactionCommitOptions,
   ): Promise<Result<Unit, CommitError>> {
@@ -4601,6 +4648,16 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     options?: TransactionCommitOptions,
   ): Promise<Result<Unit, CommitError>> {
     return this.#wrapped.commit(options);
+  }
+
+  /** Starts this wrapper's commit attempt with explicit completion stages. */
+  startCommit(): TransactionCommitReceipt {
+    const ready = this.status().status === "ready";
+    const settled = this.commit();
+    return transactionCommitReceipt(
+      settled,
+      ready ? transactionCommitVerdict(this.#wrapped) : undefined,
+    );
   }
 
   addCommitCallback(

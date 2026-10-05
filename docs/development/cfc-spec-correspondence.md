@@ -12,7 +12,8 @@ the assessment that motivated it is
 ## Where the specification lives
 
 The specification is the `cfc/` directory of the `commonfabric/specs`
-repository. It is three artifacts kept equivalent:
+repository. It is three artifacts kept equivalent, and the implementation in
+this repository is the fourth thing held consistent with them:
 
 - the prose chapters `cfc/NN-*.md`, whose critical parts are stated as
   TypeScript pseudocode;
@@ -21,18 +22,21 @@ repository. It is three artifacts kept equivalent:
   table from each pseudocode function to its Lean definition;
 - the paper under `cfc/paper/`, whose claims name both.
 
-A change to the design is a change to all three. A change to one that leaves
-the others behind is a defect in the specification, in the same way a live
-document here that no longer matches the code is a defect.
+A change to the design is a change to all three, in one specs change: the
+prose, the pseudocode, and the proof land together, and the implementation
+follows. A change to one that leaves the others behind is a defect in the
+specification, in the same way a live document here that no longer matches the
+code is a defect.
 
-The repository is private; this one is public. A comment or document here may
-cite the specification by section, and nothing the public build runs may read
-it. The developer checkout is at `~/src/specs/cfc`, or wherever `CF_SPECS_DIR`
-points; without a checkout, read it on GitHub. Cite a section by number
-(`§8.10.3`) and chapter file, and quote the sentence the point rests on.
-Never cite a line number: it names a different sentence the moment a paragraph
-is inserted above it. `cfc/13-11-decisions.md` predates this rule and cites
-lines; the rule wins.
+The specs repository is private; this one is public. A comment or document
+here may cite the specification by section, and nothing the public build runs
+may read it. The developer points the agent at their checkout, through
+`CF_SPECS_DIR` or by naming it; the location is theirs to give, and nothing
+here assumes one. An agent that cannot reach the repository at all follows
+"Without access to the specification" below. Cite a section by number
+(`§8.10.3`) and chapter file, and quote the sentence the point rests on. Never
+cite a line number: it names a different sentence the moment a paragraph is
+inserted above it.
 
 ## The standard this repository holds to
 
@@ -77,17 +81,23 @@ The vocabulary:
 ## The procedure
 
 1. **Read the specification before the code.** A change under
-   `packages/runner/src/cfc/`, to the render boundaries in
-   `packages/html/src/worker/reconciler.ts`, or to a `docs/specs/cfc-*.md`
-   document starts by reading the governing section at the pin, and the kernel
-   function for any critical function the change touches. A `§` citation in
-   the code you are about to change is the pointer; follow it. Then read every
+   `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts`, to the CFC
+   tests under `packages/runner/test/`, to the render boundaries in
+   `packages/html/src/worker/reconciler.ts` and
+   `packages/html/src/worker/display-fit.ts`, to the harness's CFC enforcement
+   in `packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+   `sandbox/runsc-cfc-result.ts`), or to a `docs/specs/cfc-*.md` document
+   starts by reading the governing section at the pin, and the kernel function
+   for any critical function the change touches, or, until that function has
+   been carved out, the adapter code that decides it today, which the kernel
+   manifest names. A `§` citation in the code you are about to change is the
+   pointer; follow it. Then read every
    section the governing rule itself cites, not only the one named: a rule
    about an address or an identifier also answers to §2.4, whose rule that a
    derived identifier joins the labels of all its inputs can contradict a
-   local edit. The agent harness's CFC checks have their own correspondence
-   record, `docs/specs/agent-harness/04-cfc-spec-correspondence.md`, and
-   follow it.
+   local edit. The harness audit's clause derivation is recorded in
+   `docs/specs/agent-harness/04-cfc-spec-correspondence.md`; the harness's
+   enforcement sources named above follow this procedure.
 
 2. **Classify the change.** Exactly one of the three below. A fourth
    activity, filing or migrating a ruling, has no labs diff to classify and
@@ -113,12 +123,16 @@ The vocabulary:
    spec text, and the change that writes it is a semantic gap.
 
 3. **For a semantic gap, open the specs pull request first.** It carries the
-   prose delta and the pseudocode delta; the Lean delta, or an entry in
-   `cfc/notes/FUTURE-SPEC-WORK.md` naming the proof it owes, in that file's
-   shape (a `## <Topic> Follow-Ups` heading with `### Formal proof tasks`,
+   prose delta, the pseudocode delta, and the Lean delta together: the model
+   and the theorems that make the new rule a proved property land in the same
+   change, so the three artifacts never disagree at a commit. Deferring a
+   proof is the exception, taken when the model the rule needs does not exist
+   yet; the body says why, and the deferral is an entry in
+   `cfc/notes/FUTURE-SPEC-WORK.md` in that file's shape (a
+   `## <Topic> Follow-Ups` heading with `### Formal proof tasks`,
    `### Paper tasks` and `### Runtime tasks` beneath it, the first sentence
-   dating the entry and naming the ruling pull request); and an edit to
-   `cfc/paper/README-paper-notes.md` when a paper claim is affected. Write it
+   dating the entry and naming the ruling pull request). The request also
+   edits `cfc/paper/README-paper-notes.md` when a paper claim is affected. Write it
    as a ruling when the question has more than one defensible answer. The labs
    pull request links it in its description.
 
@@ -211,9 +225,36 @@ a kernel function given an input the pseudocode lacks, or a MUST-force rule in
 a labs document as a blocking finding. A reviewer of a specs ruling pull
 request checks that the body says whether the entry was already answered at
 specs `main`, states the runtime's conformance under the current and the
-applied text, and names the `FUTURE-SPEC-WORK.md` entry for any proof it owes.
-Ian Hickson reviews the pull requests that change this procedure or the
-machinery behind it; the CFC owner rules.
+applied text, carries its proof, and, where it defers one, says why and names
+the `FUTURE-SPEC-WORK.md` entry. Ian Hickson reviews the pull requests that
+change this procedure or the machinery behind it; the CFC owner rules.
+
+## Without access to the specification
+
+The specs repository is private, so a contributor here may be unable to read
+it. The procedure still applies; what changes is who completes which step.
+
+- **Say so.** The pull request description states that the change was made
+  without access to the specification, so a reviewer with access knows to
+  verify the classification rather than trust it.
+- **Use what is public.** The kernel manifest and spec snapshot under
+  `packages/runner/src/cfc/kernel/` give the section numbers, the pseudocode
+  function names and their hashes; `docs/specs/cfc-conformance-statement.md`
+  says how this runtime answers §18.6.4; the `§` citations in the code and
+  the sentences they quote say what each decision rests on; the labs CFC
+  documents cite the sections they arrange. That is enough to classify most
+  changes and to carry out any host arrangement.
+- **A conforming implementation** can be completed when the cited sentence in
+  the code or a labs document states the rule the change implements. Where it
+  does not, treat the change as a semantic gap.
+- **A semantic gap cannot be completed without the text.** Write the proposal
+  into the labs pull request description in the ruling form (the question, the
+  options, the recommendation, the conformance statement) and mark the request
+  as needing a specs-side counterpart. A developer with access files the specs
+  pull request from that text and links it; the labs change then lands by the
+  usual rule, behind the ruling or behind a `SPEC-PENDING` marker.
+- **Kernel functions are off limits**: their text is the pseudocode, and a
+  change to one without reading the spec is a change to the spec by guesswork.
 
 ## What checks what
 
