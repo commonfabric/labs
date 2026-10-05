@@ -1122,11 +1122,12 @@ Mechanics:
   label is placed by the payload it records, never by where the carrier sits
   (`placeCarriedLabels`, `payloadReach`):
   - A restriction lands wherever the payload's data may be: on each member of
-    the value the payload names. It lands on the whole value where the
-    payload has an index signature, whose keys are open, or where a mapped
-    type with an `as` clause may have renamed a member, which then holds the
-    payload's data under a name the payload does not have
-    (`holdsCarriersUnderTheirNames`). Restrictions are
+    the value the payload names, and on each member with no declaration. A
+    mapped type that renames its keys keeps no member's declaration, nor does
+    a spread of its result, so a renamed member, which holds the payload's
+    data under a name the payload does not have, is reached too. It lands on
+    the whole value where the payload has an index signature, whose keys are
+    open. Restrictions are
     `confidentiality`, `requiredIntegrity`, `maxConfidentiality` and the
     writer policies, and `exactCopyOf` and `projection`, which the runtime
     verifies at the write.
@@ -1147,9 +1148,13 @@ Mechanics:
     hold data under any key, so a restriction labels the whole value. Its
     evidence labels the whole value only where nothing writes over members
     and the value holds nothing besides: `Integrity<{}, L>` carries `L`, but
-    `{ ...tagged, name }` and `{ name } & Integrity<{}, L>` do not. A
-    primitive value lists no members, so a primitive payload, as in
-    `Integrity<string, L>`, labels the whole value.
+    `{ ...tagged, name }` and `{ name } & Integrity<{}, L>` do not.
+  - A primitive, alone or beside carriers and brands, is all the data its
+    value holds, so a payload that is or includes a primitive labels such a
+    value whole: `Integrity<string, L>`, and the `string` alternative of
+    `Confidential<string | { a: number }, L>`. A primitive intersected with
+    an object that holds data of its own, as in
+    `Integrity<string, L> & { name: string }`, is placed as an object.
   - A carrier that records no payload, its metadata alone, is taken to have
     been written around the one member it is intersected with, where there is
     one. Beside more, a restriction labels the whole value and evidence lands

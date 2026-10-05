@@ -550,12 +550,21 @@ const PRIMITIVE_TYPE_FLAGS = ts.TypeFlags.StringLike |
 
 /**
  * Whether `type` is a primitive, alone or intersected with carriers and
- * brands, so that the primitive is all the data a value of it holds.
+ * brands, so that the primitive is all the data a value of it holds. An
+ * object it is intersected with that holds data of its own makes it no
+ * primitive value.
  */
-const isPrimitiveValue = (type: ts.Type): boolean =>
-  (type.isIntersection() ? type.types : [type]).some((part) =>
-    (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0
-  );
+const isPrimitiveValue = (type: ts.Type): boolean => {
+  const parts = type.isIntersection() ? type.types : [type];
+  return parts.some((part) => (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0) &&
+    parts.every((part) =>
+      (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0 ||
+      part.getProperties().every((property) =>
+        property.name === CFC_CARRIER_PROPERTY ||
+        property.name.startsWith("__@")
+      )
+    );
+};
 
 /** The alternatives of `type`: its members where it is a union. */
 const alternativesOf = (type: ts.Type): readonly ts.Type[] =>
@@ -624,13 +633,11 @@ const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A mapped type as the checker holds it: `declaration` is the mapped type
- * node it was written as, and `modifiersType` the type it maps over, `T` in
- * `{ readonly [K in keyof T]: T[K] }`, which the checker sets once it
- * resolves the mapped type's members.
+ * A mapped type as the checker holds it, with the type it maps over:
+ * `modifiersType` is `T` in `{ readonly [K in keyof T]: T[K] }`, which the
+ * checker sets once it resolves the mapped type's members.
  */
 type MappedTypeWithInternals = ts.ObjectType & {
-  readonly declaration?: ts.MappedTypeNode;
   readonly modifiersType?: ts.Type;
 };
 
@@ -676,37 +683,6 @@ const holdsCarriersUnwritten = (
 };
 
 /**
- * Whether every member a value of `type` holds goes by the name it has in
- * the payload its carriers record: nothing between the value and its
- * carriers renames one, as a mapped type with an `as` clause does. A mapped
- * type the checker holds no declaration or source for, or whose carrier did
- * not come from the type it maps over, counts as one that renames.
- */
-const holdsCarriersUnderTheirNames = (
-  type: ts.Type,
-  seen: Set<ts.Type> = new Set(),
-): boolean => {
-  if (seen.has(type)) return true;
-  seen.add(type);
-  if (type.isUnionOrIntersection()) {
-    return type.types.every((part) => holdsCarriersUnderTheirNames(part, seen));
-  }
-  if (
-    !type.getProperty(CFC_CARRIER_PROPERTY) ||
-    ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0
-  ) {
-    return true;
-  }
-  const mapped = type as MappedTypeWithInternals;
-  const source = mapped.modifiersType;
-  return mapped.declaration !== undefined &&
-    mapped.declaration.nameType === undefined &&
-    source !== undefined &&
-    source.getProperty(CFC_CARRIER_PROPERTY) !== undefined &&
-    holdsCarriersUnderTheirNames(source, seen);
-};
-
-/**
  * Which members of a value of `type` a policy whose payload is `of` reaches:
  * those that may hold the payload's data, where a restriction belongs, and
  * those that must, where evidence belongs. `all` stands for the whole value.
@@ -719,6 +695,14 @@ const payloadReach = (
   // No payload recorded (`payloadOfStamp()`): the payload's data may be
   // anywhere in the value, and nothing says where it must be.
   if (!of) return { may: "all", must: [] };
+  // A primitive value of a payload one of whose alternatives is a primitive:
+  // the value is that alternative, all of it the payload's data.
+  if (
+    alternativesOf(type).every(isPrimitiveValue) &&
+    alternativesOf(of).some(isPrimitiveValue)
+  ) {
+    return { may: "all", must: "all" };
+  }
   const payloadMembers = dataMemberDeclarations(of, checker);
   const indexed = alternativesOf(of).some((alternative) =>
     checker.getIndexInfosOfType(alternative).length > 0
@@ -727,9 +711,7 @@ const payloadReach = (
   const unwritten = holdsCarriersUnwritten(type, checker);
   // A payload whose type lists no members, such as `{}` or `unknown`: its
   // data may be under any key, and is the whole value only where nothing
-  // writes over the value's members and the value holds nothing besides. A
-  // primitive value lists none (`dataMemberDeclarations()`), so it is all a
-  // primitive payload's data.
+  // writes over the value's members and the value holds nothing besides.
   if (payloadMembers.size === 0 && !indexed) {
     return {
       may: "all",
@@ -743,14 +725,14 @@ const payloadReach = (
       must: whole && unwritten ? "all" : [],
     };
   }
-  // A renamed member holds the payload's data under a name the payload does
-  // not have, so where a member may have been renamed, a restriction labels
-  // the whole value.
-  const may = indexed || !holdsCarriersUnderTheirNames(type)
-    ? "all" as const
-    : valueMembers
-      .filter(([name]) => payloadMembers.has(name))
-      .map(([name]) => name);
+  // A member with no declaration may hold the payload's data under a name the
+  // payload does not have: a mapped type that renames its keys keeps no
+  // member's declaration, and a spread of its result keeps none either.
+  const may = indexed ? "all" as const : valueMembers
+    .filter(([name, declarations]) =>
+      payloadMembers.has(name) || declarations.length === 0
+    )
+    .map(([name]) => name);
   const must = !unwritten ? [] : valueMembers
     .filter(([name, declarations]) => {
       const payload = payloadMembers.get(name);

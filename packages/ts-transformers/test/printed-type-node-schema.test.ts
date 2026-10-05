@@ -1419,6 +1419,22 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
             {},
           ],
           [
+            "a spread of a payload a mapped type renamed",
+            `Rename<Confidential<Point, ["secret"]>>`,
+            "number",
+            "{ ...location }",
+            secret,
+            {},
+          ],
+          [
+            "a spread of a payload a mapped type renamed, beside another member",
+            `Rename<Confidential<Point, ["secret"]>>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            { latitude: secret, long: secret },
+          ],
+          [
             "a confidential spread of the payload's own type over it",
             `Confidential<Point, ["secret"]>`,
             "Point",
@@ -1449,6 +1465,7 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
             "/main.tsx": `/// <cts-enable />
 import { Cfc, Confidential, Integrity, pattern } from "commonfabric";
 type Point = { lat: number; long: number };
+type Rename<T> = { [K in keyof T as K extends "lat" ? "latitude" : K]: T[K] };
 export default pattern<{ location: ${location}; other: ${other}; name: string }>(
   ({ location, other, name }) => ({ out: ${out} }),
 );`,
@@ -1477,6 +1494,16 @@ export default pattern<{ location: ${location}; other: ${other}; name: string }>
             secret,
           ],
           [
+            "a primitive intersected with a labeled object",
+            `string & Confidential<{ payload: string }, ["secret"]>`,
+            secret,
+          ],
+          [
+            "an object intersected with a labeled primitive",
+            `Integrity<string, ["gps"]> & { name: string }`,
+            undefined,
+          ],
+          [
             "a kept member of an intersection",
             `Pick<Integrity<Point, ["gps"]> & { name: string }, "lat">`,
             gps,
@@ -1501,6 +1528,30 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           }
         });
       }
+
+      it("places a restriction on each alternative of a payload mixing a primitive and an object", async () => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Result = NonNullable<Confidential<string | { a: number } | null, ["secret"]>>;
+export default pattern<{ a: Result }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        for (const schema of [input, output]) {
+          const a = (schema.properties as Record<string, Schema>).a!;
+          const resolved = typeof a.$ref === "string"
+            ? ((schema.$defs ?? {}) as Record<string, Schema>)[
+              (a.$ref as string).split("/").pop()!
+            ]!
+            : a;
+          expect((resolved.anyOf as Schema[]).map(placement)).toEqual([
+            { whole: secret, members: {} },
+            { whole: secret, members: {} },
+          ]);
+        }
+      });
     });
 
     describe("a generic CFC alias written with its arguments", () => {

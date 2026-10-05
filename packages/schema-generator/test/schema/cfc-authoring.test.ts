@@ -3853,6 +3853,7 @@ describe("Schema: CFC authoring aliases", () => {
       declare const taggedUnknown: Integrity<unknown, readonly ["gps"]>;
       declare const mintedEmpty: Cfc<{}, { addIntegrity: readonly ["gps"] }>;
       declare const secretEmpty: Confidential<{}, readonly ["s"]>;
+      declare const renamed: Rename<SecretLocation>;
       declare const pin: Pin;
       declare const point: Point;
       declare const latitude: Pick<Point, "lat">;
@@ -3873,6 +3874,8 @@ describe("Schema: CFC authoring aliases", () => {
       const taggedUnknownSpread = { ...taggedUnknown, name: "x" };
       const mintedEmptySpread = { ...mintedEmpty, name: "x" };
       const secretEmptySpread = { ...secretEmpty, name: "x" };
+      const renamedSpread = { ...renamed };
+      const renamedSpreadWithName = { ...renamed, name: "x" };
       const twoPolicies = { ...location, ...pin, name: "x" };
       const eitherSpread = { ...either, name: "x" };
       const secretSpread = { ...secretLocation, name: "x" };
@@ -3961,6 +3964,11 @@ describe("Schema: CFC authoring aliases", () => {
           ["typeof taggedUnknownSpread", undefined, {}],
           ["typeof mintedEmptySpread", undefined, {}],
           ['NonNullable<Integrity<string, readonly ["gps"]> | null>', gps, {}],
+          [
+            'Integrity<string, readonly ["gps"]> & { name: string }',
+            undefined,
+            {},
+          ],
           ["typeof twoPolicies", undefined, { pin: secret }],
         ] as const
       ) {
@@ -3987,6 +3995,16 @@ describe("Schema: CFC authoring aliases", () => {
           ['Pick<SecretIndex & { name: string }, "name">', secret, {}],
           ["typeof secretEmptySpread", secret, {}],
           ["Rename<SecretLocation>", secret, {}],
+          ["typeof renamedSpread", secret, {}],
+          ["typeof renamedSpreadWithName", undefined, {
+            latitude: secret,
+            long: secret,
+          }],
+          [
+            'string & Confidential<{ payload: string }, readonly ["s"]>',
+            secret,
+            {},
+          ],
         ] as const
       ) {
         it(`places the labels of \`${value}\``, async () => {
@@ -4000,6 +4018,16 @@ describe("Schema: CFC authoring aliases", () => {
       expect(value.anyOf.map(placement)).toEqual([
         { whole: undefined, members: { lat: gps } },
         { whole: undefined, members: { long: gps } },
+      ]);
+    });
+
+    it("places a restriction on each alternative of a payload mixing a primitive and an object", async () => {
+      const value = await schemaOf(
+        'NonNullable<Confidential<string | { a: number } | null, readonly ["s"]>>',
+      );
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: secret, members: {} },
+        { whole: secret, members: {} },
       ]);
     });
 
