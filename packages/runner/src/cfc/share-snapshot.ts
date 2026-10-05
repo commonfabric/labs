@@ -16,19 +16,20 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { type Cell, cellRuntime } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
-import type {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "../storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type CfcConfClause, clauseAlternatives } from "./clause.ts";
+import {
+  evidenceHolds,
+  isTrustedGestureOn,
+  readEvidence,
+} from "./host-review.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
-import { isRendererTrustedEvent } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Destination whose stored identity or resolved space determines the audience. */
@@ -93,7 +94,8 @@ interface ConsentState {
 }
 
 const consents = new WeakMap<SnapshotShareConsent, ConsentState>();
-const SHARE_WRITER = "cfc-share-snapshot";
+/** Builtin implementation identity that alone writes reviewed snapshot copies. */
+export const SNAPSHOT_SHARE_WRITER = "cfc-share-snapshot";
 
 /** Follows a host binding's one pointer without observing its private target. */
 function appendTarget(
@@ -190,25 +192,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
       }
       retained.push(clause);
     }
-    const readActivities = tx.getReadActivities?.();
-    if (readActivities === undefined) {
-      throw new Error("Snapshot sharing requires a verifiable read journal");
-    }
-    const evidence = [...readActivities].map((read) => {
-      const address: IMemorySpaceAddress = {
-        space: read.space,
-        id: read.id,
-        type: read.type,
-        scope: read.scope,
-        path: [...read.path],
-      };
-      return {
-        address,
-        digest: hashStringOf(
-          tx.readOrThrow(address, { meta: internalVerifierRead }),
-        ),
-      };
-    });
+    const evidence = readEvidence(tx, "Snapshot sharing");
     return {
       actor,
       sourceLink,
@@ -294,13 +278,7 @@ export async function commitSnapshotShare(
     throw new Error("Snapshot consent is unknown or already consumed");
   }
   consents.delete(consent);
-  if (
-    !isRendererTrustedEvent(event) || !isObjectNotArray(event) ||
-    !isObjectNotArray(event.provenance) || event.provenance.origin !== "dom" ||
-    event.provenance.trusted !== true ||
-    !isObjectNotArray(event.provenance.ui) ||
-    event.provenance.ui.pattern !== "ShareSnapshot"
-  ) {
+  if (!isTrustedGestureOn(event, "ShareSnapshot")) {
     throw new Error("Snapshot sharing requires a trusted host share gesture");
   }
   const current = inspect(state.source, state.requestedAudience);
@@ -324,17 +302,12 @@ export async function commitSnapshotShare(
     // transaction. They authorize only this immutable, separately reviewed
     // copy; verifier reads retain conflict checks without adding the private
     // source's label back to the explicitly released output.
-    for (const read of current.evidence) {
-      const stored = tx.readOrThrow(read.address, {
-        meta: internalVerifierRead,
-      });
-      if (hashStringOf(stored) !== read.digest) {
-        throw new Error("Snapshot review changed before commit");
-      }
+    if (!evidenceHolds(tx, current.evidence)) {
+      throw new Error("Snapshot review changed before commit");
     }
     setCfcImplementationIdentity(tx, {
       kind: "builtin",
-      builtinId: SHARE_WRITER,
+      builtinId: SNAPSHOT_SHARE_WRITER,
     });
     const confidentiality = [...current.retained, {
       anyOf: [cfcAtom.user(state.actor), state.audience],
@@ -342,7 +315,7 @@ export async function commitSnapshotShare(
     const shared = runtime.getCell<JSONValue>(state.destination.space, {
       sharedSnapshot: state.eventId,
     }, {
-      ifc: { confidentiality, writeAuthorizedBy: [SHARE_WRITER] },
+      ifc: { confidentiality, writeAuthorizedBy: [SNAPSHOT_SHARE_WRITER] },
     }, tx);
     shared.set(state.value);
     if (state.appendBooksTo) {
@@ -379,7 +352,7 @@ export async function commitSnapshotShare(
       additionalProperties: true,
       ifc: {
         confidentiality: [...current.retained, cfcAtom.user(state.actor)],
-        writeAuthorizedBy: [SHARE_WRITER],
+        writeAuthorizedBy: [SNAPSHOT_SHARE_WRITER],
       },
     }, tx);
     receipt.set({
