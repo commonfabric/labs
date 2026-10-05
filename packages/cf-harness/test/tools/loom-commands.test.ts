@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
 import { HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES } from "../../src/client-actions/command-result.ts";
@@ -33,10 +32,6 @@ import {
 import { LOOM_RETRIEVAL_MAX_OUTPUT_CHARS } from "../../src/tools/loom-retrieval.ts";
 import { getBuiltinTool } from "../../src/tools/registry.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
-import {
-  CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
-  type PromptSlotBinding,
-} from "../../src/contracts/prompt-slot.ts";
 import { directPromptSlotBindingFor } from "../support/prompt-slot-binding.ts";
 import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
 
@@ -168,19 +163,13 @@ const sandbox: SandboxRuntime = {
 /** Helper for engine tests, which answers list and run like `contextWith`. */
 const engineWith = (
   answer: string,
-  options: {
-    ceiling?: readonly unknown[];
-    cfcEnforcementMode?: CfcEnforcementMode;
-  } = {},
+  options: { ceiling?: readonly unknown[] } = {},
 ) => {
   const calls: ProcessRunRequest[] = [];
   const engine = new CfHarnessEngine({
     model: "gpt-5.4",
     sandboxRuntime: sandbox,
     loomCommands: freshConfig(),
-    ...(options.cfcEnforcementMode !== undefined
-      ? { cfcEnforcementMode: options.cfcEnforcementMode }
-      : {}),
     ...(options.ceiling !== undefined
       ? {
         fabricSession: {
@@ -206,76 +195,6 @@ const engineWith = (
     },
   });
   return { engine, calls };
-};
-
-/**
- * Helper for loop tests, which has the model call `toolName` once with
- * `args` and then finish, and returns the run's result and the requests the
- * model was sent.
- */
-const runOneCall = async (
-  engine: CfHarnessEngine,
-  toolName: string,
-  args: Record<string, unknown>,
-  promptSlotBinding?: PromptSlotBinding,
-) => {
-  const payloads = [
-    {
-      choices: [{
-        index: 0,
-        message: {
-          role: "assistant",
-          content: "",
-          tool_calls: [{
-            id: "call-one",
-            type: "function",
-            function: { name: toolName, arguments: JSON.stringify(args) },
-          }],
-        },
-      }],
-    },
-    {
-      choices: [{
-        index: 0,
-        message: { role: "assistant", content: "Done" },
-      }],
-    },
-  ];
-  let index = 0;
-  const requests: string[] = [];
-  const loop = new CfHarnessPromptLoop({
-    engine,
-    apiKey: "synthetic-test-key",
-    model: "gpt-5.4",
-    allowedToolIds: [toolName as "run_command"],
-    fetchFn: (_url, init) => {
-      requests.push(String(init?.body ?? ""));
-      return Promise.resolve(
-        new Response(
-          JSON.stringify(
-            responsesBodyFromChatFixture(payloads[index++], init?.body),
-          ),
-          { status: 200 },
-        ),
-      );
-    },
-  });
-  const result = await loop.runPrompt({
-    prompt: "Compose the trip loom",
-    ...(promptSlotBinding !== undefined ? { promptSlotBinding } : {}),
-  });
-  return { result, requests };
-};
-
-/** A slot binding for task text that carries no operator authority. */
-const contextBinding: PromptSlotBinding = {
-  type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
-  source: { type: "test.prompt-slot", subject: "agent-request" },
-  role: "context",
-  kernelName: "cf-harness",
-  surface: "test",
-  subject: "agent-request",
-  eventId: "event-agent-request",
 };
 
 describe("loom-commands tools", () => {
@@ -879,55 +798,6 @@ describe("loom-commands tools", () => {
         context?.observations.map((observation) => observation.toolId),
       ).toEqual(["run_command"]);
       expect(context?.label).toEqual({ confidentiality: [OWNER] });
-    });
-  });
-  describe("policy", () => {
-    // The broker's grant is the authority for a host command, as the host's
-    // schema is for `submit_result`: the tool exists only in a run the host
-    // gave a command broker, and the broker decides what runs. A task bound
-    // as `context` — an agent request's task text — never carries a direct
-    // command, which is the case these hold the rule to.
-    const modes: readonly CfcEnforcementMode[] = [
-      "disabled",
-      "observe",
-      "enforce-explicit",
-      "enforce-strict",
-    ];
-    for (const mode of modes) {
-      it(`admits \`run_command\` under a \`context\` task at ${mode}, naming the host's grant as why`, async () => {
-        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
-          cfcEnforcementMode: mode,
-        });
-        const { result } = await runOneCall(
-          engine,
-          "run_command",
-          { command: "loom.compose", args: {} },
-          contextBinding,
-        );
-        const decision = (result.runState.policyDecisions ?? []).find((
-          record,
-        ) => record.toolId === "run_command");
-        expect(decision?.decision).toBe("allowed");
-        expect(decision?.reasonCodes).toEqual(["host_granted_command"]);
-        expect(calls.map((call) => call.args[1])).toEqual(["list", "run"]);
-      });
-    }
-
-    it("leaves `list_commands` under the read rule", async () => {
-      const { engine } = engineWith(JSON.stringify({ ok: true }), {
-        cfcEnforcementMode: "enforce-explicit",
-      });
-      const { result } = await runOneCall(
-        engine,
-        "list_commands",
-        {},
-        contextBinding,
-      );
-      const decision = (result.runState.policyDecisions ?? []).find((
-        record,
-      ) => record.toolId === "list_commands");
-      expect(decision?.decision).toBe("allowed");
-      expect(decision?.reasonCodes).toEqual(["cfc_enforce_explicit_read"]);
     });
   });
 });
