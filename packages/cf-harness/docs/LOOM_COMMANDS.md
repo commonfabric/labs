@@ -124,3 +124,21 @@ measured against the run's observation ceiling.
 
 The admitted answer's label is recorded as the run's model-context observation
 over the output channel; the label itself stays on the artifact.
+
+## Agent runs
+
+`cf agent runner --loom-commands-config <path>` offers both tools to the
+requests it claims and passes the file to every run. Every run the runner claims
+reaches the host through that one broker, which has two consequences:
+
+- The broker's run identity and actor are the runner's, fixed when the host
+  started it, rather than the request's. The host's ledger cannot tell one
+  request's commands from another's, and a grant keyed to a run cannot be scoped
+  to one request.
+- Every request the runner accepts holds the same grant: a Weaver ask and any
+  other pattern's request alike.
+
+Both are recorded as a shortcut beside the code in
+`packages/cli/lib/agent-run-harness.ts`. Hardening them means the runner asks
+the host for a broker per claimed run, whose scope the host chooses for that
+request.

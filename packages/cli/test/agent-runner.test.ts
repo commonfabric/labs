@@ -1488,6 +1488,10 @@ describe("agent runner", () => {
       options: {
         report?: (message: string) => void;
         omitHarnessArgs?: boolean;
+
+        /** The tools the runner offers; `describe_handle` alone by default. */
+        tools?: string[];
+        loomCommandsConfigPath?: string;
       } = {},
     ) => {
       const sessionRuntime = connect(CLOUD);
@@ -1502,13 +1506,18 @@ describe("agent runner", () => {
         model?: string;
         allowedTools?: readonly string[];
         observationCeiling?: unknown;
+        loomCommands?: unknown;
         workspaces: string[];
       } = { workspaces: [] };
+      const tools = options.tools ?? ["describe_handle"];
       const execute = createHarnessAgentRunExecutor({
         identityKeyPath: join(workRoot, "unused.key"),
         requester: home,
         workRoot,
-        allowedTools: ["describe_handle"],
+        allowedTools: tools,
+        ...(options.loomCommandsConfigPath !== undefined
+          ? { loomCommandsConfigPath: options.loomCommandsConfigPath }
+          : {}),
         report: options.report ??
           ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
         ...(options.omitHarnessArgs ? {} : { model: "scripted" }),
@@ -1532,6 +1541,7 @@ describe("agent runner", () => {
                 allowedTools: options.allowedToolIds,
                 observationCeiling: options.fabricSession
                   ?.cfcReadMaxConfidentiality,
+                loomCommands: options.loomCommands,
               };
               return script({
                 resultPath: join(
@@ -1550,7 +1560,7 @@ describe("agent runner", () => {
           }),
         },
       });
-      await startRunner(execute, { tools: ["describe_handle"] });
+      await startRunner(execute, { tools });
       return () => seen;
     };
 
@@ -1677,6 +1687,40 @@ describe("agent runner", () => {
       expect(record.errorCode).toBeUndefined();
       expect(record.state).toBe("completed");
       expect(seen().prompt).toBe("- recommend a book");
+    });
+
+    it("hands every run the host command broker and lets a request name the two command tools", async () => {
+      const commands = {
+        cliPath: "/trusted/loom",
+        transport: { kind: "broker", queuePath: "/trusted/queue" },
+      };
+      const configPath = join(workRoot, "loom-commands.json");
+      await Deno.writeTextFile(configPath, JSON.stringify(commands));
+      const seen = await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("run-host-commands");
+      }, {
+        tools: ["describe_handle", "list_commands", "run_command"],
+        loomCommandsConfigPath: configPath,
+      });
+      const result = await submit({ tools: ["list_commands", "run_command"] });
+
+      const record = await waitForCellValue<AgentRunRecord>(
+        patternSide,
+        recordOf(result),
+        (value) => value?.outcome !== undefined,
+      );
+
+      expect(record.state).toBe("completed");
+      expect(seen().allowedTools).toEqual([
+        "list_commands",
+        "run_command",
+        "submit_result",
+      ]);
+      expect(seen().loomCommands).toEqual(commands);
     });
 
     it("allows `submit_result` alongside an explicit request tool list", async () => {
