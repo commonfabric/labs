@@ -30,7 +30,11 @@ export default pattern(() => {
             type: "object",
             properties: {
                 result: {
-                    type: "unknown"
+                    anyOf: [{
+                            type: "unknown"
+                        }, {
+                            type: "undefined"
+                        }]
                 },
                 candidates: {
                     type: "array",
@@ -49,7 +53,11 @@ export default pattern(() => {
             type: "object",
             properties: {
                 result: {
-                    type: "unknown"
+                    anyOf: [{
+                            type: "unknown"
+                        }, {
+                            type: "undefined"
+                        }]
                 },
                 candidates: {
                     type: "array",

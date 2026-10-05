@@ -189,7 +189,7 @@ export function startReactiveActionCommit(state: {
     }
   }
   options.beforeCommit?.();
-  const commitPromise = state.tx.commit();
+  const commitPromise = state.tx.startCommit().settled;
   logger.timeEnd("scheduler", "run", "commit");
   return commitPromise;
 }

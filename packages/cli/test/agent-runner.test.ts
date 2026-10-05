@@ -1652,7 +1652,7 @@ describe("agent runner", () => {
         );
 
         expect(record.state).toBe(schema ? "completed" : "failed");
-        expect(record.errorCode).toBe(schema ? undefined : "PROVIDER_FAILURE");
+        expect(record.errorCode).toBe(schema ? undefined : "INVALID_RESULT");
       });
     }
 
@@ -1848,7 +1848,7 @@ describe("agent runner", () => {
       expect(record.runRef).toBeUndefined();
     });
 
-    it("fails as `PROVIDER_FAILURE` a run that wrote no result", async () => {
+    it("fails as `INVALID_RESULT` a run that wrote no result", async () => {
       await startHarnessRunner(() =>
         Promise.resolve(loopResult("run-no-result"))
       );
@@ -1856,7 +1856,7 @@ describe("agent runner", () => {
 
       const record = await waitForState(result, "failed");
 
-      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.errorCode).toBe("INVALID_RESULT");
       expect(record.modelTurns).toBe(3);
     });
 
@@ -1880,7 +1880,7 @@ describe("agent runner", () => {
       );
 
       const ended = await waitForState(result, "failed");
-      expect(ended.errorCode).toBe("PROVIDER_FAILURE");
+      expect(ended.errorCode).toBe("INVALID_RESULT");
       expect(ended.result).toBeUndefined();
     });
 
@@ -1971,7 +1971,7 @@ describe("agent runner", () => {
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
     });
 
-    it("fails as `PROVIDER_FAILURE` a result that does not fit the schema", async () => {
+    it("fails as `INVALID_RESULT` a result that does not fit the schema", async () => {
       await startHarnessRunner(async ({ resultPath }) => {
         await Deno.writeTextFile(resultPath, JSON.stringify({ answer: 7 }));
         return loopResult("run-bad-result");
@@ -1980,7 +1980,27 @@ describe("agent runner", () => {
 
       const record = await waitForState(result, "failed");
 
-      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.errorCode).toBe("INVALID_RESULT");
+      expect(record.modelTurns).toBe(3);
+      expect(record.result).toBeUndefined();
+    });
+
+    it("fails as `INVALID_RESULT` a malformed JSON result after a completed loop", async () => {
+      const messages: string[] = [];
+      await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(resultPath, "{broken");
+        return loopResult("run-malformed-result");
+      }, { report: (message) => messages.push(message) });
+      const result = await submit();
+
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("INVALID_RESULT");
+      expect(record.modelTurns).toBe(3);
+      expect(record.result).toBeUndefined();
+      expect(messages).toContain(
+        "structured result validation failed: structured result file was not valid JSON",
+      );
     });
 
     it("fails as `LIMIT_REACHED` a run the model-turn limit ended", async () => {

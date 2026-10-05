@@ -206,12 +206,7 @@ starts. A queue with no entries shows "No agent runs yet."
 
 A request made in a home space that holds no queue — its home pattern does not
 exist, or is a version without the field — ends `refused`, and
-`wish({ query: "#agent_queue" })` there reports an error naming the remedies.
-The system home pattern, set up before its source had a field, gains it only
-when the home space is next opened, since nothing updates a piece nobody opens,
-and the wish does not open it. A custom home pattern
-([Custom Home Pattern](#custom-home-pattern)) follows no source of the
-system's, and holds the field only if it says so.
+`wish({ query: "#agent_queue" })` there resolves to nothing.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
 
@@ -237,10 +232,11 @@ Home's **Chats** tab renders it: the user's rooms, the room chosen among them,
 and the controls that start a direct or a group chat.
 
 A home space whose system home pattern was set up before it held a chat manager
-holds none until the home space is next opened, which brings the home pattern
-up to date; a custom home pattern holds one only if it says so. Until then
-`wish({ query: "#chatManager" })` reports an error naming both remedies, as
-`#agent_queue` does, rather than resolving to nothing.
+holds none until the home space is next opened, since nothing updates a piece
+nobody opens, and the wish does not open it; a custom home pattern
+([Custom Home Pattern](#custom-home-pattern)) holds one only if it says so.
+Until then `wish({ query: "#chatManager" })` reports an error naming both
+remedies, rather than resolving to nothing.
 
 ## Custom Home Pattern
 

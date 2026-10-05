@@ -394,8 +394,10 @@ export class CellHandle<T = unknown> {
   /**
    * Atomically stores `value` only if the cell has no backing value, then
    * returns the value selected by that transaction. A readable schema fallback
-   * does not count as stored. Concurrent initializers converge on one winner
-   * instead of replacing it with a blind write.
+   * does not count as stored. The runtime-wide commit barrier settles before
+   * choosing the default, so unrelated pending writes can delay initialization.
+   * Concurrent initializers converge on one winner instead of replacing it
+   * with a blind write.
    *
    * It goes through a handle whose read is refused: it stores nothing over a
    * value the cell holds, and `value` is the caller's default, computed from
@@ -919,11 +921,10 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Demands lazy producers before fetching a value. By default, also waits for
-   * the runtime-wide commit-aware barrier. Rendering can pass
-   * `awaitDurability: false` to read reactive state while writes remain
-   * unconfirmed; a cell with no value yet still waits, since the write that
-   * creates it may be in flight.
+   * Demands lazy producers and required loads before fetching reactive state.
+   * Writes may remain unconfirmed when this resolves, including for an absent
+   * value or an empty object. Pass `awaitDurability: true` to also cross the
+   * runtime-wide commit-aware barrier.
    *
    * What it finds reaches the subscribers of this handle, and of every other
    * handle on the same cell under the same schema that has not written since,
@@ -942,9 +943,7 @@ export class CellHandle<T = unknown> {
     return await this.#read({
       type: RequestType.CellPull,
       cell: this.ref(),
-      ...(options.awaitDurability === undefined
-        ? {}
-        : { awaitDurability: options.awaitDurability }),
+      awaitDurability: options.awaitDurability ?? false,
     });
   }
 

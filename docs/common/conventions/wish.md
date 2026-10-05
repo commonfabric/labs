@@ -294,10 +294,10 @@ These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
 `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
 `#chatManager`, and the `#profile*` targets, which require a signed-in user and
-resolve from that user's home space. `#agent_queue` and `#chatManager` report
-an error, naming the remedies, when the home pattern holds no such field: a
-system home pattern set up before its source had one gains it when the home
-space is next opened, and a custom one holds it only if it says so.
+resolve from that user's home space. `#chatManager` reports an error, naming
+the remedies, when the home pattern holds no chat manager: a system home
+pattern set up before its source had one gains it when the home space is next
+opened, and a custom one holds it only if it says so.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |

@@ -36,6 +36,7 @@ export type AgentRunOutcome = "completed" | "failed" | "refused" | "cancelled";
 /** The error taxonomy a run ends with, shared with verb refusals. */
 export type AgentRunErrorCode =
   | "INVALID_INPUT"
+  | "INVALID_RESULT"
   | "LIMIT_REACHED"
   | "PROVIDER_FAILURE"
   | "RUNNER_LOST"

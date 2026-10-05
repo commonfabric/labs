@@ -90,6 +90,7 @@ describe("vdom debug helpers", () => {
       },
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
+      peersOf: () => [],
     };
     const runtime = { [$conn]: () => connection } as unknown as RuntimeClient;
     const mock = new MockDoc(

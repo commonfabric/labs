@@ -800,8 +800,8 @@ describe("post-main-report", () => {
       }
     });
 
-    // The gather step always writes the file, so one that is not there is
-    // a truncated artifact and contributes nothing.
+    // An artifact without the file is one whose gathering stopped part
+    // way. It reads as empty, which `recordsInDirectory()` says is safe.
     it("reads nothing from an artifact carrying no records file", async () => {
       const directory = await Deno.makeTempDir({ prefix: "records-" });
       try {

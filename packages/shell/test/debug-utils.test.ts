@@ -242,6 +242,7 @@ describe("runtime debug globals", () => {
       request: () => Promise.resolve({ refused: refusal }),
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
+      peersOf: () => [],
       signal: new AbortController().signal,
     };
     const runtime = {
