@@ -677,11 +677,21 @@ yet, and leaves alone a field it does not know. The answer carries a
 and nobody else.
 
 A task may declare a host only on a console its operator launched with
-`--allow-browser-host`; a console launched without it answers the declaration
-403. A turn with a host runs under its session's policy with browser children
-added to drive the host, and the session's other turns run under its policy as
-it is. The token binds the stream and the results to the caller that declared
-the host, and vouches for nothing else about it.
+`--allow-browser-host`, or with `CF_HARNESS_ALLOW_BROWSER_HOST=1` in its
+environment; the local dev script passes the flag through when named:
+
+```sh
+./scripts/start-local-dev.sh --cf-harness --allow-browser-host
+```
+
+A console launched with neither answers the declaration 403. Only a console
+launched with one of them lists `browser_host` among the
+[client protocol](#client-protocol) features it serves, so a host reads
+`GET /api/status` to learn whether to declare itself. A turn with a host runs
+under its session's policy with browser children added to drive the host, and
+the session's other turns run under its policy as it is. The token binds the
+stream and the results to the caller that declared the host, and vouches for
+nothing else about it.
 
 The holder of the token attaches with `POST /api/browser-host/stream`,
 `{"turnId", "token"}`, answered with Server-Sent Events: each operation arrives
@@ -963,12 +973,16 @@ and `start_turn` take the same `protocol` param and refuse with error code
 `protocol_mismatch`, the same fields in `details`; an accepted one carries the
 same `protocol` echo beside the status in its result.
 
-The features are `client_actions`, the final-action kinds above, and
+The features are `client_actions`, the final-action kinds above;
 `typed_commands`, the typed command invocation, catalog, and settlement defined
-in [`src/contracts/client-command.ts`](../src/contracts/client-command.ts). This
-console serves both. A console that answers without a `protocol` serves
-`client_actions` alone, and a host requiring `typed_commands` treats it as
-unable to serve that host. The wire shapes are pinned by the JSON files under
+in [`src/contracts/client-command.ts`](../src/contracts/client-command.ts); and
+`browser_host`, a task's `browserHost` declaration
+([Browser hosts](#browser-hosts)). The HTTP console serves the first two, and
+`browser_host` when it was launched with `--allow-browser-host`; the stdio
+transport has no browser host and serves the first two alone. A client ignores a
+feature name it does not know. A console that answers without a `protocol`
+serves `client_actions` alone, and a host requiring `typed_commands` treats it
+as unable to serve that host. The wire shapes are pinned by the JSON files under
 [`test/fixtures/client-command-wire/`](../test/fixtures/client-command-wire/),
 which the Weaver's Swift tests read too; the two `protocol-mismatch-*` files are
 the answers of a console serving `client_actions` alone.
