@@ -217,10 +217,12 @@ needs its parent object to exist, call `initialize()` after the
 pull, await it, and then use the narrow child operation. Call it even when
 `get()` exposes the compiled schema fallback: initialization is idempotent and
 materializes that fallback before the child write.
-The runtime adapter keeps the cell demanded through the runtime-wide commit
-barrier before choosing the initializer, including commits that install its
-producer. An unrelated pending commit can delay initialization and iframe
-bootstrap.
+When the cell already has a backing value and none of the documents its answer
+reads have pending writes, initialization can return while unrelated commits
+remain pending. Otherwise the runtime adapter keeps the cell demanded through
+the runtime-wide commit barrier before choosing a value or storing the default,
+including commits and conflict repairs that install its producer. An unrelated
+pending commit can therefore delay first-use initialization and iframe bootstrap.
 
 ```typescript
 // Shown at module scope.

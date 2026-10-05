@@ -1540,6 +1540,25 @@ export class RuntimeProcessor {
     });
   }
 
+  /**
+   * Returns whether every recorded read is free of an unpromoted local write.
+   * Missing read observations retain the full initialization barrier.
+   */
+  #initializationReadsAreConfirmed(tx: IExtendedStorageTransaction): boolean {
+    const reads = tx.tx.getReadActivities?.();
+    if (reads === undefined) return false;
+    for (const read of reads) {
+      if (
+        this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
+          read.id,
+          read.scope,
+          tx.tx.scopeKeyIdentity,
+        )
+      ) return false;
+    }
+    return true;
+  }
+
   /** Atomically stores a default only while the target has no backing value. */
   async handleCellInitialize(
     request: CellInitializeRequest,
@@ -1548,9 +1567,28 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
-    // A pending commit can install the producer of an apparently absent
-    // value. Keep it demanded through settlement before choosing a default.
-    await getCell(this.#runtime, request.cell).pull({ awaitDurability: true });
+    const target = getCell(this.#runtime, request.cell);
+    try {
+      await target.pull();
+      const existing = await this.#runtime.editWithRetry((tx) => {
+        const cell = target.withTx(tx);
+        if (
+          cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+          cell.get() === undefined
+        ) return undefined;
+        const value = this.#hostReadGate.read(cell);
+        return this.#initializationReadsAreConfirmed(tx) ? value : undefined;
+      });
+      if (existing.ok !== undefined) return existing.ok;
+    } catch {
+      // A malformed optimistic value can make readiness or projection fail.
+      // The durable selection below owns errors from the confirmed value.
+    }
+
+    // A pending commit or its retry can install a producer for an absent
+    // value. Keep demand active through the full barrier before storing a
+    // default, including after an optimistic backing value is withdrawn.
+    await target.pull({ awaitDurability: true });
     let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);

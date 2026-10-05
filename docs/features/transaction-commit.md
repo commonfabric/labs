@@ -48,11 +48,19 @@ install a lazy producer that the pull then computes, and includes the writes
 that computation produces. The barrier also covers pending pattern work.
 `RuntimeClient.idle()` crosses the same barrier without adding a cell demand.
 Hosts use pending-write notifications to guard teardown independently of reads.
-Bridge `initialize()` keeps that demand through the commit-aware barrier before
-atomically selecting an existing value or storing the default. It can therefore
-initialize a cell whose producer is being installed without replacing the value
-that producer supplies. This barrier is runtime-wide: an unrelated pending
-commit can delay initialization, including iframe bootstrap.
+Bridge `initialize()` first demands the cell's producers and required loads. It
+can return an existing backing value while unrelated commits remain pending,
+including commits from a running pattern in another space. Every document the
+answer reads, including redirect and linked-value targets, must be free of
+pending local writes. The answer is the value selected by that transaction;
+later writes can still change it.
+
+For an absent or optimistic backing value, or an inconclusive read, initialization
+keeps demand active through the full commit-aware barrier before atomically
+selecting a value or storing the default. That lets a pending commit or conflict
+repair install a producer without initialization replacing the value it supplies.
+This fallback is runtime-wide: unrelated pending work can delay a first-use
+default, including iframe bootstrap.
 
 Observe `receipt.verdict` when the next step requires knowing the commit's
 fate. Use `receipt.settled` when a retry needs the repaired read basis, when a
