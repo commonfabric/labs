@@ -4,15 +4,12 @@
  * holds the identity's inbox, and each of the identity's profiles points at it
  * through its `inbox` field, which is how a sender finds it.
  *
- * The offers are readable by the inbox's owner alone. The list and each offer
- * in it carry a confidentiality label for the principal who created the
- * inbox, so a runtime holding the inbox refuses to let another principal's
- * code read them or copy them out. The space's access list decides who may
- * write to it: the owner alone where server execution is on, since the
- * serving loop makes a sender's write, and every principal where it is not,
- * since a sender's own runtime makes the write. In the second case the space
- * is also readable by anyone holding a memory client, label or no label.
- * `docs/features/private-inbox.md` describes the whole arrangement.
+ * The list and each offer in it carry a confidentiality label for the
+ * principal who created the inbox, so a runtime holding the inbox refuses to
+ * let another principal's code read them or copy them out. The space grants
+ * every principal `WRITE`, so anyone holding a memory client can also read
+ * the offers, label or no label. `docs/features/private-inbox.md` describes
+ * the whole arrangement.
  */
 
 import {
@@ -273,9 +270,8 @@ function inboxLinkOf(inbox: unknown): unknown {
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
- * The space admits its owner alone where server execution is on, and every
- * principal's writes as well where it is not; see
- * `InSpaceOptions.grantsWithoutServerExecution`.
+ * The space grants every principal `WRITE`, so a sender's write is admitted
+ * whether the sender's own runtime makes it or the space's server does.
  *
  * The pointing is a second step, queued behind this one. A profile is given
  * the inbox's own result document, which this handler's run creates, so the
@@ -291,7 +287,7 @@ export const ensurePrivateInbox = handler<
   if (privateInbox.get()?.piece === undefined) {
     const piece = inboxLinkOf(
       PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
-        grantsWithoutServerExecution: { "*": "WRITE" },
+        grants: { "*": "WRITE" },
       })({ offers: [] }),
     );
     privateInbox.set({ piece });

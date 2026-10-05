@@ -68,22 +68,12 @@ and the result document is the one with a schema to take it from.
 
 ## The access its space grants
 
-A pattern cannot see whether server execution is on, and the access the inbox
-needs depends on it. `PatternFactory.inSpace()` takes the choice instead: the
-`grantsWithoutServerExecution` option names access the created space grants,
-over `grants`, only when the runtime creating it does not have server execution
-on. The builder chooses the grants where it resolves the `inSpace()` target
-(`packages/runner/src/builder/pattern.ts`). The inbox asks for `"*": WRITE`
-there.
-
-| Server execution | Access list of the inbox space | Who makes a sender's write |
-| --- | --- | --- |
-| On | the owner, `OWNER` | the serving loop, in the inbox space's server |
-| Off | the owner, `OWNER`; `"*"`, `WRITE` | the sender's own runtime |
-
-The choice is made once, when the space is created. A deployment that turns
-server execution on later leaves an inbox created without it open to every
-principal's writes. Nothing narrows such a space yet.
+The inbox's space grants its owner `OWNER` and every principal, `"*"`,
+`WRITE`, whether server execution is on or off. The inbox asks for that
+through `PatternFactory.inSpace()`'s `grants` option. With server execution
+off, a sender's own runtime makes the sender's write; with it on, the inbox
+space's server does. `WRITE` also lets a sender read the offers back to
+confirm its own, past the label, as the next sections describe.
 
 ## What the offers carry
 
@@ -123,9 +113,8 @@ An offer holds:
 
 A sender appends with the inbox's `receive` stream, reached through a
 profile's `inbox.piece`, from a handler of the sender's own. With server
-execution on, that handler is served, and the append reaches the closed inbox
-space as a stream event the space's server runs. A client sending to `receive`
-directly is then refused, since it holds no `WRITE` in the space.
+execution on, that handler is served, and the append reaches the inbox space
+as a stream event the space's server runs.
 
 The sender reads the pointer through `profile-home.tsx`'s own types, where
 `inbox.piece` is the typed link `Cell<ShareInboxPiece>`, for the reason the
@@ -154,16 +143,8 @@ wherever it keeps its own state.
 
 ## What it does not protect
 
-- **Delivery into the closed space rests on an owed check.** With server
-  execution on, a served append to another space's stream is admitted on the
-  presence of the actor's carriage alone; admission resolves no grant against
-  the stream. That is spec rule OW13 in
-  [`../specs/server-side-execution/verification-coverage.md`](../specs/server-side-execution/verification-coverage.md),
-  whose grant-resolution check is still owed. When that check lands, delivery
-  into a space that grants senders nothing needs a grant the stream opts into.
-- **Without server execution, the inbox is readable by anyone.** `WRITE`
-  implies `READ`, and the label binds only an honest runtime, so anyone holding
-  a memory client can read the offers, titles included, and can rewrite or
-  remove them.
+- **The inbox is readable by anyone.** `WRITE` implies `READ`, and the label
+  binds only an honest runtime, so anyone holding a memory client can read the
+  offers, titles included, and can rewrite or remove them.
 - **Nothing limits how many offers arrive.** A sender can append as many as it
   likes.

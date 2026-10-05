@@ -4,10 +4,9 @@
  * alike, a sender's own handler delivers offers to the inbox the owner's
  * profile points at, and a stranger tries to read them.
  *
- * Under server execution the inbox's space is its owner's alone, since the
- * serving loop makes the sender's write; without it, the sender's own runtime
- * makes the write, so the space grants every principal `WRITE`, and every
- * principal can read it.
+ * The inbox's space grants every principal `WRITE` in both server-execution
+ * postures: the serving loop makes a sender's write where server execution is
+ * on, and the sender's own runtime makes it where it is not.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -111,21 +110,6 @@ describe("private inbox across runtimes", () => {
     writeRefusals(getLoggerCountsBreakdown());
 
   /**
-   * Whether the memory server refuses the sender's runtime the inbox's space.
-   * Without server execution the sender's runtime runs the inbox's `receive`
-   * itself, which it cannot do in a space it may not read: the event waits
-   * for a load that is refused, and nothing commits that a delivery wait could
-   * see. With server execution the space's server runs it, so the sender's
-   * own access does not decide delivery, and this is `false`.
-   */
-  const senderRefusedInbox = async (): Promise<boolean> =>
-    !SERVER_EXECUTION &&
-    await sender.read(["offers"], { piece: inbox }).then(
-      () => false,
-      () => true,
-    );
-
-  /**
    * Has the sender's own handler send an offer through the owner's first
    * profile, and waits for the owner to read it or for the append to be
    * refused, then asserts the first. The append is a consequence of a
@@ -139,14 +123,13 @@ describe("private inbox across runtimes", () => {
     await sender.send(stream, { space: harness.spaceDid, title });
     await harness.settleUntil(async () =>
       (await ownerOffers()).some((each) => each.title === title) ||
-      await refusals() > refusedBefore || await senderRefusedInbox()
+      await refusals() > refusedBefore
     );
-    expect(await senderRefusedInbox()).toBe(false);
     expect(await refusals()).toBe(refusedBefore);
     expect((await ownerOffers()).map((each) => each.title)).toContain(title);
   };
 
-  it("creates the inbox in a space of its own, with the access the setting calls for", async () => {
+  it("creates the inbox in a space of its own that grants every principal WRITE", async () => {
     expect(inbox.space).not.toBe(harness.spaceDid);
     const address = {
       id: aclDocId(inbox.space as `did:${string}:${string}`),
@@ -161,7 +144,7 @@ describe("private inbox across runtimes", () => {
 
     expect(acl.value).toEqual({
       [owner.identity.did()]: "OWNER",
-      ...(SERVER_EXECUTION ? {} : { "*": "WRITE" }),
+      "*": "WRITE",
     });
   });
 
@@ -229,13 +212,21 @@ describe("private inbox across runtimes", () => {
     }
   });
 
-  it("refuses a stranger's read of the inbox", {
-    ignore: !SERVER_EXECUTION,
-  }, async () => {
-    await offer("unread");
+  it("lets a sender read the offers back and find its own", async () => {
+    // The space grants every principal `WRITE`, which implies `READ`, and the
+    // offers' label binds no runtime that reads without a ceiling, so a
+    // sender can confirm its delivery by reading the inbox, as a loom sender
+    // does.
+    await offer("read back");
 
-    await expect(stranger.read(["offers"], { piece: inbox })).rejects
-      .toThrow();
+    const offers = (await sender.read(["offers"], {
+      piece: inbox,
+    })) as ReadOffer[];
+    expect(
+      offers.some((each) =>
+        each.title === "read back" && each.from === sender.identity.did()
+      ),
+    ).toBe(true);
   });
 
   it("refuses a stranger's served copy of the offers", {
