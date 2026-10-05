@@ -366,6 +366,11 @@ export default pattern<{}>(() => {
           "schemas.input",
         ],
         [
+          "a property a later computed key may replace",
+          `const key = "input" as string;\nconst schemas = { input: toSchema<{ value: string }>(), [key]: toSchema<${UNREAD}>() };`,
+          "schemas.input",
+        ],
+        [
           "a primitive property a spread with a computed key may replace",
           `const key = "input" as string;\nconst schemas = { input: "", ...{ [key]: toSchema<${UNREAD}>() as unknown as string } };`,
           "schemas.input as unknown as Schema",
@@ -559,17 +564,43 @@ export default pattern((input: { value: string }) => ({ input }), inputSchema);`
       );
     }
 
-    it("refuses a writer the schema of a created cell, passed through a constant, reads where no syntax names it", async () => {
-      const result = await transform(`const schema = toSchema<${UNREAD}>();
+    for (
+      const [how, declaration, reference] of [
+        ["a constant", `const schema = toSchema<${UNREAD}>();`, "schema"],
+        [
+          "a function whose parameter defaults to it",
+          `const make = (schema = toSchema<${UNREAD}>()) => schema;`,
+          "make()",
+        ],
+        [
+          "a function whose destructured parameter defaults to it",
+          `const make = ({ schema = toSchema<${UNREAD}>() }: { schema?: Schema } = {}) => schema;`,
+          "make()",
+        ],
+        [
+          "a property a later computed key may replace",
+          `const key = "input" as string;\nconst schemas = { input: toSchema<{ value: string }>(), [key]: toSchema<${UNREAD}>() };`,
+          "schemas.input",
+        ],
+        [
+          "a property a spread with a computed key may replace",
+          `const key = "input" as string;\nconst schemas = { input: toSchema<{ value: string }>(), ...{ [key]: toSchema<${UNREAD}>() } };`,
+          "schemas.input",
+        ],
+      ] as const
+    ) {
+      it(`refuses a writer the schema of a created cell, passed through ${how}, reads where no syntax names it`, async () => {
+        const result = await transform(`${declaration}
 export default pattern<{}>(() => {
-  const a = new Writable({ byId: {} }, schema).for("a");
+  const a = new Writable({ byId: {} }, ${reference}).for("a");
   return { a };
 });`);
-      const unread = result.diagnostics.filter(isUnreadWriter);
+        const unread = result.diagnostics.filter(isUnreadWriter);
 
-      expect(unread).not.toEqual([]);
-      expect(unread.filter(isUnfollowedReference)).toEqual([]);
-    });
+        expect(unread).not.toEqual([]);
+        expect(unread.filter(isUnfollowedReference)).toEqual([]);
+      });
+    }
   });
 
   describe("an authored pattern's result", () => {
