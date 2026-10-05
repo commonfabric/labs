@@ -374,6 +374,10 @@ export {
   reviewedActionProvenance,
 } from "./ui-contract.ts";
 export {
+  type HostGestureProvenance,
+  hostGestureProvenance,
+} from "./host-review.ts";
+export {
   cfcObjectSchemaIsClosed,
   INJECTION_SAFE_ATOM,
   isPrimitiveJsonValue,

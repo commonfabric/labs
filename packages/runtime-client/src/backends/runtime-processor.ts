@@ -100,6 +100,7 @@ import {
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
+  hostGestureProvenance,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
@@ -2174,11 +2175,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: "ShareSnapshot" },
-      },
+      provenance: hostGestureProvenance("ShareSnapshot"),
     };
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
@@ -2254,11 +2251,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: CUSTODY_SEAL_GESTURE },
-      },
+      provenance: hostGestureProvenance(CUSTODY_SEAL_GESTURE),
     };
     markRendererTrustedEvent(event);
     // A client that detaches at any point before the entry's transaction is

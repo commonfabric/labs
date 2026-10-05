@@ -48,6 +48,7 @@ import {
 import {
   cfcLabelViewForCell,
   type CfcWriteFloorMode,
+  hostGestureProvenance,
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
@@ -407,11 +408,7 @@ function componentBinding(
 function shareClick() {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "ShareSnapshot" },
-    },
+    provenance: hostGestureProvenance("ShareSnapshot"),
   };
   markRendererTrustedEvent(event);
   return event;

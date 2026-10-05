@@ -38,6 +38,7 @@ import {
   type CfcTrustConfigInput,
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
+  hostGestureProvenance,
   loadStoredCfcEnvelope,
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
@@ -90,11 +91,7 @@ const trustIn = (policy: Record<string, string>): CfcTrustConfigInput => ({
 const trustedClick = () => {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: CUSTODY_SEAL_GESTURE },
-    },
+    provenance: hostGestureProvenance(CUSTODY_SEAL_GESTURE),
   };
   markRendererTrustedEvent(event);
   return event;
