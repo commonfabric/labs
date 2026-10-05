@@ -368,7 +368,11 @@ export {
   type CfcReadCeilingOptions,
   type CfcReadOnExceed,
 } from "./read-ceiling.ts";
-export { markRendererTrustedEvent } from "./ui-contract.ts";
+export {
+  markRendererTrustedEvent,
+  type ReviewedActionProvenance,
+  reviewedActionProvenance,
+} from "./ui-contract.ts";
 export {
   cfcObjectSchemaIsClosed,
   INJECTION_SAFE_ATOM,

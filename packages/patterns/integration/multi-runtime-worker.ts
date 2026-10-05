@@ -49,6 +49,7 @@ import {
   cfcLabelViewForCell,
   type CfcWriteFloorMode,
   markRendererTrustedEvent,
+  reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -525,15 +526,7 @@ const handlers: Record<
       eventValue = {
         type: "click",
         ...(isObjectNotArray(event) ? event : {}),
-        provenance: {
-          origin: "dom",
-          trusted: true,
-          ui: {
-            pattern: trusted.surface,
-            eventIntegrity: [trusted.surface],
-            uiContractDataset: { uiAction: trusted.action },
-          },
-        },
+        provenance: reviewedActionProvenance("dom", trusted),
       };
       markRendererTrustedEvent(eventValue);
     }

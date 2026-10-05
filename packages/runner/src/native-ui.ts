@@ -8,7 +8,10 @@
  */
 
 import type { Cell } from "./cell.ts";
-import { markRendererTrustedEvent } from "./cfc/ui-contract.ts";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "./cfc/ui-contract.ts";
 
 /** The reviewed surface and action one native control draws. */
 export interface NativeUiControl {
@@ -56,15 +59,7 @@ export function bindNativeUiControl<T extends object>(
   return (payload) => {
     const event = {
       ...payload,
-      provenance: {
-        origin: "native",
-        trusted: true,
-        ui: {
-          pattern: surface,
-          eventIntegrity: [surface],
-          uiContractDataset: { uiAction: action },
-        },
-      },
+      provenance: reviewedActionProvenance("native", { surface, action }),
     };
     markRendererTrustedEvent(event);
     stream.send(event);
