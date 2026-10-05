@@ -199,6 +199,33 @@ The selection belongs to a run. The direct driver registers nothing with Docker
 and keeps its `runsc` state under the run's own scratch directory, so runs on
 either driver coexist on one machine.
 
+A run stays on the driver it started on. Each driver's `runsc` decides where the
+CFC labels of a run's files are kept, and the two need not agree. Under Docker
+Desktop on macOS they are in a directory the Docker runtime's registration
+names, because Docker's file share takes no extended attribute, and the native
+runtime keeps them as extended attributes of the host's files; a file one
+labelled reads as unlabelled under the other. The harness does not know which
+hosts agree, so on every platform:
+
+- **A resumed run** that selects the other driver, by name or by default, is
+  refused before anything runs. The driver the run started on is the `kind` of
+  the runtime description in its state. The batch CLI refuses first, and an
+  engine built to resume refuses whatever built it. The message names the
+  recorded driver and how to name it: `--sandbox-runtime <driver>` or
+  `CF_HARNESS_SANDBOX_RUNTIME=<driver>` from the batch CLI, and the variable
+  alone from the engine, and from the batch CLI where its embedder's operator
+  can pass no flag.
+- **An interactive session** records the driver of the host that started it, as
+  `sandboxRuntime` in its status, `docker` or `runsc`. A turn of that session on
+  a host running the other is refused, saying to restart the host with
+  `CF_HARNESS_SANDBOX_RUNTIME` naming the recorded driver or to start a new
+  session. This covers the interactive stdio entrypoint, the interactive lane of
+  the Loom local host, and the console.
+
+Both refusals carry the code `provider-mismatch`. A run whose state holds no
+runtime description, and a session stored before sessions recorded a driver,
+have nothing to compare and are not refused.
+
 The settings below describe the direct driver and are read only when it is
 selected, by name or by the macOS default. A setting that is named means the
 same under both; what an unnamed one falls to differs:
@@ -1108,10 +1135,21 @@ mode.
   container of its own.
 - A resumed run does not take its sandbox driver from the run it resumes. It
   uses the driver that the flags, the environment and the platform's default
-  select when it resumes, while `capabilities.json` and `policy-snapshot.json`
-  keep the runtime description, its `selection` included, recorded when the run
-  first started. A run started on Docker and resumed on macOS with no runtime
-  named therefore resumes on the native runtime.
+  select when it resumes, and is refused where that is not the driver the run
+  started on. A run started on Docker and resumed on macOS with no runtime named
+  is therefore refused until `docker` is named.
+- A resume keeps the runtime description recorded when the run first started, in
+  `capabilities.json` and in `policy-snapshot.json`. Its `kind` is the resume's
+  too. Its `selection`, its image or rootfs, its network mode and its transport
+  fields are the first start's, and a resume that was selected another way, or
+  that names another image, rootfs or policy, is neither refused nor recorded.
+- Only a resume is held to a driver. Nothing ties a workspace, a host mount or
+  the console's shared workspace to the driver whose runs labelled its files, so
+  a new run, or a new interactive session, on the other driver reads those files
+  as that driver's `runsc` finds them, which under Docker Desktop on macOS and
+  the native runtime is without the other's labels. An interactive session
+  stored before sessions recorded a driver, and a run whose state holds no
+  runtime description, are not held to one either.
 - A signal that interrupts a batch CLI run closes the root run's sandbox runtime
   and not the runtimes of its children. A child's sessions still end, because
   they end with the harness process; nothing takes down a container of a child's

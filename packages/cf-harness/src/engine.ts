@@ -229,6 +229,11 @@ import {
   RunscSandboxRuntime,
 } from "./sandbox/runsc.ts";
 import {
+  sandboxRuntimeOfKind,
+  sandboxRuntimeOfOptions,
+  sandboxRuntimeResumeRefusal,
+} from "./sandbox/runtime-selection.ts";
+import {
   DenoProcessRunner,
   type ProcessRunner,
 } from "./sandbox/process-runner.ts";
@@ -918,6 +923,24 @@ export class CfHarnessEngine {
           ? `resumed run CFC enforcement mode ${options.runState.cfcEnforcementMode} does not match the ${this.config.cfcEnforcementMode} its fabric session raises the harness dial to; lower --fabric-cfc-enforcement-mode to resume this run`
           : `resumed run CFC enforcement mode ${options.runState.cfcEnforcementMode} does not match requested CFC enforcement mode ${this.config.cfcEnforcementMode}`,
       );
+    }
+    // A run's files carry the CFC labels of the runtime that wrote them,
+    // kept where the other runtime need not read them. A run that recorded
+    // no runtime description has nothing to compare.
+    const recordedSandbox = options.runState?.capabilitySnapshot?.cfc?.sandbox
+      ?.kind;
+    if (recordedSandbox !== undefined) {
+      const recorded = sandboxRuntimeOfKind(recordedSandbox);
+      const resumed = sandboxRuntimeOfOptions(options);
+      if (recorded !== resumed) {
+        throw sandboxRuntimeResumeRefusal(
+          recorded,
+          options.sandboxRuntimeChoice?.runtime === resumed
+            ? options.sandboxRuntimeChoice
+            : resumed,
+          false,
+        );
+      }
     }
     const runId = options.runState?.runId ?? options.runId ??
       crypto.randomUUID();

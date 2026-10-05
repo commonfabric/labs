@@ -424,6 +424,14 @@ export interface HarnessChatSessionStatus {
   model?: string;
   loomLocalHostBinding?: LoomLocalHostBinding;
   artifactRoot?: string;
+
+  /**
+   * The sandbox runtime of the host the session started on. A session goes on
+   * only on that runtime, whose label store holds what its turns labelled.
+   * Absent for a session stored before hosts recorded it.
+   */
+  sandboxRuntime?: "docker" | "runsc";
+
   capabilities: HarnessChatCapabilities;
   policy: HarnessChatPolicy;
   browserAccess?: HarnessChatBrowserAccessLease;
@@ -641,6 +649,7 @@ export interface CreateHarnessChatSessionStatusOptions {
   model?: string;
   loomLocalHostBinding?: LoomLocalHostBinding;
   artifactRoot?: string;
+  sandboxRuntime?: "docker" | "runsc";
   capabilities?: Partial<HarnessChatCapabilities>;
   policy?: HarnessChatPolicy;
   browserAccess?: HarnessChatBrowserAccessLease;
@@ -668,6 +677,9 @@ export const createHarnessChatSessionStatus = (
       : {}),
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
+      : {}),
+    ...(options.sandboxRuntime !== undefined
+      ? { sandboxRuntime: options.sandboxRuntime }
       : {}),
     capabilities: resolveHarnessChatCapabilities(options.capabilities),
     policy: options.policy ?? DEFAULT_HARNESS_CHAT_POLICY,

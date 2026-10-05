@@ -21,7 +21,10 @@
 
 import { isAbsolute, join, resolve } from "@std/path";
 
-import { HarnessControlError } from "../control-errors.ts";
+import {
+  HarnessControlError,
+  harnessResumeRefusal,
+} from "../control-errors.ts";
 import {
   CFC_INVOCATION_CONTEXT_DIR_ENV,
   CFC_RESULT_DIR_ENV,
@@ -36,7 +39,9 @@ import {
 import {
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
+  type SandboxRuntime,
   type SandboxRuntimeChoice,
+  type SandboxRuntimeDescription,
   type SandboxRuntimeKind,
 } from "./types.ts";
 
@@ -622,3 +627,61 @@ export const sandboxRuntimeChoiceReason = (
 export const describeSandboxRuntimeChoice = (
   choice: SandboxRuntimeChoice,
 ): string => `${choice.runtime} (${sandboxRuntimeChoiceReason(choice)})`;
+
+/**
+ * Returns the runtime, as an entrypoint names it, that describes itself as
+ * `kind`. A run records the kind, and an operator names the runtime.
+ */
+export const sandboxRuntimeOfKind = (
+  kind: SandboxRuntimeDescription["kind"],
+): SandboxRuntimeKind => kind === "runsc-cfc" ? "runsc" : "docker";
+
+/**
+ * Returns the runtime an engine built with `options` executes on: the one it
+ * is handed where it is handed one, and otherwise the one it builds, which is
+ * Docker unless `runsc` is named.
+ */
+export const sandboxRuntimeOfOptions = (
+  options: {
+    sandboxRuntime?: Pick<SandboxRuntime, "describe">;
+    sandboxRuntimeKind?: SandboxRuntimeKind;
+  },
+): SandboxRuntimeKind =>
+  options.sandboxRuntime !== undefined
+    ? sandboxRuntimeOfKind(options.sandboxRuntime.describe().kind)
+    : options.sandboxRuntimeKind ?? "docker";
+
+/**
+ * Builds the refusal of a resume on another runtime than its run started on.
+ *
+ * Each runtime's `runsc` decides where the CFC labels of a run's files are
+ * kept, and the two need not agree. Under Docker Desktop on macOS they are in
+ * a directory the Docker runtime's registration names, since Docker's file
+ * share takes no extended attribute, and the native runtime keeps them as
+ * extended attributes of the host's files. A file one of them labelled then
+ * reads as unlabelled under the other, and a run carried across would read
+ * what it withheld as public. The harness does not know which hosts agree,
+ * so it refuses every such resume.
+ *
+ * `recorded` is the runtime the run started on. `selected` is the runtime the
+ * resume would run on, with how it was selected where that is known. The
+ * message names the recorded runtime and how to name it: by the flag and the
+ * variable where `flags` are taken, and by the variable alone where not.
+ */
+export const sandboxRuntimeResumeRefusal = (
+  recorded: SandboxRuntimeKind,
+  selected: SandboxRuntimeKind | SandboxRuntimeChoice,
+  flags: boolean,
+): HarnessControlError =>
+  harnessResumeRefusal(
+    `resume sandbox runtime mismatch: the run started on \`${recorded}\`, ` +
+      `and this resume selects ${
+        typeof selected === "string"
+          ? `\`${selected}\``
+          : `\`${selected.runtime}\` (${sandboxRuntimeChoiceReason(selected)})`
+      }. The two need not keep the CFC labels of a run's files where the ` +
+      "other reads them, and on macOS they do not, so a run resumes only on " +
+      `the runtime it started on: name it with ${
+        flags ? `\`${SANDBOX_RUNTIME_FLAG} ${recorded}\` or ` : ""
+      }\`${SANDBOX_RUNTIME_ENV}=${recorded}\`.`,
+  );

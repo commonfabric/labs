@@ -1077,6 +1077,16 @@ run used and whether it was named or defaulted, such as
 `sandbox: docker (named by --sandbox-runtime)`. The run's recorded runtime
 description carries the same fact as `selection`.
 
+A run stays on the runtime it started on, and so does an interactive session.
+The two runtimes need not keep the CFC labels of a run's files where the other
+reads them, and on macOS they do not, so a file one labelled can read as
+unlabelled under the other. A `--resume` that selects the other runtime, by name
+or by default, is refused with `provider-mismatch`, naming the runtime the run
+started on and how to name it. A turn of a stored session on a host running the
+other runtime is refused the same way, saying to restart the host on the
+session's runtime or start a new session. A run started on Docker before macOS
+had a default therefore resumes only with `docker` named.
+
 A run on the native default is a run on the direct driver, with everything the
 rest of this section says of that driver. Two of its differences stop or change
 a run that works on Docker. A workspace or a writable host mount that holds the

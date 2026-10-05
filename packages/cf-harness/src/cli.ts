@@ -97,6 +97,9 @@ import {
   type ExplicitSandboxRuntimeSelection,
   processSandboxSelectionEnv,
   resolveSandboxRuntimeSelection,
+  sandboxRuntimeOfKind,
+  sandboxRuntimeOfOptions,
+  sandboxRuntimeResumeRefusal,
   type SandboxRuntimeSelection,
 } from "./sandbox/runtime-selection.ts";
 import type { SandboxPlatform, SandboxRuntimeChoice } from "./sandbox/types.ts";
@@ -3599,6 +3602,21 @@ export const runCfHarnessCli = async (
       if (artifacts.runState.lineage?.role === "subagent") {
         throw harnessResumeRefusal(
           `Cannot resume subagent run ${artifacts.runState.runId} as a top-level run; resume root run ${artifacts.runState.lineage.rootRunId} instead.`,
+        );
+      }
+      // The engine refuses this too. It is refused here first, where the
+      // flag that names the recorded runtime can be said.
+      const recordedSandbox = artifacts.runState.capabilitySnapshot?.cfc
+        ?.sandbox?.kind;
+      if (
+        recordedSandbox !== undefined &&
+        sandboxRuntimeOfKind(recordedSandbox) !==
+          sandboxRuntimeOfOptions(parsed)
+      ) {
+        throw sandboxRuntimeResumeRefusal(
+          sandboxRuntimeOfKind(recordedSandbox),
+          parsed.sandboxRuntimeChoice ?? sandboxRuntimeOfOptions(parsed),
+          deps.sandboxSelectionFlags ?? true,
         );
       }
       if (

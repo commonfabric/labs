@@ -19,6 +19,11 @@ import {
   type RunHarnessTranscriptOptions,
 } from "./prompt-loop.ts";
 import { establishHarnessSessionContext } from "./session-assembly.ts";
+import { sandboxRuntimeOfOptions } from "./sandbox/runtime-selection.ts";
+import {
+  SANDBOX_RUNTIME_ENV,
+  type SandboxRuntimeKind,
+} from "./sandbox/types.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import type { HarnessBrowserHost } from "./contracts/browser-host.ts";
@@ -859,6 +864,7 @@ export class HarnessInteractiveChatService {
   readonly #runIdForTurn?: (sessionId: string, turnId: string) => string;
   readonly #loomLocalHostBinding?: LoomLocalHostBinding;
   readonly #loomLocalHostModel?: string;
+  readonly #sandboxRuntime: SandboxRuntimeKind;
   readonly #createPromptLoop: HarnessInteractivePromptLoopFactory;
   readonly #now: () => string;
   readonly #randomUUID: () => string;
@@ -900,6 +906,13 @@ export class HarnessInteractiveChatService {
       );
     }
     this.#runIdForTurn = options.runIdForTurn;
+    // Every turn of this host runs on one runtime: the one of the engine or
+    // runtime it was handed, or the one its options select.
+    this.#sandboxRuntime = sandboxRuntimeOfOptions({
+      sandboxRuntime: this.#basePromptLoopOptions.engine?.sandbox ??
+        this.#basePromptLoopOptions.sandboxRuntime,
+      sandboxRuntimeKind: this.#basePromptLoopOptions.sandboxRuntimeKind,
+    });
     if (options.systemPrompt !== undefined) {
       this.#systemPrompt = options.systemPrompt;
     }
@@ -1424,6 +1437,7 @@ export class HarnessInteractiveChatService {
       model,
       loomLocalHostBinding: this.#loomLocalHostBinding,
       artifactRoot: params.artifactRoot,
+      sandboxRuntime: this.#sandboxRuntime,
       capabilities: params.capabilities,
       policy: resolveHarnessChatPolicy(
         params.policy,
@@ -1511,6 +1525,21 @@ export class HarnessInteractiveChatService {
           "durable chat session model does not match the local Loom host binding",
         );
       }
+    }
+    // What the session's earlier turns labelled is labelled where the runtime
+    // they ran on keeps labels, which the other runtime need not read. A
+    // session stored before hosts recorded a runtime has none to compare.
+    const startedOn = record.status.sandboxRuntime;
+    if (startedOn !== undefined && startedOn !== this.#sandboxRuntime) {
+      return providerMismatchError(
+        requestId,
+        `chat session \`${params.sessionId}\` started on the \`${startedOn}\` ` +
+          `sandbox runtime, and this host runs \`${this.#sandboxRuntime}\`. ` +
+          "The two need not keep the CFC labels of a session's files where " +
+          "the other reads them, and on macOS they do not, so a session goes " +
+          "on only on the runtime it started on: restart the host with " +
+          `\`${SANDBOX_RUNTIME_ENV}=${startedOn}\`, or start a new session.`,
+      );
     }
     if (record.status.status === "closed") {
       return sessionClosedError(requestId, params.sessionId);
