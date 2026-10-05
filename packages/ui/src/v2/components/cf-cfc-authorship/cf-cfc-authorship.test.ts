@@ -94,6 +94,20 @@ const unloadedCell = (id?: string) => {
   };
 };
 
+/** The markup `render()` returns, with each value written in place. */
+const templateText = (node: unknown): string => {
+  const template = node as { strings?: unknown; values?: unknown[] };
+  if (!Array.isArray(template?.strings)) {
+    return node === null || node === undefined ? "" : String(node);
+  }
+  return template.strings.map((part, index) =>
+    part +
+    (index < (template.values?.length ?? 0)
+      ? templateText(template.values![index])
+      : "")
+  ).join("");
+};
+
 /** An element that reports itself connected, as one in a document does. */
 const connectedElement = () => {
   const element = new CFCFCAuthorship();
@@ -218,6 +232,64 @@ describe("CFCFCAuthorship", () => {
     await element.refreshLabel();
 
     expect(element.authorshipState).toBe("verified");
+  });
+
+  it("reads `loading` before any label has been read", () => {
+    expect(new CFCFCAuthorship().authorshipState).toBe("loading");
+  });
+
+  it("renders `loading` with no warning while the value's resolved cell has not loaded", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      expect(element.authorshipState).toBe("loading");
+      const text = templateText(element.render());
+      expect(text).toContain('data-cfc-authorship-state="loading"');
+      expect(text).toContain("Checking author");
+      expect(text).not.toContain("Unknown author");
+      expect(text).not.toContain(">!<");
+
+      await resolved.load(authoredByLabel("alice"));
+
+      expect(element.authorshipState).toBe("verified");
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
+  it("reads `loading` while the author's resolved cell has not loaded", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+
+    try {
+      element.value = {
+        getCfcLabel: () =>
+          Promise.resolve(authoredByLabel("did:example:alice")),
+      };
+      element.author = {
+        get: () => ({ name: "Alice" }),
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      };
+
+      await element.refreshLabel();
+      await element.refreshAuthorClaim();
+      expect(element.authorshipState).toBe("loading");
+
+      await resolved.loadWithoutDeliveringLabel(undefined);
+
+      expect(element.authorshipState).toBe("unknown");
+    } finally {
+      element.disconnectedCallback();
+    }
   });
 
   it("re-reads the value's resolved label when that cell delivers one", async () => {

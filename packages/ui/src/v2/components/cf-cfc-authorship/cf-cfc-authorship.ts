@@ -14,6 +14,12 @@ import { initialsForName } from "../cf-avatar/index.ts";
 
 export type CfcAuthorshipState = "verified" | "unverified" | "unknown";
 
+/**
+ * What the badge shows: the state its labels decide, or `loading` while a
+ * label it reads has not loaded yet.
+ */
+export type CfcAuthorshipBadgeState = CfcAuthorshipState | "loading";
+
 type CfcLabelQueryableValue = {
   getCfcLabel(): Promise<CfcLabelView | undefined>;
 };
@@ -386,6 +392,10 @@ export const authorshipStateForLabel = (
  * renders the same bound value and author claim so the badge and rendered
  * content remain adjacent.
  *
+ * Until the value's label and the author's have loaded, the badge is neutral:
+ * it reads `loading`, with no warning. It reads `unknown` only once both have
+ * loaded and establish no authorship.
+ *
  * @element cf-cfc-authorship
  *
  * @prop {unknown} value - Usually supplied via `$value`; queried for CFC label IPC.
@@ -469,6 +479,11 @@ export class CFCFCAuthorship extends BaseElement {
       .authorship.unknown .badge {
         border-color: var(--cf-theme-color-border, hsl(220, 14%, 86%));
         background: var(--cf-theme-color-muted, hsl(220, 18%, 96%));
+      }
+
+      .authorship.loading .state {
+        color: var(--cf-theme-color-text-muted, hsl(220, 10%, 44%));
+        font-weight: 400;
       }
 
       .avatar,
@@ -581,6 +596,16 @@ export class CFCFCAuthorship extends BaseElement {
     author: undefined,
   };
 
+  /**
+   * Whether each source's label has yet to load: set when the source is
+   * assigned, and cleared by a read of it that leaves no watch waiting on its
+   * resolved cell, or by the worker refusing it.
+   */
+  #labelPending: Record<LabelSource, boolean> = {
+    value: true,
+    author: true,
+  };
+
   constructor() {
     super();
     this.cfcLabel = undefined;
@@ -600,6 +625,7 @@ export class CFCFCAuthorship extends BaseElement {
   set value(next: unknown) {
     const previous = this._value;
     this._value = next;
+    if (!Object.is(previous, next)) this.#labelPending.value = true;
     this.requestUpdate("value", previous);
     this.refreshForCurrentValue();
   }
@@ -611,11 +637,21 @@ export class CFCFCAuthorship extends BaseElement {
   set author(next: unknown) {
     const previous = this._author;
     this._author = next;
+    if (!Object.is(previous, next)) this.#labelPending.author = true;
     this.requestUpdate("author", previous);
     this.refreshForCurrentAuthor();
   }
 
-  get authorshipState(): CfcAuthorshipState {
+  /**
+   * What the badge shows: `loading` until the value's label and the author's
+   * have both loaded, and after that the state they decide. So `unknown`
+   * means that the loaded labels establish no authorship, never that they
+   * have yet to arrive.
+   */
+  get authorshipState(): CfcAuthorshipBadgeState {
+    if (this.#labelPending.value || this.#labelPending.author) {
+      return "loading";
+    }
     const labelState = authorshipStateForLabel(
       this.cfcLabel,
       this.authorClaim,
@@ -695,6 +731,7 @@ export class CFCFCAuthorship extends BaseElement {
       // later readable value starts one again.
       onRefused: () => {
         this.#endLabelWatch("value");
+        this.#settleLabel("value");
         this._labelRequestId++;
         const previous = this.cfcLabel;
         this.cfcLabel = undefined;
@@ -737,6 +774,7 @@ export class CFCFCAuthorship extends BaseElement {
       // watch on the cell it resolved to ends.
       onRefused: () => {
         this.#endLabelWatch("author");
+        this.#settleLabel("author");
         this._authorRequestId++;
         const previous = this._authorClaim;
         this._authorClaim = undefined;
@@ -777,6 +815,7 @@ export class CFCFCAuthorship extends BaseElement {
         unloadedCell,
         () => void this.refreshLabel(),
       );
+      this.#settleLabel("value");
     }
   }
 
@@ -790,8 +829,9 @@ export class CFCFCAuthorship extends BaseElement {
     ) {
       const previous = this._authorClaim;
       this._authorClaim = undefined;
-      this.requestUpdate("author", previous);
       this.#endLabelWatch("author");
+      this.#settleLabel("author");
+      this.requestUpdate("author", previous);
       return;
     }
 
@@ -823,6 +863,7 @@ export class CFCFCAuthorship extends BaseElement {
         unloadedCell,
         () => void this.refreshAuthorClaim(),
       );
+      this.#settleLabel("author");
     }
   }
 
@@ -895,7 +936,23 @@ export class CFCFCAuthorship extends BaseElement {
     watch?.cancel?.();
   }
 
-  private renderAvatar(state: CfcAuthorshipState) {
+  /**
+   * Records that a read of `source` has finished: its label has loaded unless
+   * a watch is still waiting on the cell it resolves to.
+   */
+  #settleLabel(source: LabelSource): void {
+    const pending = this.#labelWatches[source] !== undefined;
+    if (pending === this.#labelPending[source]) return;
+    this.#labelPending[source] = pending;
+    this.requestUpdate();
+  }
+
+  private renderAvatar(state: CfcAuthorshipBadgeState) {
+    if (state === "loading") {
+      return html`
+        <span class="status-dot" part="status-dot" aria-hidden="true"></span>
+      `;
+    }
     if (state !== "verified") {
       return html`
         <span class="status-dot" part="status-dot" aria-hidden="true">!</span>
@@ -927,11 +984,15 @@ export class CFCFCAuthorship extends BaseElement {
       primaryAuthorId(this.authorClaim);
     const authorLabel = state === "verified"
       ? claimLabel ?? "unknown author"
+      : state === "loading"
+      ? claimLabel ?? primitiveToString(this.authorName) ?? ""
       : claimLabel ?? primitiveToString(this.authorName) ?? "unknown author";
     const stateLabel = state === "verified"
       ? "Verified author"
       : state === "unverified"
       ? "Unverified author"
+      : state === "loading"
+      ? "Checking author"
       : "Unknown author";
 
     return html`
