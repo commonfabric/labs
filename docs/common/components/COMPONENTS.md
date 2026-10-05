@@ -1304,7 +1304,9 @@ different policy, and avoid cell-backed `$author` for purely decorative author
 names.
 
 The badge reads `loading` until the label on `$value` and the label on
-`$author` have both loaded, and shows nothing but a neutral marker meanwhile.
+`$author` have both loaded. Meanwhile it shows a neutral marker with no warning
+icon, the words "Checking author", and the claimed author's name when the claim
+gives one.
 After that it reads `verified`, `unverified`, or `unknown`, so `unknown` says
 that the loaded labels establish no authorship, never that they have yet to
 arrive. The element's `authorshipState` property holds the same word. The

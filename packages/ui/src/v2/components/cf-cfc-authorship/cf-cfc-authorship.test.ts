@@ -1,7 +1,16 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { CFCFCAuthorship } from "./index.ts";
+import {
+  authorshipStateForLabel as runtimeAuthorshipStateForLabel,
+  integrityAtomMatchesAuthor as runtimeIntegrityAtomMatchesAuthor,
+} from "@commonfabric/runtime-client";
+
+import {
+  authorshipStateForLabel,
+  CFCFCAuthorship,
+  integrityAtomMatchesAuthor,
+} from "./index.ts";
 
 /** A label whose root says its value was written by `sender`. */
 const authoredByLabel = (sender: string) => ({
@@ -86,6 +95,13 @@ describe("CFCFCAuthorship", () => {
     expect(element.badgePlacement).toBe("start");
     expect(property.attribute).toBe("badge-placement");
     expect(property.reflect).toBe(true);
+  });
+
+  it("exports the verdict rules `observeAuthorship()` decides by", () => {
+    expect(authorshipStateForLabel).toBe(runtimeAuthorshipStateForLabel);
+    expect(integrityAtomMatchesAuthor).toBe(
+      runtimeIntegrityAtomMatchesAuthor,
+    );
   });
 
   it("reads `loading` before it has observed anything", () => {

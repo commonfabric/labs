@@ -48,3 +48,14 @@ Deno.test("BaseElement gives a host carrying `hidden` the display its inline sty
     element.remove();
   }
 });
+
+Deno.test('BaseElement leaves a host carrying `hidden="until-found"` displayed as its own styles say', async () => {
+  const element = await attachedStack((stack) => {
+    stack.setAttribute("hidden", "until-found");
+  });
+  try {
+    expect(getComputedStyle(element).display).toBe("block");
+  } finally {
+    element.remove();
+  }
+});

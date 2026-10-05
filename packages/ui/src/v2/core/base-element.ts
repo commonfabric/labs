@@ -22,9 +22,11 @@ const DEBUG_RENDERER = false;
  * `:host { display: ... }` rule otherwise outranks the browser's `[hidden]`
  * rule, which would leave `hidden` with no effect on it. An inline `display`
  * on the host still outranks this, as it does the browser's rule.
+ * `hidden="until-found"` is left to the browser, which keeps such an element
+ * laid out so that find-in-page and fragment navigation can reveal it.
  */
 const hiddenHostStyles = css`
-  :host([hidden]) {
+  :host([hidden]:not([hidden="until-found"])) {
     display: none;
   }
 `;
