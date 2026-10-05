@@ -20,34 +20,16 @@ avoids throwaway work.
 
 ## Where the runner stands
 
-The runner soundly implements the **flat "ceiling + required-integrity" fragment**
-of CFC, and enforces all 8 of its own commit-gate invariants (relevant⇒prepared,
-digest-invalidation, verifier-read exclusion, fail-closed on missing
-schema/metadata/unsupported claim, commit-gated side effects, fresh-retry, system-
-controlled metadata, coarse `classification` summary). Its remit — the reactive
-commit boundary — is well covered.
-
-**The organizing theme.** The runtime represents a label as a *flat set* —
-`IFCLabel = { confidentiality?: unknown[]; integrity?: unknown[] }`
-([`label-view-core.ts:5`](../../packages/runner/src/cfc/label-view-core.ts)) — with
-union join and exact-`deepEqual` matching against static allow-lists
-([`prepare.ts:2481`,`:2497`](../../packages/runner/src/cfc/prepare.ts)). The spec's
-algebra is **CNF clauses (AND-of-ORs) + exchange-rule evaluation + pattern-matching
-+ trust-closure + observation-class refinement**. Almost every big gap below is a
-facet of that one representational distance. Most of the flat model's narrowness is
-*fail-closed* (it over-restricts — safe), but a few edges are genuine soundness
-holes, called out explicitly.
-
-**Default posture.** The commit gate is on by default: the Runtime constructor
-defaults `cfcEnforcementMode` to `enforce-strict`
-([`runtime.ts:495`](../../packages/runner/src/runtime.ts)), as does lib-shell's
-`createRuntimeClientOptions` — the types-level
-`DEFAULT_CFC_ENFORCEMENT_MODE = "disabled"`
-([`types.ts:42`](../../packages/runner/src/cfc/types.ts)) is only the
-bare-transaction fallback. Flow labels persist and the render confidentiality
-ceiling is built by default, so the one reject the strict rung adds — the
-writer-fit misfit — is exercised in deployment rather than dormant. A host that
-wants less states it.
+[`cfc-conformance-statement.md`](./cfc-conformance-statement.md) is the
+statement of what this runtime implements against the specification and in
+which direction each known gap errs; read it before this list, which is the
+backlog behind it. The theme that organizes the backlog: the runtime holds a
+label as `IFCLabel` in
+[`label-view-core.ts`](../../packages/runner/src/cfc/label-view-core.ts), joins by
+union and matches against static allow-lists, where the spec's algebra is CNF
+clauses, exchange-rule evaluation, pattern matching, trust closure and
+observation-class refinement. Most of the distance is fail-closed (the runtime
+over-restricts); the edges that are soundness holes are called out below.
 
 ---
 
