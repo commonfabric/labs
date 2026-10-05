@@ -329,6 +329,9 @@ describe("research session context", () => {
       store.database.exec(
         "ALTER TABLE chat_session DROP COLUMN handle_table",
       );
+      store.database.exec(
+        "ALTER TABLE chat_session DROP COLUMN client_action_catalog_answers",
+      );
       store.close();
       const exec = Database.prototype.exec;
       {
