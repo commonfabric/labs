@@ -21,6 +21,7 @@ import {
   currentPrincipal,
   Default,
   handler,
+  isWellFormedDID,
   NAME,
   pattern,
   type Stream,
@@ -188,15 +189,41 @@ export type PointTarget = {
   setInbox: Stream<SetProfileInboxEvent>;
 };
 
-/** A DID, as an offer's `space` and `from` must be written. */
-const DID_PATTERN = /^did:[a-z0-9]+:[^\s/]+$/;
+/**
+ * Whether `value` is an `http` or `https` origin written as its own canonical
+ * origin: it parses as a URL whose origin is `value` itself, so it holds no
+ * user information, path, query or fragment, names no default port, has a
+ * lowercase host and scheme, and no port out of range.
+ */
+function isOrigin(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (url.protocol === "https:" || url.protocol === "http:") &&
+    url.origin === value;
+}
 
 /**
- * An `http` or `https` origin, as an offer's `host` must be written: a scheme
- * and an authority of host characters alone, with no path, user information,
- * query or fragment.
+ * The message an append to a cell starts with when what the cell holds is not
+ * a list.
  */
-const ORIGIN_PATTERN = /^https?:\/\/[^\s/?#@]+$/;
+const NON_LIST_APPEND_MESSAGE =
+  "Cell.push() or Cell.pushAll() requires transaction and array value";
+
+/**
+ * Whether `error` is an append's refusal of a cell that holds something other
+ * than a list. The runtime gives that refusal no type of its own, so its
+ * message is the signal; the same message also covers an append made outside
+ * a transaction, which cannot happen in a handler.
+ */
+export function isNonListAppendRefusal(error: unknown): boolean {
+  const message = (error as { message?: unknown } | undefined)?.message;
+  return typeof message === "string" &&
+    message.startsWith(NON_LIST_APPEND_MESSAGE);
+}
 
 /** `value` trimmed and cut to `max` characters, or empty if not a string. */
 function trimmedText(value: unknown, max: number): string {
@@ -206,8 +233,9 @@ function trimmedText(value: unknown, max: number): string {
 /**
  * Returns the offer the inbox keeps for `event`, received at `now` by its
  * clock, or `undefined` when the event is refused. Every string is trimmed and
- * cut to its length. The event is refused unless `space` and `from` are DIDs
- * and `host` is an origin. An event with no `kind` is kept as
+ * cut to its length. The event is refused unless `space` and `from` are
+ * well-formed DIDs, by `isWellFormedDID()`, and `host` is an origin, by
+ * {@link isOrigin}. An event with no `kind` is kept as
  * {@link OFFER_DEFAULT_KIND}, one with no `id` as `<space>@<sharedAt>`, one
  * with no positive `sharedAt` as shared at `now`, and an `ownerOrigin` that is
  * not an origin is kept empty.
@@ -217,8 +245,7 @@ function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
   const host = trimmedText(event?.host, OFFER_ADDRESS_MAX_LENGTH);
   const from = trimmedText(event?.from, OFFER_ADDRESS_MAX_LENGTH);
   if (
-    !DID_PATTERN.test(space) || !ORIGIN_PATTERN.test(host) ||
-    !DID_PATTERN.test(from)
+    !isWellFormedDID(space) || !isOrigin(host) || !isWellFormedDID(from)
   ) {
     return undefined;
   }
@@ -232,7 +259,7 @@ function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
     id: trimmedText(event?.id, OFFER_ID_MAX_LENGTH) || `${space}@${sharedAt}`,
     space,
     host,
-    ownerOrigin: ORIGIN_PATTERN.test(ownerOrigin) ? ownerOrigin : "",
+    ownerOrigin: isOrigin(ownerOrigin) ? ownerOrigin : "",
     title: trimmedText(event?.title, OFFER_TITLE_MAX_LENGTH),
     from,
     sharedAt,
@@ -265,11 +292,11 @@ const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
     // A writer bypassing `receive` can replace `offers` with something other
     // than a list. The typed read above presents that as an empty list, and
     // the append refuses it by throwing; the value is left as it is, and
-    // nothing is kept.
+    // nothing is kept. Any other failure of the append propagates.
     try {
       offers.push(offer);
-    } catch {
-      return;
+    } catch (error) {
+      if (!isNonListAppendRefusal(error)) throw error;
     }
   },
 );

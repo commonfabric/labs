@@ -12,6 +12,7 @@ import {
 } from "commonfabric";
 import ProfileHome from "./profile-home.tsx";
 import PrivateInbox, {
+  isNonListAppendRefusal,
   type Offer,
   OFFER_ADDRESS_MAX_LENGTH,
   OFFER_DEFAULT_KIND,
@@ -207,6 +208,22 @@ export default pattern(() => {
       id: "query-host",
       host: "https://good.example?evil.example",
     });
+    inbox.receive.send({
+      ...valid,
+      id: "bad-port-host",
+      host: "https://example.com:99999",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "backslash-host",
+      host: "https://example.com\\evil",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "default-port-host",
+      host: "https://example.com:443",
+    });
+    inbox.receive.send({ ...valid, id: "query-space", space: "did:key:abc?" });
     inbox.receive.send({ ...valid, id: "not-me", from: SOMEONE_ELSE });
   });
   const assert_refused_offers_dropped = assert(() =>
@@ -221,6 +238,10 @@ export default pattern(() => {
       "userinfo-host",
       "fragment-host",
       "query-host",
+      "bad-port-host",
+      "backslash-host",
+      "default-port-host",
+      "query-space",
       "not-me",
     ].every((id) => offerWithId(inbox.offers, id) === undefined)
   );
@@ -257,6 +278,21 @@ export default pattern(() => {
   });
   const assert_corrupt_offers_left_as_they_were = assert(() =>
     corruptOffers.get() === "not a list"
+  );
+
+  // Only an append's refusal of a non-list is passed over; any other failure
+  // of the append propagates out of `receive`.
+  const assert_only_a_non_list_refusal_is_passed_over = assert(() =>
+    isNonListAppendRefusal(
+      new Error(
+        "Cell.push() or Cell.pushAll() requires transaction and array value\nhelp: use in handlers only, ensure cell is typed as array",
+      ),
+    ) &&
+    !isNonListAppendRefusal(
+      new TypeError("Cell.pushAll() requires an array of values, not `1`"),
+    ) &&
+    !isNonListAppendRefusal(new Error("writer-fit confidentiality misfit")) &&
+    !isNonListAppendRefusal(undefined)
   );
 
   // Pointing profiles at an inbox: of the current vintage and of an earlier
@@ -317,6 +353,7 @@ export default pattern(() => {
       { assertion: assert_duplicate_dropped },
       { action: action_receive_into_corrupt },
       { assertion: assert_corrupt_offers_left_as_they_were },
+      { assertion: assert_only_a_non_list_refusal_is_passed_over },
       { action: action_create_inboxes },
       { assertion: assert_inboxes_created },
       { action: action_point_one_elsewhere },

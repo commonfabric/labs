@@ -128,13 +128,15 @@ does, and then checks the sender:
   `id` to `OFFER_ID_MAX_LENGTH` (320), `title` to `OFFER_TITLE_MAX_LENGTH`
   (200), and `space`, `host`, `from` and `ownerOrigin` to
   `OFFER_ADDRESS_MAX_LENGTH` (256).
-- The event is dropped unless `space` and `from` are DIDs, `did:` and a
-  lowercase method then an identifier with no spaces or slashes, and `host`
-  is a bare `http` or `https` origin: a scheme and host characters alone, with
-  no path, user information (`@`), query (`?`) or fragment (`#`). A loom share
-  inbox admits those last three, so this inbox is the stricter. Each of the
-  four addresses is cut before it is checked, so one longer than the limit is
-  kept cut, and a cut `space` is a different DID.
+- The event is dropped unless `space` and `from` are well-formed DIDs, as
+  `isWellFormedDID()` decides (DID Core syntax), and `host` is an `http` or
+  `https` origin written as its own canonical origin: it parses as a URL whose
+  origin is exactly the string, so it holds no user information (`@`), path,
+  query (`?`) or fragment (`#`), no backslash, no default or out-of-range
+  port, and is lowercase. A loom share inbox admits more on both counts, so
+  this inbox is the stricter. Each of the four addresses is cut before it is
+  checked, so one longer than the limit is kept cut, and a cut `space` is a
+  different DID.
 - What a sender leaves out is filled in: `kind` with `OFFER_DEFAULT_KIND`
   (`loom`), `sharedAt`, unless it is a positive number, with the time the
   inbox received the offer, and `id` with `<space>@<sharedAt>`, so a resend
