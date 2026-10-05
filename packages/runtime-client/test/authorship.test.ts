@@ -9,6 +9,7 @@ import {
   observeAuthorship,
   type ObserveAuthorshipOptions,
 } from "@/authorship.ts";
+import { CellReadRefusedError } from "@/cell-handle.ts";
 
 /** A label whose root says its value was written by `sender`. */
 const authoredByLabel = (sender: string) => ({
@@ -865,6 +866,92 @@ describe("authorship", () => {
       notify?.(author);
 
       expect(observation.state).toBe("unverified");
+    });
+
+    it("does not verify on an authorship atom a link carried to the root", async () => {
+      const observation = observe({
+        getCfcLabel: () =>
+          Promise.resolve({
+            version: 1 as const,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{ kind: "authored-by", subject: "alice" }],
+              },
+              observes: "followRef" as const,
+            }],
+          }),
+      }, "alice");
+      await settle();
+
+      expect(observation.states()).toEqual(["unknown"]);
+    });
+
+    it("reports `unknown` once a resolved cell that holds nothing answers a read", async () => {
+      // The connection delivers no update for a cell that holds nothing, so
+      // only a read the observation asks for shows that it has loaded.
+      let read = false;
+      const subscribers = new Set<
+        (value: unknown, cfcLabel?: unknown) => void
+      >();
+      const resolved = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        subscribe(callback: (value: unknown, cfcLabel?: unknown) => void) {
+          subscribers.add(callback);
+          callback(undefined, undefined);
+          return () => {
+            subscribers.delete(callback);
+          };
+        },
+        lastRead: () => read ? { value: undefined } : { unread: true },
+        sync() {
+          read = true;
+          for (const callback of [...subscribers]) callback(undefined);
+          return Promise.resolve(undefined);
+        },
+      };
+      const observation = observe({
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      }, "alice");
+
+      try {
+        await settle();
+
+        expect(observation.states()).toEqual(["unknown"]);
+        expect(subscribers.size).toBe(0);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reports nothing for an author whose read fails other than by refusal", async () => {
+      const observation = observe(
+        { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
+        {
+          get: () => undefined,
+          sync: () => Promise.reject(new Error("the connection closed")),
+        },
+      );
+      await settle();
+
+      expect(observation.states()).toEqual([]);
+    });
+
+    it("reports `unknown` for an author whose read the worker refuses", async () => {
+      const observation = observe(
+        { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
+        {
+          get: () => undefined,
+          sync: () =>
+            Promise.reject(
+              new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+            ),
+        },
+      );
+      await settle();
+
+      expect(observation.states()).toEqual(["unknown"]);
     });
 
     it("leaves a value whose label read is cancelled unreported, with no unhandled rejection", async () => {

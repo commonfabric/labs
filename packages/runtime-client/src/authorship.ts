@@ -11,12 +11,17 @@ import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import {
   authorPrincipalCandidates,
   PRINCIPAL_CLAIM_KINDS,
+  principalClaimEntries,
   principalClaimSubject,
   representsPrincipalSubject,
 } from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { CellSubscribeOptions } from "./cell-handle.ts";
+import {
+  type CellHandleRead,
+  CellReadRefusedError,
+  type CellSubscribeOptions,
+} from "./cell-handle.ts";
 
 /**
  * Whether the value's label says the claimed author wrote it: `verified`
@@ -69,6 +74,12 @@ type CfcLabelSubscribableValue = {
     callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
     options: CellSubscribeOptions,
   ): () => void;
+
+  /** Asks the worker for the value, as a `CellHandle` does. */
+  sync?(): Promise<unknown>;
+
+  /** What the last read gave, as a `CellHandle` reports it. */
+  lastRead?(): CellHandleRead<unknown>;
 };
 
 type CfcReadableClaimValue = {
@@ -140,18 +151,19 @@ const authorshipClaimSubject = (
     : principalClaimSubject(atom, kind);
 };
 
+/**
+ * The root entries of `view` an authorship claim is read from: those
+ * `principalClaimEntries` names, at the root alone. An entry a link carried
+ * (`followRef`) describes the linked document, so it does not stand in for
+ * reading that document's own label.
+ */
+const rootEntries = (view: CfcLabelView | undefined) =>
+  principalClaimEntries(view).filter((entry) => entry.path.length === 0);
+
 const labelHasRootIntegrityKind = (
   view: CfcLabelView,
   kind: string,
-): boolean =>
-  view.entries.some((entry) =>
-    // An entry a link carried describes the linked document, so it does not
-    // stand in for reading that document's own label.
-    entry.path.length === 0 && entry.observes !== "followRef" &&
-    (entry.label.integrity ?? []).some((atom) =>
-      authorshipClaimSubject(atom, kind) !== undefined
-    )
-  );
+): boolean => hasAuthorshipIntegrity(rootEntries(view), kind);
 
 const mergeLabelViews = (
   ...views: Array<CfcLabelView | undefined>
@@ -262,6 +274,17 @@ interface LabelWatch {
   /** Ends the subscription; unset until the subscription call returns. */
   cancel: (() => void) | undefined;
 }
+
+/**
+ * Whether `cell` reports that a read of it has been answered, even with
+ * nothing: a `CellHandle` tells an unread handle from a cell that holds
+ * nothing through `lastRead()`. A cell that reports nothing of the kind has
+ * not.
+ */
+const hasBeenRead = (cell: CfcLabelSubscribableValue): boolean => {
+  const read = cell.lastRead?.();
+  return read !== undefined && !("unread" in read);
+};
 
 /**
  * The space, id and path of the cell `value` refers to, joined into one
@@ -386,9 +409,6 @@ export const integrityAtomMatchesAuthor = (
   return subject !== undefined && authorIdsForClaim(author).includes(subject);
 };
 
-const rootEntries = (view: CfcLabelView) =>
-  view.entries.filter((entry) => entry.path.length === 0);
-
 const hasAuthorshipIntegrity = (
   entries: ReturnType<typeof rootEntries>,
   kind: string,
@@ -431,8 +451,9 @@ export const authorshipStateForLabel = (
 };
 
 /**
- * Watches `value` and `author` and calls `onState` with the verdict once both
- * of their labels have loaded, and again after each later read of either
+ * Watches `value` and `author` and calls `onState` with an
+ * `AuthorshipObservation`, whose `state` is the verdict, once both of their
+ * labels have loaded, and again after each later read of either
  * one, whether or not the verdict changed. Before both have loaded it calls
  * nothing, so a verdict of `unknown` means the loaded labels establish no
  * authorship, never that they have yet to arrive. Returns a function that
@@ -446,8 +467,11 @@ export const authorshipStateForLabel = (
  * finished with nothing left waiting: the value's own label, or that of the
  * cell it resolves to, is read; when the resolved cell's label reads as
  * missing, the observation watches that cell and reads again once an update
- * shows it has loaded, and a read that still finds none then is final. A
- * source the worker refuses has loaded with no label.
+ * or a read of it shows it has loaded, and a read that still finds none then
+ * is final. A source the worker refuses carries no attestation, so its
+ * refusal ends the wait, and the verdict is reached without that label, as
+ * for one that is absent. A read that fails for any other reason decides
+ * nothing, and no verdict is reported while it stands.
  */
 export const observeAuthorship = (
   value: unknown,
@@ -591,11 +615,18 @@ class AuthorshipObservationState {
     let result: LabelViewResult;
     try {
       result = await readLabelView(this.#value, this.#kind);
-    } catch {
-      // This runs fire-and-forget. A disposal race (logout, runtime swap)
-      // cancels the read; leave the label as-is rather than leaking an
-      // unhandled rejection, as `#refreshAuthorClaim()` does.
-      return;
+    } catch (error) {
+      if (this.#cancelled || requestId !== this.#labelRequestId) return;
+      if (error instanceof CellReadRefusedError) {
+        // A refused read carries no attestation, as a refused subscription
+        // does.
+        result = { view: undefined, unloadedCell: undefined };
+      } else {
+        // Any other failure, such as a disposal race cancelling the read,
+        // decides nothing: the label stays unread, and no verdict is
+        // reported for it.
+        return;
+      }
     }
     if (this.#cancelled || requestId !== this.#labelRequestId) return;
     this.#cfcLabel = result.view;
@@ -637,8 +668,16 @@ class AuthorshipObservationState {
         candidates[0],
         authorDisplayName(valueClaim) ?? this.#authorName,
       ) ?? valueClaim;
-    } catch {
+    } catch (error) {
+      if (this.#cancelled || requestId !== this.#authorRequestId) return;
+      if (!(error instanceof CellReadRefusedError)) {
+        // As for the value's label: a failure other than a refusal decides
+        // nothing, and no verdict is reported for it.
+        return;
+      }
+      // A refused author makes no claim, as a refused subscription does.
       authorClaim = undefined;
+      unloadedCell = undefined;
     }
 
     if (this.#cancelled || requestId !== this.#authorRequestId) return;
@@ -694,7 +733,10 @@ class AuthorshipObservationState {
       if (this.#labelWatches[source] !== watch) {
         return;
       }
-      if (cfcLabel !== undefined || value !== undefined) {
+      if (
+        cfcLabel !== undefined || value !== undefined ||
+        hasBeenRead(unloadedCell)
+      ) {
         watch.loaded = true;
         refresh();
       }
@@ -713,7 +755,13 @@ class AuthorshipObservationState {
       watch.cancel = cancel;
     } else {
       cancel();
+      return;
     }
+    // The connection delivers no update for a cell that holds nothing, so a
+    // cell holding nothing would stay unread, and the watch waiting, for
+    // good. A read answers it whatever it holds, and its answer reaches the
+    // subscription above. A refusal of the read reaches `onRefused`.
+    unloadedCell.sync?.().catch(() => {});
   }
 
   /** Ends the watch on `source`'s resolved cell, if there is one. */
