@@ -44,7 +44,7 @@ export interface NativeUiControl {
  *
  * @throws If `control` names a blank surface or action.
  */
-export function bindNativeUiControl<T extends Record<string, unknown>>(
+export function bindNativeUiControl<T extends object>(
   stream: Pick<Cell<unknown>, "send">,
   control: NativeUiControl,
 ): (payload: T) => void {

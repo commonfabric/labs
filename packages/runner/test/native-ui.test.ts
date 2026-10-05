@@ -142,6 +142,28 @@ describe("native-ui", () => {
       expect(trustedEventMatchesUiContract(event, chatSendPolicy)).toBe(true);
     });
 
+    it("sends a payload typed by an interface, which has no index signature", () => {
+      // An interface has no index signature, so the binding below type-checks
+      // only under a bound that admits one. `deno task check` holds that half
+      // of the case, and the run holds the rest.
+
+      interface ChatSendRequest {
+        body: string;
+        replyTo?: string;
+      }
+
+      const send = spy((_event: unknown) => {});
+      const submit: (payload: ChatSendRequest) => void = bindNativeUiControl<
+        ChatSendRequest
+      >({ send }, { surface: "ChatSendSurface", action: "ChatSend" });
+      const payload: ChatSendRequest = { body: "hello", replyTo: "one" };
+      submit(payload);
+
+      const event = sentEvent(send);
+      expect(event).toMatchObject({ body: "hello", replyTo: "one" });
+      expect(trustedEventMatchesUiContract(event, chatSendPolicy)).toBe(true);
+    });
+
     it("keeps the surface and action it was bound with when the descriptor changes afterward", () => {
       const control = { surface: "ChatSendSurface", action: "ChatSend" };
       const { send, submit } = bindToSpy(control);
