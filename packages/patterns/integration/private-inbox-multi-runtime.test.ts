@@ -115,27 +115,31 @@ describe("private inbox across runtimes", () => {
    * and in this process, where the serving loop runs. The gate counts each
    * refusal whatever the log level shows.
    */
-  const refusals = async (): Promise<number> =>
-    writeRefusals(await sender.loggerCounts()) +
+  const refusals = async (
+    from: MultiRuntimeSession = sender,
+  ): Promise<number> =>
+    writeRefusals(await from.loggerCounts()) +
     writeRefusals(getLoggerCountsBreakdown());
 
   /**
-   * Has the sender's own handler send an offer through the owner's first
-   * profile, and waits for the owner to read it or for the append to be
+   * Has `from`'s own handler send an offer, keyed `id`, through the owner's
+   * first profile, and waits for the owner to read it or for the append to be
    * refused, then asserts the first. The append is a consequence of a
    * consequence, which a `settle()` does not wait for.
    */
   const offer = async (
     title: string,
     stream: "offer" | "queuedOffer" = "offer",
+    id: string = title,
+    from: MultiRuntimeSession = sender,
   ): Promise<void> => {
-    const refusedBefore = await refusals();
-    await sender.send(stream, { id: title, space: harness.spaceDid, title });
+    const refusedBefore = await refusals(from);
+    await from.send(stream, { id, space: harness.spaceDid, title });
     await harness.settleUntil(async () =>
       (await ownerOffers()).some((each) => each.title === title) ||
-      await refusals() > refusedBefore
+      await refusals(from) > refusedBefore
     );
-    expect(await refusals()).toBe(refusedBefore);
+    expect(await refusals(from)).toBe(refusedBefore);
     expect((await ownerOffers()).map((each) => each.title)).toContain(title);
   };
 
@@ -226,6 +230,18 @@ describe("private inbox across runtimes", () => {
       expect(each.from).toBe(sender.identity.did());
       expect(each.from).not.toBe(owner.identity.did());
     }
+  });
+
+  it("keeps an offer from each of two senders using one id", async () => {
+    await offer("shared id, from the sender", "offer", "shared id");
+    await offer("shared id, from the stranger", "offer", "shared id", stranger);
+
+    const shared = (await ownerOffers()).filter((each) =>
+      each.id === "shared id"
+    );
+    expect(shared.map((each) => each.from).sort()).toEqual(
+      [sender.identity.did(), stranger.identity.did()].sort(),
+    );
   });
 
   it("lets a sender read the offers back and find its own", async () => {

@@ -71,7 +71,7 @@ export interface OfferEvent {
 
   /**
    * The sender's key for the offer, the same on every resend of it. The inbox
-   * keeps one offer per `id`.
+   * keeps one offer per sender and `id`.
    */
   id?: string;
 
@@ -99,7 +99,10 @@ export interface Offer {
   /** What is offered, such as `loom` or `fabrichat-room`. */
   kind: string;
 
-  /** The sender's key for the offer; no two offers in the inbox share one. */
+  /**
+   * The sender's key for the offer; no two offers in the inbox from one sender
+   * share one.
+   */
   id: string;
 
   /** The DID of the space the offered thing lives in. */
@@ -232,16 +235,24 @@ function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
 /**
  * Appends the offer `event` describes, as {@link admissibleOffer} keeps it.
  * Nothing is appended for a refused event, for one whose `from` is not the
- * event's actor, or for one whose `id` an offer in the inbox already has.
+ * event's actor, or for one whose sender already has an offer in the inbox
+ * under its `id`. Keying on the sender too means no writer can take another
+ * sender's `id` first.
  */
 const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
   (event, { offers }) => {
     const offer = admissibleOffer(event, Date.now());
     if (offer === undefined || offer.from !== currentPrincipal()) return;
     // The explicit read keeps the append in the conflict set, so two
-    // deliveries of one `id` racing to append conflict, and the second sees
+    // deliveries of one offer racing to append conflict, and the second sees
     // the first.
-    if ((offers.get() ?? []).some((held) => held?.id === offer.id)) return;
+    if (
+      (offers.get() ?? []).some((held) =>
+        held?.from === offer.from && held?.id === offer.id
+      )
+    ) {
+      return;
+    }
     offers.push(offer);
   },
 );

@@ -93,7 +93,7 @@ more:
 - `kind`: what is offered, such as `loom` or `fabrichat-room`. A reader acts
   only on the kinds it knows.
 - `id`: the sender's key for the offer, the same on every resend of it. No two
-  offers in the inbox share one.
+  offers in the inbox from one sender share one.
 - `space`: the DID of the space the offered thing lives in.
 - `host`: the origin of the host serving that space.
 - `ownerOrigin`: the origin of the sender's own host, or empty.
@@ -134,8 +134,10 @@ does, and then checks the sender:
   `ownerOrigin` that is not an origin is kept empty. A field the envelope does
   not name is not kept.
 - The event is dropped when its `from` is not the principal sending it, or
-  when an offer in the inbox already has its `id`. So a resend of one offer is
-  kept once, and the first one kept stays as it was.
+  when an offer in the inbox already has its `from` and `id`. So a resend of
+  one offer is kept once, the first one kept stays as it was, and no sender
+  can take another sender's `id` first. A loom share inbox keys on `id` alone,
+  so this inbox is the stricter of the two.
 
 The sender is not told of a drop, but it can read the offers back and look
 for a row with its offer's `id`, `from` and `space`, as a loom sender does.
@@ -144,8 +146,8 @@ for a row with its offer's `id`, `from` and `space`, as a loom sender does.
 
 The owner reads `offers`. Nothing marks an offer as read or removes it, so a
 reader keeps its own record of the offers it has handled, keyed by `from` and
-`id`, wherever it keeps its own state. Two senders may choose the same `id`;
-the inbox keeps only the first offer under it.
+`id`, wherever it keeps its own state. Two senders may choose the same `id`,
+and the inbox keeps an offer from each.
 
 ## What it does not protect
 
