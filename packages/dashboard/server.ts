@@ -23,6 +23,8 @@
  *   GH_TOKEN                          GitHub tiles; read access to the
  *                                     organization's members also powers the
  *                                     organization-users tile
+ *   GH_BILLING_TOKEN                  optional dedicated token for GitHub
+ *                                     organization or enterprise billing
  */
 
 import { minOf } from "@commonfabric/utils/math";

@@ -4,6 +4,12 @@ import type {
   HarnessClientAction,
   HarnessClientActionOutcomeKind,
 } from "./client-action.ts";
+import type {
+  HarnessClientProtocolDeclaration,
+  HarnessCommandResolveBody,
+  HarnessCommandSettlementRecord,
+  HarnessTypedClientAction,
+} from "./client-command.ts";
 import type { HarnessImageAttachment } from "./image.ts";
 import type { HarnessInputCellSpec } from "./input-cells.ts";
 import type { HarnessPatternRefSpec } from "./pattern-refs.ts";
@@ -218,6 +224,16 @@ export interface HarnessChatStartSessionParams {
    */
   clientActions?: boolean;
 
+  /**
+   * The client protocol the host speaks and the features it requires. A
+   * mismatch is refused with `protocol_mismatch` before the session starts;
+   * an absent declaration requires nothing. An accepted stdio `start_session`
+   * or `start_turn` answer carries the console's `protocol` echo beside the
+   * status, whether or not the host declared one. Requiring a feature turns
+   * nothing on: `clientActions` still opts the session in to `weaver_action`.
+   */
+  protocol?: HarnessClientProtocolDeclaration;
+
   metadata?: Record<string, unknown>;
 }
 
@@ -231,6 +247,9 @@ export interface HarnessChatStartTurnParams {
 
   /** Opts the session in to `weaver_action` from this turn on; see the same field on `start_session`. */
   clientActions?: boolean;
+
+  /** The host's protocol declaration; see the same field on `start_session`. */
+  protocol?: HarnessClientProtocolDeclaration;
 
   /**
    * Cells the caller attaches to this turn by reference, each under a name the
@@ -264,6 +283,11 @@ export interface HarnessChatCloseSessionParams {
   reason?: string;
 }
 
+/**
+ * Settles one final-action request. A typed request is settled by
+ * `HarnessCommandResolveBody` (`client-command.ts`) on the same route and
+ * method, told apart by its `settlement` field in place of `outcome`.
+ */
 export interface HarnessChatResolveClientActionParams {
   sessionId: string;
   actionId: string;
@@ -298,7 +322,10 @@ export type HarnessChatRequestParamsByMethod = {
   start_turn: HarnessChatStartTurnParams;
   cancel_turn: HarnessChatCancelTurnParams;
   close_session: HarnessChatCloseSessionParams;
-  resolve_client_action: HarnessChatResolveClientActionParams;
+  /** A final-action answer, or a typed request's settlement, never both. */
+  resolve_client_action:
+    | (HarnessChatResolveClientActionParams & { settlement?: never })
+    | (HarnessCommandResolveBody & { outcome?: never; result?: never });
   status: HarnessChatStatusParams;
   list_events: HarnessChatListEventsParams;
   list_turns: HarnessChatListTurnsParams;
@@ -328,6 +355,7 @@ export interface HarnessChatError {
     | "session_closed"
     | "unknown_action"
     | "action_resolved"
+    | "protocol_mismatch"
     | "incomplete_transcript"
     | "browser_access_required"
     | "policy_denied"
@@ -524,11 +552,14 @@ export type HarnessChatStructuredEvent =
     elapsedMs?: number;
   }
   | {
-    /** The model asked the person's client to perform one action. */
+    /**
+     * The model asked the person's client to perform one action: a final-action
+     * kind, or a typed command or catalog request.
+     */
     kind: "client_action_requested";
     turnId: string;
     actionId: string;
-    action: HarnessClientAction;
+    action: HarnessClientAction | HarnessTypedClientAction;
   }
   | {
     /**
@@ -538,8 +569,18 @@ export type HarnessChatStructuredEvent =
     kind: "client_action_resolved";
     turnId: string;
     actionId: string;
+
+    /**
+     * The final-action outcome word. A typed settlement carries the word its
+     * status maps to (`legacyOutcomeOfHarnessCommandSettlement`) beside the
+     * `settlement` record, so a reader that knows only the three words still
+     * takes the request off its queue.
+     */
     outcome: HarnessClientActionOutcomeKind;
     result?: string;
+
+    /** A typed request's settlement, without the data it answered. */
+    settlement?: HarnessCommandSettlementRecord;
   }
   | {
     kind: "turn_canceled";

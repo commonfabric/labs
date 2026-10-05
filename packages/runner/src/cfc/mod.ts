@@ -20,6 +20,7 @@ export {
   type LabelFieldClassificationEntry,
   type LabelFieldRepresentationClass,
 } from "./label-field-classification.ts";
+export { InvalidIfcLabelError, parseIfcLabel } from "./label-parser.ts";
 export {
   type CfcFieldCommitment,
   commitCfcFieldValue,

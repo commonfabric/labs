@@ -90,6 +90,17 @@ counts their three child templates (`shape`, `value`, and `followRef`). These
 counters measure work before final entry coalescing; they do not count distinct
 persisted entries.
 
+## Parsing untrusted CFC labels
+
+`parseIfcLabel` from `@commonfabric/runner/cfc` is the public boundary for a
+standalone label received as untrusted JSON. It accepts object atoms and
+confidentiality `{ anyOf: [...] }` clauses, preserves extension atom type URIs,
+and returns a deeply detached `IFCLabel`.
+
+Malformed values throw `InvalidIfcLabelError` with a JSON-pointer-like `path`.
+Callers must treat the refusal as an invalid label, never as an unlabeled value.
+The parser checks grammar only; consumers remain responsible for policy meaning.
+
 ## Architecture
 
 The Runner has been refactored to eliminate singleton patterns in favor of

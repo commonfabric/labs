@@ -8,6 +8,9 @@ import { Identity } from "@commonfabric/identity";
 
 import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
 import { bindCurrentPrincipalConfidentiality } from "../src/cfc/current-principal-confidentiality.ts";
+import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
+import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
@@ -31,6 +34,38 @@ const schema = {
     }],
   },
 } as const;
+
+const privateNotes = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: { note: { type: "string" } },
+    ifc: { confidentiality: [...schema.ifc.confidentiality] },
+  },
+  ifc: { confidentiality: [...schema.ifc.confidentiality] },
+} as const;
+
+type Note = { note: string };
+
+/** The confidentiality stored for `link`'s document at exactly `path`. */
+const storedConfidentialityAt = (
+  runtime: Runtime,
+  link: Parameters<typeof loadStoredCfcEnvelope>[1],
+  path: readonly string[],
+): unknown[] => {
+  const tx = runtime.edit();
+  try {
+    const envelope = loadStoredCfcEnvelope(tx, link);
+    if (envelope.status !== "loaded") {
+      throw new Error(`No stored envelope: ${envelope.status}`);
+    }
+    return envelope.metadata.labelMap.entries
+      .filter((entry) => entry.path.join("/") === path.join("/"))
+      .flatMap((entry) => entry.label.confidentiality ?? []);
+  } finally {
+    tx.abort();
+  }
+};
 
 describe("cfc-current-principal-confidentiality", () => {
   it("refuses creator placeholders inside alternatives or other atom subjects", () => {
@@ -712,4 +747,300 @@ describe("cfc-current-principal-confidentiality", () => {
       }
     });
   }
+
+  describe("a document created under a labeled parent", () => {
+    // The owner's runtime reads under a ceiling admitting only the owner, so
+    // a label naming anyone else on the way to an item withholds it. The
+    // visitor's runtime has none: an append reads the list it joins, which a
+    // ceiling admitting only the visitor would withhold before any commit.
+
+    const withOwnerAndVisitor = async (
+      body: (owner: Runtime, visitor: Runtime) => Promise<void>,
+    ) => {
+      const storageManager = StorageManager.emulate({ as: ownerIdentity });
+      const runtimes = [ownerIdentity, visitorIdentity].map((identity) =>
+        new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager,
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+          ...(identity === ownerIdentity
+            ? { cfcReadMaxConfidentiality: [cfcAtom.user(identity.did())] }
+            : {}),
+          trustSnapshotProvider: () => ({
+            id: identity.did(),
+            actingPrincipal: identity.did(),
+          }),
+        })
+      );
+      try {
+        await body(runtimes[0], runtimes[1]);
+      } finally {
+        await storageManager.synced();
+        for (const runtime of runtimes) await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    const createList = async (
+      owner: Runtime,
+      listSchema: JSONSchema,
+      initial: Note[],
+    ) => {
+      const create = owner.edit();
+      const list = owner.getCell<Note[]>(
+        ownerIdentity.did(),
+        "notes",
+        listSchema,
+        create,
+      );
+      list.set(initial);
+      expect((await create.commit()).error).toBeUndefined();
+      await list.sync();
+      return list.getAsNormalizedFullLink();
+    };
+
+    const appendAs = async (
+      writer: Runtime,
+      link: Awaited<ReturnType<typeof createList>>,
+      listSchema: JSONSchema,
+    ) => {
+      const append = writer.edit();
+      writer.getCellFromLink<Note[]>(link, listSchema, append).push({
+        note: "Piranesi",
+      });
+      return (await append.commit()).error;
+    };
+
+    it("binds an item another principal appends to the owner of the list", async () => {
+      await withOwnerAndVisitor(async (owner, visitor) => {
+        const link = await createList(owner, privateNotes, []);
+        expect(await appendAs(visitor, link, privateNotes)).toBeUndefined();
+
+        const item = visitor.getCellFromLink<Note[]>(link, privateNotes)
+          .key(0).resolveAsCell().getAsNormalizedFullLink();
+        expect(item.id).not.toBe(link.id);
+        const itemLabel = storedConfidentialityAt(visitor, item, []);
+        expect(itemLabel).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(itemLabel).not.toContainEqual(
+          cfcAtom.user(visitorIdentity.did()),
+        );
+        const slotLabel = storedConfidentialityAt(visitor, link, ["0"]);
+        expect(slotLabel).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(slotLabel).not.toContainEqual(
+          cfcAtom.user(visitorIdentity.did()),
+        );
+        expect(owner.getCellFromLink(link).get()).toEqual([
+          { note: "Piranesi" },
+        ]);
+      });
+    });
+
+    it("binds a document nested in an appended item to the owner of the list", async () => {
+      await withOwnerAndVisitor(async (owner, visitor) => {
+        const withParts = {
+          ...privateNotes,
+          items: {
+            ...privateNotes.items,
+            properties: {
+              ...privateNotes.items.properties,
+              parts: { type: "array", items: privateNotes.items },
+            },
+          },
+        } as const;
+        const link = await createList(owner, withParts, []);
+        const append = visitor.edit();
+        visitor.getCellFromLink<(Note & { parts: Note[] })[]>(
+          link,
+          withParts,
+          append,
+        ).push({ note: "Piranesi", parts: [{ note: "Halls" }] });
+        expect((await append.commit()).error).toBeUndefined();
+
+        const items = visitor.getCellFromLink<(Note & { parts: Note[] })[]>(
+          link,
+          withParts,
+        );
+        const item = items.key(0).resolveAsCell().getAsNormalizedFullLink();
+        const part = items.key(0).key("parts").key(0).resolveAsCell()
+          .getAsNormalizedFullLink();
+        expect(part.id).not.toBe(item.id);
+        const partLabel = storedConfidentialityAt(visitor, part, []);
+        expect(partLabel).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(partLabel).not.toContainEqual(
+          cfcAtom.user(visitorIdentity.did()),
+        );
+        expect(owner.getCellFromLink(link).get()).toEqual([
+          { note: "Piranesi", parts: [{ note: "Halls" }] },
+        ]);
+      });
+    });
+
+    it("binds an item the owner appends to the owner", async () => {
+      await withOwnerAndVisitor(async (owner, visitor) => {
+        const link = await createList(owner, privateNotes, []);
+        expect(await appendAs(owner, link, privateNotes)).toBeUndefined();
+
+        const item = visitor.getCellFromLink<Note[]>(link, privateNotes)
+          .key(0).resolveAsCell().getAsNormalizedFullLink();
+        const itemLabel = storedConfidentialityAt(visitor, item, []);
+        expect(itemLabel).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(itemLabel).not.toContainEqual(
+          cfcAtom.user(visitorIdentity.did()),
+        );
+        expect(owner.getCellFromLink(link).get()).toEqual([
+          { note: "Piranesi" },
+        ]);
+      });
+    });
+
+    it("binds an appended item to its writer where the list names no reader", async () => {
+      // The list is labeled for its space's readers, which names no `User`
+      // for a creator-bound declaration to take.
+
+      await withOwnerAndVisitor(async (owner, visitor) => {
+        const spaceLabeled = {
+          ...privateNotes,
+          ifc: { confidentiality: [cfcAtom.space(ownerIdentity.did())] },
+        };
+        const link = await createList(owner, {
+          ...spaceLabeled,
+          items: { type: "object", properties: { note: { type: "string" } } },
+        }, []);
+        expect(await appendAs(visitor, link, spaceLabeled)).toBeUndefined();
+
+        const item = visitor.getCellFromLink<Note[]>(link, spaceLabeled)
+          .key(0).resolveAsCell().getAsNormalizedFullLink();
+        const itemLabel = storedConfidentialityAt(visitor, item, []);
+        expect(itemLabel).toContainEqual(cfcAtom.user(visitorIdentity.did()));
+        expect(itemLabel).not.toContainEqual(
+          cfcAtom.user(ownerIdentity.did()),
+        );
+      });
+    });
+
+    describe("a document that already existed", () => {
+      // The visitor writes a document that existed before the transaction,
+      // holding no labels, and links it into the owner's list. It is not a new
+      // document, so its declaration binds to the visitor and not to the
+      // list's owner.
+
+      const linkExistingNote = async (
+        owner: Runtime,
+        visitor: Runtime,
+        stage: (address: Omit<IMemorySpaceAddress, "path">) => Promise<void>,
+        { alsoCreateForUser = false } = {},
+      ) => {
+        const link = await createList(owner, privateNotes, []);
+        const note = visitor.getCell<Note>(ownerIdentity.did(), "existing");
+        const noteLink = note.getAsNormalizedFullLink();
+        await stage({
+          space: noteLink.space,
+          id: noteLink.id,
+          scope: "space",
+          type: "application/json",
+        });
+        const append = visitor.edit();
+        const existing = visitor.getCellFromLink<Note>(
+          noteLink,
+          privateNotes.items,
+          append,
+        );
+        existing.set({ note: "Piranesi" });
+        if (alsoCreateForUser) {
+          const forUser = visitor.getCell<Note>(
+            ownerIdentity.did(),
+            "existing",
+            undefined,
+            append,
+            "user",
+          );
+          expect(forUser.getAsNormalizedFullLink().id).toBe(noteLink.id);
+          forUser.set({ note: "Halls" });
+        }
+        visitor.getCellFromLink<Note[]>(link, privateNotes, append).push(
+          existing,
+        );
+        expect((await append.commit()).error).toBeUndefined();
+        return storedConfidentialityAt(visitor, noteLink, []);
+      };
+
+      it("binds a document stored as present but `undefined` to its writer", async () => {
+        await withOwnerAndVisitor(async (owner, visitor) => {
+          const noteLabel = await linkExistingNote(
+            owner,
+            visitor,
+            async (address) => {
+              const seed = visitor.edit();
+              seed.writeOrThrow({ ...address, path: ["value"] }, undefined);
+              expect((await seed.commit()).error).toBeUndefined();
+            },
+          );
+          expect(noteLabel).toContainEqual(
+            cfcAtom.user(visitorIdentity.did()),
+          );
+          expect(noteLabel).not.toContainEqual(
+            cfcAtom.user(ownerIdentity.did()),
+          );
+        });
+      });
+
+      it("binds a document to its writer when the transaction creates one of the same id in another scope", async () => {
+        await withOwnerAndVisitor(async (owner, visitor) => {
+          const noteLabel = await linkExistingNote(
+            owner,
+            visitor,
+            async (address) => {
+              const seed = visitor.edit();
+              seed.writeOrThrow({ ...address, path: ["value"] }, {
+                note: "Solaris",
+              });
+              expect((await seed.commit()).error).toBeUndefined();
+            },
+            { alsoCreateForUser: true },
+          );
+          expect(noteLabel).toContainEqual(
+            cfcAtom.user(visitorIdentity.did()),
+          );
+          expect(noteLabel).not.toContainEqual(
+            cfcAtom.user(ownerIdentity.did()),
+          );
+        });
+      });
+    });
+
+    it("keeps the stored readers of an existing list another principal appends a string to", async () => {
+      // A string joins the list's own document rather than one of its own,
+      // so the list's stored readers bind the declaration.
+
+      await withOwnerAndVisitor(async (owner, visitor) => {
+        const create = owner.edit();
+        const list = owner.getCell<string[]>(
+          ownerIdentity.did(),
+          "strings",
+          schema,
+          create,
+        );
+        list.set(["Solaris"]);
+        expect((await create.commit()).error).toBeUndefined();
+        await list.sync();
+        const link = list.getAsNormalizedFullLink();
+        const append = visitor.edit();
+        visitor.getCellFromLink<string[]>(link, schema, append).push(
+          "Piranesi",
+        );
+        expect((await append.commit()).error).toBeUndefined();
+
+        const listLabel = storedConfidentialityAt(visitor, link, []);
+        expect(listLabel).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(listLabel).not.toContainEqual(
+          cfcAtom.user(visitorIdentity.did()),
+        );
+        expect(owner.getCellFromLink(link).get()).toEqual([
+          "Solaris",
+          "Piranesi",
+        ]);
+      });
+    });
+  });
 });
