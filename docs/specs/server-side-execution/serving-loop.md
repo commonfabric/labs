@@ -1285,9 +1285,11 @@ names each failure by its index; the commit step maps the index to the
 contribution that carried it, requeues that contribution when it is an
 event handler and drops it whole otherwise, and commits the rest. A
 create-only receipt that already exists fails this way, and so does a
-value pin (`entity-value-hash`, which `Cell.pinDocument()` takes). The
-batch carries no confirmed reads, so a value pin is how a handler brings
-a document it read and did not write into the wave's concurrency check.
+value pin (`entity-value-hash`): the one `Cell.pinDocument()` takes, and
+the one CFC commit preparation takes over a policy manifest it consulted,
+for any kind of contribution. The batch carries no confirmed reads, so a
+value pin is how a handler brings a document it read and did not write
+into the wave's concurrency check.
 
 **Recomputation after a drop arrives by DEPENDENCY ONLY (Q1, RULED
 2026-08-05).** A dropped superseded write has no recompute trigger of
