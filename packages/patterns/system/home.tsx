@@ -103,8 +103,9 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
-  // The user's private inbox, where others deliver offers to them, and which
-  // each of their profiles points at. Absent until `ensurePrivateInbox` runs.
+  // The user's private inbox, where others deliver offers to them. Each of
+  // their profiles that points at no inbox is pointed here; one that points at
+  // another inbox keeps it. Absent until `ensurePrivateInbox` runs.
   privateInbox: Writable<PrivateInboxHolder>;
   createProfile: Stream<CreateProfileEvent>;
   // Creates the private inbox if there is none, and points every profile that
