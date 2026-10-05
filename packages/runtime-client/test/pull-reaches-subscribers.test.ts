@@ -128,7 +128,8 @@ async function messageWithReactions() {
 
 /**
  * Subscribes to `handle`, keeping every value its callback is given, and every
- * refusal, as `{ refused }`.
+ * refusal, as `{ refused }`. What it keeps is compared with `toStrictEqual()`,
+ * since `toEqual()` passes a list missing a trailing `undefined`.
  */
 function heard(handle: CellHandle<Reaction[]>): unknown[] {
   const heard: unknown[] = [];
@@ -158,9 +159,9 @@ describe("pull-reaches-subscribers", () => {
 
     // `later` was seeded from `live` with the list it still held, and the pull
     // tells both handles' subscribers what it found.
-    expect(laterHeard).toEqual([[], undefined]);
+    expect(laterHeard).toStrictEqual([[], undefined]);
     expect(later.get()).toBeUndefined();
-    expect(liveHeard).toEqual([undefined, [], undefined]);
+    expect(liveHeard).toStrictEqual([undefined, [], undefined]);
     expect(live.get()).toBeUndefined();
   });
 
@@ -185,9 +186,9 @@ describe("pull-reaches-subscribers", () => {
 
     expect(await later.pull()).toEqual([{ emoji: "y" }]);
 
-    expect(laterHeard).toEqual([[{ emoji: "y" }]]);
+    expect(laterHeard).toStrictEqual([[{ emoji: "y" }]]);
     expect(later.get()).toEqual([{ emoji: "y" }]);
-    expect(liveHeard).toEqual([undefined, [], [{ emoji: "y" }]]);
+    expect(liveHeard).toStrictEqual([undefined, [], [{ emoji: "y" }]]);
     expect(live.get()).toEqual([{ emoji: "y" }]);
   });
 });

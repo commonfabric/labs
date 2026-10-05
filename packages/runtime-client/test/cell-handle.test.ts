@@ -3217,7 +3217,9 @@ describe("cell-handle", () => {
     // What a read finds reaches the handle's subscribers when it differs from
     // what the handle holds, and goes to the connection, which hands it to
     // every other handle on the cell. Each case starts from a handle holding
-    // a value its subscriber was given.
+    // a value its subscriber was given. What was heard is compared with
+    // `toStrictEqual()`, since `toEqual()` passes a list missing a trailing
+    // `undefined`.
 
     const ref: CellRef = {
       id: "of:changed-read-cell" as CellRef["id"],
@@ -3256,9 +3258,9 @@ describe("cell-handle", () => {
 
       await expect(cell.pull()).resolves.toBeUndefined();
 
-      expect(heard).toEqual([["held"], undefined]);
-      expect(published).toEqual([undefined]);
-      expect(cell.lastRead()).toEqual({ value: undefined });
+      expect(heard).toStrictEqual([["held"], undefined]);
+      expect(published).toStrictEqual([undefined]);
+      expect(cell.lastRead()).toStrictEqual({ value: undefined });
     });
 
     it("tells neither its subscribers nor the connection of a `sync()` that finds nothing", async () => {
@@ -3266,8 +3268,8 @@ describe("cell-handle", () => {
 
       await expect(cell.sync()).resolves.toBeUndefined();
 
-      expect(heard).toEqual([["held"]]);
-      expect(published).toEqual([]);
+      expect(heard).toStrictEqual([["held"]]);
+      expect(published).toStrictEqual([]);
     });
 
     for (const read of ["sync", "pull"] as const) {
@@ -3276,8 +3278,8 @@ describe("cell-handle", () => {
 
         await expect(cell[read]()).resolves.toEqual(["found"]);
 
-        expect(heard).toEqual([["held"], ["found"]]);
-        expect(published).toEqual([["found"]]);
+        expect(heard).toStrictEqual([["held"], ["found"]]);
+        expect(published).toStrictEqual([["found"]]);
         expect(cell.get()).toEqual(["found"]);
       });
 
@@ -3286,8 +3288,8 @@ describe("cell-handle", () => {
 
         await expect(cell[read]()).resolves.toEqual(["held"]);
 
-        expect(heard).toEqual([["held"]]);
-        expect(published).toEqual([]);
+        expect(heard).toStrictEqual([["held"]]);
+        expect(published).toStrictEqual([]);
       });
     }
   });
