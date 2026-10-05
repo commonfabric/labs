@@ -1328,6 +1328,18 @@ A job runs through the same `cf-harness` path as an agent run, with no fabric
 session, and reports a `step` event for each tool its loop calls and a `command`
 event for each command the host ran for it.
 
+Each `command` event carries `{command, ok, outputs?}`. A refused command also
+carries the outcome's `code` and `hostCode` when present, and `error` from an
+admitted host answer, limited to 500 characters. An answer withheld by CFC
+contributes no reason text or outputs. The job snapshot's `commands` array holds
+these same bodies in execution order.
+
+The lane binds each harness invocation to the stored job's `id`. A host command
+configuration may name `jobIdEnvVar`; command discovery and execution then
+receive that job id in the named variable of their cleared host environment. The
+request and model tool arguments cannot select the identity, and concurrent jobs
+have separate bindings.
+
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
 have changed things.

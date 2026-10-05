@@ -9,6 +9,7 @@ import type {
   HarnessJobSpec,
 } from "../../lib/harness-job.ts";
 import {
+  LOCAL_JOB_ERROR_MAX_LENGTH,
   localJobEventsOf,
   LocalJobLane,
   localJobSpecOf,
@@ -111,6 +112,7 @@ const laneWith = (
 describe("local-jobs/lane", () => {
   describe("localJobSpecOf()", () => {
     const job = {
+      id: "job-test",
       request: {
         ...REQUEST,
         instructions: "Answer briefly.",
@@ -123,6 +125,7 @@ describe("local-jobs/lane", () => {
 
       expect(spec).toEqual({
         task: REQUEST.task,
+        commandJobId: "job-test",
         taskRole: "direct-command",
         resultSchema: REQUEST.resultSchema,
         tools: ASK.tools,
@@ -238,12 +241,79 @@ describe("local-jobs/lane", () => {
         answer({
           status: "executed",
           outcome: { ok: false },
-          entry: { status: "withheld", reasonCode: "cfc_ceiling_exceeded" },
+          entry: {
+            status: "withheld",
+            reasonCode: "cfc_ceiling_exceeded",
+            value: { error: "secret detail", outputs: { secret: "value" } },
+          },
         }),
         [call],
       ))).toEqual([{
         kind: "command",
         body: { command: "loom.compose", ok: false },
+      }]);
+    });
+
+    it("carries a refused command's code and the host's reason, cut to a bound", () => {
+      const call = calling("run_command");
+      const refused = (value: unknown, outcome: Record<string, unknown>) =>
+        localJobEventsOf(event(
+          answer({
+            status: "executed",
+            outcome: { ok: false, id: "loom.compose", ...outcome },
+            entry: { status: "admitted", value },
+          }),
+          [call],
+        ));
+
+      expect(refused(
+        {
+          ok: false,
+          code: "bad-args",
+          message: "components must contain between 1 and 100 references",
+          error: "components must contain between 1 and 100 references",
+        },
+        { code: "bad-args" },
+      )).toEqual([{
+        kind: "command",
+        body: {
+          command: "loom.compose",
+          ok: false,
+          code: "bad-args",
+          error: "components must contain between 1 and 100 references",
+        },
+      }]);
+      expect(
+        refused(
+          { ok: false, reason: "r".repeat(LOCAL_JOB_ERROR_MAX_LENGTH + 9) },
+          { code: "not_granted", hostCode: "refused" },
+        )[0].body,
+      ).toEqual({
+        command: "loom.compose",
+        ok: false,
+        code: "not_granted",
+        hostCode: "refused",
+        error: "r".repeat(LOCAL_JOB_ERROR_MAX_LENGTH),
+      });
+      expect(refused({ ok: false, message: "only a message" }, {})[0].body)
+        .toEqual({
+          command: "loom.compose",
+          ok: false,
+          error: "only a message",
+        });
+    });
+
+    it("carries only the code of a refused command whose answer was withheld", () => {
+      expect(localJobEventsOf(event(
+        answer({
+          status: "executed",
+          outcome: { ok: false, code: "bad-args" },
+          entry: { status: "withheld", reasonCode: "cfc_ceiling_exceeded" },
+        }),
+        [calling("run_command")],
+      ))).toEqual([{
+        kind: "command",
+        body: { command: "loom.compose", ok: false, code: "bad-args" },
       }]);
     });
 
@@ -388,6 +458,23 @@ describe("local-jobs/lane", () => {
         errorCode: PROFILE_UNAVAILABLE,
       });
       expect(runs).toHaveLength(0);
+    });
+
+    it("binds each concurrent run to its own job identity", async () => {
+      const { store, lane, nextRun, enqueue } = laneWith();
+      lane.start();
+      const a = enqueue("a");
+      const b = enqueue("b");
+      const first = await nextRun(0);
+      const second = await nextRun(1);
+      expect(first.spec.commandJobId).toBe(a);
+      expect(second.spec.commandJobId).toBe(b);
+      first.settle({ outcome: "cancelled" });
+      second.settle({ outcome: "cancelled" });
+      await reached(store, a, "cancelled");
+      await reached(store, b, "cancelled");
+      await lane.stop();
+      store.close();
     });
 
     it("runs at most its limit at once and starts the next when one ends", async () => {

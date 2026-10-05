@@ -227,6 +227,37 @@ describe("local-jobs/api", () => {
   });
 
   describe("one job", () => {
+    it("returns refused command details in the job snapshot and event stream", async () => {
+      const { store, post, call } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        const command = {
+          command: "loom.compose",
+          ok: false,
+          code: "bad-args",
+          error: "components must contain between 1 and 100 references",
+        };
+        store.report(job.id, "command", command);
+        store.finish(job.id, { state: "completed", result: { answer: "x" } });
+
+        const snapshot = await (await call(`/jobs/${job.id}`)).json();
+        expect(snapshot.job.commands).toEqual([command]);
+        const sent = await frames(await call(`/jobs/${job.id}/events?after=2`));
+        expect(sent[0]).toBe(
+          `id: 3\nevent: command\ndata: ${
+            JSON.stringify({
+              seq: 3,
+              at: store.events(job.id, 2)[0].at,
+              ...command,
+            })
+          }`,
+        );
+      } finally {
+        store.close();
+      }
+    });
+
     it("returns the job, and 404 for one it does not hold", async () => {
       const { post, call } = apiWith();
       const { job } = await (await post("/jobs", BODY)).json();

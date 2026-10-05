@@ -340,6 +340,37 @@ describe("local-jobs/store", () => {
   });
 
   describe("open()", () => {
+    it("keeps refused command details in events and the job snapshot across a reopen", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "local-jobs-errors-" });
+      try {
+        const path = join(dir, "jobs.sqlite");
+        const first = LocalJobStore.open(path);
+        const { job } = added(
+          first.enqueue("cfs:weaver", "ask", "a", request()),
+        );
+        first.claimNext();
+        const command = {
+          command: "loom.compose",
+          ok: false,
+          code: "bad-args",
+          hostCode: "refused",
+          error: "components must contain between 1 and 100 references",
+        };
+        first.report(job.id, "command", command);
+        first.close();
+
+        const second = LocalJobStore.open(path);
+        try {
+          expect(second.get(job.id)?.commands).toEqual([command]);
+          expect(second.events(job.id, 2)[0].body).toEqual(command);
+        } finally {
+          second.close();
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
     it("keeps jobs across a reopen of the same file", async () => {
       const dir = await Deno.makeTempDir({ prefix: "local-jobs-store-" });
       try {

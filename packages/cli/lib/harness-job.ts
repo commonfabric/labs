@@ -100,6 +100,9 @@ export interface HarnessJobSpec {
    */
   loomCommandsConfigPath?: string;
 
+  /** Host job identity attributed to this job's brokered commands. */
+  commandJobId?: string;
+
   /** The job's fabric session and input cells; absent for a job with none. */
   fabric?: HarnessJobFabric;
 }
@@ -259,6 +262,9 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
+    ...(spec.commandJobId !== undefined
+      ? { commandJobId: spec.commandJobId }
+      : {}),
     io: {
       stdout: (text) => options.report?.(text.trimEnd()),
       stderr: (text) => options.report?.(text.trimEnd()),
