@@ -72,6 +72,7 @@ import {
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
+import { holdsUnreadValue } from "./unread-label-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
@@ -316,6 +317,52 @@ function unionArms(
     );
   }
   return [resolved];
+}
+
+/**
+ * The labels of the value `schema` denotes, which may be any arm of it
+ * (`unionArms()`): those declared along each reference chain on the way to an
+ * arm (`declaredIfcLabels()`), a union's joined with those of its arms
+ * (`joinMemberIfcLabels()`). A union is labeled by every label it and its
+ * arms declare read in full (`holdsUnreadArmLabel()`), or not at all, as a
+ * union read by type is: a label read in part could claim what its author
+ * never wrote together, and a join leaves out what an unread one held.
+ */
+function armLabels(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): Record<string, unknown> | undefined {
+  const labels = declaredIfcLabels(schema, context.definitions);
+  const resolved = resolveLocalRef(schema, context);
+  if (!isObjectOrArray(resolved) || !Array.isArray(resolved.anyOf)) {
+    return labels;
+  }
+  if (holdsUnreadArmLabel(schema, context)) return undefined;
+  return joinMemberIfcLabels(
+    labels ?? {},
+    (resolved.anyOf as MutableJSONSchema[]).map((arm) =>
+      armLabels(arm, context) ?? {}
+    ),
+  );
+}
+
+/**
+ * Whether the labels declared along `schema`'s reference chain, or along any
+ * arm's of a union `schema` is, hold a value the lowering could not read in
+ * full (`holdsUnreadValue()`), in a label list or any other key. A key the
+ * lowering could not read at all is not declared, so it is not seen here.
+ */
+function holdsUnreadArmLabel(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): boolean {
+  const labels = declaredIfcLabels(schema, context.definitions);
+  if (labels && holdsUnreadValue(labels)) return true;
+  const resolved = resolveLocalRef(schema, context);
+  return isObjectOrArray(resolved) && Array.isArray(resolved.anyOf) &&
+    (resolved.anyOf as MutableJSONSchema[]).some((arm) =>
+      holdsUnreadArmLabel(arm, context)
+    );
 }
 
 /**
@@ -4185,8 +4232,10 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second, context);
         if (keys === undefined) return undefined;
-        // The picked members are the labelled value's, so its label stays.
+        // The picked members are those of whichever arm the labeled value
+        // is, so it keeps the labels of every arm, joined.
         const operand = analyze(first, instantiatedAs);
+        const labels = armLabels(operand, context);
         const { ifc, ...payload } = isObjectOrArray(operand) &&
             !Array.isArray(operand)
           ? operand as Record<string, unknown>
@@ -4196,9 +4245,7 @@ export class SchemaGenerator {
           context,
           name === "Pick" ? { pick: keys } : { omit: keys },
         );
-        return picked && isObjectOrArray(ifc) && !Array.isArray(ifc)
-          ? withIfcLabels(picked, ifc as Record<string, unknown>)
-          : picked;
+        return picked && labels ? withIfcLabels(picked, labels) : picked;
       }
       case "Record": {
         if (second === undefined) return undefined;
