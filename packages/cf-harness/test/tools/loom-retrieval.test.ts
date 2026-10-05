@@ -201,6 +201,20 @@ describe("loom-retrieval tools", () => {
   describe("page discovery kinds", () => {
     it("advertises only canonical Page kinds and their plural aliases", () => {
       const schema = loomPageDiscoverTool.descriptor.inputSchema;
+      if (typeof schema === "boolean") {
+        throw new Error("Expected object schema");
+      }
+      const kindSchema = schema.properties?.kind;
+      if (kindSchema === undefined || typeof kindSchema === "boolean") {
+        throw new Error("Expected kind schema");
+      }
+      expect(kindSchema.enum).toEqual([
+        "all",
+        "project",
+        "projects",
+        "entity",
+        "entities",
+      ]);
       for (const kind of ["all", "project", "projects", "entity", "entities"]) {
         expect(() => validateStructuredResultValue({ schema, value: { kind } }))
           .not.toThrow();
