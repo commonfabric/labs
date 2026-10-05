@@ -19,6 +19,7 @@ import {
   LOOM_SEARCH_SCHEMA_VERSION,
 } from "../../src/loom-retrieval.ts";
 import { harnessSessionToolBacking } from "../../src/session-assembly.ts";
+import { validateStructuredResultValue } from "../../src/structured-result.ts";
 import type {
   ProcessRunRequest,
   ProcessRunResult,
@@ -197,6 +198,51 @@ const engineWith = (
 };
 
 describe("loom-retrieval tools", () => {
+  describe("page discovery kinds", () => {
+    it("advertises only canonical Page kinds and their plural aliases", () => {
+      const schema = loomPageDiscoverTool.descriptor.inputSchema;
+      if (typeof schema === "boolean") {
+        throw new Error("Expected object schema");
+      }
+      const kindSchema = schema.properties?.kind;
+      if (kindSchema === undefined || typeof kindSchema === "boolean") {
+        throw new Error("Expected kind schema");
+      }
+      expect(kindSchema.enum).toEqual([
+        "all",
+        "project",
+        "projects",
+        "entity",
+        "entities",
+      ]);
+      for (const kind of ["all", "project", "projects", "entity", "entities"]) {
+        expect(() => validateStructuredResultValue({ schema, value: { kind } }))
+          .not.toThrow();
+      }
+      expect(() => validateStructuredResultValue({ schema, value: {} }))
+        .not.toThrow();
+      expect(() =>
+        validateStructuredResultValue({ schema, value: { kind: "loom" } })
+      ).toThrow();
+    });
+
+    it("returns valid kinds for an unknown kind without asking the host", async () => {
+      const { context, calls } = contextWith({});
+      const output = await loomPageDiscoverTool.invoke(context, {
+        kind: "loom",
+        limit: 500,
+      } as never);
+
+      expect(output).toMatchObject({
+        status: "error",
+        code: "invalid_input",
+        message:
+          "`kind` must be one of all, project, projects, entity, entities.",
+      });
+      expect(calls).toHaveLength(0);
+    });
+  });
+
   describe("availability", () => {
     /** Backing with everything but Loom retrieval switched off. */
     const backing = {

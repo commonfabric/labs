@@ -57,7 +57,10 @@ import {
   type HarnessChatTurnStatus,
 } from "../../src/contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
-import { harnessClientProtocolEcho } from "../../src/contracts/client-command.ts";
+import {
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  harnessClientProtocolEcho,
+} from "../../src/contracts/client-command.ts";
 
 /**
  * A loop that answers the task it was given and nothing else. The console
@@ -1374,6 +1377,52 @@ describe("console/server", () => {
   });
 
   describe("the module", () => {
+    // `deno run` can credit unexecuted top-level code from V8's code cache.
+    // The program cases disable it so their coverage measures the entry
+    // block they execute.
+
+    it("prints help and exits successfully when run as a program", async () => {
+      const repoRoot = resolve(import.meta.dirname!, "..", "..", "..", "..");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repoRoot,
+        args: (lock) => [
+          "run",
+          "--no-code-cache",
+          `--lock=${lock}`,
+          "--allow-env",
+          "packages/cf-harness/console/server.ts",
+          "--help",
+        ],
+      });
+
+      expect(output.code).toBe(0);
+      expect(new TextDecoder().decode(output.stdout)).toBe(
+        consoleHelpText(["--help"]) + "\n",
+      );
+      expect(output.stderr.length).toBe(0);
+    });
+
+    it("prints the startup error without a stack and exits 1 when a flag has no value", async () => {
+      const repoRoot = resolve(import.meta.dirname!, "..", "..", "..", "..");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repoRoot,
+        args: (lock) => [
+          "run",
+          "--no-code-cache",
+          `--lock=${lock}`,
+          "--allow-env",
+          "packages/cf-harness/console/server.ts",
+          "--port",
+        ],
+      });
+
+      expect(output.code).toBe(1);
+      expect(new TextDecoder().decode(output.stderr)).toBe(
+        "`--port` was given no value\n",
+      );
+      expect(output.stdout.length).toBe(0);
+    });
+
     it("loads on a host with no FFI permission", async () => {
       // The console promises a machine without the SQLite native library can
       // serve its page: a run reads its space through that library only as
@@ -1456,7 +1505,7 @@ describe("console/server", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         artifactRoot: (await config()).artifactRoot,
-        protocol: harnessClientProtocolEcho(),
+        protocol: harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
         sessions: [],
       });
     });
@@ -2576,7 +2625,7 @@ describe("console/server", () => {
       expect(await response.json()).toEqual({
         error: "this console does not serve browser_host",
         code: "protocol_mismatch",
-        protocol: harnessClientProtocolEcho(),
+        protocol: harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
         requestedVersion: 1,
         missing: ["browser_host"],
       });
@@ -2605,7 +2654,9 @@ describe("console/server", () => {
 
       expect(response.status).toBe(200);
       const started = await response.json();
-      expect(started.protocol).toEqual(harnessClientProtocolEcho());
+      expect(started.protocol).toEqual(
+        harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
+      );
       await server.service.waitForTurn(started.sessionId, started.turnId);
     });
 
@@ -4279,6 +4330,42 @@ describe("console/server", () => {
       });
       expect(noTurn.status).toBe(400);
       expect(await noTurn.json()).toEqual({ error: "turnId is required" });
+    });
+
+    it("serves browser_host only when it allows a browser host, and says so before a task", async () => {
+      const { server: hosted } = await hostedServer();
+      const features = async (console: ConsoleServer) =>
+        (await (await console.handle(getRequest("/api/status"))).json())
+          .protocol.features;
+      const requiring = (console: ConsoleServer) =>
+        console.handle(jsonRequest("/api/task", {
+          text: "use the web",
+          protocol: { protocolVersion: 1, requires: ["browser_host"] },
+        }));
+
+      expect(await features(server)).toEqual([
+        "client_actions",
+        "typed_commands",
+      ]);
+      expect(await features(hosted)).toEqual([
+        "client_actions",
+        "typed_commands",
+        "browser_host",
+      ]);
+
+      const refused = await requiring(server);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({
+        error: "this console does not serve browser_host",
+        missing: ["browser_host"],
+      });
+      expect((await listSessions()).sessions).toEqual([]);
+
+      const accepted = await requiring(hosted);
+      expect(accepted.status).toBe(200);
+      const started = await accepted.json();
+      expect(started.protocol.features).toContain("browser_host");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
     });
 
     it("returns 403 for a host declaration a console that allows none is sent, and gives it no browser children", async () => {

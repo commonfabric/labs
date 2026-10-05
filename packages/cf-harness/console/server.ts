@@ -92,6 +92,8 @@ import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
 import {
   checkHarnessClientProtocol,
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  type HarnessClientFeature,
   harnessClientProtocolEcho,
   readHarnessClientProtocolDeclaration,
 } from "../src/contracts/client-command.ts";
@@ -1494,6 +1496,8 @@ export class ConsoleServer {
   /** Each running turn's browser host channel, by turn id. */
   readonly #browserHosts = new Map<string, ConsoleBrowserHost>();
   readonly #config: ConsoleConfig;
+  /** The client features this console serves, as launched. */
+  readonly #clientFeatures: readonly HarnessClientFeature[];
   readonly #service: HarnessInteractiveChatService;
   readonly #health: ConsoleHealth;
   readonly #patternIndexClientFactory:
@@ -1529,6 +1533,9 @@ export class ConsoleServer {
     health?: ConsoleHealth,
   ) {
     this.#config = config;
+    this.#clientFeatures = config.allowBrowserHost
+      ? [...HARNESS_SUPPORTED_CLIENT_FEATURES, "browser_host"]
+      : HARNESS_SUPPORTED_CLIENT_FEATURES;
     this.#service = createService((envelope) => this.broadcast(envelope));
     const factory = patternIndexClientFactory ??
       (config.patternIndex !== undefined
@@ -1762,7 +1769,7 @@ export class ConsoleServer {
     if (request.method === "GET" && url.pathname === "/api/status") {
       return Response.json({
         artifactRoot: this.#config.artifactRoot,
-        protocol: harnessClientProtocolEcho(),
+        protocol: harnessClientProtocolEcho(this.#clientFeatures),
         ...this.#service.status(url.searchParams.get("sessionId") ?? undefined),
       });
     }
@@ -2054,7 +2061,10 @@ export class ConsoleServer {
             "protocol must be { protocolVersion: integer, requires: feature names }",
         }, { status: 400 });
       }
-      const check = checkHarnessClientProtocol(protocolDeclaration);
+      const check = checkHarnessClientProtocol(
+        protocolDeclaration,
+        this.#clientFeatures,
+      );
       if (!check.ok) {
         const { message, ...mismatch } = check.mismatch;
         return Response.json({ error: message, ...mismatch }, { status: 409 });
@@ -2168,7 +2178,7 @@ export class ConsoleServer {
       sessionId,
       turnId: turn.result.turnId,
       ...(browserHostToken !== undefined ? { browserHostToken } : {}),
-      protocol: harnessClientProtocolEcho(),
+      protocol: harnessClientProtocolEcho(this.#clientFeatures),
     });
   }
 

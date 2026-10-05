@@ -45,7 +45,12 @@ decided each value.
 scripts of the skills it holds, in its sandbox, registry and acquired alike; it
 is off unless named. `start-local-dev.sh` passes it to `console:launch`, which
 resolves it and prints it beside the record that decided it.
-`packages/cf-harness/console/README.md` has the rest.
+`--allow-browser-host` alongside `--cf-harness` lets a task sent to that console
+declare a browser host, such as the Weaver, to show the agent's web pages to the
+owner; it is off unless named here or exported as
+`CF_HARNESS_ALLOW_BROWSER_HOST=1`, and the console lists `browser_host` in
+`GET /api/status` when it is on. `packages/cf-harness/console/README.md` has the
+rest.
 
 The console is a surface on the fabric rather than part of it. It needs Docker
 and a connected model provider, and when it cannot start — either of those

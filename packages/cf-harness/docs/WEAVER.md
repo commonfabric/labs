@@ -286,7 +286,8 @@ Mac. Then, in Weaver's settings under Services:
 - `/cf-harness <task>` starts a fresh session and places the live panel in the
   current loom. A turn runs for minutes; the panel streams throughout, and the
   piece replaces it when the turn ends. On a console launched with
-  `--allow-browser-host`, the Weaver declares itself the turn's
+  `--allow-browser-host`, which says so by listing `browser_host` in its
+  `GET /api/status`, the Weaver declares itself the turn's
   [browser host](../console/README.md#browser-hosts), so the browser children of
   a task that needs the web drive a page the Weaver shows the owner, who takes
   it over when an agent hands it to them. Such a task may end with a Markdown

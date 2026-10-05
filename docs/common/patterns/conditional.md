@@ -40,6 +40,31 @@ branches are evaluated eagerly as arguments — they do not short-circuit. So
 branch needs `computed()` deferral; see
 [Eager Ternary Branch Evaluation](../../development/debugging/gotchas/eager-ternary-branch-evaluation.md).
 
+## Showing and Hiding Through a Prop
+
+A ternary in child position renders nothing until its condition has a value,
+so the element it guards stays out of view while the pattern loads. A pattern
+that shows or hides an element through a prop instead, as
+`style={{ display: shown }}`, loses that: the renderer drops a declaration
+whose value is `undefined`, so until `shown` first runs the element is drawn
+with its default display, which is visible. On a cold load that can be
+seconds of controls and rows that should not be there.
+
+Give such an element a static `hidden` as well:
+
+```tsx
+// Shown for illustration only.
+<div hidden style={{ display: editorDisplay }}>
+  {/* … */}
+</div>
+```
+
+`hidden` keeps the element out of view until `editorDisplay` has a value,
+and an inline `display` outranks `hidden` once it has one, so the computed
+alone decides from then on. A `cf-` component honors `hidden` the same way.
+FabriChat (`packages/patterns/fabrichat/`) hides per-viewer and per-session
+controls this way, for the reason its `FabriChatMessageRow` states.
+
 ## Keep `computed()` for Data, Not UI Gating
 
 Inside a `computed()` body, ternaries and logical operators stay plain

@@ -55,6 +55,7 @@ import {
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
   CHAT_UNREACT_ACTION,
+  type ChatDisplay,
   type ChatReaction,
   type ChatReactionTally,
   type ChatRoomKind,
@@ -276,27 +277,32 @@ export const FabriChatMessageRow = pattern<
       replies: threadReplyCounts(entries).get(own.key) ?? 0,
     };
   });
-  const rowDisplay = computed(() =>
+  const rowDisplay = computed((): ChatDisplay =>
     (inThread ? placement.inOpenThread : placement.inMain) ? "block" : "none"
   );
   const threadLabel = computed(() =>
     placement.replies === 1 ? "1 reply" : `${placement.replies} replies`
   );
-  const threadLinkDisplay = computed(() =>
+  const threadLinkDisplay = computed((): ChatDisplay =>
     !inThread && placement.replies > 0 ? "inline-flex" : "none"
   );
   // What differs by viewer or by session is shown or hidden through a prop,
   // never by building a different tree: a branch chosen per viewer is stored
   // once for everyone, and runtimes that chose differently overwrite each
-  // other without end.
-  const ownDisplay = computed(() =>
+  // other without end. Each element shown or hidden this way also carries a
+  // static `hidden`, which keeps it out of view until its display computed has
+  // a value and is outranked by that value once it has one, so an element
+  // whose computed has yet to run stays hidden.
+  const ownDisplay = computed((): ChatDisplay =>
     isMine && !isDeletedNow ? "inline-flex" : "none"
   );
-  const obliterateDisplay = computed(() =>
+  const obliterateDisplay = computed((): ChatDisplay =>
     canObliterate ? "inline-flex" : "none"
   );
-  const editorDisplay = computed(() => (isEditing ? "block" : "none"));
-  const pickerDisplay = computed(() =>
+  const editorDisplay = computed(
+    (): ChatDisplay => (isEditing ? "block" : "none"),
+  );
+  const pickerDisplay = computed((): ChatDisplay =>
     pickerOpen.get() === true ? "flex" : "none"
   );
   const pickerLabel = computed(() => (pickerOpen.get() === true ? "✕" : "☺+"));
@@ -353,7 +359,7 @@ export const FabriChatMessageRow = pattern<
 
   return {
     [UI]: (
-      <div style={{ display: rowDisplay }}>
+      <div hidden style={{ display: rowDisplay }}>
         <cf-hover-reveal revealed={pickerOpen}>
           <div
             style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}
@@ -405,6 +411,7 @@ export const FabriChatMessageRow = pattern<
               <div
                 data-ui-pattern={CHAT_EDIT_SURFACE}
                 data-ui-event-integrity={CHAT_EDIT_SURFACE}
+                hidden
                 style={{ display: editorDisplay }}
               >
                 <cf-hstack gap="1" align="center">
@@ -460,6 +467,7 @@ export const FabriChatMessageRow = pattern<
                       aria-label="Remove my reaction"
                       title="Remove my reaction"
                       disabled={cannotWrite}
+                      hidden
                       style={{ display: tally.mine ? "inline-flex" : "none" }}
                       onClick={commitDeleteReaction({
                         myProfile,
@@ -492,6 +500,7 @@ export const FabriChatMessageRow = pattern<
               <cf-button
                 size="sm"
                 variant="link"
+                hidden
                 style={{ display: threadLinkDisplay }}
                 onClick={openThread}
               >
@@ -503,6 +512,7 @@ export const FabriChatMessageRow = pattern<
             <div
               data-ui-pattern={CHAT_REACT_SURFACE}
               data-ui-event-integrity={CHAT_REACT_SURFACE}
+              hidden
               style={{
                 display: pickerDisplay,
                 gap: "0.25rem",
@@ -571,6 +581,7 @@ export const FabriChatMessageRow = pattern<
             <cf-button
               size="sm"
               variant="ghost"
+              hidden
               style={{ display: ownDisplay }}
               onClick={startEdit}
             >
@@ -585,6 +596,7 @@ export const FabriChatMessageRow = pattern<
                 data-ui-action={CHAT_DELETE_ACTION}
                 size="sm"
                 variant="ghost"
+                hidden
                 style={{ display: ownDisplay }}
                 onClick={deleteMessage}
               >
@@ -600,6 +612,7 @@ export const FabriChatMessageRow = pattern<
                 data-ui-action={CHAT_OBLITERATE_ACTION}
                 size="sm"
                 variant="ghost"
+                hidden
                 style={{ display: obliterateDisplay }}
                 onClick={obliterateMessage}
               >
