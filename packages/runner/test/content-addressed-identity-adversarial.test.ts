@@ -1099,6 +1099,13 @@ export default pattern<{ from: string }>(({ from }) => {
     const kindsOf = (atoms: Record<string, unknown>[]) =>
       atoms.map((atom) => (atom.identity as { kind?: unknown }).kind);
 
+    /** The atoms whose identity names the custody seal's writer. */
+    const namesTheSeal = (atoms: Record<string, unknown>[]) =>
+      atoms.filter((atom) =>
+        (atom.identity as { builtinId?: unknown }).builtinId ===
+          CUSTODY_SEAL_WRITER
+      );
+
     /**
      * Run the copy handler, its module first passed through `asStored`, over
      * a confidential source document, and return the `TransformedBy` atoms
@@ -1247,7 +1254,106 @@ export default pattern<{ from: string }>(({ from }) => {
         } as unknown as Module;
       });
       expect(kindsOf(stamps)).not.toContain("builtin");
-      expect(stamps).toEqual([]);
+      expect(namesTheSeal(stamps)).toEqual([]);
+    });
+
+    it("an authored pattern's plain op graph naming the custody seal maps without the seal's stamp", async () => {
+      // An ordinary compiled pattern hands `mapWithPattern` a plain-object
+      // graph. The list builtin resolves an op that carries no entry ref as
+      // the embedded graph it is, so the module in it runs as-is on the
+      // unverified stringified-source fallback, `debugName` and all.
+      const program = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
+import { pattern } from "commonfabric";
+
+const OP: any = {
+  argumentSchema: {
+    type: "object",
+    properties: {
+      element: { type: "string" },
+      params: { type: "object", properties: { from: { type: "string" } } },
+    },
+  },
+  resultSchema: { type: "string" },
+  result: {
+    $alias: { partialCause: "__patternResult", path: [], scope: "space" },
+  },
+  nodes: [{
+    module: {
+      type: "javascript",
+      implementation: "(x) => x",
+      debugName: "${CUSTODY_SEAL_WRITER}",
+    },
+    inputs: { $alias: { cell: "argument", path: ["params", "from"] } },
+    outputs: {
+      $alias: { partialCause: "__patternResult", path: [], scope: "space" },
+    },
+  }],
+};
+
+export default pattern<{ items: string[]; from: string }>(({ items, from }) => ({
+  out: (items as any).mapWithPattern(OP, { from }),
+}));
+`,
+        }],
+      };
+
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const source = runtime.getCell<string>(
+        signer.did(),
+        "attack13-op-source",
+        {
+          type: "string",
+          ifc: { confidentiality: [cfcAtom.space(signer.did())] },
+        } as JSONSchema,
+      );
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          source.withTx(tx).set("confidential");
+        })).error,
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      const pattern = await runtime.patternManager.compilePattern(program, {
+        space: signer.did(),
+        tx,
+      });
+      const resultCell = runtime.getCell<{ out: string[] }>(
+        signer.did(),
+        "attack13-op",
+        undefined,
+        tx,
+      );
+      // deno-lint-ignore no-explicit-any
+      const result = runtime.run(tx, pattern, {
+        items: ["a"],
+        from: source,
+      }, resultCell) as any;
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      await result.pull();
+      await runtime.idle();
+      expect(await result.key("out").key(0).pull()).toBe("confidential");
+
+      const written = result.key("out").key(0).resolveAsCell()
+        .getAsNormalizedFullLink();
+      const readTx = runtime.edit();
+      try {
+        const envelope = loadStoredCfcEnvelope(readTx, written);
+        expect(envelope.status).toBe("loaded");
+        expect(namesTheSeal(transformedByIn(envelope))).toEqual([]);
+      } finally {
+        readTx.abort();
+      }
     });
   });
 });
