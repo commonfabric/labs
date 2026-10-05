@@ -10,9 +10,10 @@ requests one group at a time, after which this list is archived. Each item: wher
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
-Status legend: `open` (not yet applied to the spec), `adopted` (the spec has
-ruled on the entry and carries the requirement, in the section named),
-`applied`.
+Status legend: `open` (not yet before the spec), `proposed` (a specs pull
+request carrying it is open, named in the entry), `applied` (the proposed edit
+landed as written), `adopted` (the spec has ruled on the entry and carries the
+requirement in its own words, in the section named).
 
 ## From the S16 default-transition design
 
@@ -1512,7 +1513,7 @@ query's selection inputs are labeled"). Three points where the text and the
 runner differ, or where the text leaves a choice open:
 
 **SC-49 [normative] A secret in a member's address — §8.17.6 rule 4.**
-`open`. Rule 4 derives a member's address from its content and payload
+`proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: keyed derivation permitted, the slot carries `S` alone, the key-disclosure and address-equality residuals recorded under §18.6.4; the runner's salt conforms, no code change. Rule 4 derives a member's address from its content and payload
 label, and so puts the payload label on the reference identity at each slot,
 since a reader could otherwise confirm a guess at a member by recomputing
 its address. The runner keys each member's address on a per-space secret as
@@ -1528,7 +1529,7 @@ equal members, and a member kept across a change of the selection, share an
 address.
 
 **SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
-item.** `open`. The item requires that untrusted code obtain a member
+item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: the requirement stated over both routes, keyed derivation as the means for the constructed-reference route; no code change. The item requires that untrusted code obtain a member
 reference only through a result, and offers a namespace untrusted code cannot
 write to as the means. A namespace stops a member's address from being
 received by writing the same content. It does not stop a reference from being
@@ -1540,7 +1541,7 @@ Proposed edit: state the requirement over both routes, and allow a secret
 in the address as the means for the second.
 
 **SC-51 [clarify] The existence entry of a member with labels at two levels —
-§8.17.6 rule 4, last item.** `open`. The item says the existence entry
+§8.17.6 rule 4, last item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option C: root label where present, else the join of field labels, the full join under an unkeyed address; the runner's root-label existence entries conform, no code change. The item says the existence entry
 carries the member's payload label. A member can carry a label at its root
 and further labels on its fields. The runner's existence observation of such
 a member consumes the root label. Proposed edit: say whether the payload
