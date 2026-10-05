@@ -67,7 +67,7 @@ describe("document-member-paths", () => {
     const tx = runtime.edit();
     runtime.getCell(space, name, schema, tx).set(value as never);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cell = runtime.getCell(space, name, schema);
     await cell.sync();
     return cell;
@@ -101,7 +101,7 @@ describe("document-member-paths", () => {
     target.key("note").set(secret);
     alsoWrite(target as Cell<unknown>);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   it("labels no payload path for a write to the member `slug`", async () => {
@@ -171,7 +171,7 @@ describe("document-member-paths", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     const tx = runtime.edit();
     const root = runtime.getCell(space, "member-introspected", undefined, tx)

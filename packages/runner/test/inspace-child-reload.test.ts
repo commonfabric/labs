@@ -96,7 +96,7 @@ describe("inSpace child piece reload from its own space", () => {
       );
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, parent as any, {}, resultCell1);
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
 
       r1.key("create").send({ label: "hi" });
@@ -177,7 +177,7 @@ describe("inSpace child piece reload from its own space", () => {
       );
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, parent as any, {}, resultCell1);
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
       await rt1.idle();
 

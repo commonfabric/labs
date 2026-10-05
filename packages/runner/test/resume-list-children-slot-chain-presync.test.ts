@@ -80,7 +80,7 @@ describe("resume-list-children-slot-chain-presync", () => {
     {
       const hopTx = author.runtime.edit();
       next.withTx(hopTx).set({ n: 7 });
-      expect((await hopTx.commit()).error).toBeUndefined();
+      expect((await hopTx.commit().settled).error).toBeUndefined();
     }
     for (let hop = CHAIN_HOPS - 1; hop >= 1; hop--) {
       const cell = author.runtime.getCell<unknown>(
@@ -89,7 +89,7 @@ describe("resume-list-children-slot-chain-presync", () => {
       );
       const hopTx = author.runtime.edit();
       cell.withTx(hopTx).set(next);
-      expect((await hopTx.commit()).error).toBeUndefined();
+      expect((await hopTx.commit().settled).error).toBeUndefined();
       next = cell;
     }
     const tx = author.runtime.edit();
@@ -105,7 +105,7 @@ describe("resume-list-children-slot-chain-presync", () => {
     );
     author.runtime.run(tx, compiled, { items: [next] }, authored);
     author.runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await authored.pull();
     await author.runtime.settled();
     await author.runtime.patternManager.flushCompileCacheWrites();

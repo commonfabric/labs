@@ -58,7 +58,7 @@ async function setupSharedSeedGraph(effectCount: number) {
   });
   const effects: Action[] = [];
 
-  await tx.commit();
+  await tx.commit().settled;
 
   const computation: Action = (actionTx) => {
     const value = source.withTx(actionTx).get() ?? 0;

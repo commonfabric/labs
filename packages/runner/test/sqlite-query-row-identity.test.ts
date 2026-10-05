@@ -105,7 +105,7 @@ describe("sqlite-query-row-identity", () => {
   ): Promise<void> => {
     const tx = runtime.edit();
     tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     if (res.error) throw res.error;
   };
 
@@ -139,7 +139,7 @@ describe("sqlite-query-row-identity", () => {
       { tick, db },
       runtime.getCell(space, `${label}-result`, queryPattern.resultSchema, tx),
     );
-    await tx.commit();
+    await tx.commit().settled;
     return { result, tick };
   };
 
@@ -162,7 +162,7 @@ describe("sqlite-query-row-identity", () => {
   ): Promise<QueryState> => {
     const tx = runtime.edit();
     tick.withTx(tx).set((tick.withTx(tx).get() as number) + 1);
-    await tx.commit();
+    await tx.commit().settled;
     const state = await settledPast(result, previous.requestHash);
     await runtime.settled();
     return state;
@@ -195,7 +195,7 @@ describe("sqlite-query-row-identity", () => {
       labelView: cfcLabelViewForCell(row),
       logicalPath: ["body"],
     });
-    await tx.commit();
+    await tx.commit().settled;
     return atoms;
   };
 
@@ -439,7 +439,7 @@ describe("sqlite-query-row-identity", () => {
       tx,
     );
     handle.set(db);
-    await tx.commit();
+    await tx.commit().settled;
     const { result, tick } = await runQuery(handle, "relabel");
     const first = await settledPast(result, undefined);
     await runtime.settled();
@@ -449,7 +449,7 @@ describe("sqlite-query-row-identity", () => {
 
     const relabel = runtime.edit();
     handle.withTx(relabel).set({ ...db, tables: labeledTables });
-    await relabel.commit();
+    await relabel.commit().settled;
     const second = await rerun(result, tick, first);
     expect(second.error).toBeUndefined();
     expect(second.result).toEqual(first.result);

@@ -76,7 +76,7 @@ async function withReceipt(
     const tx = writer.edit();
     const fixture = seed(writer, signer.did(), tx);
     writer.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await writerStorage.synced();
     const link = fixture.receipt.getAsNormalizedFullLink();
     const resolution = {

@@ -120,7 +120,7 @@ describe("a writer imported from another module", () => {
         );
         const result = rt.run(tx, pattern, {}, resultCell);
         rt.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await result.pull();
         await rt.idle();
 
@@ -129,7 +129,7 @@ describe("a writer imported from another module", () => {
 
         const send = rt.edit();
         result.withTx(send).key("save").send(undefined);
-        expect((await send.commit()).error).toBeUndefined();
+        expect((await send.commit().settled).error).toBeUndefined();
         await rt.idle();
         await result.pull();
         expect(result.key("name").get()).toBe("updated");

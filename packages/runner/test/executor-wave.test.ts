@@ -98,6 +98,7 @@ import {
 } from "../src/executor/effect-completion.ts";
 import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("executor wave test");
 const space = signer.did() as MemorySpace;
@@ -204,7 +205,7 @@ describe("stage D seal-into-wave", () => {
       tx,
     );
     const running = host.runner.run(tx, pattern, {}, cell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     host.runner.stop(cell);
     return {
@@ -369,7 +370,7 @@ describe("stage D seal-into-wave", () => {
     // contribution — error undefined, contributionCount 1.)
     const tx = runtime.edit();
     doc.withTx(tx).set({ value: 1 });
-    await expect(tx.commit()).rejects.toThrow(
+    await expect(tx.commit().settled).rejects.toThrow(
       "unstamped transaction sealed into a wave",
     );
 
@@ -410,7 +411,7 @@ describe("stage D seal-into-wave", () => {
         },
       });
       cell.withTx(tx).set({ value: seq });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     runtime.clearSealDestination();
 
@@ -515,7 +516,7 @@ describe("stage D seal-into-wave", () => {
         { space, id: `of:${space}`, type: "application/json", path: [] },
         { value: { "did:key:mallory": "OWNER" } },
       );
-      const committed = tx.commit();
+      const committed = tx.commit().settled;
       const result = await sealed.promise;
       runtime.clearSealDestination();
       const contributionCount = wave.contributionCount;
@@ -640,14 +641,14 @@ describe("stage D seal-into-wave", () => {
         const dataTx = runtime.edit();
         stamp(dataTx, `acl-document-requeue-data:${eventId}`);
         data.withTx(dataTx).set({ value: 1 });
-        expect((await dataTx.commit()).error).toBeUndefined();
+        expect((await dataTx.commit().settled).error).toBeUndefined();
         const aclTx = runtime.edit();
         stamp(aclTx, `acl-document-requeue-acl:${eventId}`);
         aclTx.writeOrThrow(
           { space, id: `of:${space}`, type: "application/json", path: [] },
           { value: { "did:key:mallory": "OWNER" } },
         );
-        const aclCommitted = await aclTx.commit();
+        const aclCommitted = await aclTx.commit().settled;
         runtime.clearSealDestination();
         const outcome = await wave.commitWave(newSink());
         await wave.settled();
@@ -716,7 +717,7 @@ describe("stage D seal-into-wave", () => {
           },
         });
         cell.withTx(tx).set({ value: seq });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       runtime.clearSealDestination();
 
@@ -767,7 +768,7 @@ describe("stage D seal-into-wave", () => {
     const tx1 = runtime.edit();
     stampWaveRunContext(tx1, { actionId: "derive-a", kind: "derivation" });
     a.withTx(tx1).set({ value: 1 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     // Nothing reached the store: the sealed write lives in the overlay.
     expect(Engine.serverSeq(engine)).toBe(seqBefore);
@@ -779,7 +780,7 @@ describe("stage D seal-into-wave", () => {
     const seen = a.withTx(tx2).get();
     expect(seen).toEqual({ value: 1 });
     b.withTx(tx2).set({ value: seen!.value + 1 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     expect(leasedWave.contributionCount).toBe(2);
 
     runtime.clearSealDestination();
@@ -818,7 +819,7 @@ describe("stage D seal-into-wave", () => {
     const tx1 = runtime.edit();
     stampWaveRunContext(tx1, { actionId: "derive-x", kind: "derivation" });
     x.withTx(tx1).set({ value: 10 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     const tx1Settlement = waveSettlementOf(tx1);
     expect(tx1Settlement).toBeDefined();
 
@@ -826,7 +827,7 @@ describe("stage D seal-into-wave", () => {
     stampWaveRunContext(tx2, { actionId: "derive-z", kind: "derivation" });
     const seen = x.withTx(tx2).get();
     z.withTx(tx2).set({ value: seen!.value + 1 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
 
     // A concurrent authored commit lands mid-wave and moves x's head past
     // the wave's basis: the next wave's input, and this wave's conflict.
@@ -915,7 +916,7 @@ describe("stage D seal-into-wave", () => {
     stampWaveRunContext(tx, { actionId: "derive-w", kind: "derivation" });
     expect(w.withTx(tx).get()).toBeUndefined();
     w.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
 
@@ -982,7 +983,7 @@ describe("stage D seal-into-wave", () => {
     const tx = runtime.edit();
     stampWaveRunContext(tx, { actionId: "derive-own", kind: "derivation" });
     w.withTx(tx).set({ value: 42 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     runtime.clearSealDestination();
     const outcome = await wave.commitWave(newSink());
@@ -1024,7 +1025,7 @@ describe("stage D seal-into-wave", () => {
       kind: "derivation",
     });
     x.withTx(before).set({ value: 1 });
-    expect((await before.commit()).error).toBeUndefined();
+    expect((await before.commit().settled).error).toBeUndefined();
 
     const stale = runtime.edit();
     stampWaveRunContext(stale, {
@@ -1060,10 +1061,11 @@ describe("stage D seal-into-wave", () => {
     });
     const freshSeen = y.withTx(fresh).get()?.value ?? 0;
     y.withTx(fresh).set({ value: freshSeen + 1 });
-    expect((await fresh.commit()).error).toBeUndefined();
+    expect((await fresh.commit().settled).error).toBeUndefined();
 
     y.withTx(stale).set({ value: staleSeen + 1 });
-    const staleOutcome = await stale.commit({ resolveAt: "verdict" });
+    const staleOutcome = await stale.commit({ holdSyncedUntilCovered: false })
+      .verdict;
     expect(staleOutcome.error?.name).toBe("StorageTransactionInconsistent");
 
     runtime.clearSealDestination();
@@ -1125,7 +1127,7 @@ describe("stage D seal-into-wave", () => {
     // pushed commit — no destination installed yet).
     const primeTx = runtime.edit();
     internalDoc.withTx(primeTx).set({ inputHash: "stale" });
-    expect((await primeTx.commit()).error).toBeUndefined();
+    expect((await primeTx.commit().settled).error).toBeUndefined();
 
     // The routing destination: unmarked seals ride the wave; a MARKED
     // effect-completion writeback commits as its own engine-plane commit
@@ -1201,7 +1203,7 @@ describe("stage D seal-into-wave", () => {
     const t1 = runtime.edit();
     stampWaveRunContext(t1, { actionId: "memo-wipe", kind: "derivation" });
     internalDoc.withTx(t1).key("inputHash").set("new");
-    expect((await t1.commit()).error).toBeUndefined();
+    expect((await t1.commit().settled).error).toBeUndefined();
 
     // 2. The completion writeback, racing the open wave: the result AND
     // the hash it serves. Against the overlay the hash write is a
@@ -1254,7 +1256,7 @@ describe("stage D seal-into-wave", () => {
     // Seed a doc the handler reads, so basis rows have a confirmed read.
     const seedTx = runtime.edit();
     seed.withTx(seedTx).set({ value: 7 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
     const seedSeq = Engine.serverSeq(engine);
 
     const wave1 = newWave({ lease });
@@ -1270,7 +1272,7 @@ describe("stage D seal-into-wave", () => {
       });
       const base = seed.withTx(tx).get();
       y.withTx(tx).set({ value: base!.value + 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return accumulator;
     };
     await handlerRun(wave1);
@@ -1376,7 +1378,7 @@ describe("stage D seal-into-wave", () => {
       });
       const base = y.withTx(tx).get()?.value ?? 0;
       y.withTx(tx).set({ value: base + 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       // The served intent tx: SAME event, separate contribution,
       // addressed to the acting session's instance.
       const intentTx = runtime.edit();
@@ -1408,7 +1410,7 @@ describe("stage D seal-into-wave", () => {
           }],
         } as never,
       );
-      expect((await intentTx.commit()).error).toBeUndefined();
+      expect((await intentTx.commit().settled).error).toBeUndefined();
     };
 
     const wave1 = newWave({ lease });
@@ -1490,7 +1492,7 @@ describe("stage D seal-into-wave", () => {
     );
     const seedTx = runtime.edit();
     doc.withTx(seedTx).set({ a: 1, b: 1 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -1502,7 +1504,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice" },
     });
     doc.withTx(tx).key("a").set(2);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     // The rival touches ONLY /value/b — disjoint from the handler's
@@ -1587,7 +1589,7 @@ describe("stage D seal-into-wave", () => {
       scope: "space",
       path: ["entries", "0", "consequenced"],
     }).withTx(tx).set(true);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     // The concurrent writer: a second event delivered onto the same
@@ -1639,7 +1641,7 @@ describe("stage D seal-into-wave", () => {
       eventId: "e-late",
     });
     cell.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     // The lease expires (a pause outlived the TTL) and the same process
@@ -1701,7 +1703,7 @@ describe("stage D seal-into-wave", () => {
       tx.enableMultiSpaceWrites?.([foreign, space]);
       foreignCell.withTx(tx).set({ value });
       homeCell.withTx(tx).set({ value: value + 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       runtime.clearSealDestination();
       const order: Array<{ space: MemorySpace; home: boolean }> = [];
       return { wave, order };
@@ -1815,7 +1817,7 @@ describe("stage D seal-into-wave", () => {
     handlerTx.enableMultiSpaceWrites?.([foreign, space]);
     handlerForeign.withTx(handlerTx).set({ value: 1 });
     handlerHome.withTx(handlerTx).set({ value: 2 });
-    expect((await handlerTx.commit()).error).toBeUndefined();
+    expect((await handlerTx.commit().settled).error).toBeUndefined();
 
     // The crossing derivation: same target space, and no event behind
     // it, so it takes the drop arm rather than the requeue arm.
@@ -1840,7 +1842,7 @@ describe("stage D seal-into-wave", () => {
     derivationTx.enableMultiSpaceWrites?.([foreign, space]);
     derivationForeign.withTx(derivationTx).set({ value: 3 });
     derivationHome.withTx(derivationTx).set({ value: 4 });
-    expect((await derivationTx.commit()).error).toBeUndefined();
+    expect((await derivationTx.commit().settled).error).toBeUndefined();
 
     // The bystander: everything else the wave is carrying. It never
     // touched the failed space and reads nothing the withdrawals take
@@ -1856,7 +1858,7 @@ describe("stage D seal-into-wave", () => {
       kind: "derivation",
     });
     bystander.withTx(bystanderTx).set({ value: 5 });
-    expect((await bystanderTx.commit()).error).toBeUndefined();
+    expect((await bystanderTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     wave.failForeignSpace(foreign, "engine open failed (test)");
@@ -1967,7 +1969,7 @@ describe("stage D seal-into-wave", () => {
       kind: "derivation",
     });
     foreignCell.withTx(tx).set({ value: 1 });
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     expect(committed.error).toBeDefined();
     expect(committed.error!.message).toContain("foreign-space write");
     expect(refusals).toEqual([
@@ -1985,7 +1987,7 @@ describe("stage D seal-into-wave", () => {
     const tx2 = runtime.edit();
     stampWaveRunContext(tx2, { actionId: "derive/home", kind: "derivation" });
     homeCell.withTx(tx2).set({ value: 2 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     const outcome = await wave.commitWave(newSink());
     await wave.settled();
@@ -2046,7 +2048,7 @@ describe("stage D seal-into-wave", () => {
     tx.enableMultiSpaceWrites?.([space, foreign]);
     homeCell.withTx(tx).set({ value: 1 });
     foreignCell.withTx(tx).set({ value: 2 });
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     expect(committed.error).toBeDefined();
     expect(committed.error!.message).toContain("foreign-space write");
 
@@ -2060,7 +2062,7 @@ describe("stage D seal-into-wave", () => {
     const tx2 = runtime.edit();
     stampWaveRunContext(tx2, { actionId: "derive/clean", kind: "derivation" });
     cleanCell.withTx(tx2).set({ value: 3 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     const outcome = await wave.commitWave(newSink());
     await wave.settled();
@@ -2125,7 +2127,7 @@ describe("stage D seal-into-wave", () => {
     writerTx.enableMultiSpaceWrites?.([foreign, space]);
     foreignSeed.withTx(writerTx).set({ value: 3 });
     homeDoc.withTx(writerTx).set({ value: 1 });
-    expect((await writerTx.commit()).error).toBeUndefined();
+    expect((await writerTx.commit().settled).error).toBeUndefined();
 
     // The reader: reads the writer's FOREIGN sealed write through the
     // foreign replica's layered view and derives writes in both spaces.
@@ -2146,7 +2148,7 @@ describe("stage D seal-into-wave", () => {
     expect(seen).toEqual({ value: 3 });
     foreignOut.withTx(readerTx).set({ value: seen!.value + 1 });
     homeOut.withTx(readerTx).set({ value: seen!.value + 10 });
-    expect((await readerTx.commit()).error).toBeUndefined();
+    expect((await readerTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const homeLink = homeDoc.getAsNormalizedFullLink();
@@ -2212,7 +2214,7 @@ describe("stage D seal-into-wave", () => {
     const seedTx = runtime.edit();
     doc.withTx(seedTx).set({ a: 1, b: 1 });
     input.withTx(seedTx).set({ value: 5 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
     const inputSeq = Engine.serverSeq(engine);
 
     const wave = newWave({ lease });
@@ -2228,7 +2230,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice" },
     });
     doc.withTx(handlerTx).key("a").set(2);
-    expect((await handlerTx.commit()).error).toBeUndefined();
+    expect((await handlerTx.commit().settled).error).toBeUndefined();
 
     // A pure derivation READS an input and whole-doc-sets the SAME doc:
     // its write must be judged on its own — superseded, dropped — not
@@ -2240,7 +2242,7 @@ describe("stage D seal-into-wave", () => {
     });
     const seen = input.withTx(derivationTx).get();
     doc.withTx(derivationTx).set({ a: seen!.value, b: seen!.value });
-    expect((await derivationTx.commit()).error).toBeUndefined();
+    expect((await derivationTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const link = doc.getAsNormalizedFullLink();
@@ -2297,7 +2299,7 @@ describe("stage D seal-into-wave", () => {
     );
     const seedTx = runtime.edit();
     doc.withTx(seedTx).set({ a: 1, b: 1 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -2310,7 +2312,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice" },
     });
     doc.withTx(firstTx).key("a").set(2);
-    expect((await firstTx.commit()).error).toBeUndefined();
+    expect((await firstTx.commit().settled).error).toBeUndefined();
 
     // The second handler patches /value/b — the SAME field the rival
     // writes — so its rebase conflicts semantically and it requeues.
@@ -2322,7 +2324,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:bob" },
     });
     doc.withTx(secondTx).key("b").set(7);
-    expect((await secondTx.commit()).error).toBeUndefined();
+    expect((await secondTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const link = doc.getAsNormalizedFullLink();
@@ -2379,7 +2381,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice" },
     });
     parentDoc.withTx(parentTx).set({ value: 1 });
-    expect((await parentTx.commit()).error).toBeUndefined();
+    expect((await parentTx.commit().settled).error).toBeUndefined();
 
     const childTx = runtime.edit();
     stampWaveRunContext(childTx, {
@@ -2390,7 +2392,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice" },
     });
     childDoc.withTx(childTx).set({ value: 2 });
-    expect((await childTx.commit()).error).toBeUndefined();
+    expect((await childTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const parentLink = parentDoc.getAsNormalizedFullLink();
@@ -2477,7 +2479,7 @@ describe("stage D seal-into-wave", () => {
       {
         const tx = servingRuntime.edit();
         seed.withTx(tx).set({ value: 7 });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const seedSeq = Engine.serverSeq(engine);
 
@@ -2525,7 +2527,7 @@ describe("stage D seal-into-wave", () => {
       // The WRITE stays logged — the emitter genuinely wrote the entry.
       expect(log.writes.some((write) => write.id === sidecarId)).toBe(true);
 
-      expect((await emitTx.commit()).error).toBeUndefined();
+      expect((await emitTx.commit().settled).error).toBeUndefined();
       servingRuntime.clearSealDestination();
       const outcome = await wave.commitWave(newSink());
       await wave.settled();
@@ -2607,7 +2609,7 @@ describe("stage D seal-into-wave", () => {
       streamCell.withTx(emitTx).send(
         { tag: Symbol.for("cf:test-tag") } as never,
       );
-      expect((await emitTx.commit()).error).toBeUndefined();
+      expect((await emitTx.commit().settled).error).toBeUndefined();
       servingRuntime.clearSealDestination();
       const outcome = await wave.commitWave(newSink());
       await wave.settled();
@@ -2656,7 +2658,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice" },
     });
     consequence.withTx(handlerTx).set({ value: 5 });
-    expect((await handlerTx.commit()).error).toBeUndefined();
+    expect((await handlerTx.commit().settled).error).toBeUndefined();
 
     // The derivation READS the handler's sealed write through the
     // layered view, then writes its own doc.
@@ -2668,7 +2670,7 @@ describe("stage D seal-into-wave", () => {
     const seen = consequence.withTx(deriveTx).get();
     expect(seen).toEqual({ value: 5 });
     derived.withTx(deriveTx).set({ value: seen!.value + 1 });
-    expect((await deriveTx.commit()).error).toBeUndefined();
+    expect((await deriveTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     // A rival whole-doc set races the consequence: semantic conflict, so
@@ -2722,7 +2724,7 @@ describe("stage D seal-into-wave", () => {
     stampWaveRunContext(tx, { actionId: "derive-race", kind: "derivation" });
     x.withTx(tx).set({ value: 1 });
     keep.withTx(tx).set({ value: 2 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
     runtime.clearSealDestination();
@@ -2833,7 +2835,7 @@ describe("stage D seal-into-wave", () => {
       kind: "entity-absent",
       id: takenId,
     });
-    expect((await handlerTx.commit()).error).toBeUndefined();
+    expect((await handlerTx.commit().settled).error).toBeUndefined();
 
     const deriveTx = runtime.edit();
     stampWaveRunContext(deriveTx, {
@@ -2841,7 +2843,7 @@ describe("stage D seal-into-wave", () => {
       kind: "derivation",
     });
     independent.withTx(deriveTx).set({ value: 2 });
-    expect((await deriveTx.commit()).error).toBeUndefined();
+    expect((await deriveTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const outcome = await wave.commitWave(newSink());
@@ -2920,7 +2922,7 @@ describe("stage D seal-into-wave", () => {
       id: pinnedId,
       valueHash: commitPreconditionValueHash({ value: 1 }),
     });
-    expect((await handlerTx.commit()).error).toBeUndefined();
+    expect((await handlerTx.commit().settled).error).toBeUndefined();
 
     const deriveTx = runtime.edit();
     stampWaveRunContext(deriveTx, {
@@ -2928,7 +2930,7 @@ describe("stage D seal-into-wave", () => {
       kind: "derivation",
     });
     independent.withTx(deriveTx).set({ value: 2 });
-    expect((await deriveTx.commit()).error).toBeUndefined();
+    expect((await deriveTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const outcome = await wave.commitWave(newSink());
@@ -2983,7 +2985,7 @@ describe("stage D seal-into-wave", () => {
       kind: "entity-absent",
       id: takenId,
     });
-    expect((await guardTx.commit()).error).toBeUndefined();
+    expect((await guardTx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     expect(wave.contributionCount).toBe(1);
 
@@ -3019,7 +3021,7 @@ describe("stage D seal-into-wave", () => {
       acting: { user: "did:key:alice", session: "sess-1" },
     });
     scoped.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const outcome = await wave.commitWave(newSink());
@@ -3072,7 +3074,7 @@ describe("stage D seal-into-wave", () => {
     for (const [cell, value] of [[seedA, 1], [seedB, 2]] as const) {
       const tx = runtime.edit();
       cell.withTx(tx).set({ value });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
 
     const wave = newWave({ lease });
@@ -3083,11 +3085,11 @@ describe("stage D seal-into-wave", () => {
     const run1 = runtime.edit();
     stampWaveRunContext(run1, { actionId: "recompute", kind: "derivation" });
     outA.withTx(run1).set({ value: seedA.withTx(run1).get()!.value + 1 });
-    expect((await run1.commit()).error).toBeUndefined();
+    expect((await run1.commit().settled).error).toBeUndefined();
     const run2 = runtime.edit();
     stampWaveRunContext(run2, { actionId: "recompute", kind: "derivation" });
     outB.withTx(run2).set({ value: seedB.withTx(run2).get()!.value + 1 });
-    expect((await run2.commit()).error).toBeUndefined();
+    expect((await run2.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const outcome = await wave.commitWave(newSink());
@@ -3119,7 +3121,7 @@ describe("stage D seal-into-wave", () => {
     const tx1 = runtime.edit();
     stampWaveRunContext(tx1, { actionId: "derive-kept", kind: "derivation" });
     kept.withTx(tx1).set({ value: 1 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     // The second action aborts before commit: it never reaches the wave.
     const dropped = runtime.getCell<{ value: number }>(
@@ -3183,7 +3185,7 @@ describe("stage D seal-into-wave", () => {
       tx.enableMultiSpaceWrites?.([foreign, space]);
       foreignScoped.withTx(tx).set({ value });
       home.withTx(tx).set({ value: value + 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       runtime.clearSealDestination();
       return wave;
     };
@@ -3262,7 +3264,7 @@ describe("stage D seal-into-wave", () => {
     partialTx.enableMultiSpaceWrites?.([foreign, space]);
     foreignScoped.withTx(partialTx).set({ value: 21 });
     home.withTx(partialTx).set({ value: 22 });
-    const partialCommit = await partialTx.commit();
+    const partialCommit = await partialTx.commit().settled;
     expect(partialCommit.error?.message ?? "").toContain(
       "foreign-space write refused at wave accumulation",
     );
@@ -3469,7 +3471,7 @@ describe("stage D seal-into-wave", () => {
       tx.enableMultiSpaceWrites?.([provisioned, space]);
       cell.withTx(tx).set({ value });
       home.withTx(tx).set({ value: value + 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       runtime.clearSealDestination();
     };
 
@@ -3629,7 +3631,7 @@ describe("stage D seal-into-wave", () => {
       ungrantedTx.enableMultiSpaceWrites?.([victim, space]);
       ungrantedTarget.withTx(ungrantedTx).set({ value: 1 });
       homeBeside.withTx(ungrantedTx).set({ value: 2 });
-      const ungrantedCommit = await ungrantedTx.commit();
+      const ungrantedCommit = await ungrantedTx.commit().settled;
       expect(ungrantedCommit.error?.message ?? "").toContain(
         "holds no structural write grant",
       );
@@ -3660,7 +3662,7 @@ describe("stage D seal-into-wave", () => {
       grantedTx.enableMultiSpaceWrites?.([actor as MemorySpace, space]);
       ownTarget.withTx(grantedTx).set({ value: 3 });
       homeBeside2.withTx(grantedTx).set({ value: 4 });
-      const grantedCommit = await grantedTx.commit();
+      const grantedCommit = await grantedTx.commit().settled;
       expect(grantedCommit.error).toBeUndefined();
       expect(refusals).toBe(1);
       expect(wave.foreignSpaces).toEqual([actor as MemorySpace]);
@@ -3729,7 +3731,7 @@ describe("stage D seal-into-wave", () => {
     tx1.enableMultiSpaceWrites?.([foreign, space]);
     foreignDoc.withTx(tx1).set({ value: 5 });
     homeIn.withTx(tx1).set({ value: 5 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     // Contribution 1: a derivation READS the foreign doc (read-only in
     // that space — the tx seals only the home space) and writes home.
@@ -3740,7 +3742,7 @@ describe("stage D seal-into-wave", () => {
     });
     const seen = foreignDoc.withTx(tx2).get();
     homeOut.withTx(tx2).set({ value: (seen?.value ?? 0) + 1 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
 
     // A rival authored commit moves homeIn's head past the basis, which
     // REQUEUES contribution 0 (whole-doc set never commutes) — its
@@ -3798,7 +3800,7 @@ describe("stage D seal-into-wave", () => {
       kind: "bookkeeping",
     });
     watermark.withTx(tx).set({ seq: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     runtime.clearSealDestination();
     const outcome = await wave.commitWave(newSink(), { derivedThrough: 41 });
@@ -3821,7 +3823,7 @@ describe("stage D seal-into-wave", () => {
       kind: "bookkeeping",
     });
     watermark.withTx(tx2).set({ seq: 42 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     const wmLink = watermark.getAsNormalizedFullLink();
     Engine.applyCommit(engine, {
       sessionId: "rival-session",
@@ -3906,7 +3908,7 @@ describe("stage D seal-into-wave", () => {
     );
     const seedTx = runtime.edit();
     seed.withTx(seedTx).set({ value: 5 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -3941,7 +3943,7 @@ describe("stage D seal-into-wave", () => {
       });
       const base = seed.withTx(tx).get();
       cells[index].withTx(tx).set({ value: (base?.value ?? 0) + index + 1 });
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `run ${index} seal failed: ${committed.error.message}`,
@@ -3992,7 +3994,7 @@ describe("stage D seal-into-wave", () => {
     );
     const seedTx = runtime.edit();
     seed.withTx(seedTx).set({ value: 2 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
     const seedSeq = Engine.serverSeq(engine);
 
     const wave = newWave({ lease });
@@ -4017,7 +4019,7 @@ describe("stage D seal-into-wave", () => {
     });
     const base = seed.withTx(tx).get();
     scoped.withTx(tx).set({ value: (base?.value ?? 0) + 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     runtime.clearSealDestination();
     const outcome = await wave.commitWave(newSink());
@@ -4086,7 +4088,7 @@ describe("stage D seal-into-wave", () => {
     {
       const seedTx = runtime.edit();
       spaceDoc.withTx(seedTx).set({ value: 1 });
-      expect((await seedTx.commit()).error).toBeUndefined();
+      expect((await seedTx.commit().settled).error).toBeUndefined();
     }
     const runOnce = async (
       actionId: string,
@@ -4111,7 +4113,7 @@ describe("stage D seal-into-wave", () => {
       // The write stays space-scoped so only the READS decide the
       // discovered scope (the tx ratchet is read-driven).
       output.withTx(tx).set({ value: valueOut });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       runtime.clearSealDestination();
       const outcome = await wave.commitWave(sink);
       await wave.settled();
@@ -4158,7 +4160,7 @@ describe("stage D seal-into-wave", () => {
       });
       spaceDoc.withTx(spaceRun).get();
       output.withTx(spaceRun).set({ value: 10 });
-      expect((await spaceRun.commit()).error).toBeUndefined();
+      expect((await spaceRun.commit().settled).error).toBeUndefined();
       const bobRun = runtime.edit();
       stampWaveRunContext(bobRun, {
         actionId: "s4-clear-guard",
@@ -4173,7 +4175,7 @@ describe("stage D seal-into-wave", () => {
         undefined,
       );
       bobOut.withTx(bobRun).set({ value: 11 });
-      expect((await bobRun.commit()).error).toBeUndefined();
+      expect((await bobRun.commit().settled).error).toBeUndefined();
       runtime.clearSealDestination();
       const outcome = await wave.commitWave(sink);
       await wave.settled();
@@ -4235,7 +4237,7 @@ describe("stage D seal-into-wave", () => {
     );
     const seedTx = runtime.edit();
     doc.withTx(seedTx).set({ seq: 1, other: 0 });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -4245,7 +4247,7 @@ describe("stage D seal-into-wave", () => {
       kind: "bookkeeping",
     });
     doc.withTx(tx).key("seq").set(9);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // A concurrent authored PATCH to a DISJOINT field: commutes, so the
     // bookkeeping advance rebases instead of dropping.
@@ -4314,13 +4316,13 @@ describe("stage D seal-into-wave", () => {
         if (
           !waveRunContextOf(tx)?.actionId.startsWith("piece-instantiate/")
         ) {
-          return tx.tx.commit();
+          return tx.tx.commit().settled;
         }
         pieceInstantiationSeals += 1;
         if (pieceInstantiationSeals === 1) {
           return Promise.resolve({ error: staleRead as never });
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) =>
@@ -4402,7 +4404,9 @@ describe("stage D seal-into-wave", () => {
           if (!instantiateTxs.has(tx)) return commit();
           refusals += 1;
           tx.abort(staleRead.message);
-          return Promise.resolve({ error: staleRead as never });
+          return createTransactionCommitReceipt(
+            Promise.resolve({ error: staleRead as never }),
+          );
         }) as typeof tx.commit;
         return tx;
       }) as typeof offRuntime.edit;
@@ -4464,13 +4468,13 @@ describe("stage D seal-into-wave", () => {
         if (
           !waveRunContextOf(tx)?.actionId.startsWith("piece-instantiate/")
         ) {
-          return tx.tx.commit();
+          return tx.tx.commit().settled;
         }
         pieceInstantiationSeals += 1;
         if (pieceInstantiationSeals <= 2) {
           return Promise.resolve({ error: staleRead as never });
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) =>
@@ -4522,14 +4526,14 @@ describe("stage D seal-into-wave", () => {
         if (
           !waveRunContextOf(tx)?.actionId.startsWith("piece-instantiate/")
         ) {
-          return tx.tx.commit();
+          return tx.tx.commit().settled;
         }
         pieceInstantiationSeals += 1;
         if (pieceInstantiationSeals === 1) {
           refusalRequested.resolve();
           return heldRefusal.promise as never;
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) =>
@@ -4577,7 +4581,7 @@ describe("stage D seal-into-wave", () => {
           refusals += 1;
           return Promise.resolve({ error: refusal as never });
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) =>
@@ -4757,7 +4761,7 @@ describe("stage D seal-into-wave", () => {
           rejections += 1;
           return Promise.reject(rejection);
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) =>
@@ -4922,7 +4926,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
       kind: "bookkeeping",
     });
     doc1.withTx(tx1).set({ n: 1 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     const settlement1 = waveSettlementOf(tx1);
     expect(settlement1).toBeDefined();
     runtime.clearSealDestination();
@@ -4960,7 +4964,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
       kind: "bookkeeping",
     });
     doc2.withTx(tx2).set({ n: 2 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     const settlement2 = waveSettlementOf(tx2);
     expect(settlement2).toBeDefined();
     runtime.clearSealDestination();
@@ -4982,7 +4986,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
       undefined,
     );
     doc3.withTx(tx3).set({ n: 3 });
-    expect((await tx3.commit()).error).toBeUndefined();
+    expect((await tx3.commit().settled).error).toBeUndefined();
     expect(waveSettlementOf(tx3)).toBeUndefined();
   });
 
@@ -5071,7 +5075,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
     tx1.enableMultiSpaceWrites?.([foreign, space]);
     foreignDocA.withTx(tx1).set({ value: 1 });
     homeA.withTx(tx1).set({ value: 1 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     const tx2 = runtime.edit();
     stampWaveRunContext(tx2, {
@@ -5084,7 +5088,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
     tx2.enableMultiSpaceWrites?.([foreign, space]);
     foreignDocB.withTx(tx2).set({ value: 2 });
     homeB.withTx(tx2).set({ value: 2 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
 
     runtime.clearSealDestination();
 
@@ -5209,7 +5213,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
     tx1.enableMultiSpaceWrites?.([foreign, space]);
     foreignDoc.withTx(tx1).set({ value: 5 });
     homeIn.withTx(tx1).set({ value: 5 });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     // Contribution 1: a derivation SHALLOW-reads the foreign doc — a
     // nonRecursive shape probe, exactly what the query proxies record
@@ -5225,7 +5229,7 @@ describe("stage F fix round: foreign-batch settle sequences and shallow reads", 
       nonRecursive: true,
     });
     homeOut.withTx(tx2).set({ value: 1 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
 
     // A rival authored commit moves homeIn's head past the basis, which
     // REQUEUES contribution 0 — its foreign write withdraws with it.

@@ -67,7 +67,7 @@ describe("collection index resume sync", () => {
             "output",
           );
           const parent = runtime.getCell(signer.did(), "parent");
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await storage.synced();
           const inputIds = new Set([
             list.getAsNormalizedFullLink().id,
@@ -161,7 +161,7 @@ describe("collection index resume sync", () => {
             holdInputs = false;
             tx = runtime.edit();
             elements.withTx(tx).set([1]);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             await runtime.settled(Infinity);
             expect(attempts).toHaveLength(4);
             expect(attempts.map((entry) => entry.identity)).toEqual([
@@ -175,7 +175,7 @@ describe("collection index resume sync", () => {
             expect(output.getRaw()).toBeUndefined();
             tx = runtime.edit();
             elements.withTx(tx).set([]);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             await runtime.scheduler.idleWithPendingCommits();
             expect(maintenanceIds).toHaveLength(2);
             expect(output.getRaw()).toBeUndefined();

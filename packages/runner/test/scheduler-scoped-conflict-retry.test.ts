@@ -43,7 +43,7 @@ describe("scheduler-scoped-conflict-retry", () => {
         alternate.set("alternate result");
         seed.writeValueOrThrow(outputLink, alternate.getAsLink());
         if (previous !== undefined) seed.writeValueOrThrow(userLink, previous);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         await writerStorage.synced();
         await reader.getCellFromLink(outputLink).sync();
 

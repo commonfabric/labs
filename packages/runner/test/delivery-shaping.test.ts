@@ -488,7 +488,7 @@ describe("delivery shaping (scheduler integration)", () => {
     const runtime = makeRuntime();
     try {
       const { tx, linkRef, received } = streamWithHandler(runtime, "w3/on");
-      await tx.commit();
+      await tx.commit().settled;
       // A handful of clicks is well within the burst budget, so every one is
       // delivered — none coalesced away.
       runtime.scheduler.queueEvent(linkRef, trusted({ n: 1 }));
@@ -505,7 +505,7 @@ describe("delivery shaping (scheduler integration)", () => {
     const runtime = makeRuntime();
     try {
       const { tx, linkRef, received } = streamWithHandler(runtime, "w3/burst");
-      await tx.commit();
+      await tx.commit().settled;
       // More than a full burst: the overflow is held and released one batch per
       // window (the sustained rate cap), but no click is lost.
       const total = BURST_CAPACITY + 3;
@@ -528,7 +528,7 @@ describe("delivery shaping (scheduler integration)", () => {
         runtime,
         "w3/internal",
       );
-      await tx.commit();
+      await tx.commit().settled;
       // Not marked renderer-trusted -> delivered normally, not coalesced.
       runtime.scheduler.queueEvent(linkRef, { n: 1 });
       runtime.scheduler.queueEvent(linkRef, { n: 2 });
@@ -544,7 +544,7 @@ describe("delivery shaping (scheduler integration)", () => {
     const runtime = makeRuntime();
     try {
       const { tx, linkRef, received } = streamWithHandler(runtime, "w3/strip");
-      await tx.commit();
+      await tx.commit().settled;
       runtime.scheduler.queueEvent(
         linkRef,
         trusted({
@@ -567,7 +567,7 @@ describe("delivery shaping (scheduler integration)", () => {
     const runtime = makeRuntime();
     try {
       const { tx, linkRef, received } = streamWithHandler(runtime, "w4/cap");
-      await tx.commit();
+      await tx.commit().settled;
       const total = MAX_EVENT_BACKLOG_PER_STREAM + 3;
       for (let i = 1; i <= total; i++) {
         runtime.scheduler.queueEvent(linkRef, { n: i });
@@ -592,7 +592,7 @@ describe("delivery shaping (scheduler integration)", () => {
     const runtime = makeRuntime();
     try {
       const { tx, linkRef, received } = streamWithHandler(runtime, "w4/refuse");
-      await tx.commit();
+      await tx.commit().settled;
       for (let i = 1; i <= MAX_EVENT_BACKLOG_PER_STREAM; i++) {
         runtime.scheduler.queueEvent(linkRef, { n: i });
       }
@@ -647,7 +647,7 @@ describe("delivery shaping (scheduler integration)", () => {
         runtime,
         "w4/coalesce",
       );
-      await tx.commit();
+      await tx.commit().settled;
       for (let i = 1; i < MAX_EVENT_BACKLOG_PER_STREAM; i++) {
         runtime.scheduler.queueEvent(linkRef, { n: i });
       }
@@ -702,7 +702,7 @@ describe("delivery shaping (scheduler integration)", () => {
     const runtime = makeRuntime();
     try {
       const { tx, linkRef, received } = streamWithHandler(runtime, "w4/keep");
-      await tx.commit();
+      await tx.commit().settled;
       runtime.scheduler.queueEvent(
         linkRef,
         { marker: "keep" },
@@ -743,7 +743,7 @@ describe("delivery shaping (scheduler integration)", () => {
       const c = runtime.getCell(space, "w4/collapse-time", undefined, tx);
       const linkRef = c.asSchema(STREAM_SCHEMA).key("events")
         .getAsNormalizedFullLink();
-      await tx.commit();
+      await tx.commit().settled;
       const times: (number | undefined)[] = [];
       const handler: EventHandler = (t: IExtendedStorageTransaction) => {
         times.push(t.dispatchedEventTime);

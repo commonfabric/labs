@@ -96,6 +96,6 @@ describe("artifact index pinning (session-lifetime)", () => {
     expect(writeBacks.started()).toBeGreaterThan(0);
     expect(writeBacks.inFlight()).toBe(0);
     writeBacks.restore();
-    await tx.commit();
+    await tx.commit().settled;
   });
 });

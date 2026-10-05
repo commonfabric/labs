@@ -197,7 +197,7 @@ describe("scheduler-owed retries run past the node's freshness gates", () => {
       const txA = runtimeA.edit();
       runtimeA.getCell(space, "gated-retry-source", valueSchema, txA)
         .set({ value: 42 });
-      await txA.commit();
+      await txA.commit().settled;
       await smA.synced();
 
       const derived = runtimeB.getCell(

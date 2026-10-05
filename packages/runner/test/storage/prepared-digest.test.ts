@@ -94,7 +94,7 @@ describe("prepared digest transaction binding", () => {
     tx.writeValueOrThrow(address("output"), 1);
     expect(tx.prepareCfc()).not.toBe("");
     expect(outcomes).toEqual(["computed"]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(outcomes).toEqual(["computed", "memo"]);
   });
 
@@ -113,7 +113,7 @@ describe("prepared digest transaction binding", () => {
     expect(tx.prepareCfc()).not.toBe("");
     tx.recordCfcDereferenceTrace({ ...trace });
     expect(tx.getCfcState().prepare.status).toBe("prepared");
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(outcomes).toEqual(["computed", "computed"]);
   });
 
@@ -275,7 +275,7 @@ describe("prepared digest transaction binding", () => {
     tx.markCfcRelevant("test");
     expect(tx.prepareCfc()).not.toBe("");
     tx.writeValuesOrThrow([{ address: address("output"), value: "two" }]);
-    expect((await tx.commit()).error).toBeDefined();
+    expect((await tx.commit().settled).error).toBeDefined();
   });
 
   it("holds trust and implementation snapshots immutable", () => {

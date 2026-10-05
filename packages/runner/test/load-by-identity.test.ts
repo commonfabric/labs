@@ -56,7 +56,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     tx = runtime.edit();
   });
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -93,7 +93,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, pattern as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     return result.getAsQueryResult();
@@ -267,7 +267,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -433,7 +433,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -516,7 +516,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -771,7 +771,7 @@ describe("legacy-envelope tolerance on cold load", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.storageManager.synced();
   };
 
@@ -791,7 +791,7 @@ describe("legacy-envelope tolerance on cold load", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, pattern as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
     return result.getAsQueryResult();
   };

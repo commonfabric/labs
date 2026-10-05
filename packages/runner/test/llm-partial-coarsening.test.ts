@@ -229,7 +229,7 @@ describe("LLM partial batch coarsening (channel 6)", () => {
             }
             const bump = runtime.edit();
             messages.withTx(bump).set([{ role: "user", content: "second" }]);
-            await bump.commit();
+            await bump.commit().settled;
             await clock.settle();
             expect(partials.length).toBe(2);
 

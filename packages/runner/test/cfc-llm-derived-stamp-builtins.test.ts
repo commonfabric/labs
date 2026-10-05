@@ -110,7 +110,7 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
         "model bytes",
       );
       modelTx.prepareCfc();
-      expect((await modelTx.commit()).ok).toBeDefined();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const builtinRead = runtime.getCell(
@@ -137,7 +137,7 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
         "forged provenance",
       );
       forgeTx.prepareCfc();
-      expect((await forgeTx.commit()).ok).toBeDefined();
+      expect((await forgeTx.commit().settled).ok).toBeDefined();
 
       const forgeReadTx = runtime.edit();
       const forgedRead = runtime.getCell(

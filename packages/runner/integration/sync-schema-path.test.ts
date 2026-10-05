@@ -104,7 +104,7 @@ async function test() {
     address: { city: "Los Angeles" },
   };
   testEmployeeCell.set(employeeData);
-  assertEquals(await tx.commit(), { ok: {} });
+  assertEquals(await tx.commit().settled, { ok: {} });
 
   // Create a cell that points to the address portion of that cell
   tx = runtime1.edit();
@@ -115,7 +115,7 @@ async function test() {
     tx,
   );
   testAddressesCell.set({ addresses: [testEmployeeCell.key("address")] });
-  assertEquals(await tx.commit(), { ok: {} });
+  assertEquals(await tx.commit().settled, { ok: {} });
 
   await testAddressesCell.sync();
   await testEmployeeCell.sync();

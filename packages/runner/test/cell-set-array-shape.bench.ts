@@ -32,7 +32,7 @@ async function cleanup(
   storageManager: ReturnType<typeof StorageManager.emulate>,
   tx?: IExtendedStorageTransaction,
 ) {
-  await tx?.commit();
+  await tx?.commit().settled;
   await runtime.dispose();
   await storageManager.close();
 }

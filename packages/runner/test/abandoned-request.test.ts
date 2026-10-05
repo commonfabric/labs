@@ -25,6 +25,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { settleAbandonedRequest } from "../src/builtins/abandoned-request.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -80,7 +81,9 @@ describe("settleAbandonedRequest", () => {
       (opened as any).commit = () => {
         commits++;
         opened.abort(REFUSAL);
-        return Promise.resolve({ error: REFUSAL });
+        return createTransactionCommitReceipt(
+          Promise.resolve({ error: REFUSAL }),
+        );
       };
       return opened;
     };
@@ -95,7 +98,7 @@ describe("settleAbandonedRequest", () => {
       undefined,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     const commits = refuseCommits();
     let wrote = false;

@@ -67,7 +67,7 @@ describe("sqlite-query-unsent-cancellation", () => {
         undefined,
         setup,
       );
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
 
       let cancel!: () => void;
       // deno-lint-ignore no-explicit-any -- the builtin's own result cell

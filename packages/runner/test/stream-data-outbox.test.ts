@@ -120,7 +120,7 @@ describe("stream-data outbox mechanism", () => {
     try {
       expect(fetchCalls).toEqual([]);
 
-      const commitPromise = tx.commit();
+      const commitPromise = tx.commit().settled;
 
       expect(fetchCalls).toEqual([]);
 
@@ -171,7 +171,7 @@ describe("stream-data outbox mechanism", () => {
         url: "http://mock-test-server.local/stream-idempotency",
       }, resultCell);
       result.sink(() => {});
-      const commitPromise = tx.commit();
+      const commitPromise = tx.commit().settled;
       await commitPromise;
       await runtime.settled();
 
@@ -215,7 +215,7 @@ describe("stream-data outbox mechanism", () => {
     inputsCell.set({
       url: "http://mock-test-server.local/stream-retry",
     });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     const action = rawStreamData(
@@ -234,14 +234,14 @@ describe("stream-data outbox mechanism", () => {
       "streamData retry regression",
     );
     action(rejectedTx);
-    const rejectedResult = await rejectedTx.commit();
+    const rejectedResult = await rejectedTx.commit().settled;
     expect(isCfcEnforcementRejection(rejectedResult.error)).toBe(true);
     await runtime.settled();
     expect(fetchCalls).toEqual([]);
 
     const retryTx = runtime.edit();
     action(retryTx);
-    const retryResult = await retryTx.commit();
+    const retryResult = await retryTx.commit().settled;
     expect(retryResult.ok).toBeDefined();
     await runtime.settled();
 
@@ -274,7 +274,7 @@ describe("stream-data outbox mechanism", () => {
     inputsCell.set({
       url: "http://mock-test-server.local/stream-scope-change",
     });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     const action = rawStreamData(
@@ -288,7 +288,7 @@ describe("stream-data outbox mechanism", () => {
 
     const firstTx = runtime.edit();
     action(firstTx);
-    const firstResult = await firstTx.commit();
+    const firstResult = await firstTx.commit().settled;
     expect(firstResult.ok).toBeDefined();
     await runtime.settled();
     expect(fetchCalls.length).toBe(1);
@@ -307,12 +307,12 @@ describe("stream-data outbox mechanism", () => {
     );
     userUrl.set("http://mock-test-server.local/stream-scope-change");
     inputsCell.withTx(linkTx).key("url").set(userUrl);
-    const linkResult = await linkTx.commit();
+    const linkResult = await linkTx.commit().settled;
     expect(linkResult.ok).toBeDefined();
 
     const secondTx = runtime.edit();
     action(secondTx);
-    const secondResult = await secondTx.commit();
+    const secondResult = await secondTx.commit().settled;
     expect(secondResult.ok).toBeDefined();
     await runtime.settled();
 
