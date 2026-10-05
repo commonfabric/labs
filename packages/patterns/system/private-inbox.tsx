@@ -177,9 +177,12 @@ export type PrivateInboxHolder = {
 
 /** What the pointing step needs of each profile in Home's list. */
 type PointTarget = {
-  // A profile of a vintage without the field or the stream is skipped.
-  inbox?: { piece?: Cell<unknown> };
-  setInbox?: Stream<SetProfileInboxEvent>;
+  // The pointer is typed as reaching the inbox's name and nothing else. The
+  // inbox labels its offers confidential to its owner, and a link carries
+  // that label at the paths it reaches, so a read typed to reach the offers
+  // would join a confidential label from another space into this run.
+  inbox?: { piece?: Cell<PrivateInboxPiece> };
+  setInbox: Stream<SetProfileInboxEvent>;
 };
 
 /**
@@ -303,7 +306,9 @@ export const ensurePrivateInbox = handler<
  *
  * The list is bound as a value: the runner resolves it before the body runs,
  * and withdraws the dispatch until every profile it names has loaded, so an
- * unloaded profile is never taken for one with no inbox.
+ * unloaded profile is never taken for one with no inbox. The read and the
+ * `setInbox` it leads to are two transactions in two spaces, so a pointer
+ * set between them is replaced.
  */
 export const pointProfilesAtPrivateInbox = handler<
   void,
@@ -319,8 +324,7 @@ export const pointProfilesAtPrivateInbox = handler<
   const inbox = privateInbox?.piece?.resolveAsCell();
   if (inbox === undefined) return;
   for (const profile of profiles ?? []) {
-    if (profile?.setInbox === undefined) continue;
-    if (profile.inbox?.piece !== undefined) continue;
+    if (profile === undefined || profile.inbox?.piece !== undefined) continue;
     profile.setInbox.send({ inbox });
   }
 });

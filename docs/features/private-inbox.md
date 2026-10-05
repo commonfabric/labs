@@ -41,7 +41,25 @@ The pointing runs as a second event, queued behind the one that creates the
 inbox, because the inbox piece exists only once that event's transaction has
 committed. It reads the profile list as a value, so the runner holds the event
 until every profile has loaded, and an unloaded profile is never taken for one
-without an inbox. The link a profile receives names the inbox's own result
+without an inbox. A profile of any vintage with a `setInbox` is pointed this
+way; one predating `setInbox` drops the event, and the runtime logs a warning
+that no handler took it.
+
+The pointing step reads each profile's pointer through a type that reaches the
+inbox's name and nothing else. A link carries the label of what it reaches at
+the paths it reaches, and the inbox labels its offers confidential to its
+owner. A read typed to reach the offers would join that label, from another
+space, into the served run in Home's space. When the event drain, rather than
+the wave that queued it, delivered such a run, writer-fit would refuse the
+run's record that it handled the event, and the event would be lost; the
+refusal also reaches the run's own sends, on either path. Read through the
+narrow type, the pointer joins no confidentiality.
+
+The read and the `setInbox` it leads to are two transactions, in Home's space
+and then in the profile's, so a pointer that something else sets between them
+is replaced by Home's inbox.
+
+The link a profile receives names the inbox's own result
 document rather than the cell Home's link reaches it through: a link written
 into a profile's labeled `inbox` takes its label from the document it names,
 and the result document is the one with a schema to take it from.
@@ -106,6 +124,13 @@ profile's `inbox.piece`, from a handler of the sender's own. With server
 execution on, that handler is served, and the append reaches the closed inbox
 space as a stream event the space's server runs. A client sending to `receive`
 directly is then refused, since it holds no `WRITE` in the space.
+
+The sender reads the pointer through `profile-home.tsx`'s own types, where
+`inbox.piece` reaches the inbox's name and nothing else, for the reason the
+pointing step does: a read typed to reach the offers joins their label into
+the sender's run, and that run is refused. `receive` stamps the offer with the
+sender as `from`, including when the send comes from a handler that another
+of the sender's handlers queued.
 
 `receive` appends nothing for an event that has no actor, whose `kind` is not
 as described above or is longer than `OFFER_KIND_MAX_LENGTH`, whose `space` is
