@@ -790,10 +790,19 @@ export class CellHandle<T = unknown> {
    * reaches `callback` whatever it holds, as does an update the connection
    * delivers; the connection delivers no update that holds nothing (the
    * worker sends one for a document it has not loaded too), so a handle on a
-   * cell that holds nothing stays unread until a read answers it. After that, `callback` is called whenever the value changes, and
-   * `onRefused` with each refusal. The callback's return value, if a Cancel
-   * function, is called before the next value, when a refusal drops the value
-   * it was given, and when the subscription is cancelled.
+   * cell that holds nothing stays unread until a read answers it. After that,
+   * `callback` is called whenever the value changes, and `onRefused` with
+   * each refusal. The callback's return value, if a Cancel function, is
+   * called before the next value, when a refusal drops the value it was
+   * given, and when the subscription is cancelled.
+   *
+   * A change reaches `callback` through an update, or through a read, by this
+   * handle or by any other on the same cell under the same schema, that
+   * changes what the reading handle holds. Since no update holds
+   * nothing, a subscriber that was given a value hears that the cell now
+   * holds nothing only from a {@link pull}, as `undefined`: a `sync()` that
+   * finds nothing may have found a document not loaded yet, and is not
+   * delivered.
    */
   subscribe(
     callback: (
@@ -908,6 +917,12 @@ export class CellHandle<T = unknown> {
    * unconfirmed; a cell with no value yet still waits, since the write that
    * creates it may be in flight.
    *
+   * What it finds reaches the subscribers of this handle, and of every other
+   * handle on the same cell under the same schema, when it differs from what
+   * this handle holds, `undefined` included: a pull waits for the loads its
+   * read starts, so finding nothing means the cell holds nothing, and a
+   * subscriber that was given a value is told so.
+   *
    * @throws {CellReadRefusedError} When the worker refuses the read, as
    *   {@link sync} does.
    */
@@ -926,7 +941,10 @@ export class CellHandle<T = unknown> {
   /**
    * Helper for {@link sync} and {@link pull}, which asks the worker for the
    * cell's value with `request` and caches the answer, unless a write or an
-   * update this handle took meanwhile is newer. A refused read caches the
+   * update this handle took meanwhile is newer. An answer that changes what
+   * the handle holds reaches its subscribers, and those of every other handle
+   * subscribed to the same cell under the same schema, except a `sync()` that
+   * finds nothing in a handle holding a value. A refused read caches the
    * refusal and rejects.
    */
   async #read(
@@ -934,7 +952,7 @@ export class CellHandle<T = unknown> {
   ): Promise<Readonly<T> | undefined> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
-    const { read, authoritative } = await this.#enqueueOperation(
+    const { read, response, authoritative } = await this.#enqueueOperation(
       async (queue) => {
         const authoritativeGeneration = queue.authoritativeGeneration;
         const response = await this.#conn.request<
@@ -944,7 +962,7 @@ export class CellHandle<T = unknown> {
         const authoritative = updateGeneration === this.#updateGeneration &&
           authoritativeGeneration === queue.authoritativeGeneration;
         if (authoritative) this.#recordInQueue(queue, read);
-        return { read, authoritative };
+        return { read, response, authoritative };
       },
     );
     const latest = writeGeneration === this.#writeGeneration &&
@@ -955,14 +973,22 @@ export class CellHandle<T = unknown> {
       if (latest) this.#refuse(read.refused);
       throw new CellReadRefusedError(read.refused);
     }
-    if (latest) {
-      if (this.#refusal === undefined && !this.#unread) {
-        this.#value = read.value;
-      } else {
-        // A read that ends a refusal, or answers a handle that held nothing
-        // yet, is news to its subscribers, so they hear the value it found.
-        this.#publishValue(read.value as T);
-      }
+    if (!latest) return read.value;
+    // A pull that finds nothing has waited for the loads its read started, so
+    // the cell holds nothing. A `sync()` waits for none, and finds nothing in
+    // a document the worker has not loaded yet as well.
+    const settled = read.value !== undefined ||
+      request.type === RequestType.CellPull;
+    // A read that ends a refusal, or answers a handle that held nothing yet,
+    // is news to its subscribers even when it finds what the handle held.
+    const isNews = this.#refusal !== undefined || this.#unread;
+    if (isNews || (settled && !valuesOrCellsEqual(read.value, this.#value))) {
+      this.#publishValue(read.value as T);
+      // The connection drops an update that holds nothing, so another handle
+      // on the cell can still hold a value this read found gone.
+      if (settled) this.#conn.publishRead(this, response.value);
+    } else {
+      this.#value = read.value;
     }
     return read.value;
   }

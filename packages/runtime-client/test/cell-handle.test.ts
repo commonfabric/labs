@@ -51,6 +51,7 @@ describe("cell-handle", () => {
               requests.push(request);
               return Promise.resolve({ value: { ready: true } });
             },
+            publishRead: () => {},
           }),
         } as unknown as RuntimeClient;
         const cell = new CellHandle<{ ready: boolean }>(runtime, ref);
@@ -851,6 +852,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          publishRead: () => {},
         }),
       } as unknown as RuntimeClient;
       return { runtime, requests };
@@ -2001,6 +2003,7 @@ describe("cell-handle", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        publishRead: () => {},
         signal: { aborted: false },
       };
       const runtime = {
@@ -2407,6 +2410,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          publishRead: () => {},
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2588,6 +2592,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          publishRead: () => {},
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -3206,5 +3211,84 @@ describe("cell-handle", () => {
       expect(requests).toHaveLength(1);
       expect(requests[0].value).toBe(1n);
     });
+  });
+
+  describe("CellHandle reads that change what it holds", () => {
+    // What a read finds reaches the handle's subscribers when it differs from
+    // what the handle holds, and goes to the connection, which hands it to
+    // every other handle on the cell. Each case starts from a handle holding
+    // a value its subscriber was given.
+
+    const ref: CellRef = {
+      id: "of:changed-read-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+    };
+    /**
+     * A handle holding `["held"]`, on a runtime that answers each read with
+     * `answer`, with what its subscriber heard and what the connection was
+     * handed to pass on.
+     */
+    const holding = (answer: unknown) => {
+      const published: unknown[] = [];
+      const runtime = {
+        [$conn]: () => ({
+          signal: new AbortController().signal,
+          request: () => Promise.resolve({ value: answer }),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          publishRead: (_reader: unknown, value: unknown) => {
+            published.push(value);
+          },
+        }),
+      } as unknown as RuntimeClient;
+      const cell = new CellHandle<string[]>(runtime, ref, { value: ["held"] });
+      const heard: unknown[] = [];
+      cell.subscribe((value) => {
+        heard.push(value);
+      }, { onRefused: () => {} });
+      return { cell, heard, published };
+    };
+
+    it("tells its subscribers and the connection of a `pull()` that finds nothing", async () => {
+      const { cell, heard, published } = holding(undefined);
+
+      await expect(cell.pull()).resolves.toBeUndefined();
+
+      expect(heard).toEqual([["held"], undefined]);
+      expect(published).toEqual([undefined]);
+      expect(cell.lastRead()).toEqual({ value: undefined });
+    });
+
+    it("tells neither its subscribers nor the connection of a `sync()` that finds nothing", async () => {
+      const { cell, heard, published } = holding(undefined);
+
+      await expect(cell.sync()).resolves.toBeUndefined();
+
+      expect(heard).toEqual([["held"]]);
+      expect(published).toEqual([]);
+    });
+
+    for (const read of ["sync", "pull"] as const) {
+      it(`tells its subscribers and the connection of a \`${read}()\` that finds another value`, async () => {
+        const { cell, heard, published } = holding(["found"]);
+
+        await expect(cell[read]()).resolves.toEqual(["found"]);
+
+        expect(heard).toEqual([["held"], ["found"]]);
+        expect(published).toEqual([["found"]]);
+        expect(cell.get()).toEqual(["found"]);
+      });
+
+      it(`tells neither its subscribers nor the connection of a \`${read}()\` that finds what it holds`, async () => {
+        const { cell, heard, published } = holding(["held"]);
+
+        await expect(cell[read]()).resolves.toEqual(["held"]);
+
+        expect(heard).toEqual([["held"]]);
+        expect(published).toEqual([]);
+      });
+    }
   });
 });
