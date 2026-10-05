@@ -6,8 +6,10 @@
  * the native runtime from that machine's own cfc-vm store, or a refusal where
  * it has none. Each export here is the entrypoint of the same name with the
  * platform set to `linux` unless the case names another, so a case reads the
- * same wherever it runs. A case about the platform default names its platform
- * and may call either.
+ * same wherever it runs. The Loom local host takes no platform default, so
+ * its export names Docker instead, unless the case's environment names a
+ * runtime. A case about the default, or about a host given no runtime, calls
+ * the source module.
  */
 
 import {
@@ -51,7 +53,7 @@ export const resolveInteractiveProvisioning = (
   parsed: Parameters<typeof resolveInteractiveProvisioningOnHost>[0],
   cwd: string,
   env: Record<string, string | undefined>,
-  host: { platform?: string; homeDir?: string } = {},
+  host: { homeDir?: string } = {},
 ): ReturnType<typeof resolveInteractiveProvisioningOnHost> =>
   resolveInteractiveProvisioningOnHost(parsed, cwd, env, { ...LINUX, ...host });
 
@@ -63,12 +65,16 @@ export const runHarnessInteractiveChatStdioCli:
       ...host,
     });
 
-/** Like `createLoomLocalCfHarnessHost()`, except on Linux. */
+/**
+ * Like `createLoomLocalCfHarnessHost()`, except that its environment names
+ * Docker where it names no sandbox runtime, as a Loom that runs on Docker
+ * does. The environment is the process's own where the case gives none.
+ */
 export const createLoomLocalCfHarnessHost:
   typeof createLoomLocalCfHarnessHostOnHost = (options) =>
     createLoomLocalCfHarnessHostOnHost({
       ...options,
-      cliDependencies: { ...LINUX, ...options.cliDependencies },
+      env: { ...NAMES_DOCKER, ...(options.env ?? Deno.env.toObject()) },
     });
 
 /** Like `resolveConsoleConfig()` of `console/server.ts`, except on Linux. */

@@ -92,11 +92,14 @@ import {
   DEFAULT_FABRIC_MOUNT_PATH,
 } from "./sandbox/docker-runsc.ts";
 import {
-  CFC_VM_HOME_ENV,
   describeSandboxRuntimeChoice,
+  DOCKER_DRIVER_SETTINGS,
+  type ExplicitSandboxRuntimeSelection,
+  processSandboxSelectionEnv,
   resolveSandboxRuntimeSelection,
+  type SandboxRuntimeSelection,
 } from "./sandbox/runtime-selection.ts";
-import type { SandboxRuntimeChoice } from "./sandbox/types.ts";
+import type { SandboxPlatform, SandboxRuntimeChoice } from "./sandbox/types.ts";
 import {
   type CfHarnessHostMountConfig,
   type CfHarnessHostMountMode,
@@ -415,10 +418,18 @@ export interface RunCfHarnessCliDependencies {
   sandboxHomeDir?: string;
 
   /**
-   * Platform whose default sandbox runtime applies to a run that names none,
-   * as `Deno.build.os` writes it, which it is when absent.
+   * Platform whose default sandbox runtime applies to a run that names none;
+   * the one this process runs on when absent.
    */
-  platform?: string;
+  platform?: SandboxPlatform;
+
+  /**
+   * The caller that must name the sandbox runtime of every run, for an
+   * embedder that takes no platform default (the Loom local host). A run
+   * that names none is then refused on every platform, and `platform` is not
+   * consulted.
+   */
+  sandboxRuntimeNamedBy?: string;
 
   /**
    * Whether whoever starts this run can give it the sandbox selection flags,
@@ -1374,6 +1385,58 @@ const parseStructuredResultConfig = async (
   };
 };
 
+/** The dependencies that decide a batch run's sandbox runtime selection. */
+type CliSandboxSelectionDependencies = Pick<
+  RunCfHarnessCliDependencies,
+  | "pathExists"
+  | "sandboxHomeDir"
+  | "platform"
+  | "sandboxRuntimeNamedBy"
+  | "sandboxSelectionFlags"
+>;
+
+/**
+ * Helper for the batch CLI, which derives a run's sandbox runtime selection
+ * from `env` and the flags in `explicit`, as `deps` configure it.
+ */
+const cliSandboxRuntimeSelection = (
+  env: Record<string, string | undefined>,
+  explicit: ExplicitSandboxRuntimeSelection,
+  cwd: string,
+  deps: CliSandboxSelectionDependencies,
+): Promise<SandboxRuntimeSelection> =>
+  resolveSandboxRuntimeSelection(env, explicit, {
+    ...(deps.sandboxRuntimeNamedBy !== undefined
+      ? { namedBy: deps.sandboxRuntimeNamedBy }
+      : { platform: deps.platform ?? Deno.build.os }),
+    flags: deps.sandboxSelectionFlags ?? true,
+    cwd,
+    ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
+    ...(deps.sandboxHomeDir !== undefined
+      ? { homeDir: deps.sandboxHomeDir }
+      : {}),
+  });
+
+/**
+ * Derives the sandbox runtime selection of a prompt run started with `deps`
+ * and no selection flag, without starting one. An embedder that starts its
+ * runs later calls this as it starts, so that a selection every one of them
+ * would be refused for refuses the embedder instead.
+ *
+ * @throws HarnessControlError as `resolveSandboxRuntimeSelection()` does.
+ */
+export const selectCfHarnessCliSandboxRuntime = (
+  deps:
+    & CliSandboxSelectionDependencies
+    & Pick<RunCfHarnessCliDependencies, "cwd" | "env"> = {},
+): Promise<SandboxRuntimeSelection> =>
+  cliSandboxRuntimeSelection(
+    deps.env ?? processSandboxSelectionEnv(),
+    {},
+    resolve(deps.cwd ?? Deno.cwd()),
+    deps,
+  );
+
 export const parseCfHarnessCliArgs = async (
   argv: readonly string[],
   deps: Pick<
@@ -1385,6 +1448,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxHomeDir"
     | "commandJobId"
     | "platform"
+    | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
   > = {},
@@ -1612,7 +1676,6 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_SKILLS_REGISTRY_URL: Deno.env.get(
         "CF_HARNESS_SKILLS_REGISTRY_URL",
       ),
-      HOME: Deno.env.get("HOME"),
       CF_HARNESS_CFC_ENFORCEMENT_MODE: Deno.env.get(
         "CF_HARNESS_CFC_ENFORCEMENT_MODE",
       ),
@@ -1648,22 +1711,8 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE: Deno.env.get(
         "CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE",
       ),
-      CF_HARNESS_SANDBOX_IMAGE: Deno.env.get("CF_HARNESS_SANDBOX_IMAGE"),
-      CF_HARNESS_SANDBOX_DOCKER_RUNTIME: Deno.env.get(
-        "CF_HARNESS_SANDBOX_DOCKER_RUNTIME",
-      ),
-      CF_HARNESS_SANDBOX_RUNTIME: Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME"),
-      CF_HARNESS_SANDBOX_ROOTFS: Deno.env.get("CF_HARNESS_SANDBOX_ROOTFS"),
-      CF_HARNESS_RUNSC_CFC_POLICY: Deno.env.get("CF_HARNESS_RUNSC_CFC_POLICY"),
-      CF_HARNESS_RUNSC_BINARY: Deno.env.get("CF_HARNESS_RUNSC_BINARY"),
-      CF_HARNESS_DOCKER_NETWORK_MODE: Deno.env.get(
-        "CF_HARNESS_DOCKER_NETWORK_MODE",
-      ),
-      [CFC_VM_HOME_ENV]: Deno.env.get(CFC_VM_HOME_ENV),
-      [CFC_RESULT_DIR_ENV]: Deno.env.get(CFC_RESULT_DIR_ENV),
-      [CFC_INVOCATION_CONTEXT_DIR_ENV]: Deno.env.get(
-        CFC_INVOCATION_CONTEXT_DIR_ENV,
-      ),
+      // The home, and every setting of either sandbox driver.
+      ...processSandboxSelectionEnv(),
     };
   const gatewayBaseUrl = typeof args["gateway-base-url"] === "string"
     ? args["gateway-base-url"]
@@ -1850,7 +1899,7 @@ export const parseCfHarnessCliArgs = async (
     sandboxRunscBinary,
     sandboxRunscNetworkMode,
     sandboxRuntimeChoice,
-  } = await resolveSandboxRuntimeSelection(
+  } = await cliSandboxRuntimeSelection(
     env,
     {
       ...(typeof args["sandbox-runtime"] === "string"
@@ -1862,16 +1911,13 @@ export const parseCfHarnessCliArgs = async (
       ...(typeof args["sandbox-cfc-policy"] === "string"
         ? { sandboxCfcPolicy: args["sandbox-cfc-policy"] }
         : {}),
+      // By name only: a flag given a value the Docker driver would refuse is
+      // still one someone gave.
+      dockerDriverFlags: DOCKER_DRIVER_SETTINGS.map((setting) => setting.flag)
+        .filter((flag) => args[flag.slice(2)] !== undefined),
     },
-    {
-      platform: deps.platform ?? Deno.build.os,
-      flags: deps.sandboxSelectionFlags ?? true,
-      cwd,
-      ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
-      ...(deps.sandboxHomeDir !== undefined
-        ? { homeDir: deps.sandboxHomeDir }
-        : {}),
-    },
+    cwd,
+    deps,
   );
   const explicitCfcMode = typeof args["cfc-enforcement-mode"] === "string"
     ? args["cfc-enforcement-mode"]

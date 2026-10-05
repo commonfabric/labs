@@ -1498,7 +1498,7 @@ describe("agent runner", () => {
          * The platform the harness runs as and the home it finds, for a run
          * that names no sandbox runtime. Absent, the run names Docker.
          */
-        unnamedSandbox?: { platform: string; home: string };
+        unnamedSandbox?: { platform: typeof Deno.build.os; home: string };
       } = {},
     ) => {
       const sessionRuntime = connect(CLOUD);
@@ -1613,12 +1613,15 @@ describe("agent runner", () => {
     it("reports the harness's refusal, naming the variable alone, for a run on macOS with no native runtime", async () => {
       const messages: string[] = [];
       let looped = false;
+      // By the path the file system has for it: a home reached through a
+      // link is refused for that before its store is looked at.
+      const home = await Deno.realPath(workRoot);
       await startHarnessRunner(() => {
         looped = true;
         return Promise.resolve(loopResult("run-unreached"));
       }, {
         report: (message) => messages.push(message),
-        unnamedSandbox: { platform: "darwin", home: workRoot },
+        unnamedSandbox: { platform: "darwin", home },
       });
       const result = await submit();
 
@@ -1633,7 +1636,7 @@ describe("agent runner", () => {
       // Docker it is told is the variable, and no flag.
       expect(refusal).toContain(
         `it is not set up at \`${
-          join(workRoot, "Library", "Application Support", "cfc-vm")
+          join(home, "Library", "Application Support", "cfc-vm")
         }\``,
       );
       expect(refusal).toContain(

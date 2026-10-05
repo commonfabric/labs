@@ -246,8 +246,13 @@ unless the store holds an executable `bin/runsc` and `bin/cfc-vm`, a
 `config.json`, the `images/kitchensink` directory, the `ext4/kitchensink.ext4`
 image, and a CFC policy either under the home or as its own `policy.json`. The
 refusal names the store and what is missing, and says to set
-`CF_HARNESS_SANDBOX_RUNTIME=docker` to serve on Docker instead. There is no
-fallback from one driver to the other. The package's
+`CF_HARNESS_SANDBOX_RUNTIME=docker` to serve on Docker instead. They refuse the
+same way where the environment sets one of the Docker driver's own variables,
+`CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` among them, since whoever set it
+means Docker; where a default CFC policy could not be examined; and where the
+store is reached through a symbolic link, which the macOS `runsc` cannot run
+from. There is no fallback from one driver to the other. The package's
 [current-state reference](../docs/CURRENT_STATE.md#selection) has the rule in
 full.
 

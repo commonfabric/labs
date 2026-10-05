@@ -1013,6 +1013,9 @@ and the choice is never a fallback from one driver to the other:
 - **On every other platform** the run uses Docker. The native runtime is the
   macOS `runsc`, which runs in a VM only macOS has, so the platform is the whole
   of the reason; a direct driver on Linux is always one that was named.
+- **The Loom local host** takes no default on any platform. Loom names the
+  runtime of every run it starts, so a `batch` or `interactive` run that names
+  none is refused, saying that Loom must name `docker` or `runsc`.
 
 A store is set up for the default when it holds all of the following, and the
 default is refused when any is missing:
@@ -1028,13 +1031,37 @@ default is refused when any is missing:
 
 A defaulted native run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
-otherwise from the store's own `policy.json`, which the installer writes. It is
-refused where neither is there, because a run enforces CFC unless told otherwise
-and an enforcing run with no policy cannot start. A `runsc` setting that is
-named replaces the store's: a named rootfs stands in for the image,
-`CF_HARNESS_RUNSC_BINARY` for the shim and the daemon beside it, and a named
-policy for both defaults. `--sandbox-cfc-policy ""` names none, and the run then
-starts only in a mode that does not enforce.
+otherwise from the store's own `policy.json`. gVisor's release installer writes
+that file; a store built from source has one only if someone put it there. The
+default is refused where neither is there, because a run enforces CFC unless
+told otherwise and an enforcing run with no policy cannot start. A `runsc`
+setting that is named replaces the store's: a named rootfs stands in for the
+image, `CF_HARNESS_RUNSC_BINARY` for the shim and the daemon beside it, and a
+named policy for both defaults. `--sandbox-cfc-policy ""` names none, and the
+run then starts only in a mode that does not enforce.
+
+Three more things refuse the default, each before anything executes:
+
+- **A setting of the Docker driver.** `--sandbox-image`,
+  `--sandbox-docker-runtime`, `--cfc-result-dir` and
+  `--cfc-invocation-context-dir`, and the variables that set the same things,
+  `CF_HARNESS_SANDBOX_IMAGE`, `CF_HARNESS_SANDBOX_DOCKER_RUNTIME`,
+  `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+  `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR`, are read by Docker alone.
+  Whoever gives one with no runtime named means Docker, so the run is refused,
+  naming the setting and never its value, until Docker is named or the setting
+  is removed. A named `runsc` is not refused for them and reads none of them.
+- **A policy that cannot be examined.** A default policy the harness could not
+  look at, for any reason but its not being there, is not known to be absent, so
+  the next default does not stand in for it. The refusal names the file and the
+  reason. A named `runsc` is refused the same way.
+- **A store given by another path than the one it is at.** The driver hands the
+  macOS `runsc` the rootfs by the path the file system has for it, and that
+  `runsc` recognizes one of its store's images by comparing the path as written
+  with the store's as it was given. A `CFC_VM_HOME`, or a home, that reaches the
+  store through a symbolic link would therefore start containers with an empty
+  root, so it is refused, naming the path to set `CFC_VM_HOME` to. `/tmp` on
+  macOS is such a link.
 
 To run on Docker on macOS, name it: `--sandbox-runtime docker` on the batch CLI,
 or `CF_HARNESS_SANDBOX_RUNTIME=docker` for any entrypoint. A named runtime is

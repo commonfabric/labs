@@ -168,6 +168,7 @@ import {
   RUNSC_CFC_POLICY_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
+  type SandboxPlatform,
   sandboxRuntimeChoiceReason,
 } from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
@@ -740,7 +741,7 @@ export const resolveConsoleConfig = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   cwd: string,
-  host: { platform?: string } = {},
+  host: { platform?: SandboxPlatform } = {},
 ): Promise<ConsoleConfig> => {
   const parsed = parseConsoleArgs(args);
   // A flag written with an empty value is refused rather than read as unset,
@@ -1440,7 +1441,7 @@ export const createConsoleHealth = (
   env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
-  host: { platform?: string } = {},
+  host: { platform?: SandboxPlatform } = {},
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
     config.sandboxRuntimeKind === "runsc"
@@ -2823,7 +2824,7 @@ export const startConsoleServer = async (
   env: Record<string, string | undefined> = Deno.env.toObject(),
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
-  host: { platform?: string } = {},
+  host: { platform?: SandboxPlatform } = {},
 ): Promise<void> => {
   // A flag with no value first: the `-h` it leaves behind is not a question.
   refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);

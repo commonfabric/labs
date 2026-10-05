@@ -9,7 +9,9 @@
  * taken from the cfc-vm store and refused where the store cannot provide it.
  * On every other platform it is Docker, because the native runtime is the
  * macOS `runsc`, which runs in a VM only that platform has. Nothing here
- * falls back from one runtime to the other.
+ * falls back from one runtime to the other. An entrypoint whose caller must
+ * name the runtime takes no default at all, and refuses a run that names
+ * none.
  *
  * The docker runtime reads its own environment (image, docker runtime,
  * network mode) where it builds its sandbox; only the runsc runtime needs
@@ -21,14 +23,25 @@ import { isAbsolute, join, resolve } from "@std/path";
 
 import { HarnessControlError } from "../control-errors.ts";
 import {
+  CFC_INVOCATION_CONTEXT_DIR_ENV,
+  CFC_RESULT_DIR_ENV,
+} from "./docker-runsc.ts";
+import {
+  canonicalHostPath,
   DARWIN_CFC_VM_IMAGE_KEY,
   darwinCfcVmRootfs,
   darwinCfcVmStore,
   type RunscNetworkMode,
 } from "./runsc.ts";
-import type { SandboxRuntimeChoice, SandboxRuntimeKind } from "./types.ts";
+import {
+  SANDBOX_RUNTIME_ENV,
+  type SandboxPlatform,
+  type SandboxRuntimeChoice,
+  type SandboxRuntimeKind,
+} from "./types.ts";
 
-export type { SandboxRuntimeChoice, SandboxRuntimeKind };
+export { SANDBOX_RUNTIME_ENV };
+export type { SandboxPlatform, SandboxRuntimeChoice, SandboxRuntimeKind };
 
 /** Engine options naming which runtime executes a run, and how. */
 export interface SandboxRuntimeSelection {
@@ -54,9 +67,14 @@ export interface ExplicitSandboxRuntimeSelection {
   sandboxRuntime?: string;
   sandboxRootfs?: string;
   sandboxCfcPolicy?: string;
+
+  /**
+   * The Docker driver's flags the caller was given, by name and never by
+   * value. A runtime the platform defaulted to the native one refuses them.
+   */
+  dockerDriverFlags?: readonly DockerDriverFlag[];
 }
 
-export const SANDBOX_RUNTIME_ENV = "CF_HARNESS_SANDBOX_RUNTIME";
 export const SANDBOX_ROOTFS_ENV = "CF_HARNESS_SANDBOX_ROOTFS";
 export const RUNSC_CFC_POLICY_ENV = "CF_HARNESS_RUNSC_CFC_POLICY";
 export const RUNSC_BINARY_ENV = "CF_HARNESS_RUNSC_BINARY";
@@ -66,31 +84,98 @@ export const SANDBOX_NETWORK_MODE_ENV = "CF_HARNESS_DOCKER_NETWORK_MODE";
 /** Names the macOS cfc-vm store, for the macOS `runsc` and for this module. */
 export const CFC_VM_HOME_ENV = "CFC_VM_HOME";
 
+/** Names the Docker driver's image. */
+export const SANDBOX_IMAGE_ENV = "CF_HARNESS_SANDBOX_IMAGE";
+
+/** Names the Docker-registered runtime the Docker driver runs under. */
+export const SANDBOX_DOCKER_RUNTIME_ENV = "CF_HARNESS_SANDBOX_DOCKER_RUNTIME";
+
 /** The batch CLI's flag naming the runtime. */
 export const SANDBOX_RUNTIME_FLAG = "--sandbox-runtime";
 
 /** The batch CLI's flag naming the runsc runtime's CFC policy. */
 export const SANDBOX_CFC_POLICY_FLAG = "--sandbox-cfc-policy";
 
-/** The platform, as `Deno.build.os` writes it, whose default is native. */
-export const NATIVE_RUNTIME_PLATFORM = "darwin";
+/**
+ * The Docker driver's own settings, each batch CLI flag beside the variable
+ * that sets the same thing. The direct driver reads none of them.
+ */
+export const DOCKER_DRIVER_SETTINGS = [
+  { flag: "--sandbox-image", variable: SANDBOX_IMAGE_ENV },
+  { flag: "--sandbox-docker-runtime", variable: SANDBOX_DOCKER_RUNTIME_ENV },
+  { flag: "--cfc-result-dir", variable: CFC_RESULT_DIR_ENV },
+  {
+    flag: "--cfc-invocation-context-dir",
+    variable: CFC_INVOCATION_CONTEXT_DIR_ENV,
+  },
+] as const;
+
+/** One of the Docker driver's flags on the batch CLI. */
+export type DockerDriverFlag = (typeof DOCKER_DRIVER_SETTINGS)[number]["flag"];
+
+/**
+ * Every variable the selection reads. An entrypoint that hands the selection
+ * a narrowed environment hands it all of these.
+ */
+export const SANDBOX_SELECTION_ENV: readonly string[] = [
+  "HOME",
+  SANDBOX_RUNTIME_ENV,
+  SANDBOX_ROOTFS_ENV,
+  RUNSC_CFC_POLICY_ENV,
+  RUNSC_BINARY_ENV,
+  SANDBOX_NETWORK_MODE_ENV,
+  CFC_VM_HOME_ENV,
+  ...DOCKER_DRIVER_SETTINGS.map((setting) => setting.variable),
+];
+
+/** Returns the process's own values of the variables the selection reads. */
+export const processSandboxSelectionEnv = (): Record<
+  string,
+  string | undefined
+> =>
+  Object.fromEntries(
+    SANDBOX_SELECTION_ENV.map((name) => [name, Deno.env.get(name)]),
+  );
+
+/** The platform whose default is the native runtime. */
+export const NATIVE_RUNTIME_PLATFORM: SandboxPlatform = "darwin";
 
 const nonEmpty = (input: string | undefined): string | undefined => {
   const trimmed = input?.trim();
   return trimmed === undefined || trimmed === "" ? undefined : trimmed;
 };
 
-const regularFileExists = (path: string): Promise<boolean> =>
-  Deno.stat(path).then((info) => info.isFile).catch(() => false);
+/**
+ * Returns whether a regular file is at `path`. Only a path that is not there
+ * reads as absent.
+ *
+ * @throws The error of any other failure to look, which says nothing of
+ * whether a file is there.
+ */
+const regularFileExists = async (path: string): Promise<boolean> => {
+  try {
+    return (await Deno.stat(path)).isFile;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
 
-export interface SandboxRuntimeSelectionOptions {
+/** What an entrypoint does where nothing names a runtime. */
+export type UnnamedSandboxRuntime =
   /**
-   * Platform whose default applies where nothing names a runtime, as
-   * `Deno.build.os` writes it. Required, so that an entrypoint states which
-   * platform it runs on instead of inheriting one by omission.
+   * It takes the default of the `platform` it runs on. Required, so that an
+   * entrypoint states its platform instead of inheriting one by omission.
    */
-  platform: string;
+  | { platform: SandboxPlatform }
+  /**
+   * It refuses, on every platform: `namedBy` is the caller that must name the
+   * runtime of every run, as the refusal names it.
+   */
+  | { namedBy: string };
 
+/** How an entrypoint derives its selection. */
+export type SandboxRuntimeSelectionOptions = UnnamedSandboxRuntime & {
   /**
    * Whether the entrypoint takes the batch CLI's selection flags. A refusal
    * names each flag beside its variable where it does, and the variable
@@ -109,12 +194,15 @@ export interface SandboxRuntimeSelectionOptions {
   /** Relative rootfs and policy paths resolve against this, as other path flags do. */
   cwd?: string;
 
-  /** Whether a regular file exists at `path`; `Deno.stat` when absent. */
+  /**
+   * Whether a regular file exists at `path`; `Deno.stat` when absent. It
+   * throws where it could not look, which the selection refuses on.
+   */
   pathExists?: (path: string) => Promise<boolean>;
 
   /** Looks at one piece of the macOS store; `Deno.stat` when absent. */
   stat?: (path: string) => Promise<Deno.FileInfo>;
-}
+};
 
 /** The default CFC policy, which the docker path's installer puts under `home`. */
 const homeCfcPolicy = (home: string): string =>
@@ -228,6 +316,18 @@ const nativeDefaultRefusal = (
       }\`${SANDBOX_RUNTIME_ENV}=docker\`.`,
   );
 
+/** Helper for the refusals, which names how a CFC policy is named. */
+const policyNaming = (flags: boolean): string =>
+  `${
+    flags ? `\`${SANDBOX_CFC_POLICY_FLAG}\` or ` : ""
+  }\`${RUNSC_CFC_POLICY_ENV}\``;
+
+/** Helper for the refusals, which joins `names` as prose: `a`, `b` and `c`. */
+const listed = (names: readonly string[]): string =>
+  names.length < 2
+    ? names.join("")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+
 /**
  * Derives the runtime selection from explicit values and the environment.
  *
@@ -240,7 +340,8 @@ const nativeDefaultRefusal = (
  * the home. The `runsc` binary is the store's shim, the rootfs is the store's
  * image, and the CFC policy is the default one under the home or else the
  * store's own. A companion that is named replaces the store's, as it does for
- * a named `runsc`.
+ * a named `runsc`. The store is returned by the path the file system has for
+ * it, which has to be the path it was given by.
  *
  * For a named `runsc` the default CFC policy is the one the docker path's
  * installer puts under the home, so both runtimes label the same files the
@@ -248,11 +349,14 @@ const nativeDefaultRefusal = (
  * value means "none" and is not overridden by a default), and only taken when
  * it is there.
  *
- * @throws HarnessControlError where nothing names a runtime on macOS and the
- * native runtime cannot be provided: the store cannot be located, a piece the
- * selection would take from it is not there, or no CFC policy is found and
- * none was named. The message names the store, each thing in the way, and
- * how Docker is selected.
+ * @throws HarnessControlError where nothing names a runtime and the entrypoint
+ * takes no default; and where nothing names one on macOS and the native
+ * runtime cannot be provided: a setting of the Docker driver is given, the
+ * store cannot be located or is reached through a link, a piece the selection
+ * would take from it is not there, or no CFC policy is found and none was
+ * named. Each message says what is in the way and how a runtime is named.
+ * Also, for a runtime that is or defaults to `runsc`, where a default CFC
+ * policy could not be examined for any reason but its not being there.
  * @throws Error when the runtime or the network mode is not one of its values.
  */
 export const resolveSandboxRuntimeSelection = async (
@@ -282,25 +386,49 @@ export const resolveSandboxRuntimeSelection = async (
       sandboxRuntimeChoice: { runtime: named, source: namedBy },
     };
   }
+  if (named === undefined && !("platform" in options)) {
+    throw new HarnessControlError(
+      "invalid-request",
+      "No sandbox runtime is named, and this entrypoint takes no default: " +
+        `${options.namedBy} must name \`docker\` or \`runsc\`, with ${
+          options.flags ? `\`${SANDBOX_RUNTIME_FLAG}\` or ` : ""
+        }\`${SANDBOX_RUNTIME_ENV}\`.`,
+    );
+  }
   // The platform is the whole of the reason: the native runtime is the macOS
   // `runsc`, and no other platform has the VM it runs in.
+  const platform = "platform" in options ? options.platform : undefined;
   const nativeDefault = named === undefined &&
-    options.platform === NATIVE_RUNTIME_PLATFORM;
-  if (named === undefined && !nativeDefault) {
+    platform === NATIVE_RUNTIME_PLATFORM;
+  if (named === undefined && platform !== undefined && !nativeDefault) {
     return {
-      sandboxRuntimeChoice: {
-        runtime: "docker",
-        source: "default",
-        platform: options.platform,
-      },
+      sandboxRuntimeChoice: { runtime: "docker", source: "default", platform },
     };
   }
 
   const home = nonEmpty(options.homeDir) ?? nonEmpty(env.HOME);
   let nativeStore: string | undefined;
   if (nativeDefault) {
-    nativeStore = darwinCfcVmStore(env[CFC_VM_HOME_ENV], home);
-    if (nativeStore === undefined) {
+    // Before the store is looked for: whoever gave one of these means Docker,
+    // and is told so whatever the store holds.
+    const dockerSettings = [
+      ...(explicit.dockerDriverFlags ?? []),
+      ...DOCKER_DRIVER_SETTINGS.map((setting) => setting.variable).filter((
+        variable,
+      ) => nonEmpty(env[variable]) !== undefined),
+    ].map((name) => `\`${name}\``);
+    if (dockerSettings.length > 0) {
+      const several = dockerSettings.length > 1;
+      throw nativeDefaultRefusal(
+        `${listed(dockerSettings)} ${
+          several ? "are settings" : "is a setting"
+        } of the Docker driver, which the native runtime does not read`,
+        `Remove ${several ? "them" : "it"}`,
+        options.flags,
+      );
+    }
+    const given = darwinCfcVmStore(env[CFC_VM_HOME_ENV], home);
+    if (given === undefined) {
       throw nativeDefaultRefusal(
         `its store cannot be located: neither \`${CFC_VM_HOME_ENV}\` nor ` +
           "`HOME` is set",
@@ -308,16 +436,43 @@ export const resolveSandboxRuntimeSelection = async (
         options.flags,
       );
     }
-    if (!isAbsolute(nativeStore)) {
+    if (!isAbsolute(given)) {
       // The macOS `runsc` resolves the same name against its own working
       // directory, which need not be this selection's.
       throw nativeDefaultRefusal(
-        `its store cannot be located: \`${nativeStore}\` is not an ` +
+        `its store cannot be located: \`${given}\` is not an ` +
           "absolute path",
         `Set \`${CFC_VM_HOME_ENV}\` to the store's absolute path`,
         options.flags,
       );
     }
+    // The driver hands the macOS `runsc` the rootfs by the path the file
+    // system has for it, and that `runsc` tells one of its store's images by
+    // comparing the path, as written, with the store's own as it was given.
+    // So a store given by any other path than the one it is at runs nothing.
+    const written = resolve(given);
+    let canonical: string;
+    try {
+      canonical = canonicalHostPath("the native store", written);
+    } catch (error) {
+      throw nativeDefaultRefusal(
+        `its store cannot be located: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        `Set \`${CFC_VM_HOME_ENV}\` to the path the store is at`,
+        options.flags,
+      );
+    }
+    if (canonical !== written) {
+      throw nativeDefaultRefusal(
+        `its store \`${written}\` resolves to \`${canonical}\`, which the ` +
+          "macOS `runsc` reads as another path: it compares paths as they " +
+          "are written",
+        `Set \`${CFC_VM_HOME_ENV}\` to \`${canonical}\``,
+        options.flags,
+      );
+    }
+    nativeStore = written;
   }
 
   const namedRootfs = atCwd(
@@ -341,7 +496,25 @@ export const resolveSandboxRuntimeSelection = async (
   let sandboxCfcPolicy = namedPolicy;
   if (sandboxCfcPolicy === undefined && !policyNamed) {
     for (const candidate of defaultPolicies) {
-      if (await pathExists(candidate)) {
+      let found: boolean;
+      try {
+        found = await pathExists(candidate);
+      } catch (error) {
+        // Not known to be absent, so the next default does not stand in for
+        // it, and the selection does not go on as though there were none.
+        const unexamined = `CFC policy at \`${candidate}\` could not be ` +
+          `examined (${error}), so whether it is there is not known`;
+        const remedy = `Make it readable or name a policy with ${
+          policyNaming(options.flags)
+        }`;
+        throw nativeStore !== undefined
+          ? nativeDefaultRefusal(`the ${unexamined}`, remedy, options.flags)
+          : new HarnessControlError(
+            "invalid-request",
+            `The ${unexamined}. ${remedy}.`,
+          );
+      }
+      if (found) {
         sandboxCfcPolicy = candidate;
         break;
       }
@@ -366,9 +539,7 @@ export const resolveSandboxRuntimeSelection = async (
       problems.push(
         `no CFC policy is at ${
           defaultPolicies.map((path) => `\`${path}\``).join(" or ")
-        } (name one with ${
-          options.flags ? `\`${SANDBOX_CFC_POLICY_FLAG}\` or ` : ""
-        }\`${RUNSC_CFC_POLICY_ENV}\`)`,
+        } (name one with ${policyNaming(options.flags)})`,
       );
     }
     if (problems.length > 0) {
@@ -419,7 +590,7 @@ export const resolveSandboxRuntimeSelection = async (
       ? {
         runtime: "runsc",
         source: "default",
-        platform: options.platform,
+        platform: NATIVE_RUNTIME_PLATFORM,
         nativeStore,
       }
       : { runtime: "runsc", source: namedBy },

@@ -98,9 +98,10 @@ names where to fix it, and those are three different places.
 Which sandbox driver the console runs on comes from its environment, and the
 printout's `sandbox` row says which and why:
 
-- `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`. Loom sets the
-  variable for the instances it starts, so a console that came up with a loom
-  instance is on the driver that instance chose.
+- `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`. A console that
+  came up with a loom instance inherits the variable from loom where loom sets
+  it for that instance, and is then on the driver the instance chose; where loom
+  sets none, the next line applies.
 - With the variable unset, a Mac runs the native runtime, the direct driver over
   the cfc-vm store at `CFC_VM_HOME` or `~/Library/Application Support/cfc-vm`,
   and the launch is refused where that store is not set up, naming the store and

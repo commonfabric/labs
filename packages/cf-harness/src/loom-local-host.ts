@@ -326,6 +326,8 @@ export interface CreateLoomLocalCfHarnessHostOptions {
   cliDependencies?: Omit<
     RunCfHarnessCliDependencies,
     | "env"
+    | "platform"
+    | "sandboxRuntimeNamedBy"
     | "loomLocalHostBinding"
     | "credentialStore"
     | "providerSettingsStore"
@@ -340,6 +342,14 @@ export interface LoomLocalCfHarnessHost {
   runBatch(argv: readonly string[]): Promise<number>;
   runInteractive(args?: readonly string[]): Promise<void>;
 }
+
+/**
+ * Who names the sandbox runtime of every run this host starts. The host takes
+ * no platform default: Loom selects a runtime for each instance, so a run
+ * that reaches here naming none is one Loom did not select for, and is
+ * refused on every platform instead of landing on whichever default applies.
+ */
+const SANDBOX_RUNTIME_NAMED_BY = "Loom";
 
 /** Creates the fixed-owner execution boundary used by local single-user Loom. */
 export const createLoomLocalCfHarnessHost = async (
@@ -549,6 +559,7 @@ export const createLoomLocalCfHarnessHost = async (
           : {}),
         env: cliEnv(resolved.binding.modelProvider),
         ...(hostHome !== undefined ? { sandboxHomeDir: hostHome } : {}),
+        sandboxRuntimeNamedBy: SANDBOX_RUNTIME_NAMED_BY,
         loomLocalHostBinding: resolved.binding,
         credentialStore,
         ...(resolved.resolver !== undefined
@@ -583,7 +594,7 @@ export const createLoomLocalCfHarnessHost = async (
         // the sandbox the instance selected.
         processEnv,
         {
-          platform: options.cliDependencies?.platform ?? Deno.build.os,
+          namedBy: SANDBOX_RUNTIME_NAMED_BY,
           ...(hostHome !== undefined ? { homeDir: hostHome } : {}),
         },
       );

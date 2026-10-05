@@ -36,6 +36,7 @@ import {
   resolveHarnessFabricSessionConfig,
 } from "./fabric-session-options.ts";
 import { resolveInteractiveProvisioning } from "./host-mounts.ts";
+import type { SandboxPlatform } from "./sandbox/types.ts";
 import { BUILTIN_TOOLS } from "./tools/registry.ts";
 import {
   createHarnessInteractiveChatService,
@@ -149,7 +150,8 @@ Environment:
                                        native cfc-vm store (CFC_VM_HOME, or
                                        ~/Library/Application Support/cfc-vm) and refuses to
                                        start where it is not set up; every other platform
-                                       runs docker
+                                       runs docker. The local Loom host refuses to start
+                                       with it unset
   CF_HARNESS_LOOM_AUTHORING_CONFIG     Default host authoring configuration file
   CF_HARNESS_FABRIC_API_URL            Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY           Default value for --fabric-identity
@@ -835,7 +837,10 @@ export const runHarnessInteractiveChatStdioCli = async (
    * whose default sandbox runtime applies where that environment names none.
    * Each is the process's own when absent.
    */
-  host: { env?: Record<string, string | undefined>; platform?: string } = {},
+  host: {
+    env?: Record<string, string | undefined>;
+    platform?: SandboxPlatform;
+  } = {},
 ): Promise<void> => {
   const env = host.env ?? Deno.env.toObject();
   const options = parseHarnessInteractiveChatStdioCliOptions(

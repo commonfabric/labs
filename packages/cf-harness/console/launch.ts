@@ -67,6 +67,7 @@ import {
   RUNSC_CFC_POLICY_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
+  type SandboxPlatform,
   type SandboxRuntimeChoice,
   sandboxRuntimeChoiceReason,
   type SandboxRuntimeSelection,
@@ -996,7 +997,7 @@ export const prepareConsoleLaunch = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   io: ConsoleLaunchIo = REAL_IO,
-  host: { platform?: string } = {},
+  host: { platform?: SandboxPlatform } = {},
 ): Promise<{ plan: ConsoleLaunchPlan; consoleArgs: string[] }> => {
   const undeclared: string[] = [];
   const parsed = parseArgs([...args], {
@@ -1224,7 +1225,7 @@ export const launchConsole = async (
   ) => Promise<void> = (consoleArgs, health) =>
     startConsoleServer(consoleArgs, undefined, undefined, health, host),
   io: ConsoleLaunchIo = REAL_IO,
-  host: { platform?: string } = {},
+  host: { platform?: SandboxPlatform } = {},
 ): Promise<void> => {
   // A flag with no value first, on either side of `--`: the `-h` it leaves
   // behind is not a question.

@@ -250,16 +250,25 @@ export class SandboxSessionUnavailableError extends Error {
 /** The sandbox runtimes an entrypoint selects between. */
 export type SandboxRuntimeKind = "docker" | "runsc";
 
+/** The variable that names the sandbox runtime, for every entrypoint. */
+export const SANDBOX_RUNTIME_ENV = "CF_HARNESS_SANDBOX_RUNTIME";
+
+/**
+ * A platform whose default sandbox runtime can apply, as `Deno.build.os`
+ * writes it. A name outside this set is a type error rather than a platform
+ * that reads as "not macOS".
+ */
+export type SandboxPlatform = typeof Deno.build.os;
+
 /**
  * How a selection came to its runtime, kept so that a run and the console can
- * tell a runtime someone named from one the platform defaulted to. Each
- * `platform` is written as `Deno.build.os` writes it.
+ * tell a runtime someone named from one the platform defaulted to.
  */
 export type SandboxRuntimeChoice =
   /** A flag or the environment named the runtime. */
   | { runtime: SandboxRuntimeKind; source: "flag" | "environment" }
   /** Nothing named one, on a platform whose default is Docker. */
-  | { runtime: "docker"; source: "default"; platform: string }
+  | { runtime: "docker"; source: "default"; platform: SandboxPlatform }
   /**
    * Nothing named one, on the platform whose default is the native runtime,
    * which runs from the cfc-vm store at `nativeStore`.
@@ -267,7 +276,7 @@ export type SandboxRuntimeChoice =
   | {
     runtime: "runsc";
     source: "default";
-    platform: string;
+    platform: SandboxPlatform;
     nativeStore: string;
   };
 

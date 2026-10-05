@@ -88,16 +88,20 @@ over the environment. Any other value is refused. A named driver is taken as
 named on every platform: `docker` is Docker whatever the machine holds, and
 `runsc` is the direct driver with the settings named beside it.
 
-Where neither names a driver, the platform decides, and nothing falls back from
-one driver to the other:
+Where neither names a driver, the entrypoint decides, and nothing falls back
+from one driver to the other:
 
-- On macOS the selection is the direct driver with the **native runtime**: the
-  `runsc` shim, rootfs image and VM of the cfc-vm store that gVisor's macOS
-  installer writes. The store is the directory `CFC_VM_HOME` names, which must
-  be an absolute path, and otherwise `Library/Application Support/cfc-vm` under
-  the home. Where the store cannot provide the runtime the entrypoint is refused
-  before it runs, serves, or launches anything.
-- On every other platform the selection is Docker. The native runtime is the
+- The Loom local host takes no default, on any platform. Loom names the driver
+  of every run it starts, so a `batch` or `interactive` run that names none is
+  refused, saying that Loom must name `docker` or `runsc`.
+- Every other entrypoint takes its platform's default. On macOS that is the
+  direct driver with the **native runtime**: the `runsc` shim, rootfs image and
+  VM of the cfc-vm store that gVisor's macOS installer writes. The store is the
+  directory `CFC_VM_HOME` names, which must be an absolute path, and otherwise
+  `Library/Application Support/cfc-vm` under the home. Where the store cannot
+  provide the runtime the entrypoint is refused before it runs, serves, or
+  launches anything.
+- On every other platform that default is Docker. The native runtime is the
   macOS `runsc`, which runs in a VM only macOS has, so the platform alone
   decides this; no other platform has a default direct driver.
 
@@ -119,16 +123,43 @@ itself. The shim reads `config.json` to start the VM. The driver names
 `ext4/kitchensink.ext4`. A piece that cannot be examined counts as not there,
 and the refusal carries the reason.
 
-The refusal is a `HarnessControlError` with the code `invalid-request`. Its
-message says that no runtime is named and the default on macOS is the native
-runtime, names the store and each thing in the way, and says how Docker is
+The macOS default is refused for three more things, each checked before the
+pieces above:
+
+- **A setting of the Docker driver.** Each of `--sandbox-image`,
+  `--sandbox-docker-runtime`, `--cfc-result-dir` and
+  `--cfc-invocation-context-dir`, and each of `CF_HARNESS_SANDBOX_IMAGE`,
+  `CF_HARNESS_SANDBOX_DOCKER_RUNTIME`, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+  `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` set to anything but white space,
+  refuses the default, before the store is looked for. The refusal names every
+  one given and no value. A named `runsc` reads none of them and is not refused
+  for them, and neither is the Docker default of another platform.
+- **A store given by another path than the one it is at.** The store's path is
+  resolved through every symbolic link, as the driver resolves the rootfs it
+  hands `runsc`. Where the result differs from the path as given, with `.`, `..`
+  and repeated or trailing slashes removed, the default is refused, naming the
+  resolved path as what to set `CFC_VM_HOME` to. The macOS `runsc` compares a
+  container's rootfs, as written, with `images/` under its store as given, and
+  runs one that does not match from the directory itself, which is empty. That
+  is read from its source and has not been run. A path that cannot be resolved,
+  a link to nothing or a loop of links among them, is refused with the reason.
+- **A default CFC policy that could not be examined.** Only a policy that is not
+  there reads as absent. Any other failure to look refuses the default, naming
+  the file and the failure, so that the store's own policy never stands in for
+  one under the home that might be there. A named `runsc` is refused the same
+  way, without the way to Docker, since nothing about it is a default.
+
+Each refusal is a `HarnessControlError` with the code `invalid-request`. The
+message of a refused default says that no runtime is named and the default on
+macOS is the native runtime, says what is in the way, and says how Docker is
 selected: by `--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`
-on the batch CLI and the batch lane of the Loom local host, and by the variable
-alone on the entrypoints that take no selection flag. `cf agent` runs the batch
-CLI with an argument list it writes itself, so its operator can pass no flag,
-and it asks for the variable alone too. Through the Loom local host's batch lane
-the refusal is a host failure carrying that message, and through its interactive
-lane a chat-protocol `internal_error` carrying it.
+on the batch CLI, and by the variable alone on the entrypoints that take no
+selection flag. `cf agent` runs the batch CLI with an argument list it writes
+itself, so its operator can pass no flag, and it asks for the variable alone
+too. The Loom local host's own refusal names the flag and the variable on its
+batch lane and the variable alone on its interactive lane. Through the batch
+lane a refusal is a host failure carrying the message, and through the
+interactive lane a chat-protocol `internal_error` carrying it.
 
 `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
 the batch CLI, which the batch lane of the Loom local host also hands its
@@ -181,9 +212,10 @@ same under both; what an unnamed one falls to differs:
 
 The macOS default requires a policy because a run enforces CFC unless told
 otherwise, and an enforcing run with none is refused as it starts. The store's
-own `policy.json` is what the macOS installer writes, so an installed store is
-usable with nothing else on the machine. The file under the home is taken first
-so that both drivers label the same files the same way.
+own `policy.json` is what gVisor's release installer writes, so a store
+installed from a release is usable with nothing else on the machine; a store
+built from source holds one only where someone put it there. The file under the
+home is taken first so that both drivers label the same files the same way.
 
 The harness writes the rootfs path into the bundle as the container's root. On
 Linux `runsc` is expected to find a directory there. On macOS the path is a
@@ -1017,12 +1049,14 @@ Autonomous wish dispatch currently routes through `cf-harness` when Loom's Page
 authority prerequisites are considered available.
 
 Local batch and interactive entrypoints use a dedicated single-user host
-binding. It resolves the persisted provider from a canonical `CF_HARNESS_HOME`,
-binds Codex credentials to the fixed local owner, records the provider, model,
-authentication source, owner, and home identity, and requires that exact
-snapshot on resume before any provider traffic. Hosted multi-user integrations
-must supply an owner-bound credential resolver rather than reuse this local
-host.
+binding. That host takes no default sandbox driver: Loom names `docker` or
+`runsc` for every run it starts there, and a run that names neither is refused
+on every platform ([Selection](#selection)). It resolves the persisted provider
+from a canonical `CF_HARNESS_HOME`, binds Codex credentials to the fixed local
+owner, records the provider, model, authentication source, owner, and home
+identity, and requires that exact snapshot on resume before any provider
+traffic. Hosted multi-user integrations must supply an owner-bound credential
+resolver rather than reuse this local host.
 
 Loom also has an opt-in adapter for the interactive NDJSON protocol. It is not
 the default interactive harness, and browser automation is not yet wired into
