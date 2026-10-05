@@ -4,7 +4,7 @@
       "Offer": {
         "properties": {
           "from": {
-            "description": "The DID of the principal who sent the offer. `receive` keeps an offer only\nwhen this is the event's actor, which nothing in the payload can choose.",
+            "description": "The DID the offer names as its sender. `receive` keeps an offer only when\nthis is the event's actor, but any principal may write the list without\n`receive`, so to a reader this is the sender's claim, which it checks for\nitself before trusting it.",
             "type": "string"
           },
           "host": {
@@ -102,7 +102,7 @@
       "Offer": {
         "properties": {
           "from": {
-            "description": "The DID of the principal who sent the offer. `receive` keeps an offer only\nwhen this is the event's actor, which nothing in the payload can choose.",
+            "description": "The DID the offer names as its sender. `receive` keeps an offer only when\nthis is the event's actor, but any principal may write the list without\n`receive`, so to a reader this is the sender's claim, which it checks for\nitself before trusting it.",
             "type": "string"
           },
           "host": {
