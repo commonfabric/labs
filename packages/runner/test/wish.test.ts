@@ -2692,6 +2692,36 @@ describe("wish built-in", () => {
         .toBe("direct");
     });
 
+    it("reports a home with no agent queue for #agent_queue, naming the remedy", async () => {
+      const resolved = await resolveHomeTarget(
+        "agent-queue-absent",
+        "journal",
+        [],
+        "#agent_queue",
+      );
+      expect(resolved?.error).toContain(
+        "The home space holds no agent queue",
+      );
+      expect(resolved?.error).toContain("open the home space once");
+      expect(resolved?.error).toContain("A custom home pattern needs");
+      expect(resolved?.result).toBeUndefined();
+    });
+
+    it("reports a home with no chat manager for #chatManager, naming the remedy", async () => {
+      const resolved = await resolveHomeTarget(
+        "chat-manager-absent",
+        "journal",
+        [],
+        "#chatManager",
+      );
+      expect(resolved?.error).toContain(
+        "The home space holds no chat manager",
+      );
+      expect(resolved?.error).toContain("open the home space once");
+      expect(resolved?.error).toContain("A custom home pattern needs");
+      expect(resolved?.result).toBeUndefined();
+    });
+
     it("resolves #learned to the home learned object", async () => {
       const resolved = await resolveHomeTarget(
         "learned",
