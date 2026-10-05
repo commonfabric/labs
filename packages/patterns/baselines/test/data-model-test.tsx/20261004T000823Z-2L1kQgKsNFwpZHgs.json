@@ -1,0 +1,72 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "errorMsg": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "evalTime": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "(never)",
+        "type": "string"
+      },
+      "inputText": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "value": {
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "value",
+      "inputText",
+      "errorMsg",
+      "evalTime"
+    ],
+    "type": "object"
+  },
+  "pattern": "test/data-model-test.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "evalAndStore": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "rerenderDisplay": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "value": true
+    },
+    "required": [
+      "value",
+      "evalAndStore",
+      "rerenderDisplay",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

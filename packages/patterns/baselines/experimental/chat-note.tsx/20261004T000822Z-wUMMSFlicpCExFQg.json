@@ -1,0 +1,153 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "content": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "isHidden": {
+        "default": false,
+        "type": "boolean"
+      },
+      "linkPattern": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "description": "Pattern JSON for [[wiki-links]]. Defaults to creating new ChatNotes.",
+        "type": "string"
+      },
+      "model": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "anthropic:claude-sonnet-4-5",
+        "description": "Selected model for generation. Defaults to Sonnet 4.5",
+        "type": "string"
+      },
+      "noteId": {
+        "default": "",
+        "type": "string"
+      },
+      "parentNotebook": true,
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Chat Note",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "experimental/chat-note.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_2": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "content": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_2"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Represents a chat-enabled note with inline LLM conversations.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "backlinks": {
+        "$ref": "#/$defs/AnonymousType_1"
+      },
+      "content": {
+        "default": "",
+        "type": "string"
+      },
+      "editContent": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "isGenerating": {
+        "type": "boolean"
+      },
+      "isHidden": {
+        "default": false,
+        "type": "boolean"
+      },
+      "mentioned": {
+        "$ref": "#/$defs/AnonymousType_2",
+        "default": []
+      },
+      "noteId": {
+        "default": "",
+        "type": "string"
+      },
+      "parentNotebook": true
+    },
+    "required": [
+      "mentioned",
+      "backlinks",
+      "parentNotebook",
+      "content",
+      "isHidden",
+      "noteId",
+      "isGenerating",
+      "editContent",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

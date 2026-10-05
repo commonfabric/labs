@@ -323,13 +323,14 @@ export class ObjectFormatter implements TypeFormatter {
         checker,
       );
       // Get the actual property type and recursively delegate to the main schema generator
-      const resolvedPropType = propTypeNode && context.boundTypeParameters &&
-          holdsTypeParameter(
-            propTypeNode,
-            checker,
-            context.boundTypeParameters.arguments,
-          ) &&
-          !usesParameterUnreachably(propTypeNode, checker)
+      const readsBoundNode = propTypeNode && context.boundTypeParameters &&
+        holdsTypeParameter(
+          propTypeNode,
+          checker,
+          context.boundTypeParameters.arguments,
+        ) &&
+        !usesParameterUnreachably(propTypeNode, checker);
+      const resolvedPropType = readsBoundNode && propTypeNode
         ? checker.getTypeFromTypeNode(propTypeNode)
         : safeGetPropertyType(prop, type, checker, propTypeNode);
 
@@ -367,12 +368,20 @@ export class ObjectFormatter implements TypeFormatter {
       }
 
       // Delegate to the main generator (specific formatters handle wrappers/defaults)
-      const generated = this.#schemaGenerator.formatChildType(
-        resolvedPropType,
-        context,
-        propTypeNode,
-        instantiatedPropType,
-      );
+      const readsOptionalBound = readsBoundNode && isOptionalSymbol(prop);
+      const generated = readsOptionalBound
+        ? this.#schemaGenerator.formatOptionalProperty(
+          resolvedPropType,
+          context,
+          propTypeNode!,
+          instantiatedPropType,
+        )
+        : this.#schemaGenerator.formatChildType(
+          resolvedPropType,
+          context,
+          propTypeNode,
+          instantiatedPropType,
+        );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(
           generated as Record<string, unknown>,
@@ -421,7 +430,7 @@ export class ObjectFormatter implements TypeFormatter {
       const apSchema = this.#schemaGenerator.formatChildType(
         readIndex ? checker.getTypeFromTypeNode(indexNode) : chosenIndex,
         context,
-        boundIndex ? indexNode : undefined,
+        indexNode,
         instantiatedValueType(context.instantiatedAs, checker),
       );
       // Attempt to read JSDoc from index signature declarations

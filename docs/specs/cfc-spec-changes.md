@@ -1793,3 +1793,37 @@ What this costs, and what is not covered:
 - **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
   given. The gate keys on labels, not URLs, so a labelled value does not get
   through; an unlabelled one is outside this entry.
+
+## From appending to another principal's private list (2026-10-01)
+
+**SC-57 [normative] A document created beneath a private parent takes the
+parent's readers — the `User(CurrentPrincipal)` creator binding, beside
+§8.12.4.** `open`, for the CFC spec owner's ruling. A `User` confidentiality
+clause whose subject is `CurrentPrincipal` binds, at commit, to a concrete
+reader: a store already holding labels keeps the readers it stores, and a new
+store takes the acting principal. An item a second principal appends to an
+owner-private list falls between the two. It is a new document, so it took
+the appender, while the transaction that appended it read the list and so
+carries the owner's reader in its taint. §8.12.4's `canWrite` then measured
+that taint against a ceiling naming the appender, and refused the append,
+whether the appender's own runtime or the serving loop ran the handler. The
+runner now binds a document created beneath a stored parent
+to the parent instead. When a transaction creates a document and links it
+into a document that existed before the transaction, the placeholder binds to
+the concrete `User` readers the parent's declared policy names at the position
+the link lands on, gathered across every such parent; a document created
+beneath such a document in the same transaction takes the same readers. Where
+the parents name no `User` reader there, the binding falls to the acting
+principal as before. The binding only raises: the new document's readers are
+ones the parent already promised that position to, a reader has to satisfy
+every clause the document holds, and the appender gains no standing as a
+reader. What it changes is the write ceiling, which now admits the parent's
+readers in a transaction's taint and nothing else, so data labeled for any
+other reader, the appender's own included, still misfits. Proposed edit: state
+the parent rule where the spec describes binding a reader-private declaration
+to its creator, define "beneath" as the link placement above, and say that the
+parent is read as stored before the transaction. Implemented in
+`packages/runner/src/cfc/prepare.ts` (`creatorBinding`, through
+`bindCurrentPrincipalToStoredConfidentiality` in
+`packages/runner/src/cfc/current-principal-confidentiality.ts`); described in
+[`current-principal.md`](../features/current-principal.md).

@@ -2,6 +2,7 @@
  * Module for interacting with a runtime over some IPC, currently a web worker thread.
  */
 
+export * from "./authorship.ts";
 export * from "./cell-handle.ts";
 export * from "./piece-handle.ts";
 export * from "./runtime-client.ts";
