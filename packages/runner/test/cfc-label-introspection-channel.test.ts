@@ -58,6 +58,7 @@ const observationFor = (
 const seedLabeledDoc = async (
   runtime: Runtime,
   storageKey: string,
+  labelMapExtras: Record<string, unknown> = {},
 ): Promise<string> => {
   const seed = runtime.edit();
   const id = parseLink(
@@ -86,9 +87,10 @@ const seedLabeledDoc = async (
           },
           origin: "derived",
         }],
+        ...labelMapExtras,
       },
     },
-  });
+  } as never);
   expect((await seed.commit()).ok).toBeDefined();
   return id;
 };
@@ -492,6 +494,66 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       await storageManager.close();
     }
   });
+
+  for (
+    const [name, documentEntries] of [
+      ["templates of its own", [{
+        path: [
+          "cfc",
+          "labels",
+          "value",
+          "body",
+          "confidentiality",
+          "clauses",
+          "*",
+          "alternatives",
+          "*",
+        ],
+        label: { confidentiality: ["weak"] },
+        origin: "label-metadata",
+        observes: "labelMetadata",
+      }]],
+      ["a number", 42],
+      ["a list holding `null`", [null]],
+    ] as const
+  ) {
+    it(`records the entry's own confidentiality beside a stored \`documentEntries\` member holding ${name}`, async () => {
+      // A stored label map holds its templates in `entries`. A
+      // `documentEntries` member stored beside that list is one no reader
+      // validated, so the decoded map never carries it, and the observation
+      // falls back to the confidentiality of the entry it describes.
+
+      const { storageManager, runtime } = makeRuntime({
+        cfcFlowLabels: "persist",
+      });
+      try {
+        const storageKey = `channel-stored-document-entries-${name}`;
+        const id = await seedLabeledDoc(runtime, storageKey, {
+          documentEntries,
+        });
+        const tx = runtime.edit();
+        expect(
+          readStoredCfcMetadata(tx, { space, id })?.labelMap.documentEntries,
+        ).toBeUndefined();
+        const cell = runtime.getCell(space, storageKey, undefined, tx);
+        const outcome = inspectStoredConfLabel(
+          tx,
+          cell.getAsNormalizedFullLink(),
+          "/body",
+          {},
+        );
+        expect(outcome.status).toBe("ok");
+        const observations = tx.getCfcState().labelMetadataObservations;
+        expect(observations).toHaveLength(1);
+        expect([...observations[0].confidentiality]).toContainEqual("secret");
+        expect([...observations[0].confidentiality]).not.toContainEqual("weak");
+        await tx.commit();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
 
   it("collapses a metadata read error to the unobservable arm", async () => {
     const { storageManager, runtime } = makeRuntime({

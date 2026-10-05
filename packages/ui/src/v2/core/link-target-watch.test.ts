@@ -65,6 +65,40 @@ describe("LinkTargetWatch", () => {
         expect(counts.subscribed).toBe(1);
         watch.cancel();
       });
+
+      it("reports no target once the worker refuses the link", async () => {
+        const target = pieceCell("of:fid1:piece");
+        const link = createMockCellHandle({}, {
+          id: "of:fid1:link-holder" as CellRef["id"],
+          space: "did:key:test-space" as CellRef["space"],
+          path: ["piece"],
+        }) as CellHandle;
+        let refuse = () => {};
+        Object.defineProperty(link, "asSchema", {
+          value: () => ({
+            sync: () => Promise.resolve(target),
+            subscribe(
+              callback: (value: CellHandle) => void,
+              options: { onRefused: () => void },
+            ) {
+              callback(target);
+              refuse = options.onRefused;
+              return () => {};
+            },
+          }),
+        });
+        const retargets: Array<CellHandle | undefined> = [];
+        const watch = new LinkTargetWatch({
+          isCurrent: () => true,
+          onRetarget: (next) => retargets.push(next),
+        });
+        expect(await watch.watch(link, target)).toBe(target);
+
+        refuse();
+
+        expect(retargets).toEqual([undefined]);
+        watch.cancel();
+      });
     });
   });
 });

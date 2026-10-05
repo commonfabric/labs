@@ -90,7 +90,11 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
-import type { HarnessClientActionOutcomeKind } from "../src/contracts/client-action.ts";
+import {
+  checkHarnessClientProtocol,
+  harnessClientProtocolEcho,
+  readHarnessClientProtocolDeclaration,
+} from "../src/contracts/client-command.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -1758,6 +1762,7 @@ export class ConsoleServer {
     if (request.method === "GET" && url.pathname === "/api/status") {
       return Response.json({
         artifactRoot: this.#config.artifactRoot,
+        protocol: harnessClientProtocolEcho(),
         ...this.#service.status(url.searchParams.get("sessionId") ?? undefined),
       });
     }
@@ -2035,7 +2040,26 @@ export class ConsoleServer {
       loomId?: unknown;
       browserHost?: unknown;
       clientActions?: unknown;
+      protocol?: unknown;
     } = isObjectOrArray(parsed) ? parsed : {};
+    // The host's protocol is checked before anything else is read, so a host
+    // this console cannot serve learns that, and nothing starts.
+    if (body.protocol !== undefined) {
+      const protocolDeclaration = readHarnessClientProtocolDeclaration(
+        body.protocol,
+      );
+      if (protocolDeclaration === undefined) {
+        return Response.json({
+          error:
+            "protocol must be { protocolVersion: integer, requires: feature names }",
+        }, { status: 400 });
+      }
+      const check = checkHarnessClientProtocol(protocolDeclaration);
+      if (!check.ok) {
+        const { message, ...mismatch } = check.mismatch;
+        return Response.json({ error: message, ...mismatch }, { status: 409 });
+      }
+    }
     if (
       body.clientActions !== undefined &&
       typeof body.clientActions !== "boolean"
@@ -2144,6 +2168,7 @@ export class ConsoleServer {
       sessionId,
       turnId: turn.result.turnId,
       ...(browserHostToken !== undefined ? { browserHostToken } : {}),
+      protocol: harnessClientProtocolEcho(),
     });
   }
 
@@ -2295,9 +2320,11 @@ export class ConsoleServer {
 
   /**
    * Takes the person's answer to one action the model asked their client to
-   * perform. The route is the stdio `resolve_client_action` request under
-   * HTTP: the same service method decides, so the two cannot disagree. Its
-   * errors carry the code in an `error` object, as the Weaver reads them.
+   * perform: a final action's outcome, or a typed command's settlement. The
+   * route is the stdio `resolve_client_action` request under HTTP: the body
+   * goes to the same service method, which reads it with the same reader, so
+   * the two cannot disagree. Its errors carry the code in an `error` object,
+   * as the Weaver reads them.
    */
   async #resolveClientAction(request: Request): Promise<Response> {
     let parsed: unknown;
@@ -2308,24 +2335,9 @@ export class ConsoleServer {
         status: 400,
       });
     }
-    const body: Record<string, unknown> = isObjectOrArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-    if (
-      typeof body.sessionId !== "string" || typeof body.actionId !== "string"
-    ) {
-      return Response.json({ error: "sessionId and actionId are required" }, {
-        status: 400,
-      });
-    }
     const response = await this.#service.resolveClientAction(
       crypto.randomUUID(),
-      {
-        sessionId: body.sessionId,
-        actionId: body.actionId,
-        outcome: body.outcome as HarnessClientActionOutcomeKind,
-        ...(body.result !== undefined ? { result: body.result as string } : {}),
-      },
+      parsed,
     );
     if (response.ok) return Response.json({ ok: true });
     const { code, message } = response.error;
@@ -2605,6 +2617,7 @@ const CHAT_ERROR_STATUS: Readonly<Record<HarnessChatError["code"], number>> = {
   invalid_request: 400,
   unknown_action: 404,
   action_resolved: 409,
+  protocol_mismatch: 409,
   session_exists: 409,
   session_not_found: 404,
   turn_exists: 409,

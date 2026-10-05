@@ -870,6 +870,7 @@ export default pattern(() => {
       parseModule(
         await transformSource(
           `import { Cfc, CurrentPrincipal, cell, computed, Default, handler, pattern, RepresentsCurrentUser, UI, wish, Writable, WriteAuthorizedBy } from "commonfabric";
+import * as CF from "commonfabric";
 type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
 interface Item { id: string }
 const removeItem = handler<void, { items: Writable<Item[]>; id: string }>((_, { items, id }) => {
@@ -958,6 +959,15 @@ export default pattern(() => {
 
       it("keeps the cell's writer in a computed value's input", async () => {
         computedKeepsPolicy(await transform(count, made));
+      });
+
+      it("keeps the cell's writer where the function is named through a namespace import", async () => {
+        computedKeepsPolicy(
+          await transform(
+            count,
+            `const items = CF.cell<Owned<Item[], typeof removeItem>>([]);`,
+          ),
+        );
       });
 
       it("keeps the writer of a cell its writer alone protects", async () => {

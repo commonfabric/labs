@@ -910,6 +910,130 @@ describe("reference-initialization", () => {
     });
   });
 
+  describe("a captured binding to a record whose field carries a floor", () => {
+    // A record whose `admins` field may hold only a value carrying the `admin`
+    // endorsement, which a write through `registrySchema` mints. A collection
+    // builtin stages a write redirect to the record, or to a cell holding a
+    // link to it, into each sub-pattern's `params`. The slot's schema repeats
+    // the record's floor, and nothing is written under the slot. Each document
+    // carries a labeled `note`, so its stored labels are what a link to it
+    // brings.
+
+    const note = { type: "string", ifc: { addIntegrity: ["noted"] } } as const;
+    const admins = { type: "array", items: { type: "string" } } as const;
+    const registrySchema: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        note,
+        admins: {
+          ...admins,
+          ifc: { requiredIntegrity: ["admin"], addIntegrity: ["admin"] },
+        },
+      },
+    };
+    // The same record written by a schema that mints no endorsement.
+    const unendorsingSchema: JSONSchemaObj = {
+      type: "object",
+      properties: { note, admins },
+    };
+    const holderSchema: JSONSchemaObj = {
+      type: "object",
+      properties: { note, registry: {} },
+    };
+    const capturingSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        params: {
+          type: "object",
+          properties: { registry: { ...registrySchema, asCell: ["readonly"] } },
+        },
+      },
+    };
+
+    /** Commits `write` in a transaction of its own, and returns its refusal. */
+    async function commit(write: (tx: ReturnType<Runtime["edit"]>) => void) {
+      const tx = runtime.edit();
+      write(tx);
+      runtime.prepareTxForCommit(tx);
+      return (await tx.commit()).error?.message;
+    }
+
+    /** Stages a redirect to `cell` as the captured binding, and records it. */
+    function stage(
+      tx: ReturnType<Runtime["edit"]>,
+      cell: { getAsWriteRedirectLink(): unknown },
+    ) {
+      const argument = runtime.getCell(space, "argument", capturingSchema, tx);
+      argument.set({ params: { registry: cell.getAsWriteRedirectLink() } });
+      recordCapturedArgumentFields(tx, argument.getAsNormalizedFullLink(), [
+        "params",
+      ]);
+    }
+
+    it("accepts it where the record holds no value at the floored field", async () => {
+      expect(
+        await commit((tx) =>
+          runtime.getCell(space, "registry", registrySchema, tx).set({
+            note: "n",
+          })
+        ),
+      ).toBeUndefined();
+
+      expect(
+        await commit((tx) =>
+          stage(tx, runtime.getCell(space, "registry", undefined, tx))
+        ),
+      ).toBeUndefined();
+    });
+
+    it("accepts it through a link to the record written before the record's endorsed value", async () => {
+      expect(
+        await commit((tx) => {
+          runtime.getCell(space, "registry", registrySchema, tx).set({
+            note: "n",
+          });
+          runtime.getCell(space, "holder", holderSchema, tx).set({
+            note: "n",
+            registry: runtime.getCell(space, "registry", undefined, tx)
+              .getAsWriteRedirectLink(),
+          });
+        }),
+      ).toBeUndefined();
+      expect(
+        await commit((tx) =>
+          runtime.getCell(space, "registry", registrySchema, tx).key("admins")
+            .set(["alice"])
+        ),
+      ).toBeUndefined();
+
+      expect(
+        await commit((tx) =>
+          stage(
+            tx,
+            runtime.getCell(space, "holder", undefined, tx).key("registry"),
+          )
+        ),
+      ).toBeUndefined();
+    });
+
+    it("refuses it where the record's value at the floored field carries no endorsement", async () => {
+      expect(
+        await commit((tx) =>
+          runtime.getCell(space, "registry", unendorsingSchema, tx).set({
+            note: "n",
+            admins: ["mallory"],
+          })
+        ),
+      ).toBeUndefined();
+
+      expect(
+        await commit((tx) =>
+          stage(tx, runtime.getCell(space, "registry", undefined, tx))
+        ),
+      ).toContain("write floor failed at /params/registry/admins");
+    });
+  });
+
   describe("labels of a staged reference", () => {
     // The owner's message is initialized as a protected default, which mints
     // the owner's authorship on it. Another principal then stages a reference

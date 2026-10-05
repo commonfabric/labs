@@ -56,6 +56,7 @@ import {
 import { patternRefsContextMessage } from "./pattern-refs.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
 import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
@@ -397,7 +398,8 @@ export interface EstablishHarnessSessionContextOptions {
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
  * skills, the well-known grants of the session's space, host-supplied input
- * cells, and the guidance for selecting a piece target.
+ * cells, the guidance for selecting a piece target, and, for a run whose host
+ * opted in to `weaver_action`, the guidance for using the Weaver's commands.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
@@ -477,6 +479,9 @@ const establishContextMessages = async (
   );
   if (patternRefsMessage !== undefined) {
     messages.push(patternRefsMessage);
+  }
+  if (engine.clientActionsAvailable) {
+    messages.push(WEAVER_COMMAND_GUIDANCE);
   }
   messages.push(REVISION_VERIFICATION_GUIDANCE);
   return messages;

@@ -221,7 +221,7 @@ describe("CellSet / CellUpdate echo race over IPC", () => {
       const seen: unknown[] = [];
       const cancel = handle.subscribe((value) => {
         seen.push(value === undefined ? undefined : { ...value });
-      });
+      }, { onRefused: () => {} });
       await flush();
       transport.pump();
       expect(seen).toEqual([undefined, { color: "red" }]);
