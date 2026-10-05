@@ -31,6 +31,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { maxOf } from "@commonfabric/utils/math";
 import { resultSchemaMetaSpelling } from "../src/result-schema-meta.ts";
 import {
   decodeMemoryBoundary,
@@ -42,15 +43,18 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
+  URI,
 } from "../src/storage/interface.ts";
 import { ReplicaLoadFailureError } from "../src/storage/interface.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import { resolveLink } from "../src/link-resolution.ts";
+import { deriveEventKey } from "../src/scheduler/event-identity.ts";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import type {
   WaveCommitRejection,
@@ -288,6 +292,48 @@ const BUMP_PATTERN = [
   "  { value: Writable<number> },",
   "  { value: number; bump: Stream<unknown> }",
   ">(({ value }) => ({ value, bump: bump({ value }) }));",
+].join("\n");
+
+/** Like `BUMP_PATTERN`, except that the handler also writes `eventKey()`. */
+const EVENT_KEY_PATTERN = [
+  "import { eventKey, handler, pattern, Stream, Writable } from 'commonfabric';",
+  "const bump = handler<",
+  "  unknown,",
+  "  { value: Writable<number>; key: Writable<string> }",
+  ">((_ev, { value, key }) => {",
+  "  value.set((value.get() ?? 0) + 1);",
+  "  key.set(eventKey());",
+  "});",
+  "export default pattern<",
+  "  { value: Writable<number>; key: Writable<string> },",
+  "  { value: number; key: string; bump: Stream<unknown> }",
+  ">(({ value, key }) => ({ value, key, bump: bump({ value, key }) }));",
+].join("\n");
+
+/**
+ * Like `CASCADE_PATTERN`, except that the cascaded handler records what
+ * `currentPrincipal()` and `eventKey()` return to it.
+ */
+const CASCADE_IDENTITY_PATTERN = [
+  "import {",
+  "  currentPrincipal, eventKey, handler, pattern, Stream, Writable,",
+  "} from 'commonfabric';",
+  "type Seen = { principal: string; key: string };",
+  "const second = handler<unknown, { seen: Writable<Seen> }>(",
+  "  (_ev, { seen }) => {",
+  "    seen.set({ principal: currentPrincipal() ?? 'none', key: eventKey() });",
+  "  },",
+  ");",
+  "const first = handler<unknown, { next: Stream<unknown> }>(",
+  "  (_ev, { next }) => { next.send({}); },",
+  ");",
+  "export default pattern<",
+  "  { seen: Writable<Seen> },",
+  "  { seen: Seen; first: Stream<unknown>; second: Stream<unknown> }",
+  ">(({ seen }) => {",
+  "  const next = second({ seen });",
+  "  return { seen, first: first({ next }), second: next };",
+  "});",
 ].join("\n");
 
 const CASCADE_PATTERN = [
@@ -776,13 +822,8 @@ describe("Phase 3 events-down (serving side)", () => {
     // own, ahead of the handling: a caller that only needs its event on
     // the record waits there.
     const appends = new ArrivalLog<{ delivered: boolean }>();
-    (result.key("bump") as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: { status(): { status: string } }) => void,
-        options?: { onAppended?: (delivery: { delivered: boolean }) => void },
-      ): unknown;
-    }).send(
+    sendEvent(
+      result.key("bump"),
       {},
       (ackTx) => acks.record(ackTx.status().status),
       { onAppended: appends.record },
@@ -1221,6 +1262,65 @@ describe("Phase 3 events-down (serving side)", () => {
       expect((doc?.value as { value?: number })?.value).toBe(1);
       expect(consequenceCommitsFor()).toBe(1);
     }
+    cancelDemand();
+  });
+
+  it("returns one `eventKey()` to the client's echo and the served run of an event, bound to the entry's `firedAt.user` and not to the payload", async () => {
+    // The host comes up only after the send, so the key the client holds
+    // before then is its echo's alone, and the key the store holds after is
+    // the served run's alone: under server execution the client commits the
+    // event and nothing else.
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(
+      clientRuntime,
+      EVENT_KEY_PATTERN,
+      { arg: "event-key-arg", result: "event-key-result" },
+    );
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    const storedKey = () =>
+      (Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value as { key?: string } | undefined)?.key;
+
+    result.key("bump").send({
+      eventKey: "evk:forged",
+      eventId: "evt:forged",
+      firedAt: { user: bobSigner.did(), session: "bob-session" },
+    });
+    await clientRuntime.idle();
+    const echoKey = (argument.get() as { key?: string }).key;
+    expect(echoKey).toMatch(/^evk:./);
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    expect(storedKey()).toBeUndefined();
+
+    host = newHost();
+    {
+      // An authored poke activates the space, standing in for the
+      // reconnect a real restart's clients make.
+      const poke = clientRuntime.edit();
+      clientRuntime.getCell<number>(space, "event-key-activate", undefined)
+        .withTx(poke).set(1);
+      expect((await poke.commit()).error).toBeUndefined();
+    }
+    await awaitAdmitted(server, () => storedKey() !== undefined);
+
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const entry = (Engine.read(engine, { id: sidecarId })
+      ?.value as StreamEventsDocValue).entries![0];
+    expect(entry.firedAt?.user).toBe(aliceSigner.did());
+    const streamLink = resolveLink(
+      clientRuntime,
+      clientRuntime.readTx(),
+      result.key("bump").getAsNormalizedFullLink(),
+    );
+    expect(storedKey()).toBe(
+      deriveEventKey(entry.eventId, aliceSigner.did(), streamLink),
+    );
+    expect(storedKey()).toBe(echoKey);
     cancelDemand();
   });
 
@@ -1890,12 +1990,8 @@ describe("Phase 3 events-down (serving side)", () => {
     };
     try {
       const poisonAcks = new ArrivalLog<string>();
-      (result.key("bump") as unknown as {
-        send(
-          value: unknown,
-          onCommit: (tx: { status(): { status: string } }) => void,
-        ): unknown;
-      }).send(
+      sendEvent(
+        result.key("bump"),
         { kind: "poison-1" },
         (tx) => poisonAcks.record(tx.status().status),
       );
@@ -2353,13 +2449,8 @@ describe("Phase 3 events-down (serving side)", () => {
     const acks = new ArrivalLog<
       { status: string; tx: IExtendedStorageTransaction }
     >();
-    (result.key(verb) as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: IExtendedStorageTransaction) => void,
-        options?: { eventId?: string; session?: string },
-      ): unknown;
-    }).send(
+    sendEvent(
+      result.key(verb),
       payload,
       (tx) => acks.record({ status: tx.status().status, tx }),
       { eventId, session: "receipt-pin-session" },
@@ -2846,6 +2937,40 @@ describe("Phase 3 events-down (serving side)", () => {
     await awaitActive();
   });
 
+  it("reactivates a space with undelivered events and no session after its activation and the events check both fail to open the engine", async () => {
+    // With no session to see, the gate after a failed activation looks
+    // for undelivered events, and that look needs the engine the
+    // activation just failed to open. Failing it too must not end the
+    // recovery: the host activates to look again.
+    const engine = await server.engineForSpace(space);
+    const engineForSpace = server.engineForSpace.bind(server);
+    let engineOpenFailures = 2;
+    server.engineForSpace = (openedSpace) => {
+      if (engineOpenFailures === 0) return engineForSpace(openedSpace);
+      engineOpenFailures -= 1;
+      return Promise.reject(new Error("induced engine open failure"));
+    };
+    host = newHost();
+    const stream = { id: "of:engine-open-failure-piece", path: ["stream"] };
+    const appended = await server.commitDelegatedAppend({
+      targetSpace: space,
+      targetStream: streamEntriesDocId(stream),
+      targetStreamLink: stream,
+      eventId: "evt-engine-open-failure",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "engine-open-failure-session",
+      capabilityRef: "cap-engine-open-failure",
+      sessionId: `service:${space}`,
+      localSeq: 990_400,
+    });
+    expect(appended.deduped).toBe(false);
+    expect(Engine.selectPendingStreamEventDocs(engine).length)
+      .toBeGreaterThanOrEqual(1);
+    await awaitActive();
+    expect(engineOpenFailures).toBe(0);
+  });
+
   it("same-space cascade (LT1): the served handler's send commits a durable wave-carried entry with the INHERITED actor — processed exactly once", async () => {
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
     const engine = await server.engineForSpace(space);
@@ -2907,6 +3032,101 @@ describe("Phase 3 events-down (serving side)", () => {
       id: argument.getAsNormalizedFullLink().id,
     });
     expect((doc?.value as { value?: number })?.value).toBe(11);
+    cancelDemand();
+  });
+
+  it("returns the root event's actor from `currentPrincipal()` in a same-space cascaded handler, and binds its `eventKey()` to that actor and the cascade entry", async () => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(
+      clientRuntime,
+      CASCADE_IDENTITY_PATTERN,
+      { arg: "cascade-identity-arg", result: "cascade-identity-result" },
+    );
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    const storedSeen = () =>
+      (Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value as { seen?: { principal: string; key: string } } | undefined)
+        ?.seen;
+
+    host = newHost();
+    result.key("first").send({});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
+    await awaitAdmitted(server, () => storedSeen() !== undefined);
+
+    const secondLink = resolveLink(
+      clientRuntime,
+      clientRuntime.readTx(),
+      result.key("second").getAsNormalizedFullLink(),
+    );
+    const cascadeEntry = sidecarIdsIn(engine).flatMap((id) =>
+      (Engine.read(engine, { id })?.value as StreamEventsDocValue).entries ??
+        []
+    ).find((entry) => entry.stream?.id === secondLink.id);
+    expect(cascadeEntry).toBeDefined();
+    expect(cascadeEntry!.firedAt?.user).toBe(aliceSigner.did());
+    expect(storedSeen()).toEqual({
+      principal: aliceSigner.did(),
+      key: deriveEventKey(cascadeEntry!.eventId, aliceSigner.did(), secondLink),
+    });
+    cancelDemand();
+  });
+
+  it("holds the store's admission-stamped sidecar in the serving replica under the store read-through posture once its own wave commits a same-space cascade", async () => {
+    // The served run of `first` marks its own entry consequenced and
+    // appends `second`'s entry to another sidecar, and the serving replica
+    // seals both sidecars itself. As the wave commits, admission stamps the
+    // appended entry's `seq` and advances each touched stream's
+    // `eventWatermark`, so the sidecars the store holds are not the ones
+    // the replica sealed. With no session watch to deliver them, the feed's
+    // refresh of the loop's own commit is the one path that brings them
+    // into the replica. A drain queues an entry only once the replica's view
+    // holds it at its stamped seq, so a view left with a sealed copy defers
+    // every later event in the space.
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(clientRuntime, CASCADE_PATTERN, {
+      arg: "cascade-read-through-arg",
+      result: "cascade-read-through-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      storeReadThrough: true,
+    });
+    result.key("first").send({});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 11;
+    });
+    // A cycle past the wave that committed the cascade, so its feed record
+    // has been drained.
+    await kickAndSettle(engine);
+
+    const replica = servingManager!.open(space).replica;
+    const sidecars = sidecarIdsIn(engine);
+    expect(sidecars.length).toBe(2);
+    for (const id of sidecars) {
+      const stored = Engine.read(engine, { id })?.value as StreamEventsDocValue;
+      for (const entry of stored.entries ?? []) {
+        expect(typeof entry.seq).toBe("number");
+      }
+      expect(replica.getDocument(id as URI)?.value).toEqual(stored);
+    }
+    expect(host.stats().events.visibilityDeferrals).toBe(0);
     cancelDemand();
   });
 
@@ -4273,7 +4493,7 @@ describe("Phase 3 events-down (serving side)", () => {
       // AND the watermark has advanced past the last of them, the drain's
       // pending-entry scan can no longer select any of them — a re-delivery is
       // excluded by construction, not by having failed to show up yet.
-      const lastSeq = Math.max(...allEntries().map((entry) => entry.seq ?? 0));
+      const lastSeq = maxOf(allEntries().map((entry) => entry.seq ?? 0));
       await awaitAdmitted(server, () =>
         allEntries().length === 3 &&
         allEntries().every((entry) => entry.consequenced === true) &&

@@ -30,6 +30,9 @@ export interface TransformOptions {
   state?: CrossStageState;
   assertDiagnostics?: boolean;
   canonicalWriterIdentityFile?: (fileName: string) => string;
+
+  /** Compiles as a reload of durable stored source (`storedSource`). */
+  storedSource?: boolean;
 }
 
 export interface BatchTypeCheckResult {
@@ -575,6 +578,7 @@ export async function transformFiles(
     state: options.state,
     assertDiagnostics: options.assertDiagnostics,
     canonicalWriterIdentityFile: options.canonicalWriterIdentityFile,
+    storedSource: options.storedSource,
   });
 
   const out: Record<string, string> = {};
@@ -600,11 +604,13 @@ export async function transformFiles(
     out[fileName] = output;
   }
   if (options.pipelineDiagnostics) {
-    options.pipelineDiagnostics.push(...pipeline.getDiagnostics());
+    for (const diagnostic of pipeline.getDiagnostics()) {
+      options.pipelineDiagnostics.push(diagnostic);
+    }
   }
   if (options.policyManifests) {
     for (const manifests of pipeline.getPolicyManifests().values()) {
-      options.policyManifests.push(...manifests);
+      for (const manifest of manifests) options.policyManifests.push(manifest);
     }
   }
   return out;
@@ -830,6 +836,7 @@ export async function validateFiles(
     state: options.state,
     assertDiagnostics: options.assertDiagnostics,
     canonicalWriterIdentityFile: options.canonicalWriterIdentityFile,
+    storedSource: options.storedSource,
   });
 
   const outputs: Record<string, string> = {};

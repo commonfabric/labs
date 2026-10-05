@@ -612,12 +612,12 @@ describe("validation", () => {
 
     describe("given a record membership refuses", () => {
       it("returns `false` for a null-prototype object", () => {
-        // The narrowing `isFabricPlainObject()` accepts this one; membership
-        // requires an `Object.prototype`-rooted record.
+        // Membership and the narrowing `isFabricPlainObject()` agree here:
+        // both require an `Object.prototype`-rooted record.
 
         const obj = Object.create(null) as Record<string, never>;
 
-        expect(isFabricPlainObject(obj as FabricValue)).toBe(true);
+        expect(isFabricPlainObject(obj as FabricValue)).toBe(false);
         expect(isValidFabricPlainObject(obj)).toBe(false);
       });
 
@@ -908,15 +908,15 @@ describe("validation", () => {
 
         it("refuses a value whose class will not say its name", () => {
           // `name` is an accessor too, so guarding the constructor read alone
-          // leaves the next read out in the open.
+          // leaves the next read out in the open. It goes on the class itself,
+          // which keeps the class its prototype's actual constructor, so that
+          // the lookup finds it and the accessor is really read.
 
           class NameThrows {}
-          Object.defineProperty(NameThrows.prototype, "constructor", {
-            value: Object.defineProperty(function () {}, "name", {
-              get() {
-                throw new Error("this must not reach the caller");
-              },
-            }),
+          Object.defineProperty(NameThrows, "name", {
+            get() {
+              throw new Error("this must not reach the caller");
+            },
           });
 
           expect(() => assertValidFabricValueLayer(new NameThrows())).toThrow(

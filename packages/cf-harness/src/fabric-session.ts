@@ -3,7 +3,7 @@
  * `PiecesController` connected to a deployed API, built lazily on the tool's
  * first invocation and cached for the rest of the run while healthy.
  * Everything here runs on the trusted host side — nothing in this module ever
- * enters the docker sandbox.
+ * enters the sandbox.
  */
 
 import { Identity } from "@commonfabric/identity";

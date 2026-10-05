@@ -10,11 +10,10 @@
 
 import * as path from "@std/path";
 import {
-  preloadArgument,
+  recordingArguments,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
   type SkipList,
-  spoolWriteArgument,
   type TestIdentity,
 } from "@commonfabric/test-support/records";
 import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
@@ -74,6 +73,14 @@ export interface UnitRequest {
    * them, which is what a unit selected whole asks for.
    */
   skip: readonly string[];
+
+  /**
+   * Seconds one run of the unit is expected to take, as the manifest the
+   * lane planned from prices the identities it runs. Absent where nothing
+   * priced it. A runner that runs units side by side starts the costliest
+   * first by it.
+   */
+  cost?: number;
 }
 
 /** One JUnit report an invocation writes, and how to read it. */
@@ -92,6 +99,15 @@ export interface Invocation {
   cwd: string;
   env?: Record<string, string>;
   junit?: readonly JUnitOutput[];
+
+  /**
+   * Which of its suite's {@link Suite.processes} this invocation is. A
+   * lane measures the time before the earliest mark its runner leaves in
+   * the spool saying its units began as the process's setup, and counts
+   * nothing of an invocation that leaves no mark or names no process: what
+   * such an invocation spends is what its units took.
+   */
+  process?: string;
 }
 
 /** What a suite is given when it builds its commands. */
@@ -107,9 +123,11 @@ export interface CommandContext {
   outputDir: string;
 
   /**
-   * Where coverage profiles go. A suite writes one directory under it
-   * per workspace member, named by {@link coverageMemberDirectory}, so
-   * that what one member's tests reached is converted on its own.
+   * Where coverage profiles go. A suite whose runner is `deno test` over
+   * files writes one directory under it per workspace member, named by
+   * {@link coverageMemberDirectory}, so that what one member's tests
+   * reached is converted on its own; a suite that builds its own command
+   * line writes one directory named for itself.
    * Absent where this batch is not being measured, which is every batch
    * outside the coverage gate and the full run.
    */
@@ -189,6 +207,27 @@ export interface Suite {
   whole: readonly Unit[];
 
   /**
+   * The process each unit runs in, for a suite whose processes spend time
+   * on setup before any of their units begins: a `deno test` type-checking
+   * the module graph of every file it was handed, the pattern test runner
+   * starting up. A lane pays that setup each time it starts such a
+   * process, however many of the process's units it runs, so the packer
+   * charges it the first time a lane opens a unit of that process, and
+   * again for each further run of it a repeated test asks for. What it
+   * charges is measured from the processes that mark when their units
+   * begin, and charged to every process named here, marking or not. The
+   * name is the `process` the invocation running the unit carries, and
+   * means nothing outside its suite.
+   *
+   * A suite names a process for every unit or for none, since the packer
+   * charges a suite's process setup only to the units named here. Absent
+   * where no process the suite starts marks when its units began, such as
+   * a repository gate or one type check over many paths, and whatever such
+   * a process spends is then part of what its units cost.
+   */
+  processes?: ReadonlyMap<Unit, string>;
+
+  /**
    * Tree paths this suite accounts for beyond its units. A suite whose
    * units are files needs none; a suite whose units are dispatch arms
    * names the scripts those arms run, so the drift guard can tell that
@@ -209,7 +248,9 @@ export interface Suite {
    * repository, since a declaration for such a unit comes to most
    * changes and places it in most lanes by declaration rather than by
    * what it has caught. Such a unit reaches a lane on what it is worth,
-   * or because nothing has a record of it.
+   * or because nothing has a record of it. The type check is the exception:
+   * a change reaches every type-check group importing what it touches,
+   * however many that is, since no `deno test` checks types.
    */
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
 
@@ -448,19 +489,31 @@ export function unavailableFrom(
   return { excluded, unavailable };
 }
 
+/** A batch's skip list, as the invocation running the batch takes it. */
+export interface BatchSkipList {
+  /** The file holding the list, where the batch skips anything. */
+  path?: string;
+
+  /** The variable naming that file, where there is one. */
+  env: Record<string, string>;
+}
+
 /**
- * What an invocation takes to record: the preload, and the write
- * permission it needs to leave its name map in the batch's spool. The
- * permission is left out where the flags already grant one, since
- * appending a path list to a blanket grant either ends the run or cuts
- * the grant down to that list; `spoolWriteArgument` says which.
+ * Writes a batch's skip list into the batch's own directory as
+ * `<slug>.skip.json`, where it names anything. One naming nothing is not
+ * written, since the absence of the file is what tells the invocation to
+ * run everything.
  */
-export function recordingArguments(
-  flags: readonly string[],
+export async function writeBatchSkipList(
   context: CommandContext,
-): string[] {
-  const write = spoolWriteArgument(flags, context.spoolDir);
-  return write === undefined ? [preloadArgument()] : [preloadArgument(), write];
+  slug: string,
+  skips: SkipList,
+): Promise<BatchSkipList> {
+  if (Object.keys(skips).length === 0) return { env: {} };
+  const skipList = path.join(context.outputDir, `${slug}.skip.json`);
+  await Deno.mkdir(context.outputDir, { recursive: true });
+  await Deno.writeTextFile(skipList, serializeSkipList(skips));
+  return { path: skipList, env: { [SKIP_LIST_VARIABLE]: skipList } };
 }
 
 /**
@@ -473,14 +526,41 @@ export function shuffleArguments(): string[] {
   return [shuffleFlag(shuffleSeed())];
 }
 
-/** Writes a batch's skip list where its invocations will read it. */
-export async function writeSkipList(
-  skipListPath: string,
-  skips: SkipList,
-): Promise<void> {
-  if (Object.keys(skips).length === 0) return;
-  await Deno.mkdir(path.dirname(skipListPath), { recursive: true });
-  await Deno.writeTextFile(skipListPath, serializeSkipList(skips));
+/**
+ * The command that runs `deno test` over `files` under `flags`, recording
+ * and shuffling as every suite's `deno test` does, and writing its report to
+ * `junitPath`. The preload is permitted to read `skipList`, where the
+ * batch has one.
+ *
+ * It never type-checks. The `typecheck` suite checks every file a test
+ * loads, so a test process checking its module graph again repeats that
+ * work in every process a lane starts. Whatever `flags` say about checking
+ * is replaced by one `--no-check`.
+ */
+export function denoTestCommand(
+  flags: readonly string[],
+  context: CommandContext,
+  junitPath: string,
+  files: readonly string[],
+  skipList?: string,
+): string[] {
+  const unchecked = [
+    "--no-check",
+    ...flags.filter((flag) => !/^--(no-)?check(=|$)/.test(flag)),
+  ];
+  return [
+    Deno.execPath(),
+    "test",
+    ...unchecked,
+    ...shuffleArguments(),
+    ...recordingArguments(unchecked, {
+      spool: context.spoolDir,
+      root: context.root,
+      skipList,
+    }),
+    `--junit-path=${junitPath}`,
+    ...files,
+  ];
 }
 
 /** The skip list a set of unit requests comes to. */
@@ -561,7 +641,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
       units.push(file);
       partOf.set(file, part);
     }
-    unavailable.push(...part.unavailable ?? []);
+    for (const entry of part.unavailable ?? []) unavailable.push(entry);
   }
   const surfaces = {
     recordSurfaces,
@@ -577,6 +657,10 @@ export function fileSuite(options: FileSuiteOptions): Suite {
     // Every unit here is a file the command names. The preload reads the skip
     // list under the same path.
     whole: [],
+    // One `deno test` per part.
+    processes: new Map(
+      [...partOf].map(([unit, part]) => [unit, part.junit.scope]),
+    ),
     ...(options.measured === undefined ? {} : { measured: options.measured }),
 
     locate(record) {
@@ -616,15 +700,8 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           if (!group.some((request) => request.unit === unit)) continue;
           skips[unit] = [...new Set([...skips[unit] ?? [], ...leaves])];
         }
-        const env: Record<string, string> = { ...part.env };
-        if (Object.keys(skips).length > 0) {
-          const skipListPath = path.join(
-            context.outputDir,
-            `${slug}.skip.json`,
-          );
-          await writeSkipList(skipListPath, skips);
-          env[SKIP_LIST_VARIABLE] = skipListPath;
-        }
+        const skipList = await writeBatchSkipList(context, slug, skips);
+        const env: Record<string, string> = { ...part.env, ...skipList.env };
         const measuring = measuringInto(context, part.packageDir);
         if (measuring !== undefined) env.DENO_COVERAGE_DIR = measuring;
         if (
@@ -634,20 +711,19 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           env.CF_PATTERN_COVERAGE_DIR = context.patternCoverageDir;
         }
         invocations.push({
-          command: [
-            Deno.execPath(),
-            "test",
-            ...part.flags,
-            ...shuffleArguments(),
-            ...recordingArguments(part.flags, context),
-            `--junit-path=${junitPath}`,
-            ...group.map((request) =>
+          command: denoTestCommand(
+            part.flags,
+            context,
+            junitPath,
+            group.map((request) =>
               path.relative(cwd, path.resolve(context.root, request.unit))
             ),
-          ],
+            skipList.path,
+          ),
           cwd,
           env,
           junit: [{ path: junitPath, ...part.junit }],
+          process: part.junit.scope,
         });
       }
       return invocations;

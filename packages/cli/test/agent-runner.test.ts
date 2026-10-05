@@ -645,6 +645,7 @@ describe("agent runner", () => {
     const renewalCommitted = defer<void>();
     const recoveryReady = defer<void>();
     const releaseRenewal = defer<void>();
+    const executionStarted = defer<ClaimedAgentRun>();
     const held = defer<AgentRunExecution>();
     const original = runnerSide.editWithRetry.bind(runnerSide);
     let delayedRenewal = false;
@@ -676,10 +677,9 @@ describe("agent runner", () => {
         }
         return value;
       }, ...rest)) as typeof runnerSide.editWithRetry;
-    let active: ClaimedAgentRun | undefined;
     let wake: (() => void) | undefined;
     const runner = await startRunner((run) => {
-      active = run;
+      executionStarted.resolve(run);
       return held.promise;
     }, {
       runtimeForHost: () => Promise.resolve(runnerSide),
@@ -689,9 +689,10 @@ describe("agent runner", () => {
       },
     });
     await waitForState(result, "running");
+    const active = await executionStarted.promise;
 
     clock = new Date("2026-09-18T12:00:30.000Z");
-    const renewal = active!.renewLease();
+    const renewal = active.renewLease();
     await renewalReady.promise;
     clock = new Date("2026-09-18T12:01:00.000Z");
     wake!();
@@ -704,7 +705,7 @@ describe("agent runner", () => {
       (value) => value?.claim?.leaseUntil === "2026-09-18T12:01:30.000Z",
     );
 
-    expect(active!.signal.aborted).toBe(false);
+    expect(active.signal.aborted).toBe(false);
     expect(runner.activeRuns).toBe(1);
     held.resolve({ outcome: "refused" });
     await waitForState(result, "refused");
@@ -1496,6 +1497,7 @@ describe("agent runner", () => {
       );
       let seen: {
         argv?: unknown;
+        prompt?: string;
         slotRole?: string;
         model?: string;
         allowedTools?: readonly string[];
@@ -1523,6 +1525,7 @@ describe("agent runner", () => {
                   ...seen.workspaces,
                   options.workspaceHostPath!,
                 ],
+                prompt: prompt.prompt,
                 slotRole: prompt.promptSlotBinding?.role,
                 model: options.model,
                 argv: options.inputCells,
@@ -1652,6 +1655,29 @@ describe("agent runner", () => {
         expect(record.errorCode).toBe(schema ? undefined : "PROVIDER_FAILURE");
       });
     }
+
+    it("hands the run a task starting with `-` as its prompt", async () => {
+      // An argument after a flag that starts with `-` reads as a flag of its
+      // own, so the task has to reach the harness in the `=` spelling.
+      const seen = await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("run-dash-task");
+      });
+      const result = await submit({ task: "- recommend a book" });
+
+      const record = await waitForCellValue<AgentRunRecord>(
+        patternSide,
+        recordOf(result),
+        (value) => value?.outcome !== undefined,
+      );
+
+      expect(record.errorCode).toBeUndefined();
+      expect(record.state).toBe("completed");
+      expect(seen().prompt).toBe("- recommend a book");
+    });
 
     it("allows `submit_result` alongside an explicit request tool list", async () => {
       const seen = await startHarnessRunner(async ({ resultPath }) => {

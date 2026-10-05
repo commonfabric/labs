@@ -1,7 +1,7 @@
 import { FabricInstance, refuseFabricInstance } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { isCell } from "../cell.ts";
+import { exportCell, isCell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import {
@@ -17,7 +17,7 @@ export function connectInputAndOutputs(node: NodeRef) {
   function connect(value: any): any {
     if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
     if (isCell(value)) {
-      const exported = value.export();
+      const exported = exportCell(value);
       if (exported.frame !== node.frame) {
         const implementation = isObjectOrArray(node.module)
           ? node.module.implementation
@@ -87,7 +87,7 @@ export function applyInputIfcToOutput<T, R>(
   const collectedClassifications = new Set<unknown>();
   traverseValue(inputs, (item: unknown) => {
     if (isCell(item)) {
-      const { schema: inputSchema } = item.export();
+      const { schema: inputSchema } = exportCell(item);
       if (inputSchema !== undefined) {
         ContextualFlowControl.joinSchema(collectedClassifications, inputSchema);
       }
@@ -109,7 +109,7 @@ function attachCfcToOutputs(
   lubConfidentiality: readonly CfcConfClause[],
 ) {
   if (isCell(outputs)) {
-    const exported = outputs.export();
+    const exported = exportCell(outputs);
     const outputSchema = exported.schema ?? true;
     // we may have fields in the output schema, so incorporate those
     const joined = new Set<unknown>(lubConfidentiality);

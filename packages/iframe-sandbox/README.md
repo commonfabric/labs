@@ -50,12 +50,14 @@ frame.src = "<main id='root'></main>";
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell
 shape: `get()`, `pull()`, optional `initialize()`, `set()`, and `push()`,
-`sink()`, `key()`, and `resolve()`. `initialize(defaultValue)` atomically stores
-the default only while the cell has no backing value and returns the value that
-won. A readable schema fallback does not count as stored, so calling
-`initialize()` after `pull()` safely materializes it before a child write. The
-resource kinds are `cell`, `stream`, `sqlite`, and `service`. Named methods let
-an application expose a narrow service without expanding the cell protocol.
+`sink()`, `key()`, and `resolve()`. The capability's `push(values)` takes the
+members to append as one list, like the runtime's `Cell.pushAll()`, so a list of
+any length reaches it intact. `initialize(defaultValue)` atomically stores the
+default only while the cell has no backing value and returns the value that won.
+A readable schema fallback does not count as stored, so calling `initialize()`
+after `pull()` safely materializes it before a child write. The resource kinds
+are `cell`, `stream`, `sqlite`, and `service`. Named methods let an application
+expose a narrow service without expanding the cell protocol.
 
 The higher-level `cf-iframe` component accepts the same `bridge` property. Its
 `context` convenience property turns top-level Fabric cells into cell resources,
@@ -111,6 +113,28 @@ freshness boundary; it waits for the runtime Cell pull, including scheduler and
 storage work that pull must settle. The bridge does not substitute a lighter
 readiness probe for that contract.
 
+A read the host may not show is refused, with the `read-refused` error code, and
+is never delivered as `undefined`. `pull()` rejects with it, and a sink hears it
+through the `onRefused` option, after the cleanup its listener returned for the
+last value runs. A sink added while a refusal stands hears it there at once, and
+its listener is not called until a value arrives. A failed write changes no
+value, so it reaches no sink:
+
+```ts
+const stopSecret = secret.sink((value) => render(value), {
+  onRefused: (error) => renderHidden(error.code),
+});
+```
+
+A cell the host has not read yet is loading, not empty: `get()` returns
+`undefined`, which a sink's listener is handed at once as any sink's is, the
+listener hears nothing more until the host's read answers, and `update()` pulls
+before it computes.
+
+The host holds the path a guest read to that refusal: `set()` and `push()`
+through the same path reject with `read-refused` until a read of it (a `pull()`,
+or a value its sink delivers) is admitted.
+
 `describe()` makes the API inspectable by people and agents. It returns every
 resource's kind, core operations, named methods, description, and schema.
 Missing resources and unsupported operations reject with `FabricBridgeError`,
@@ -154,6 +178,9 @@ and replacing the array:
 ```ts
 await tasks.push({ title: "Review bridge", done: false });
 ```
+
+`pushAll()` appends every member of one list the same way, for a list too long
+to spread into `push()`'s arguments.
 
 ## React
 
@@ -263,10 +290,14 @@ A load report cannot be matched to a document: a guest can renavigate its own
 frame, and the inner frame's initial `about:blank` navigation can complete after
 a document was asked for, so reports do not stand one to one with the documents
 the host asks for. The host offers a fresh port per report and lets use decide
-which offer matters. A session's first request retires every session offered
-before it, and a guest already holding a port refuses the new offer rather than
-losing the session it has. Two offers are kept at most, which is what stops a
-guest renavigating its own frame from accumulating them.
+which offer matters. A guest need not have started listening by the time its
+document has loaded, so a guest that starts listening only after that asks for a
+port up the parent chain, and the host offers one on that request as it does on
+a report, unless it is still loading a document, whose report is still to come.
+A session's first request retires every session offered before it, and a guest
+already holding a port refuses the new offer rather than losing the session it
+has. Two offers are kept at most, which is what stops a guest renavigating its
+own frame from accumulating them.
 
 ## Security considerations
 
@@ -286,6 +317,20 @@ The double-frame construction exists because support for the iframe `csp`
 attribute is inconsistent. The outer `srcdoc` frame applies a Content Security
 Policy inherited by the inner guest document. See the [CSP processing model] and
 [browser support for the `csp` attribute].
+
+A `srcdoc` frame also inherits the policy of the page that embeds it, and both
+apply. A host page whose own policy refuses inline script therefore refuses the
+outer frame's script and every guest's. Such a host serves the outer frame from
+a URL instead, where it takes its policy from its own response, and sets
+`outerFrameUrl` on the element; `cf-iframe` takes it from the
+`iframeOuterFrameUrl` the host gave its `RuntimeClient`. The document served is
+`outer-frame-script.js` as its script, under the policy the guest is to inherit
+and a `sandbox` directive that withholds `allow-same-origin`. Framed by the
+element, the document is sandboxed by the element's `sandbox` attribute as the
+inlined one is. The directive is for the same URL opened on its own, in a tab or
+a window, where no element and so no attribute stands in front of it, and a
+document that runs a guest's inline script would otherwise run it as the host's
+origin.
 
 [CSP processing model]: https://www.w3.org/TR/CSP2/#processing-model-iframe-srcdoc
 [browser support for the `csp` attribute]: https://caniuse.com/mdn-html_elements_iframe_csp

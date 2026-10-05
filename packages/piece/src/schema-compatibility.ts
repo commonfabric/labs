@@ -255,12 +255,14 @@ function subschemaChildren(
   }
   for (const key of SUBSCHEMA_LIST_KEYS) {
     const nested = record[key];
-    if (!skip?.has(key) && Array.isArray(nested)) children.push(...nested);
+    if (!skip?.has(key) && Array.isArray(nested)) {
+      for (const child of nested) children.push(child);
+    }
   }
   for (const key of SUBSCHEMA_MAP_KEYS) {
     const nested = record[key];
     if (!skip?.has(key) && isKeyableObjectOrArray(nested)) {
-      children.push(...Object.values(nested));
+      for (const child of Object.values(nested)) children.push(child);
     }
   }
   return children;
@@ -361,9 +363,15 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * authorization evidence, which `comparableIfc` keeps.
  *
  * `writerIdentity` is the write authorization, compared except for the parts of
- * its claim that move without the authorization moving.
+ * its claim that move without the authorization moving. `writerAlternatives`
+ * is a list of such authorizations, each with the contract beside it, and each
+ * claim in it is compared the same way.
  */
-type IfcKeyRole = "declared" | "derived" | "writerIdentity";
+type IfcKeyRole =
+  | "declared"
+  | "derived"
+  | "writerIdentity"
+  | "writerAlternatives";
 
 /**
  * A role for every key of {@link IFC_KEYS}. The mapped type is the point: a new
@@ -384,6 +392,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   flowPrecisionClaim: "declared",
   uiContract: "declared",
   writeAuthorizedBy: "writerIdentity",
+  writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
   // transition annotation, and of the `RepresentsCurrentUser` and
   // `AuthoredByCurrentUser` spellings that expand to it. It names atoms the
@@ -496,7 +505,10 @@ const comparableIfc = (ifc: unknown): unknown => {
     const role: IfcKeyRole | undefined = IFC_KEY_ROLES[key as IfcKey] as
       | IfcKeyRole
       | undefined;
-    if (role === "derived" || role === "writerIdentity") {
+    if (
+      role === "derived" || role === "writerIdentity" ||
+      role === "writerAlternatives"
+    ) {
       handled = true;
       break;
     }
@@ -527,6 +539,22 @@ const comparableIfc = (ifc: unknown): unknown => {
       keep(kept, key, normalized);
       continue;
     }
+    if (role === "writerAlternatives" && Array.isArray(value)) {
+      const normalized = value.map((policy) => {
+        if (!isObjectNotArray(policy)) return policy;
+        const writer = writerClaimWithoutVolatileIdentity(
+          policy.writeAuthorizedBy,
+        );
+        return writer === policy.writeAuthorizedBy
+          ? policy
+          : { ...policy, writeAuthorizedBy: writer };
+      });
+      if (normalized.some((policy, index) => policy !== value[index])) {
+        changed = true;
+      }
+      keep(kept, key, normalized);
+      continue;
+    }
     keep(kept, key, value);
   }
   if (!changed) return ifc;
@@ -538,7 +566,11 @@ const comparableIfc = (ifc: unknown): unknown => {
  * Reject a piece update unless its argument and result schemas preserve the
  * contracts of the currently running pattern.
  *
- * Arguments are contravariant and results are covariant. Open argument objects
+ * Arguments are contravariant and results are covariant. An object is open
+ * when its `additionalProperties` admits any value: absent, `true`, `{}`, or
+ * `{ type: "unknown" }`, the last being what an index signature over `unknown`
+ * records. A result object that is open may gain any named field, since its
+ * readers already accept whatever sits there. Open argument objects
  * may still gain optional/defaulted named fields as the piece-evolution policy,
  * and may drop named fields the pattern no longer reads — a demand given up
  * leaves a writer's value unread, where a dropped result field breaks a reader,
@@ -580,12 +612,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a
- * `writeAuthorizedBy` writer claim's volatile identity is normalized out before
- * the `ifc` comparison. That identity is the content-addressed module hash
- * (`moduleIdentity`, and the legacy `bundleId`), which rehashes on any edit to
- * the authoring module, together with the source-file spelling (`file`), which
- * changes with the resolver that compiled the module. The runtime authorizes a
+ * `writeOnly`) are compared for exact equality, with one exception: a writer
+ * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
+ * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * identity is the content-addressed module hash (`moduleIdentity`, and the
+ * legacy `bundleId`), which rehashes on any edit to the authoring module,
+ * together with the source-file spelling (`file`), which changes with the
+ * resolver that compiled the module. The runtime authorizes a
  * write on `moduleIdentity` plus the binding `path` and never on `file`, and it
  * re-verifies the live writer's `moduleIdentity` against the claim at write
  * time, so holding those fields fixed here would reject a recompile or a
@@ -1078,6 +1111,27 @@ function isScalarSchemaType(type: string): boolean {
   return SCALAR_SCHEMA_TYPES.has(type);
 }
 
+/**
+ * The `additionalProperties` of `schema`, with every schema that admits any
+ * value written as `true`: an absent keyword, `{}`, and `{ type: "unknown" }`,
+ * which is what a TypeScript index signature `[key: string]: unknown` records.
+ * A `type` list containing `unknown` admits any value as well, and descriptive
+ * annotations beside `type` leave it unconstrained. Any other
+ * keyword, `asCell` and `$comment` among them, is a constraint, and the schema
+ * is returned as written.
+ */
+function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
+  const additional = schema.additionalProperties ?? true;
+  if (typeof additional === "boolean") return additional;
+  const unconstrained = Object.entries(additional).every(([key, value]) =>
+    (key === "type" &&
+      (value === "unknown" ||
+        (Array.isArray(value) && value.includes("unknown")))) ||
+    (key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+  );
+  return unconstrained ? true : additional;
+}
+
 function objectSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
@@ -1149,7 +1203,7 @@ function objectSubsetIssue(
       }
     }
 
-    const previousAdditional = source.additionalProperties ?? true;
+    const previousAdditional = additionalPropertiesOf(source);
     for (const property of Object.keys(candidateProperties)) {
       const matchedPatterns = matchingPatternPropertySchemas(
         previousPatternProperties,
@@ -1164,9 +1218,11 @@ function objectSubsetIssue(
         );
         if (issue) return issue;
       }
-      // Open objects remain evolvable by adding optional/defaulted fields.
-      // A typed index signature is different: it promised that every unknown
-      // property accepted values of that type, including this newly named one.
+      // Open objects remain evolvable by adding optional/defaulted fields, and
+      // an index signature over `unknown` leaves an object open. An index
+      // signature over any narrower type is different: it promised that every
+      // unnamed property accepted values of that type, including this newly
+      // named one.
       if (
         Object.hasOwn(previousProperties, property) ||
         matchedPatterns.length > 0 ||
@@ -1229,7 +1285,7 @@ function objectSubsetIssue(
       }
     }
 
-    const previousAdditional = target.additionalProperties ?? true;
+    const previousAdditional = additionalPropertiesOf(target);
     for (const property of Object.keys(candidateProperties)) {
       const matchedPatterns = matchingPatternPropertySchemas(
         previousPatternProperties,
@@ -1328,7 +1384,7 @@ function objectSubsetIssue(
       !Object.hasOwn(targetProperties, property) &&
       targetPatternContracts.length === 0
     ) {
-      const targetAdditional = target.additionalProperties ?? true;
+      const targetAdditional = additionalPropertiesOf(target);
       if (targetAdditional === true) continue;
       if (targetAdditional === false) {
         return `${path}.${property}: source field is rejected by the target object`;
@@ -1460,8 +1516,8 @@ function additionalPropertiesSubsetIssue(
   path: string,
   context: CompatibilityContext,
 ): string | undefined {
-  const sourceAdditional = source.additionalProperties ?? true;
-  const targetAdditional = target.additionalProperties ?? true;
+  const sourceAdditional = additionalPropertiesOf(source);
+  const targetAdditional = additionalPropertiesOf(target);
   // Verb events: a boolean↔boolean additionalProperties transition is free
   // in both directions (see CompatibilityContext.verbEvent). Schema-valued
   // additionalProperties on either side still compares — a constraint on the

@@ -14,6 +14,7 @@ import type { FabricBridge } from "@commonfabric/iframe-sandbox";
 import { CFIframe } from "./index.ts";
 
 type CFIframeInternals = {
+  onRuntime(runtime: RuntimeClient | undefined): void;
   onLoad(): void;
   onError(event: CustomEvent): void;
   dismissError(): void;
@@ -185,6 +186,53 @@ describe("CFIframe", () => {
 
     expect(element._errorDetails).toBeNull();
     expect(templateValues(element)[1]).toBe(element.src);
+  });
+
+  it("hands the sandbox the outer frame the host's runtime names", () => {
+    const element = new CFIframe();
+    const serving = {
+      iframeOuterFrameUrl: () => "/outer-frame",
+    } as unknown as RuntimeClient;
+    const inlining = {
+      iframeOuterFrameUrl: () => undefined,
+    } as unknown as RuntimeClient;
+
+    // The third binding is the sandbox's `outerFrameUrl`, after its bridge
+    // and its source.
+    expect(templateValues(element)[2]).toBeUndefined();
+    internals(element).onRuntime(serving);
+    expect(templateValues(element)[2]).toBe("/outer-frame");
+    internals(element).onRuntime(inlining);
+    expect(templateValues(element)[2]).toBeUndefined();
+    internals(element).onRuntime(serving);
+    internals(element).onRuntime(undefined);
+    expect(templateValues(element)[2]).toBeUndefined();
+  });
+
+  it("takes the outer frame from the runtime alone, never from a property", () => {
+    const element = new CFIframe();
+    // What a pattern's markup can reach is this element's properties.
+    for (
+      const name of ["outerFrameUrl", "_outerFrameUrl", "iframeOuterFrameUrl"]
+    ) {
+      expect(
+        (CFIframe as unknown as { elementProperties: Map<string, unknown> })
+          .elementProperties.has(name),
+      ).toBe(false);
+    }
+    for (const name of ["outerFrameUrl", "_outerFrameUrl", "#outerFrameUrl"]) {
+      (element as unknown as Record<string, string>)[name] =
+        "https://elsewhere.test/";
+    }
+    expect(templateValues(element)[2]).toBeUndefined();
+    internals(element).onRuntime(
+      {
+        iframeOuterFrameUrl: () => "/outer-frame",
+      } as unknown as RuntimeClient,
+    );
+    expect(templateValues(element)[2]).toBe("/outer-frame");
+    expect(element.render().strings.join("").match(/\.outerFrameUrl=/g))
+      .toHaveLength(1);
   });
 
   it("translates sandbox events into component state and events", () => {

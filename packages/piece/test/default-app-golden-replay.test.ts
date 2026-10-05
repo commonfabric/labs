@@ -134,9 +134,9 @@ describe("default-app golden replay (state survives an in-place roll-forward)", 
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "golden-replay-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     controller = new PiecesController(session, runtime);
     await controller.synced();
@@ -277,9 +277,9 @@ describe("default-app golden replay (state survives an in-place roll-forward)", 
     await controller.stopPiece(root);
 
     stub.setSource(ROOT_V2);
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: controller.getSpaceName()!,
+      spaceDid: controller.getSpace(),
     });
     const readerStorage = EmulatedStorageManager.connectTo(server, {
       as: signer,

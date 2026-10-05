@@ -78,6 +78,9 @@ export interface ExecDependencies {
    * `CallableExecutionDeps` carry. */
   deriveSelectedValue?: CallableExecutionDeps["deriveSelectedValue"];
 
+  /** @internal Seam for tests, the same one `CallableExecutionDeps` carries. */
+  sendEvent?: CallableExecutionDeps["sendEvent"];
+
   /**
    * Each phase the dispatch below reaches, in order. A caller announcing the
    * invocation identity hangs it here: the identity is what a failed call is

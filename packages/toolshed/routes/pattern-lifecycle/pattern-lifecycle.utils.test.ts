@@ -4,12 +4,12 @@ import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { EntityDocument } from "@commonfabric/memory/v2";
-import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   createAclServer,
   genesisAcl,
@@ -168,13 +168,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
     await server.close();
     server = new MemoryV2Server.Server({
       store: new URL(`memory://private-registration-${crypto.randomUUID()}`),
-      authorizeSessionOpen(message, context) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string"
-          ? principal
-          : verifySessionOpenAuthorization(message, context);
-      },
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: {
         audience: "did:key:z6Mk-private-registration-audience",
       },
@@ -209,6 +203,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
       storageManager: ownerStorage,
     });
     try {
+      // The root records the principal its `addPiece` acts for.
       const root = ok(
         await processInstantiate(deps, alice.did(), {
           space,
@@ -217,11 +212,14 @@ describe("pattern-lifecycle verbs (transport half)", () => {
             files: [{
               name: "/main.tsx",
               contents: `
-import { computed, handler, pattern, Writable } from "commonfabric";
-const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(({piece}, {panels}) => panels.addUnique(piece));
+import { computed, currentPrincipal, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>, adder: Writable<string>}>(
+  ({piece}, {panels, adder}) => { panels.addUnique(piece); adder.set(currentPrincipal() ?? ""); },
+);
 export default pattern(() => {
   const panels = new Writable<Writable<unknown>[]>([]);
-  return {panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels})};
+  const adder = new Writable<string>("");
+  return {panels, adder, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels, adder})};
 });`,
             }],
           },
@@ -252,6 +250,16 @@ export default pattern(() => {
       expect(repeated).toEqual(created);
       expect((await owner.getRegisteredPieces()).map((piece) => piece.id))
         .toEqual([created.pieceId]);
+      // The requesting writer, neither the space's owner nor the process.
+      expect(
+        await ownerRuntime.getCellFromEntityId(
+          space as MemorySpace,
+          entityIdFrom(root.pieceId),
+        ).asSchema({
+          type: "object",
+          properties: { adder: { type: "string" } },
+        }).key("adder").pull(),
+      ).toBe(bob.did());
       expect((await server.readDocument(space, `of:${space}`))?.value).toEqual(
         acl,
       );

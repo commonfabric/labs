@@ -1,3 +1,10 @@
+/**
+ * Computes the canonical content hash of a `FabricValue` by feeding its
+ * type-tagged bytes into a single SHA-256 context. The module also keeps the
+ * caches that make feeding a string cheaper, and counts the containers it
+ * feeds, which is how a test tells a whole-value hash from a small one.
+ */
+
 import {
   createHasher,
   type IncrementalHasher,
@@ -60,6 +67,8 @@ const TAG_SYMBOL = 0x2a;
 const TAG_REGEXP = 0x2b;
 const TAG_KEY_PAIR = 0x2c;
 const TAG_UNAVAILABLE = 0x2d;
+const TAG_DURATION_NSEC = 0x2e;
+const TAG_DURATION_DAY = 0x2f;
 
 // Special for hashing:
 const TAG_STRING_HASH = 0xf0;
@@ -88,6 +97,8 @@ const TAG_SYMBOL_BYTES = new Uint8Array([TAG_SYMBOL]);
 const TAG_REGEXP_BYTES = new Uint8Array([TAG_REGEXP]);
 const TAG_KEY_PAIR_BYTES = new Uint8Array([TAG_KEY_PAIR]);
 const TAG_UNAVAILABLE_BYTES = new Uint8Array([TAG_UNAVAILABLE]);
+const TAG_DURATION_NSEC_BYTES = new Uint8Array([TAG_DURATION_NSEC]);
+const TAG_DURATION_DAY_BYTES = new Uint8Array([TAG_DURATION_DAY]);
 
 //
 // Core: recursive value feeding
@@ -121,6 +132,13 @@ const smallLengthCache: Uint8Array[] = Array.from(
   { length: MAX_CACHED_SMALL_LENGTH + 1 },
   (_, i) => encodeULEB128(i),
 );
+
+/**
+ * How many arrays and plain objects have been fed to a hasher, counted from
+ * when this module loaded. Only a test or a benchmark reads it, through
+ * `getContainersHashed()`.
+ */
+let containersHashed = 0;
 
 /**
  * Gets the bytes needed to represent the given string, either by computing it
@@ -270,6 +288,7 @@ export class ValueHasher {
     const hasher = this.#hasher;
     const path = this.#path;
 
+    containersHashed++;
     path.push(value);
     hasher.update(TAG_ARRAY_BYTES);
     let i = 0;
@@ -344,6 +363,26 @@ export class ValueHasher {
 
       case VALUE_TAGS.FabricEpochDay: {
         hasher.update(TAG_EPOCH_DAY_BYTES);
+        const bytes = bigintToMinimalTwosComplement(
+          (value as { value: bigint }).value,
+        );
+        this.#feedLength(bytes.length);
+        hasher.update(bytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricDurationNsec: {
+        hasher.update(TAG_DURATION_NSEC_BYTES);
+        const bytes = bigintToMinimalTwosComplement(
+          (value as { value: bigint }).value,
+        );
+        this.#feedLength(bytes.length);
+        hasher.update(bytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricDurationDay: {
+        hasher.update(TAG_DURATION_DAY_BYTES);
         const bytes = bigintToMinimalTwosComplement(
           (value as { value: bigint }).value,
         );
@@ -453,6 +492,7 @@ export class ValueHasher {
     const hasher = this.#hasher;
     const path = this.#path;
 
+    containersHashed++;
     path.push(value);
 
     // Note: Even though we could conceivably define the key sort order to be
@@ -479,6 +519,11 @@ export class ValueHasher {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Computes the hash of a value without consulting or populating any cache.
    */
@@ -497,4 +542,14 @@ export class ValueHasher {
     valueHasher.feedValue(value);
     return valueHasher.digestString();
   }
+}
+
+/**
+ * Counts the arrays and plain objects fed to a hasher.
+ *
+ * @internal Not in the `value-hash` barrel; `for-testing-only.ts` offers it to
+ * tests.
+ */
+export function getContainersHashed(): number {
+  return containersHashed;
 }

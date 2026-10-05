@@ -3,7 +3,8 @@
  */
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { budgetStatus, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
+import { maxOf, minOf } from "@commonfabric/utils/math";
+import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, STALE_RUNS_ERROR, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
 
 Deno.test("landingHref: squash-merge trailing (#N) -> the PR", () => {
@@ -53,6 +54,15 @@ Deno.test("groupDigits: separates thousands, rounding first", () => {
   assertEquals(groupDigits(30.6), "31");
 });
 
+Deno.test("ciDurationSub: counts the runs in the time window or the most recent ones", () => {
+  assertEquals(ciDurationSub(25, 6), "median of 25 PR runs in 6h");
+  assertEquals(ciDurationSub(1, 6), "median of 1 PR run in 6h");
+  assertEquals(ciDurationSub(20), "median of last 20 PR runs");
+  assertEquals(ciDurationSub(1), "median of last 1 PR run");
+  assertEquals(ciDurationSub(0), "no passing PR runs");
+  assertEquals(ciDurationSub(0, 6), "no passing PR runs");
+});
+
 Deno.test("daysLabel: consistent 'x days' text", () => {
   assertEquals(daysLabel(5), "5 days");
   assertEquals(daysLabel(1), "1 day");
@@ -93,6 +103,7 @@ Deno.test("friendlyError: raw errors become short calm phrases", () => {
   assertEquals(friendlyError("HTTP 403: rate limit exceeded"), "rate limit hit");
   assertEquals(friendlyError("Bad credentials"), "auth failed");
   assertEquals(friendlyError("GitHub API x: set GH_TOKEN or GITHUB_TOKEN"), "set GH_TOKEN");
+  assertEquals(friendlyError(STALE_RUNS_ERROR), "run list out of date");
   assertEquals(friendlyError("something weird"), "temporarily unavailable");
 });
 
@@ -145,7 +156,7 @@ Deno.test("sparkline: scale normalizes to the recent runs, clipping old spikes",
   const spiky = ysOf(sparkline([100, 10, 11, 12, 13], "#111", { count: 4, color: "#eee" }));
   assert(spiky[0] < 0, `old spike should clip above the viewport, got y=${spiky[0]}`);
   const recent = spiky.slice(1);
-  assert(Math.max(...recent) - Math.min(...recent) > 12, "recent runs should span most of the height");
+  assert(maxOf(recent) - minOf(recent) > 12, "recent runs should span most of the height");
   // Without the spike, the same recent runs land on the same scale (spike-independent).
   const clean = ysOf(sparkline([12, 10, 11, 12, 13], "#111", { count: 4, color: "#eee" }));
   assertEquals(clean.slice(1), recent);
@@ -179,7 +190,7 @@ Deno.test("sparkline: highlight scaleAll keeps the whole series in view, still d
   const [base, tail] = lines;
   // The spike is now the series max, so it stays in view (not clipped past the top).
   assert(base[0] >= 0, `spike should stay in view with scaleAll, got y=${base[0]}`);
-  assertEquals(base[0], Math.min(...base), "the spike is the highest point (smallest y)");
+  assertEquals(base[0], minOf(base), "the spike is the highest point (smallest y)");
   assertEquals(tail.length, 4); // the tail still covers the trailing 4 points
 });
 

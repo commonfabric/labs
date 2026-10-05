@@ -7,6 +7,7 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {
@@ -14,6 +15,7 @@ import {
   performanceGitHubRateLimit,
 } from "./github-rate-limit.ts";
 import {
+  ciDurationSub,
   compactSpan,
   daysLabel,
   DURATION_LABEL_HEIGHT,
@@ -29,6 +31,7 @@ import {
 } from "./tile-render-values.ts";
 
 export {
+  ciDurationSub,
   compactSpan,
   daysLabel,
   DURATION_LABEL_HEIGHT,
@@ -87,8 +90,11 @@ const GITHUB_ERROR_BODY_BYTES = 4_096;
 const GITHUB_LOG_DETAIL_CHARS = 300;
 
 export interface GitHubRequestOptions {
-  // These expected HTTP responses stay quiet while transport failures still log.
+  /** Expected HTTP responses that stay quiet while transport failures log. */
   ignoreStatuses?: readonly number[];
+
+  /** The REST API version required by an endpoint newer than the default. */
+  apiVersion?: string;
 }
 
 export interface GitHubDownload {
@@ -268,12 +274,17 @@ interface GitHubResponseResult {
   operation: ActiveGitHubOperation;
 }
 
-function githubRequest(path: string, token: string, withTimeout: boolean): Promise<Response> {
+function githubRequest(
+  path: string,
+  token: string,
+  withTimeout: boolean,
+  apiVersion = "2022-11-28",
+): Promise<Response> {
   const init: RequestInit = {
     headers: {
       authorization: `Bearer ${token}`,
       accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
+      "x-github-api-version": apiVersion,
     },
   };
   if (withTimeout) init.signal = AbortSignal.timeout(15_000);
@@ -308,6 +319,7 @@ async function githubResponse(
   token: string,
   performance: boolean,
   withTimeout: boolean,
+  apiVersion?: string,
 ): Promise<GitHubResponseResult> {
   const normalizedPath = path.replace(/^\//, "");
   const operation: ActiveGitHubOperation = {
@@ -331,7 +343,7 @@ async function githubResponse(
       );
       operation.stage = "requesting GitHub";
     }
-    response = await githubRequest(path, token, withTimeout);
+    response = await githubRequest(path, token, withTimeout, apiVersion);
   } catch (error) {
     failed = true;
     operationError = error;
@@ -366,6 +378,7 @@ async function githubJson<T>(
     token,
     performance,
     true,
+    options.apiVersion,
   );
   if (!res.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(res.status);
@@ -465,6 +478,7 @@ async function githubDownloadResponse(
     token,
     performance,
     false,
+    options.apiVersion,
   );
   if (!response.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(response.status);
@@ -523,7 +537,7 @@ export async function runArtifactId(options: {
   const ids = (listed.artifacts ?? [])
     .filter((artifact) => artifact.name === name && !artifact.expired)
     .map((artifact) => artifact.id);
-  return ids.length === 0 ? undefined : Math.max(...ids);
+  return ids.length === 0 ? undefined : maxOf(ids);
 }
 
 // Cache an async result for ttlMs; a rejection is not cached (so it retries).
@@ -557,10 +571,72 @@ export function clampInt(v: string | null, def: number, lo: number, hi: number):
   return Math.max(lo, Math.min(hi, Math.floor(n)));
 }
 
+/**
+ * The error a run list is refused with when it is behind the workflow's newest
+ * runs: its newest run is older than one already collected, or a search does
+ * not reach the runs on the workflow's newest page.
+ */
+export const STALE_RUNS_ERROR = "run list behind the workflow's newest runs";
+
+/** A workflow run as far as telling which of two runs was created last. */
+export interface DatedRun {
+  id: number;
+  created_at: string;
+}
+
+/**
+ * Whether `fetched`, a run list read from `source`, has a newest run older than
+ * the newest run of `held`, the list already collected from it. A workflow's
+ * newest run only ever moves forward, so only a stale view of the workflow can
+ * list that. A stale list is logged with how many runs each list holds and
+ * their newest runs, which tells an empty reply from a lagging one.
+ */
+export function isStaleRunList(
+  source: string,
+  fetched: readonly DatedRun[],
+  held: readonly DatedRun[] | undefined,
+): boolean {
+  if (createdAt(newestRun(fetched)) >= createdAt(newestRun(held))) return false;
+  console.error(
+    `run source ${source} stale, ${STALE_RUNS_ERROR}. Fetched ` +
+      `${describeRuns(fetched)}; held ${describeRuns(held)}.`,
+  );
+  return true;
+}
+
+/**
+ * The run in `runs` created last, or `undefined` when none has a readable
+ * creation time.
+ */
+function newestRun(runs: readonly DatedRun[] | undefined): DatedRun | undefined {
+  let newest: DatedRun | undefined;
+  for (const run of runs ?? []) {
+    if (createdAt(run) > createdAt(newest)) newest = run;
+  }
+  return newest;
+}
+
+/**
+ * When `run` was created, or `-Infinity` for no run or an unreadable time, so
+ * a list without a dated run is older than any list with one.
+ */
+function createdAt(run: DatedRun | undefined): number {
+  const at = run ? Date.parse(run.created_at) : NaN;
+  return Number.isFinite(at) ? at : -Infinity;
+}
+
+/** Names the size of `runs` and its newest run. */
+function describeRuns(runs: readonly DatedRun[] | undefined): string {
+  const run = newestRun(runs);
+  const count = `${runs?.length ?? 0} run${runs?.length === 1 ? "" : "s"}`;
+  return `${count}, ${run ? `newest run ${run.id} created ${run.created_at}` : "none dated"}`;
+}
+
 // Turn a raw collector error into a short, calm tile message. The full error is
 // still logged; the dashboard shows a human phrase, not a stack trace or API
 // path.
 export function friendlyError(msg: string): string {
+  if (msg === STALE_RUNS_ERROR) return "run list out of date";
   const m = msg.toLowerCase();
   if (/connect|sending request|network|dns|refused|unreachable|timed ?out|timeout|econn/.test(m)) {
     return "source unreachable";
@@ -668,7 +744,7 @@ export function sparkline(
   // window can sit far from the historical range, e.g. a near-zero error rate).
   const recent = highlight && !highlight.scaleAll ? vals.slice(-highlight.count) : vals;
   const scaled = scaleValues(recent, scale);
-  const lo = Math.min(...scaled), hi = Math.max(...scaled);
+  const lo = minOf(scaled), hi = maxOf(scaled);
   const pad = (hi - lo) * 0.125 || 0.5; // 12.5% each side ≈ +25% range; a floor for a flat series
   const min = lo - pad, rng = (hi + pad) - min;
   // Place each point at its `xs` fraction of the width (shared axis), else evenly.
@@ -761,7 +837,7 @@ export function multiSparkline(
   const all = drawable.flatMap((line) => line.vals);
   if (!all.length) return "";
   const scaled = scaleValues(all, opts.scale);
-  const lo = Math.min(...scaled), hi = Math.max(...scaled);
+  const lo = minOf(scaled), hi = maxOf(scaled);
   // Match sparkline's centered flat range when trimming leaves two equal values.
   const pad = scaled === all || lo !== hi ? 0 : 0.5;
   const w = 220, h = 34, min = lo - pad, max = hi + pad, rng = (max - min) || 1;

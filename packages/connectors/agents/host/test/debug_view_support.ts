@@ -21,6 +21,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { fromFileUrl } from "@std/path";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import type { RawDataProvenance } from "../../debug-view/main.tsx";
 import { createBuilder } from "../../../../runner/src/builder/factory.ts";
 import type { Cell } from "../../../../runner/src/builder/types.ts";
@@ -93,18 +94,16 @@ export class ObservedServer extends MemoryV2Server.Server {
     ...args: Parameters<MemoryV2Server.Server["evaluateGraphQuery"]>
   ) {
     const result = await super.evaluateGraphQuery(...args);
-    this.returnedEntityIds.push(...result.entities.map((entity) => entity.id));
+    for (const entity of result.entities) {
+      this.returnedEntityIds.push(entity.id);
+    }
     return result;
   }
 }
 
 export function newSharedServer(): ObservedServer {
   return new ObservedServer({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: EMULATED_AUDIENCE },
   });
 }

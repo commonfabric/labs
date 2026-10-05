@@ -136,8 +136,10 @@ views:
 - `attemptedWrites`: the maybe-write target set, sourced from tx
   `markReadAsAttemptedWrite` reads performed while deciding whether a diff
   results in a write
-- `writes`: the actual changed/final write set sourced from v2 transaction
-  internals
+- `writes`: the recorded write set sourced from v2 transaction internals:
+  every write the transaction recorded, including one whose value returned to
+  where it started and an authoritative write of an unchanged value. The
+  reactivity log's `writes` list only changed paths and are not this set
 
 Boundary checking uses `attemptedWrites ∪ writes` as the target set for
 relevance and conservative target-side policy checks. Persisted output label-map
@@ -362,19 +364,15 @@ therefore carries its own guard:
   has rather than what any of them holds, so the read is `nonRecursive`, and the
   flow join keys on that: a recursive read consumes every label-map entry at or
   below the path it names, a `nonRecursive` one consumes only the entry at that
-  path, so this read consumes the document's root entry and nothing else.
-  Reading a meta member instead would consume the user data an entry of the same
-  name covers, because canonicalization strips a leading `value` and a document
-  with a user field named `slug` labels it at the logical path the raw
-  `["slug"]` member reads. The read carries no commit precondition, because a
-  precondition would turn a whole-document write into a read-modify-write, and
-  the blind root writes the runtime makes would lose the race against any
-  advance of the document they replace. What that leaves open is an erasure
-  racing the guard, never a forgery: the two shapes that name a field are
-  refused from the write itself, with no read at all. The refusal is also the
-  first of these guards to run, ahead of the ones keyed by target id, so which
-  document a write names cannot decide whether it is asked for an authorization.
-  Meta fields stay readable.
+  path, so this read consumes the document's root entry and nothing else. The
+  read carries no commit precondition, because a precondition would turn a
+  whole-document write into a read-modify-write, and the blind root writes the
+  runtime makes would lose the race against any advance of the document they
+  replace. What that leaves open is an erasure racing the guard, never a
+  forgery: the two shapes that name a field are refused from the write itself,
+  with no read at all. The refusal is also the first of these guards to run,
+  ahead of the ones keyed by target id, so which document a write names cannot
+  decide whether it is asked for an authorization. Meta fields stay readable.
 - The reserved siblings — the `cfc` label map and `source` — are the runtime's,
   and a write reaching either from outside the privileged persistence scope is
   recorded, with the commit boundary turning each record into a fail-closed
@@ -461,7 +459,10 @@ Storage rules:
 ### Path Canonicalization
 
 The canonical logical path format is `string[]` with the wrapper segment
-`"value"` stripped. Root is `[]`.
+`"value"` stripped. Root is `[]`, the payload root, which the document root `[]`
+also becomes. A document path outside `value` names one of the document's own
+members, such as `source` or `slug`, and has no logical path: it is never
+matched as a payload path (spec §4.6.5).
 
 When we need deterministic hashing or ordering, encode that canonical path as a
 JSON Pointer string derived from the segment array.

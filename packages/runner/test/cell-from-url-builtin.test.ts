@@ -1,6 +1,6 @@
 import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
@@ -41,10 +41,12 @@ describe("cellFromUrl builtin", () => {
     url: string,
     hosts?: string[],
     spaceHost?: string,
+    settle?: () => Promise<void>,
   ): Promise<
     {
       pending: unknown;
       id: string | undefined;
+      space?: string;
       path?: readonly unknown[];
       scope?: string;
     }
@@ -70,6 +72,11 @@ describe("cellFromUrl builtin", () => {
     tx = runtime.edit();
 
     await result.pull();
+    if (settle !== undefined) {
+      await settle();
+      await runtime.idle();
+      await result.pull();
+    }
 
     const pending = result.key("pending").get();
 
@@ -85,6 +92,7 @@ describe("cellFromUrl builtin", () => {
     return {
       pending,
       id: link?.id as string | undefined,
+      space: link?.space,
       path: link?.path,
       scope: link?.scope,
     };
@@ -207,18 +215,95 @@ describe("cellFromUrl builtin", () => {
     expect(resolved).toBeUndefined();
   });
 
-  it("resolves a URL naming an unknown space to no cell", async () => {
-    // A space named rather than addressed resolves only from the runtime's
-    // cache. Until it is there, the honest answer is that this names no cell
-    // — not a cell in whichever space happened to be asking.
+  it("resolves a URL naming a legacy space in the space the name resolves to", async () => {
+    // A space named rather than addressed is a legacy name, which resolves to
+    // the DID the name has always named. Resolving opens and creates nothing.
     const id = anExistingCell();
-    const { pending, id: resolved } = await resolve(
+    const { pending, id: resolved, space: named } = await resolve(
       `https://fabric.example/some-space-name/${id}`,
       HOSTS,
+      undefined,
+      async () => {
+        await runtime.resolveLegacySpaceName("some-space-name");
+      },
     );
 
     expect(pending).toBe(false);
-    expect(resolved).toBeUndefined();
+    expect(resolved).toBe(id);
+    expect(named).toBe(await legacySpaceDid("some-space-name"));
+    expect(named).not.toBe(space);
+  });
+
+  it("stays pending when a legacy name it no longer names finishes deriving, and settles once the current one does", async () => {
+    // Each derivation finishes only when the test says so, and the order the
+    // test picks is the one a slow first name produces: it finishes after
+    // the URL has moved on to a second name. Clearing `pending` then would
+    // run the action again, which would ask for the second name twice.
+    const derive = runtime.resolveLegacySpaceName.bind(runtime);
+    const gates = new Map<string, PromiseWithResolvers<void>>();
+    const requested: string[] = [];
+    const gate = (name: string) => {
+      let entry = gates.get(name);
+      if (entry === undefined) {
+        entry = Promise.withResolvers<void>();
+        gates.set(name, entry);
+      }
+      return entry;
+    };
+    runtime.resolveLegacySpaceName = async (name) => {
+      requested.push(name);
+      await gate(name).promise;
+      return await derive(name);
+    };
+    // The work each derivation's completion runs as, in the order the
+    // builtin starts them.
+    const completions: Promise<unknown>[] = [];
+    runtime.asyncWorkObserver = (work) => void completions.push(work);
+
+    const id = anExistingCell();
+    const urlFor = (name: string) => `https://fabric.example/${name}/${id}`;
+    const url = runtime.getCell<string>(space, "cell-from-url-names", {
+      type: "string",
+    }, tx);
+    url.withTx(tx).set(urlFor("first-name"));
+    const builtin = byRef("cellFromUrl");
+    const testPattern = pattern<{ url: string }>(({ url }) =>
+      builtin({ url, hosts: HOSTS })
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "cell-from-url-names-result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, { url }, resultCell);
+    tx.commit();
+    tx = runtime.edit();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(true);
+
+    const edit = runtime.edit();
+    url.withTx(edit).set(urlFor("second-name"));
+    edit.commit();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(true);
+
+    gate("first-name").resolve();
+    await completions[0];
+    await runtime.idle();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(true);
+    expect(requested).toEqual(["first-name", "second-name"]);
+
+    gate("second-name").resolve();
+    await runtime.settled();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(false);
+    const slot = result.key("cell");
+    const sub = runtime.getCellFromLink(parseLink(slot.getRaw(), slot)!);
+    const held = parseLink(sub.getRaw(), sub);
+    expect(held?.id).toBe(id);
+    expect(held?.space).toBe(await legacySpaceDid("second-name"));
   });
 
   for (const destination of ["invalid URL", "missing argument member"]) {

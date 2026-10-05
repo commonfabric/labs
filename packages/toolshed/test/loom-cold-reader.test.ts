@@ -3,7 +3,6 @@ import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { Server } from "@commonfabric/memory/v2/server";
-import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
 import { Identity } from "@commonfabric/identity";
@@ -16,6 +15,7 @@ import {
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { debugVDOMSchema } from "@commonfabric/runner/schemas";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   genesisAcl,
   LoopbackSessionFactory,
@@ -45,13 +45,7 @@ describe("loom-cold-reader", () => {
       const operator = await Identity.fromPassphrase("cold-loom-operator");
       const server = new Server({
         store: new URL(`memory://cold-loom-${crypto.randomUUID()}`),
-        authorizeSessionOpen(message, context) {
-          const principal = (message.authorization as { principal?: unknown })
-            ?.principal;
-          return typeof principal === "string"
-            ? principal
-            : verifySessionOpenAuthorization(message, context);
-        },
+        authorizeSessionOpen: authorizeLoopbackSessionOpen,
         sessionOpenAuth: { audience: "did:key:cold-loom-service" },
         acl: { mode: "enforce", delegatingDids: [operator.did()] },
         subscriptionRefreshDelayMs: 0,

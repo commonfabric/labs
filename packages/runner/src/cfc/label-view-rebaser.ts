@@ -7,9 +7,11 @@ import { isDeepFrozen } from "@commonfabric/data-model";
 import { isOrClause } from "./clause.ts";
 import {
   type CfcLabelView,
+  cfcLabelViewOriginSpaces,
   cloneCfcLabel,
   cloneCfcLabelView,
   rebaseCfcLabelView,
+  withCfcLabelViewOrigins,
 } from "./label-view-core.ts";
 
 /** Owns a base view and its canonical slices until the base is replaced. */
@@ -44,7 +46,7 @@ export class CfcLabelViewRebaser {
     }
     const slice = this.#slices.get(key);
     if (slice === undefined) return undefined;
-    return {
+    return withCfcLabelViewOrigins({
       version: 1,
       entries: slice.entries.map((entry) => {
         const label = cloneCfcLabel(entry.label);
@@ -61,6 +63,6 @@ export class CfcLabelViewRebaser {
           ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
         };
       }),
-    };
+    }, cfcLabelViewOriginSpaces(slice));
   }
 }

@@ -15,6 +15,7 @@ import {
   parseJUnit,
   preloadModulePath,
   readNameMaps,
+  recordingArguments,
   RECORDS_DIR_VARIABLE,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
@@ -35,10 +36,6 @@ const FIXTURE_CONFIG = {
       .href,
     "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
-    "@records/registration": new URL(
-      "../../src/records/registration.ts",
-      import.meta.url,
-    ).href,
   },
 };
 
@@ -102,6 +99,14 @@ interface RunOptions {
    * can leave a name map in. True unless a test says otherwise.
    */
   write?: boolean;
+
+  /**
+   * The permission flags of a test task the run stands in for, which it
+   * is started with alongside what `recordingArguments()` adds to them.
+   * Without them, the run may read and write everything that `write`
+   * lets it and takes the preload alone.
+   */
+  flags?: readonly string[];
 }
 
 /**
@@ -122,32 +127,39 @@ async function runFixture(
   files: readonly string[],
   options: RunOptions = {},
 ): Promise<Deno.CommandOutput> {
-  const { before = [], skips, write = true } = options;
-  const env: Record<string, string> = {
-    [RECORDS_DIR_VARIABLE]: fixture.spool,
-    [SKIP_LIST_VARIABLE]: "",
-  };
+  const { before = [], flags, skips, write = true } = options;
+  let skipList: string | undefined;
   if (skips !== undefined) {
-    const path = join(fixture.dir, "skips.json");
+    skipList = join(fixture.dir, "skips.json");
     await Deno.writeTextFile(
-      path,
+      skipList,
       typeof skips === "string" ? skips : serializeSkipList(skips),
     );
-    env[SKIP_LIST_VARIABLE] = path;
   }
+  const permissions = flags ??
+    ["--allow-read", ...(write ? ["--allow-write"] : []), "--allow-env"];
+  const recording = flags === undefined
+    ? [`--preload=${preloadModulePath()}`]
+    : recordingArguments(flags, {
+      spool: fixture.spool,
+      root: fixture.dir,
+      ...(skipList === undefined ? {} : { skipList }),
+    });
   return await new Deno.Command(Deno.execPath(), {
     args: [
       "test",
-      "--allow-read",
-      ...(write ? ["--allow-write"] : []),
-      "--allow-env",
+      "--no-check",
+      ...permissions,
       ...before.map((module) => `--preload=${module}`),
-      `--preload=${preloadModulePath()}`,
+      ...recording,
       `--junit-path=${fixture.junit}`,
       ...files,
     ],
     cwd: fixture.runIn,
-    env,
+    env: {
+      [RECORDS_DIR_VARIABLE]: fixture.spool,
+      [SKIP_LIST_VARIABLE]: skipList ?? "",
+    },
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -344,26 +356,29 @@ describe("emptied", () => {
 });
 `;
 
-// Two modules that register a suite for whoever calls them, one
-// declaring itself machinery and one not. What each leaf's file comes
-// out as is the whole of what the declaration does.
-const DECLARED_REGISTRAR = `import { describe, it } from "@std/testing/bdd";
-import { registerFrameworkModule } from "@records/registration";
-registerFrameworkModule(import.meta.url);
-export function suite(title: string): void {
-  describe(title, () => {
-    it("leaf", () => {});
-  });
+// A module that registers tests for whichever file calls it, the way a
+// shared suite does: leaves inside the caller's own describe, and a
+// top-level test named by the caller.
+const REGISTRAR = `import { it } from "@std/testing/bdd";
+export function leaves(): void {
+  it("kept", () => {});
+  it("dropped", () => {});
+}
+export function test(name: string): void {
+  Deno.test(name, () => {});
 }
 `;
 
-const BARE_REGISTRAR = `import { describe, it } from "@std/testing/bdd";
-export function suite(title: string): void {
-  describe(title, () => {
-    it("leaf", () => {});
-  });
-}
+/** A test file registering all of its tests through `REGISTRAR`. */
+function registeredThrough(title: string): string {
+  return `import { describe } from "@std/testing/bdd";
+import { leaves, test } from "./registrar.ts";
+describe("${title}", () => {
+  leaves();
+});
+test("${title} bare");
 `;
+}
 
 const BARE_FILE = `Deno.test("bare kept", () => {});
 Deno.test("bare dropped", () => {});
@@ -654,25 +669,45 @@ describe("preload", () => {
     }
   });
 
-  it("attributes a suite a declared registrar built to its caller", async () => {
+  it("attributes a test a helper module registered to the file the run was given", async () => {
     const fixture = await makeFixture({
-      "declared.ts": DECLARED_REGISTRAR,
-      "bare.ts": BARE_REGISTRAR,
-      "declared.test.ts":
-        `import { suite } from "./declared.ts";\nsuite("declared");\n`,
-      "bare.test.ts": `import { suite } from "./bare.ts";\nsuite("bare");\n`,
+      "registrar.ts": REGISTRAR,
+      "one.test.ts": registeredThrough("one"),
+      "two.test.ts": registeredThrough("two"),
     });
     try {
-      const run = await runFixture(fixture, [
-        "declared.test.ts",
-        "bare.test.ts",
-      ]);
+      const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"]);
       assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
-      expect(names.get("declared > leaf")).toEqual("declared.test.ts");
-      // Undeclared, so the map names the module that called `describe`
-      // rather than the file that asked it to.
-      expect(names.get("bare > leaf")).toEqual("bare.ts");
+      expect(names.get("one > kept")).toEqual("one.test.ts");
+      expect(names.get("one bare")).toEqual("one.test.ts");
+      expect(names.get("two > kept")).toEqual("two.test.ts");
+      expect(names.get("two bare")).toEqual("two.test.ts");
+      expect([...names.values()]).not.toContain("registrar.ts");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("skips a test a helper module registered by the file the run was given", async () => {
+    const fixture = await makeFixture({
+      "registrar.ts": REGISTRAR,
+      "one.test.ts": registeredThrough("one"),
+      "two.test.ts": registeredThrough("two"),
+    });
+    try {
+      const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"], {
+        skips: { "one.test.ts": ["one > dropped", "one bare"] },
+      });
+      assert(run.success, output(run));
+      const reported = await outcomes(fixture);
+      expect(reported.get("one > kept")).toEqual("pass");
+      expect(reported.get("one > dropped")).toEqual("skip");
+      expect(reported.get("one bare")).toEqual("skip");
+      // The other file registered the same leaves through the same
+      // module, and the list names nothing of it.
+      expect(reported.get("two > dropped")).toEqual("pass");
+      expect(reported.get("two bare")).toEqual("pass");
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }
@@ -741,6 +776,34 @@ describe("preload", () => {
       expect(reported.get("name, options and body")).toEqual("skip");
       expect(reported.get("options and body")).toEqual("skip");
       expect(reported.get("whole definition")).toEqual("pass");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("skips a listed test in a run whose own flags read and write nothing", async () => {
+    // A workspace member whose task grants `--allow-env` and nothing else
+    // is started with that and what the recording arguments add to it.
+    // Those additions are all the preload has to read the skip list with,
+    // and to climb from the test file to the repository root that the
+    // list is keyed from.
+
+    const fixture = await makeFixture(
+      { "member/bare.test.ts": BARE_FILE },
+      "member",
+    );
+    try {
+      const run = await runFixture(fixture, ["bare.test.ts"], {
+        flags: ["--allow-env"],
+        skips: { "member/bare.test.ts": ["bare dropped"] },
+      });
+      assert(run.success, output(run));
+      expect(output(run)).not.toContain("test records:");
+      const reported = await outcomes(fixture);
+      expect(reported.get("bare kept")).toEqual("pass");
+      expect(reported.get("bare dropped")).toEqual("skip");
+      const names = await readNameMaps(fixture.spool);
+      expect(names.get("bare kept")).toEqual("member/bare.test.ts");
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }

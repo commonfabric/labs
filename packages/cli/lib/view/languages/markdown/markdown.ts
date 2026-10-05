@@ -14,6 +14,8 @@
 import { decodeHTMLStrict as decodeEntities } from "entities";
 import { Lexer } from "marked";
 
+import { maxOf } from "@commonfabric/utils/math";
+
 import { cpLen } from "../../ansi.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";
 import type {
@@ -235,7 +237,8 @@ function renderMarkdownBlocks(
     for (let i = 0; i < source.length; i++) {
       out[range.start + i] = rendered[i] ?? emptyLine();
     }
-    declarations.push(...htmlDeclarationRanges(text, tokenOffset, token));
+    const tokenDeclarations = htmlDeclarationRanges(text, tokenOffset, token);
+    for (const declaration of tokenDeclarations) declarations.push(declaration);
   }
   applyHtmlDeclarations(text, rawLines, out, declarations, inlineLexer);
   return out;
@@ -1214,7 +1217,7 @@ function renderTableBlock(
   const widths = align.map((_, column) =>
     Math.max(
       1,
-      ...richRows.map((row) => cpLen(row[column]?.text ?? "")),
+      maxOf(richRows.map((row) => cpLen(row[column]?.text ?? ""))),
     )
   );
   return source.map((_, index) =>
@@ -1433,7 +1436,7 @@ function headingTree(
       if (heads[k].level > level) {
         // A deeper heading with no parent at this level: attach at this depth.
         const sub = build(k, heads[k].level, depth);
-        nodes.push(...sub.nodes);
+        for (const node of sub.nodes) nodes.push(node);
         k = sub.next;
         continue;
       }

@@ -326,6 +326,12 @@ describe("research session context", () => {
       store.database.exec(
         "ALTER TABLE chat_session DROP COLUMN transcript_omissions",
       );
+      store.database.exec(
+        "ALTER TABLE chat_session DROP COLUMN handle_table",
+      );
+      store.database.exec(
+        "ALTER TABLE chat_session DROP COLUMN client_action_catalog_answers",
+      );
       store.close();
       const exec = Database.prototype.exec;
       {
@@ -335,7 +341,7 @@ describe("research session context", () => {
           function (this: Database, ...args: Parameters<Database["exec"]>) {
             if (
               args[0] ===
-                "ALTER TABLE chat_session ADD COLUMN transcript_omissions TEXT"
+                "ALTER TABLE chat_session ADD COLUMN handle_table TEXT"
             ) {
               throw new Error("migration refused");
             }

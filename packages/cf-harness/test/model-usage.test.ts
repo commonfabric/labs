@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import {
   estimateOpenAIModelUsageCostUsd,
   normalizeOpenAIUsage,
@@ -197,4 +199,43 @@ Deno.test("GPT-5.6 long-context pricing applies to the full request", () => {
     }),
     (272_001 * 2.5 * 2 + 100 * 15 * 1.5) / 1_000_000,
   );
+});
+
+describe("current OpenAI model usage estimates", () => {
+  it("estimates GPT-6.1 Sol prices for cached reads, writes, and long context", () => {
+    expect(estimateOpenAIModelUsageCostUsd("gpt-6.1-sol", {
+      inputTokens: 2_000,
+      cachedInputTokens: 1_200,
+      cacheWriteTokens: 600,
+      outputTokens: 300,
+    })).toBe(0.00502);
+    expect(estimateOpenAIModelUsageCostUsd("gpt-6.1-sol", {
+      inputTokens: 300_000,
+      cachedInputTokens: 100_000,
+      cacheWriteTokens: 100_000,
+      outputTokens: 1_000,
+    })).toBe(0.935);
+  });
+
+  it("prices Luna 6 cache details and long context", () => {
+    expect(estimateOpenAIModelUsageCostUsd("gpt-6-luna", {
+      inputTokens: 2_000,
+      cachedInputTokens: 1_200,
+      cacheWriteTokens: 600,
+      outputTokens: 300,
+    })).toBe(0.000257);
+    expect(estimateOpenAIModelUsageCostUsd("gpt-6-luna", {
+      inputTokens: 300_000,
+      cachedInputTokens: 100_000,
+      cacheWriteTokens: 100_000,
+      outputTokens: 1_000,
+    })).toBe(0.04775);
+  });
+
+  it("withholds a Sol 6.1 estimate when either token total is missing", () => {
+    for (const usage of [{ inputTokens: 100 }, { outputTokens: 10 }]) {
+      expect(withEstimatedOpenAIModelUsageCost("gpt-6.1-sol", usage))
+        .toEqual({ ...usage, estimateWithheldReason: "missing-token-counts" });
+    }
+  });
 });

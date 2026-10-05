@@ -15,8 +15,8 @@ deno task test
 
 **Important:** Always use `deno task test` from the root, NOT `deno test`, as the task includes necessary flags.
 
-A package's `test` task is no substitute for a type check: some packages' tests
-skip checking outright, and the rest check only the modules their tests reach.
+A package's `test` task is no substitute for a type check: every `deno test`
+runs under `--no-check`, and the type check is a suite of its own.
 `deno task check` at the root checks the whole workspace at once, so run both:
 
 ```bash
@@ -62,9 +62,9 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A handful of packages run a test runner of their own — `packages/dashboard`
-and `packages/identity` among them — and appended arguments reach whatever that
-runner does with them, which its own source says.
+A package can run a test runner of its own, as `packages/identity` does, and
+appended arguments reach whatever that runner does with them, which its own
+source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
@@ -222,11 +222,11 @@ summer and 03:00 in winter, early on a Pacific day either way. It asks
 calls the CI workflow at the head of `main` with that seed, which runs every CI
 test suite under it. When a test fails, the run fails. The run's checks on the
 commit are listed under "Tomorrow's order", apart from the checks of the
-commit's own run. The CI workflow skips its coverage and topology gates, and
-its attestation and deploy jobs, when another workflow calls it. The records
-relay follows the workflow, and its records carry the seed they ran under, so
-[test selection](test-selection.md) keeps them apart from the commit's own
-runs.
+commit's own run. When another workflow calls the CI workflow, it skips
+`Status`, which holds the coverage and topology checks. It also skips the build,
+attestation and deploy jobs. The records relay follows the workflow, and its
+records carry the seed they ran under, so [test selection](test-selection.md)
+keeps them apart from the commit's own runs.
 
 The order a run takes depends on the set of test files as well as the seed:
 `deno test --shuffle` and the runners this repository owns permute the whole
@@ -273,15 +273,27 @@ choose:
   than an accident of it.
 - The CLI's shell harnesses under `packages/cli/integration/` run in a fixed
   order for that same reason: each is one scenario driven end to end.
+- `deno task integration pattern-tests` runs each `.test.tsx` file in a
+  `cf test` process of its own, five at a time. Each process has its own
+  store, so the order the files start in decides how long the run takes and
+  nothing else. The files a continuous-integration lane expects to take
+  longest start first, so the lane finishes close to the time it was charged
+  for. Files of equal expected time, and every file of a local run, which has
+  no such figures, start in the order the seed puts them in. A local run can
+  therefore start the files in a different order from a lane at the same
+  commit. That changes nothing a test sees, because each file runs alone in
+  its process and its steps run in the order they are written, so every step
+  runs locally in the order it ran in the lane.
 
 #### Writing a task that runs tests
 
 A `deno test` written anywhere in this repository takes the seed from the root
-`test-seed` task. In a package, that is its `deno-test` task, which its `test`
-task runs through `tasks/run-member-tests.ts`:
+`test-seed` task, and passes `--no-check`, since the type check is a suite of
+its own. In a package, that is its `deno-test` task, which its `test` task runs
+through `tasks/run-member-tests.ts`:
 
 ```json
-"deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-read test/"
+"deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read test/"
 ```
 
 `deno task -q test-seed` resolves to the root task from any directory inside
@@ -290,6 +302,9 @@ standard error. `deno task check-test-shuffle` fails when a command that
 starts a test runner does not carry a seed, and lists the runners this
 repository owns along with the ones whose order is the test.
 `packages/test-support/src/shuffle.ts` holds the seed and the permutation.
+`tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
+workflow, or a shell script writes without `--no-check`; a lane passes the flag
+to every `deno test` it builds whatever the task says.
 
 ### Browser tests in agent sandboxes
 
@@ -365,11 +380,12 @@ of plain `deno test` discovery, and once as the argument list handed to
 `deno-web-test`. Adding a browser test means naming the file and nothing
 further.
 
-The two matches need not sit on one task line. `packages/dashboard` spreads
-them across the runner script its test task starts and the `test-browser` task
-that runner then calls. What matters is that both are the same glob, so neither
-can fall behind the other. The package-level task remains the one command
-authors and the root workspace runner invoke, and it owns every step.
+The two matches sit on two task lines, `deno-test` and `browser-test`, which
+the package's `test` task runs in turn. What matters is that both are the same
+glob, so neither can fall behind the other. The test topology reads the second
+one to find the files the browser half runs. The package-level task remains the
+one command authors and the root workspace runner invoke, and it owns every
+step.
 
 The glob hands its files to `deno-web-test` in the order the shell expands
 them, which is alphabetical rather than the order anyone chose. Tests in one
@@ -432,7 +448,7 @@ TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno tas
 After the shell reports that it is listening, run the browser test:
 
 ```bash
-API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
+API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
 ```
 
 Each outage asserts that the relay closed live socket endpoints before the
@@ -476,9 +492,11 @@ that set it:
 curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 ```
 
-`servingLoop` is null on the OFF arm and an object on the ON arm, and this is
-the check CI's own posture-probe step makes against the server; the paragraph
-below covers the shell half, which that step asserts separately.
+`servingLoop` is null on the OFF arm and an object on the ON arm. A lane makes
+this check against every Toolshed server its capabilities start, through
+`verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
+function also checks the shell half, the define baked into the shell, which
+`/api/meta` reports as `shellServerExecutionDefine`.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is
@@ -523,6 +541,78 @@ overriding a true global default, or a true web override with the global default
 false. Restart the servers through the integration runner for each combination
 so the browser bundle is rebuilt with that environment.
 
+### The ON topology in one process
+
+A runtime on the ON arm commits the event a handler is fired with and nothing
+else; the handler runs on a serving loop beside the memory server. A test that
+hosts its own memory server and runs a client ON therefore needs that loop
+too. Without it the server admits the event and nothing ever delivers it, so
+a wait on the consequence never resolves and the test hangs rather than
+failing.
+
+`@commonfabric/runner/executor/serving-memory-server.deno` supplies the pair:
+a memory server over a fresh non-persistent store, with an `ExecutorHost`
+attached whose serving runtimes are built by the same factory toolshed uses.
+It comes in two shapes, by how the test's clients reach it:
+
+- `startServingMemoryServer({ apiUrl })` is reached in-process. Clients connect
+  with `EmulatedStorageManager.connectTo(serving.server, ...)`, and session
+  opens are authorized by the principal they name, as with
+  `newLoopbackServer()`.
+- `listenServingMemoryServer()` also listens on a localhost websocket at
+  `serving.url`, for a runtime built with the `remoteClient` preset — in the
+  test's realm, in a Deno Worker, or in a subprocess. It wraps
+  `StandaloneMemoryServer`, verifies signed session opens as toolshed does, and
+  takes the same `serve` option for the plain HTTP requests that address
+  receives. Its serving runtimes compile against `serving.url` unless given an
+  `apiUrl`. Its memory server checks no access list unless given `aclMode`,
+  which also lists the service identity as the server's delegating
+  principal, as a toolshed running server execution lists its own.
+
+Both return a handle that `await using` closes, serving loop first. The host
+keeps the process's ambient server-execution flag on while it lives, so a
+runtime in the same realm that asks for the OFF arm runs ON beside it. The
+serving loop's own options pass through: `policy`, the `on*` diagnostic hooks,
+and `ensureSpaceRoots`, which defaults to `false` here, the switch the serving
+loop keeps for tests. `prepareStorageManager` hands the test each serving
+runtime's storage manager before the runtime is built, which is where a stub on
+one of its providers goes.
+
+```ts
+// Shown at module scope.
+import { Identity } from "@commonfabric/identity";
+import { Runtime } from "@commonfabric/runner";
+import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+
+const alice = await Identity.fromPassphrase("alice");
+await using serving = await startServingMemoryServer({
+  apiUrl: new URL(import.meta.url),
+});
+const storageManager = EmulatedStorageManager.connectTo(serving.server, {
+  as: alice,
+});
+const runtime = new Runtime({
+  apiUrl: new URL(import.meta.url),
+  storageManager,
+  experimental: { serverExecution: true },
+});
+```
+
+`serving.idle()` covers the memory server and not the loop: it says the server
+has applied what it received, while a served consequence may still be in a
+wave. Wait for the consequence itself, the way any other test waits for a
+value.
+
+A test that should follow whichever posture a run resolves, rather than fixing
+one, resolves it as a deployed entry point does — the explicit
+`EXPERIMENTAL_SERVER_EXECUTION`, else `SERVER_EXECUTION_DEFAULT_ENABLED` — and
+starts a serving server for ON and a plain one for OFF. The pattern
+`MultiRuntimeHarness` and `packages/cli/test/agent-connections.serial.test.ts`
+do this, so each runs on whichever arm the CI role selects. A test over the
+harness whose expectations differ by arm asks `resolveServerExecution()`,
+beside the harness, which arm that is.
+
 ### Tests that start Deno
 
 For deliberate import-map and lockfile changes, follow the
@@ -564,7 +654,7 @@ a path holding a space one argument:
 ```
 
 A test launched from a script can read `Deno.execPath()` directly, as
-`packages/dashboard/test/runner.ts` does with `--allow-run=${Deno.execPath()},git`.
+`tasks/run-member-tests.test.ts` does with `--allow-run=${deno}`.
 
 That a task's `deno` is the running one rather than one found on `PATH` is what
 makes the computed form name the right binary, so
@@ -582,14 +672,32 @@ The inherited environment includes `DENO_COVERAGE_DIR`, so under coverage a
 child Deno writes coverage profiles of its own as it exits. A signal that
 reaches a child while it is exiting either loses its profiles or leaves one
 truncated, and one truncated profile makes `deno coverage` refuse every profile
-in the job, which then reports no coverage at all. So a test whose child is
-done, or is waiting only on input the test controls, ends it by closing that
-input and then awaits its `status` rather than sending it a signal. A test
-whose subject is a child killed while it runs is not in that position: the
-kill loses that child's coverage, but it cannot truncate a profile. `packages/memory/test/inbox-store.test.ts`
-ends its writer processes by closing their input, and
-`packages/memory/test/inbox-store-child-coverage.test.ts` fails when any of them
-loses its profile.
+of that suite and member, whose report then holds no coverage at all. So a test
+whose child is done, or is waiting only on input the test controls, ends it by
+closing that input and then awaits its `status` rather than sending it a signal.
+A test whose subject is a child killed while it runs is not in that position:
+the kill loses that child's coverage, but it cannot truncate a profile.
+
+A web worker that a test starts writes coverage profiles too, and it writes them
+while it shuts down, after `terminate()` has already returned. A process that
+exits before that write finishes loses the worker's profiles or leaves one
+truncated. A `Worker` object gives no signal when its shutdown is done, but in
+Deno a Web Lock that a web worker holds is released only when the worker's
+runtime is torn down, which comes after that write.
+`@commonfabric/utils/worker-lifetime` is built on that. The worker calls
+`holdWorkerLifetimeLock()` and posts the name it returns no later than the
+first reply its creator waits for, and the creator ends the worker with
+`terminateWorker()`, which settles once the worker has been torn down. Where the
+worker could take no lock, as where Web Locks are missing or refused, the name
+is `undefined` and `terminateWorker()` settles as soon as `terminate()` returns.
+A test, a test harness, or a runtime transport that starts a Deno web worker
+ends it that way. A termination needs the wait wherever it can be the last thing
+its process does, and under a shuffled order, or in a lane that runs one test
+from a file, any test's termination can be.
+`packages/runtime-client/test/client/transport-web-worker-coverage.test.ts`
+fails when the runtime worker loses its profile. A Node `worker_threads` worker
+cannot be waited for this way, because Deno releases its locks when it is
+terminated.
 
 ### Test Structure
 
@@ -830,9 +938,10 @@ files, and why `deno task check-local-program` refuses a
   wait machinery itself.
 - [COVERAGE.md](COVERAGE.md) — how CI measures coverage. It explains the two
   mechanisms (Deno's V8 coverage for runtime code, and transformer-based
-  coverage for authored patterns) and how both feed the coverage-debt gate.
-- [CI_PERFORMANCE.md](CI_PERFORMANCE.md) — the CI wall-time policy, and the
-  coverage-debt baseline and ratchet markers that gate a pull request.
+  coverage for authored patterns), how both feed the repository-wide trend, and
+  the measured-set gate that holds a pull request to its baseline.
+- [CI_PERFORMANCE.md](CI_PERFORMANCE.md) — the CI wall-time policy: the required
+  check, the dials that govern the lanes, and the step and job bounds.
 - [BENCHMARKS.md](BENCHMARKS.md) — how `*.bench.ts` files run in CI, how the
   team ops dashboard charts their trends, and the naming and stdout
   constraints a bench file must satisfy.

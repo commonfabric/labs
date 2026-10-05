@@ -6,6 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { atomPropagationClass } from "../../src/cfc/atom-classes.ts";
 import { uniqueCfcAtoms } from "../../src/cfc/observation.ts";
@@ -50,13 +51,26 @@ function scan(
   const template = (entry: LabelMapEntry) =>
     (entry.origin === "structure" || entry.origin === "derived") &&
     entry.path.includes("*");
+  // A standalone probe asks which reference sits at the slot it names, so it
+  // drops the runtime-minted templates strictly beneath that slot.
+  const beneathProbe = (entry: LabelMapEntry) =>
+    shape === "followRef" && template(entry) &&
+    entry.path.length > path.length && isPrefix(path, entry.path);
+  // A label-metadata entry is keyed relative to the stored document, so a
+  // payload lookup never sees it (spec §4.6.4), whatever class it carries.
   const selected = entries.filter((entry) =>
-    readConsumesEntry(shape, entry) && !(machinery && template(entry))
+    entry.origin !== "label-metadata" &&
+    readConsumesEntry(shape, entry) && !(machinery && template(entry)) &&
+    !beneathProbe(entry)
   );
+  // A concrete structure entry and an enumerate entry label a container
+  // node, so they apply to a read of that node and not to a read beneath it.
+  const atItsNodeOnly = (entry: LabelMapEntry) =>
+    entry.observes === "enumerate" ||
+    (entry.origin === "structure" && !template(entry));
   const ancestors = selected.filter((entry) =>
     isPrefix(entry.path, path) &&
-    (entry.origin !== "structure" || template(entry) ||
-      entry.path.length === path.length)
+    (!atItsNodeOnly(entry) || entry.path.length === path.length)
   );
   const buckets = new Map<string, LabelMapEntry[]>();
   for (const entry of ancestors) {
@@ -68,15 +82,14 @@ function scan(
     buckets.set(bucket, group);
   }
   const consumed = [...buckets.values()].flatMap((group) => {
-    const longest = Math.max(...group.map((entry) => entry.path.length));
+    const longest = maxOf(group.map((entry) => entry.path.length));
     return group.filter((entry) => entry.path.length === longest);
   });
   if (!nonRecursive) {
-    consumed.push(
-      ...selected.filter((entry) =>
-        entry.path.length > path.length && isPrefix(path, entry.path)
-      ),
+    const descendants = selected.filter((entry) =>
+      entry.path.length > path.length && isPrefix(path, entry.path)
     );
+    for (const entry of descendants) consumed.push(entry);
   }
   return {
     confidentiality: uniqueCfcAtoms(
@@ -97,7 +110,7 @@ function corpus(): string[][] {
     level = level.flatMap((path) =>
       ["a", "b", "*", ""].map((segment) => [...path, segment])
     );
-    paths.push(...level);
+    for (const path of level) paths.push(path);
   }
   return paths;
 }
@@ -118,6 +131,7 @@ describe("deriveFlowJoin()", () => {
         derived: true,
         structure: true,
         link: true,
+        minted: true,
         "external-ingest": true,
         "label-metadata": true,
       };
@@ -133,11 +147,16 @@ describe("deriveFlowJoin()", () => {
         "followRef",
         "labelMetadata",
       ] as const;
+      // A stored entry of the label-metadata origin is a template: keyed
+      // under the label subtree and observed by the `labelMetadata` class.
+      // Any other spelling of that origin makes the envelope unreadable.
       const entries: LabelMapEntry[] = paths.flatMap((path, index) =>
         origins.map((origin, offset): LabelMapEntry => ({
-          path,
+          path: origin === "label-metadata" ? ["cfc", "labels", ...path] : path,
           origin,
-          observes: classes[(index + offset) % classes.length],
+          observes: origin === "label-metadata"
+            ? "labelMetadata"
+            : classes[(index + offset) % classes.length],
           label: {
             confidentiality: ["shared", `entry-${index}-${offset}`],
             integrity: [

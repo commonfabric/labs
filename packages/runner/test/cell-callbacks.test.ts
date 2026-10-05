@@ -15,7 +15,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { JSONSchema } from "../src/builder/types.ts";
-import { isCell } from "../src/cell.ts";
+import { isCell, sendEvent, setCell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
@@ -61,7 +61,7 @@ describe("Cell commit callbacks", () => {
     let callbackCalled = false;
     let callbackTx: IExtendedStorageTransaction | undefined;
 
-    cell.set(42, (committedTx) => {
+    setCell(cell, 42, (committedTx) => {
       callbackCalled = true;
       callbackTx = committedTx;
     });
@@ -85,7 +85,7 @@ describe("Cell commit callbacks", () => {
     let callbackCalled = false;
     let callbackTx: IExtendedStorageTransaction | undefined;
 
-    cell.send(20, (committedTx) => {
+    sendEvent(cell, 20, (committedTx) => {
       callbackCalled = true;
       callbackTx = committedTx;
     });
@@ -115,12 +115,12 @@ describe("Cell commit callbacks", () => {
     let callback2Called = false;
     const callOrder: number[] = [];
 
-    cell1.set(1, () => {
+    setCell(cell1, 1, () => {
       callback1Called = true;
       callOrder.push(1);
     });
 
-    cell2.set(2, () => {
+    setCell(cell2, 2, () => {
       callback2Called = true;
       callOrder.push(2);
     });
@@ -145,7 +145,7 @@ describe("Cell commit callbacks", () => {
 
     const statuses: string[] = [];
 
-    cell.set(42, (settledTx) => {
+    setCell(cell, 42, (settledTx) => {
       statuses.push(settledTx.status().status);
     });
 
@@ -166,7 +166,7 @@ describe("Cell commit callbacks", () => {
     );
 
     const statuses: string[] = [];
-    cell.set(42, (committedTx) => {
+    setCell(cell, 42, (committedTx) => {
       statuses.push(committedTx.status().status);
     });
     refuseAtCommitBoundary(
@@ -191,12 +191,12 @@ describe("Cell commit callbacks", () => {
     let callback1Called = false;
     let callback2Called = false;
 
-    cell.set(1, () => {
+    setCell(cell, 1, () => {
       callback1Called = true;
       throw new Error("Callback error");
     });
 
-    cell.set(2, () => {
+    setCell(cell, 2, () => {
       callback2Called = true;
     });
 
@@ -232,7 +232,7 @@ describe("Cell commit callbacks", () => {
     let callbackCalled = false;
     let receivedTx: IExtendedStorageTransaction | undefined;
 
-    cell.set(42, (committedTx) => {
+    setCell(cell, 42, (committedTx) => {
       callbackCalled = true;
       receivedTx = committedTx;
     });

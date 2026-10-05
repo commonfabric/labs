@@ -35,10 +35,10 @@ import {
 } from "@commonfabric/runner/shared";
 import {
   EmulatedStorageManager,
-  newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
-import { ExecutorHost } from "@commonfabric/runner/executor/host";
+import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   CfHarnessEngine,
   type CreateHarnessEngineOptions,
@@ -64,6 +64,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 
 const signer = await Identity.fromPassphrase("cf-harness assign-slug tool");
 
@@ -145,12 +146,10 @@ describe("assign-slug", () => {
       storageManager,
       fetch: patternFetch,
     });
-    pieces = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `assign-slug-${crypto.randomUUID()}`,
-      }),
+    pieces = await openLegacySpace(
+      signer,
       runtime,
+      `assign-slug-${crypto.randomUUID()}`,
     );
     await pieces.synced();
   });
@@ -173,49 +172,30 @@ describe("assign-slug", () => {
   it("marks a pending served read as not-yet-data and names the same page after its reply arrives", async () => {
     await runtime.dispose();
     await storageManager.close();
-    const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
     const reply = Promise.withResolvers<{ rows: { n: number }[] }>();
     const requested = Promise.withResolvers<void>();
     let queries = 0;
-    const service = await Identity.fromPassphrase("pending-page-service");
-    const host = new ExecutorHost({
-      server,
-      serviceIdentity: service.did(),
-      ensureSpaceRoots: false,
-      createRuntime: (space) => {
-        const manager = EmulatedStorageManager.connectTo(server, {
-          as: service,
-        });
+    const serving = await startServingMemoryServer({
+      apiUrl: new URL("http://toolshed.test"),
+      prepareStorageManager: (manager, space) => {
         const rpc = stub(manager.open(space), "sqliteQuery", () => {
           queries++;
           requested.resolve();
           return reply.promise;
         });
-        const serving = new Runtime({
-          apiUrl: new URL("http://toolshed.test"),
-          storageManager: manager,
-          servingPosture: true,
-          experimental: { serverExecution: true },
-        });
-        return Promise.resolve({
-          runtime: serving,
-          dispose: async () => {
-            await serving.dispose();
-            rpc.restore();
-            await manager.close();
-          },
-        });
+        return () => rpc.restore();
       },
     });
+    const { server } = serving;
     storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: "pending-served-page",
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -316,10 +296,10 @@ describe("assign-slug", () => {
       }
     } finally {
       reply.resolve({ rows: [] });
-      await host.close();
+      await serving.host.close();
       await runtime.dispose();
       await storageManager.close();
-      await server.close();
+      await serving.close();
     }
   });
 
@@ -1162,7 +1142,7 @@ describe("assign-slug", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () =>
           Promise.reject(new Error("storage unavailable"));
         return cell;
@@ -1199,7 +1179,7 @@ describe("assign-slug", () => {
       runtime.getCellFromEntityId = ((
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
-        const cell = originalGetCell(...args);
+        const cell = patchableCell(originalGetCell(...args));
         if (String(args[1]) !== slugEntity) {
           return cell;
         }
@@ -1251,7 +1231,7 @@ describe("assign-slug", () => {
       runtime.getCellFromEntityId = ((
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
-        const cell = originalGetCell(...args);
+        const cell = patchableCell(originalGetCell(...args));
         if (String(args[1]) !== counterEntity) {
           return cell;
         }
@@ -1321,7 +1301,7 @@ describe("assign-slug", () => {
         `assign-slug-did-${crypto.randomUUID()}`,
       );
       const didPieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
           spaceDid: spaceIdentity.did(),
         }),

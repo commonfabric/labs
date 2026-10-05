@@ -372,9 +372,9 @@ describe("piece-repair", () => {
         storageManager,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `cli-bulk-repair-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );
@@ -612,7 +612,10 @@ describe("piece-repair", () => {
           name: "/main.tsx",
           contents: [
             "import { NAME, pattern } from 'commonfabric';",
-            "export default pattern<{ members?: unknown[] }>(",
+            "export default pattern<",
+            "  { members?: unknown[] },",
+            "  { [NAME]: string; members?: unknown[] }",
+            ">(",
             "  ({ members }) => ({ [NAME]: 'Holder', members }),",
             ");",
             "",

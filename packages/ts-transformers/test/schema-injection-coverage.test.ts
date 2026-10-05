@@ -648,9 +648,11 @@ Deno.test("generateObject<T>(spreadOptions) spreads a non-literal options expres
   const output = await t(source);
   const [schema] = emittedSchemas(parseModule(output));
   assertEquals((schema.properties as Obj).ok.type, "boolean");
-  // Non-literal options become { ...opts, schema: ... }; the spread is a
-  // printer-level construct, so it is checked as text.
-  assertStringIncludes(output, "...opts");
+  const [call] = callsNamed(parseModule(output), "generateObject");
+  const spreads = collect(call!, ts.isSpreadAssignment);
+  assertEquals(spreads.length, 1);
+  assert(ts.isIdentifier(spreads[0]!.expression));
+  assertEquals(spreads[0]!.expression.text, "opts");
 });
 
 //

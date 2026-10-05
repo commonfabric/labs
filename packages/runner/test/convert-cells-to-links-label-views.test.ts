@@ -19,7 +19,7 @@ import { convertCellsToLinks } from "../src/cell.ts";
 import type { CfcLabelView } from "../src/cfc/label-view.ts";
 import {
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "../src/cfc/link-label-view.ts";
 import { KeepAsCell } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -83,8 +83,10 @@ describe("convert-cells-to-links-label-views", () => {
 
   it("attaches the display form of a cell's carried view under `includeCfcLabelView`", async () => {
     await withRuntime((runtime, space) => {
-      const link = runtime.getCell(space, "label-view-carrier").getAsLink();
-      setLinkCfcLabelView(link, SOURCED_VIEW);
+      const link = withLinkCfcLabelView(
+        runtime.getCell(space, "label-view-carrier").getAsLink(),
+        SOURCED_VIEW,
+      );
       const cell = runtime.getCellFromLink(link);
 
       const converted = convertCellsToLinks(
@@ -101,8 +103,10 @@ describe("convert-cells-to-links-label-views", () => {
 
   it("attaches no view without `includeCfcLabelView`", async () => {
     await withRuntime((runtime, space) => {
-      const link = runtime.getCell(space, "label-view-carrier").getAsLink();
-      setLinkCfcLabelView(link, SOURCED_VIEW);
+      const link = withLinkCfcLabelView(
+        runtime.getCell(space, "label-view-carrier").getAsLink(),
+        SOURCED_VIEW,
+      );
       const cell = runtime.getCellFromLink(link);
 
       const converted = convertCellsToLinks(
@@ -115,12 +119,14 @@ describe("convert-cells-to-links-label-views", () => {
   });
 
   it("leaves a view riding a link it was handed as it is", () => {
-    const link = linkRefFrom({
-      id: "of:label-view-handed",
-      space: "did:key:test",
-      path: [],
-    }) as SigilLink;
-    setLinkCfcLabelView(link, SOURCED_VIEW);
+    const link = withLinkCfcLabelView(
+      linkRefFrom({
+        id: "of:label-view-handed",
+        space: "did:key:test",
+        path: [],
+      }) as SigilLink,
+      SOURCED_VIEW,
+    );
 
     const converted = convertCellsToLinks(
       { source: link },

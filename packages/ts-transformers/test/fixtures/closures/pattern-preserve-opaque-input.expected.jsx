@@ -21,25 +21,17 @@ const __cfLift_1 = __cfHelpers.lift<{
     type: "object",
     properties: {
         input: {
-            $ref: "#/$defs/State",
-            asCell: ["readonly"]
-        }
-    },
-    required: ["input"],
-    $defs: {
-        State: {
             type: "object",
             properties: {
                 foo: {
                     type: "string"
-                },
-                bar: {
-                    type: "string"
                 }
             },
-            required: ["foo", "bar"]
+            required: ["foo"],
+            asCell: ["readonly"]
         }
-    }
+    },
+    required: ["input"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
@@ -47,8 +39,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 // Verifies: Writable<T> pattern input is preserved as an opaque ref, with JSX .get() wrapped in a lift-applied computation
 //   input.key("foo").get() in JSX → lift(({ input }) => input.key("foo").get())({ input })
 // Context: When the pattern parameter is typed as Writable<State>, the input
-//   schema uses asOpaque: true. The .get() call inside JSX is not in a safe
-//   reactive context, so it gets wrapped in a lift-applied computation.
+//   schema carries `asCell: ["opaque"]`. The .get() call inside JSX is not in a
+//   safe reactive context, so it gets wrapped in a lift-applied computation.
 export default pattern((input: Writable<State>) => {
     return {
         [UI]: <div>{__cfLift_1({ input: input })}</div>,

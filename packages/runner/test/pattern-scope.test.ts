@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { createSession, Identity } from "@commonfabric/identity";
+import { Identity } from "@commonfabric/identity";
 import {
   getServerExecutionConfig,
   setServerExecutionConfig,
@@ -18,6 +18,25 @@ import { type FactoryInput } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+
+/**
+ * Returns the DID the allocation record `callingSpace` holds for the
+ * `PatternFactory.inSpace(name)` target `name`, or `undefined` when it holds
+ * none.
+ */
+const allocatedSpace = async (
+  runtime: Runtime,
+  callingSpace: string,
+  name: string,
+): Promise<string | undefined> => {
+  const record = runtime.getCell(
+    callingSpace as typeof space,
+    { inSpaceAllocation: { space: callingSpace, name } },
+    { type: "object", properties: { did: { type: "string" } } } as const,
+  );
+  await record.sync();
+  return record.get()?.did;
+};
 
 Deno.test("Cell.key keeps base scope; schema carries the scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
@@ -530,10 +549,6 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
   });
   const tx = runtime.edit();
   const spaceName = `pattern-factory-in-space-${crypto.randomUUID()}`;
-  const expectedSpace = (await createSession({
-    identity: signer,
-    spaceName,
-  })).space;
 
   try {
     const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
@@ -566,6 +581,11 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
     const actionLink = parseLink(result.key("child").getRaw(), result);
     const actionResult = runtime.getCellFromLink(actionLink!);
     const childLink = actionResult.resolveAsCell().getAsNormalizedFullLink();
+    // The name resolves to the space the calling space's allocation record
+    // names, which is a space of its own.
+    const expectedSpace = await allocatedSpace(runtime, space, spaceName);
+    assertEquals(typeof expectedSpace, "string");
+    assertEquals(expectedSpace === space, false);
     assertEquals(childLink?.space, expectedSpace);
     assertEquals(
       await result.key("child", "value").pull(),
@@ -664,10 +684,6 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
   const tx = runtime.edit();
   const spaceName =
     `pattern-factory-in-space-annotation-${crypto.randomUUID()}`;
-  const expectedSpace = (await createSession({
-    identity: signer,
-    spaceName,
-  })).space;
 
   try {
     const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
@@ -730,6 +746,11 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
     // The child space is resolved before the handler write lands, so the
     // target holds a direct link to the child in the resolved space.
     const childLink = parseLink(target.getRaw(), target);
+    // The name resolves to the space the calling space's allocation record
+    // names, which is a space of its own.
+    const expectedSpace = await allocatedSpace(runtime, space, spaceName);
+    assertEquals(typeof expectedSpace, "string");
+    assertEquals(expectedSpace === space, false);
     assertEquals(childLink?.space, expectedSpace);
     assertEquals(
       await target.key("value").pull(),
@@ -749,10 +770,6 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
   });
   const tx = runtime.edit();
   const spaceName = `pattern-factory-in-space-writeonly-${crypto.randomUUID()}`;
-  const expectedSpace = (await createSession({
-    identity: signer,
-    spaceName,
-  })).space;
 
   try {
     const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
@@ -822,6 +839,11 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
     // The child space is resolved before the writeonly handler write lands, so
     // the target holds a direct link to the child in the resolved space.
     const childLink = parseLink(target.getRaw(), target);
+    // The name resolves to the space the calling space's allocation record
+    // names, which is a space of its own.
+    const expectedSpace = await allocatedSpace(runtime, space, spaceName);
+    assertEquals(typeof expectedSpace, "string");
+    assertEquals(expectedSpace === space, false);
     assertEquals(childLink?.space, expectedSpace);
     assertEquals(
       await target.key("value").pull(),

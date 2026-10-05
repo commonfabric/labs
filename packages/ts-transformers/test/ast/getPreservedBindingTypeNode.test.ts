@@ -124,6 +124,20 @@ describe("getPreservedBindingTypeNode()", () => {
     `)).toBe(`Writable<string | Default<"">>`);
   });
 
+  it("returns a scope wrapper of the cell type its aliased argument names", () => {
+    expect(preserved(`${IMPORTS}
+      type Draft = Writable<string | Default<"">>;
+      interface Input { c: PerUser<Draft>; }
+    `)).toBe(`PerUser<Writable<string | Default<"">>>`);
+  });
+
+  it("returns a scope wrapper of the type its aliased argument names", () => {
+    expect(preserved(`${IMPORTS}
+      type Blank = string | Default<"">;
+      interface Input { c: PerUser<Blank>; }
+    `)).toBe(`PerUser<string | Default<"">>`);
+  });
+
   it("returns one flat union for a member that names a union", () => {
     expect(preserved(`${IMPORTS}
       type Blank = string | Default<"">;

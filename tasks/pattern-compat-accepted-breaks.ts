@@ -879,14 +879,129 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/loom-panel-added-by-break.md",
   },
   {
-    // Each `Panel` kind gains an optional `addedByProfile`, whose write
-    // contract and label are its type. The proof does not apply the
-    // open-object evolution allowance inside a union branch.
+    // Each `Panel` kind's `addedBy` gains the `admitPanel` write contract and
+    // the runtime's `authored-by` label as its type, which the proof reads as
+    // a narrowed union branch, and the narrowed `Panel` reaches the `before`
+    // of `addPanel`'s event. Under this baseline the pair already failed on
+    // `argument.panels[]` for `addedByProfile`, which this entry also covers.
     pattern: "loom/main.tsx",
     baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
-    paths: ["argument.panels[]"],
+    paths: ["argument.panels[]", "result.addPanel.before"],
     reason:
-      "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
-    record: "docs/history/loom-panel-adder-profile-break.md",
+      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, which reads as a narrowed union branch in the panels and in addPanel's event",
+    record: "docs/history/loom-panel-attested-adder-break.md",
+  },
+  {
+    // The same change over the baseline that carries `addedByProfile`. An
+    // admission event no longer names an adder, so `addedBy` leaves the
+    // event of the three streams that add a panel.
+    pattern: "loom/main.tsx",
+    baselines: ["20260924T085224Z-oEtBQ4AVdy1fMTAB"],
+    paths: ["argument.panels[]", "result.addPanel.addedBy"],
+    reason:
+      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, and an admission event no longer names one",
+    record: "docs/history/loom-panel-attested-adder-break.md",
+  },
+  {
+    // The demo's release rule now pins two levels, `commit` and the `submit`
+    // step beneath it, so the policy its briefs declare has a new digest,
+    // which the proof reads as a changed label on the briefs.
+    pattern: "cfc-exchange-rules/witnessed-chain.tsx",
+    baselines: ["20260926T005010Z-wTSqH_JN5Vg6LFNp"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the witnessed-chain demo's release rule pins the submit step beneath commit, which changes the declared policy's digest",
+    record: "docs/history/witnessed-chain-two-level-break.md",
+  },
+  {
+    // Home's result slot `defaultProfile` gains the labels its type declares.
+    // `TrustedDefaultProfile` is a labeled profile link beside `undefined`,
+    // and the schema generator read that union as plain cells and dropped
+    // the labels, so no baseline records them. They mark the slot, not the
+    // cell the picker writes, so they gate no write (see the record). The
+    // five home baselines the inbox entry above names report the same path
+    // and stay with that entry, keeping the pairs disjoint. Home is a
+    // required pattern, so this entry carries the ruling that lets it name
+    // one.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20260729T022742Z-mKLGw1aighDtz0A6",
+      "20260818T220011Z-KnU5UM1qdaNt22eV",
+      "20260918T215200Z-jpAh5dGwUi9mXmVz",
+      "20260921T032753Z-6P1lIbz2DyCslReM",
+      "20260921T034351Z-L6-4n7t2hSp4c9zK",
+      "20260921T034425Z-2SJDIuEY_Tfn22zn",
+      "20260921T060231Z-PWGPKZCDuyWqwSwC",
+      "20260922T054240Z-GWbX89962ESG30mt",
+      "20260922T062506Z-8jwCsMRoRpYix3Gp",
+      "20260922T072811Z-lDfT9uaOpdQ85euK",
+      "20260922T075652Z-hQWEhKVxnruVe95d",
+      "20260922T162055Z-4Cvb8ipDmkleafD2",
+      "20260923T173753Z-q-4fKdxnO8AE7OfY",
+      "20260923T183517Z-q_fFTIwOH7X_PxWF",
+      "20260923T205258Z-STa6M0JZsfFIPAkx",
+      "20260923T225026Z-KWX9GtxW9KjSuIl9",
+      "20260929T175237Z-sY6ZuenYIhmCyPPh",
+      "20260930T050901Z-KQuFsaQLJAntgi-G",
+    ],
+    paths: ["result.defaultProfile"],
+    reason:
+      "home's result slot defaultProfile gains the writeAuthorizedBy, uiContract and addIntegrity its type declares, which the schema generator had dropped from a labeled cell beside undefined; they mark the slot rather than the cell the picker writes, which still writes it",
+    record: "docs/history/home-default-profile-labels-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Gideon",
+      on: "2026-10-01",
+      reason:
+        "yeah i think we should do 1 now and follow up with 2. please proceed as you suggest, including with the one upgrade test",
+    },
+  },
+  {
+    // A THIRD entry for home, naming only the baselines recorded under or
+    // after the entry above; the other 23 report the same path and stay with
+    // the two entries that name them, keeping the pairs disjoint.
+    //
+    // Home's default profile moves from a link stored at the root of its own
+    // cell to a link under `profile` in a slot cell (`DefaultProfileSlot`),
+    // because a handle to a cell whose root holds a link denotes the linked
+    // cell and so the picker could not re-point it. The slot is a fresh cell;
+    // the cell the default was kept in stays, as `legacyDefaultProfile`, and
+    // is the default until one is chosen in the slot.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20261001T190916Z-5k9_Adl37zMhsNgG",
+      "20261001T210138Z-P3RELdPaFKfIXROk",
+      "20261002T164437Z-Ppiw9bONPOzUfI_d",
+      "20261003T000427Z-oEfsHL584h6qI8sa",
+      "20261003T003223Z-fDj2SHhwNCXbd-O3",
+    ],
+    paths: ["result.defaultProfile"],
+    reason:
+      "home's default profile moves under `profile` in a fresh slot cell so the picker can re-point it, and a default chosen before stays the default until one is chosen in the slot",
+    record: "docs/history/home-default-profile-slot-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Gideon",
+      on: "2026-10-01",
+      reason:
+        'preserve existing defaults: "i feel like we need to somehow preserve the default profile across this migration", then of the design that keeps the previous cell as the default until the slot holds one, "that sounds good to me. let\'s proceed as you suggest for 8373"',
+    },
+  },
+  {
+    // A THIRD entry for the picker, naming only baselines the two entries
+    // above leave out. The picker's `defaultProfile` argument is home's slot,
+    // which holds the default's link under `profile`, rather than the link.
+    pattern: "system/profile-picker.tsx",
+    baselines: [
+      "20260918T215200Z-jd2IozSP5n9l8UnE",
+      "20260922T062506Z-a2dPgr0XCKC82UO6",
+      "20260922T072811Z-s4HWEqeDMVTSnsl-",
+      "20260922T075652Z-qC_3l84MczfDgjvh",
+      "20260923T173753Z-1_LxUmwIZJz7WCut",
+      "20260923T205258Z-B19D5XwDS0LdQdeY",
+      "20261003T000427Z-YEfgzmp3UjJCJFgP",
+    ],
+    paths: ["argument.defaultProfile"],
+    reason:
+      "the picker's defaultProfile argument is home's slot holding the default's link under `profile`, rather than the link",
+    record: "docs/history/home-default-profile-slot-break.md",
   },
 ];

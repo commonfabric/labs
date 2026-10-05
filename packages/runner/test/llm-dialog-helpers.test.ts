@@ -2,6 +2,7 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { spliceAll } from "@commonfabric/utils/arrays";
 import type { BuiltInLLMMessage, BuiltInLLMToolCallPart } from "commonfabric";
 
 import {
@@ -752,7 +753,7 @@ Deno.test("executeToolCalls wraps denied, present-result, pin, and error results
     withTx: () => ({
       get: () => pinnedState,
       set: (next: typeof pinnedState) => {
-        pinnedState.splice(0, pinnedState.length, ...next);
+        spliceAll(pinnedState, 0, pinnedState.length, next);
       },
     }),
   };

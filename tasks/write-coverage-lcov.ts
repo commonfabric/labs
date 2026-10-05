@@ -1,9 +1,5 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run
 import * as path from "@std/path";
-import {
-  readUnlaunchedMembers,
-  writeUnlaunchedMembers,
-} from "./unlaunched-members.ts";
 
 // Taken from this file's own location rather than the working directory, which
 // the conversion inherits from its caller.
@@ -208,23 +204,6 @@ async function writeEmptyLcov(
 }
 
 /**
- * Copies the unlaunched-member record `profileDir` carries into the directory
- * `outputPath` names, so that the record and the report it qualifies travel
- * together as one artifact. A profile directory carrying no record clears any
- * record already sitting beside the report, so that the two always describe
- * the same run; where neither directory holds one, nothing is written.
- */
-export async function copyUnlaunchedMembers(
-  profileDir: string,
-  outputPath: string,
-): Promise<void> {
-  await writeUnlaunchedMembers(
-    path.dirname(outputPath),
-    await readUnlaunchedMembers(profileDir),
-  );
-}
-
-/**
  * Converts every coverage profile under `profileDir` into one LCOV report
  * at `outputPath`, and says whether the report accounts for everything
  * the profiles named.
@@ -237,10 +216,6 @@ export async function writeLcovReport(
   profileDir: string,
   outputPath: string,
 ): Promise<{ ok: boolean }> {
-  // Ahead of every path below: the record says what the report does not
-  // cover, so a report written without it says more than the run measured.
-  await copyUnlaunchedMembers(profileDir, outputPath);
-
   const profileFiles = await collectCoverageProfileFiles(profileDir);
   if (profileFiles.length === 0) {
     await writeEmptyLcov(

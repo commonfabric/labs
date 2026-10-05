@@ -932,6 +932,67 @@ label):
 </cf-toast-provider>
 ```
 
+### cf-custody-seal
+
+**Purpose**: The trusted host confirmation that seals the actor's draft into a
+custody room's trusted-declassifier policy. The dialog is the host's, not the
+pattern's: it shows what the runtime checked (room, readers, seats, policy
+digest, the actor's sources) apart from what the room's terms say (question,
+answers, and a leak bound conditional on the policy). **Tag**:
+`<cf-custody-seal>`
+
+**Bindings**:
+
+- `$draft` - the value to seal
+- `$terms` - the room's terms document
+- `$policy` - a cell holding the room's custody policy reference
+- `$sources` - the actor's source policy: a list of the actor's own `Context`
+  and `Resource` atoms, in the actor's home space
+
+**Events**:
+
+- `cf-sealed` - no payload; fires when the seal commits. A binding that changes
+  while a commit is in flight suppresses it, so read the room when you must
+  know.
+
+Only a trusted click on the dialog's **Seal & consent** seals; a scripted click
+cannot. See `docs/common/components/COMPONENTS.md` and
+`docs/specs/cfc-custody-seal.md`.
+
+### cf-custody-answer
+
+**Purpose**: Asks the trusted host to publish a custody room's answer once per
+instance, and shows it. The host publishes it only when every rule of the room's
+policy requires the seal's witness and releases only to the seal, a rule
+releases the answer to the seal, and every seat has sealed, and refuses every
+later request. What the component shows is read by the host from the instance's
+answer slot and verified to be the seal's write: a string, a number or a
+boolean, shown as text, since the seal publishes nothing else; any other value
+the slot holds is refused as an alert ("Custody answer refuses an answer that is
+not a scalar"), not shown as the answer. That is the slot of the instance the
+bound terms digest to, under the policy the bound policy cell names. The
+published answer for an instance never changes, but which instance the component
+shows is only as fixed as its bindings, which a room member's own code can
+rewrite. Binding both to cells each declared `WriteAuthorizedBy` the one handler
+that writes it, which writes only while the cell is unwritten, refuses other
+code's writes to those cells and nothing more. A failure other than those
+refusals (a lost worker connection, a slot the seal did not write) is shown as
+an alert; before the room has terms it asks nothing. **Tag**:
+`<cf-custody-answer>`
+
+**Bindings**:
+
+- `$terms` - the room's terms document
+- `$policy` - a cell holding the room's custody policy reference
+- `$output` - the room's projected answer; each change asks for publication
+
+**Events**:
+
+- `cf-published` - `detail.instance` when this component published it; fires
+  once the published answer is shown.
+
+See `docs/specs/cfc-custody-seal.md`.
+
 ## Styling Components
 
 Components expose CSS custom properties and parts for styling:

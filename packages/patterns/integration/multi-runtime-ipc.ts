@@ -30,12 +30,27 @@ export type WorkerRequest = {
  * A response from a worker realm. `ok` is the command's answer as one
  * `codec-realm` encoding, for the reason {@link WorkerRequest} gives; a
  * command that fails answers with text instead. `ready` announces that the
- * request listener is installed.
+ * request listener is installed, and names the worker's lifetime lock for
+ * `terminateWorker()` to wait on.
  */
 export type WorkerResponse =
-  | { ready: true }
+  | { ready: true; lifetimeLock: string | undefined }
   | { id: number; ok: RealmEncodedValue }
   | { id: number; error: string };
+
+/**
+ * A piece other than the one a harness opened, named by its result cell's
+ * entity id and the space that cell lives in. `MultiRuntimeSession.link()`
+ * returns a value of this shape, so a piece another piece holds a link to is
+ * addressed by linking to it through the first one.
+ */
+export type PieceAddress = {
+  /** The result cell's entity id. */
+  id: string;
+
+  /** The DID of the space the result cell lives in. */
+  space: string;
+};
 
 export type TrustedUiDescriptor = {
   /** `data-ui-pattern` / `data-ui-event-integrity` of the trusted surface. */

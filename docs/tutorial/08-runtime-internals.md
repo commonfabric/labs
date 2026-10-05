@@ -113,10 +113,10 @@ the Part I promise "optimistic but converge; you may see a write lose and
 re-apply."
 
 Not every write takes that compare-and-swap path, though. **Mergeable**
-operations (Chapter 2 — `push`, `addUnique`, `increment`, `removeByValue`)
-commit the *intent* of the write and drop their own incidental read of the
-container from the conflict set, so concurrent appends or increments merge
-on the server instead of conflicting
+operations (Chapter 2 — `push`, `pushAll`, `addUnique`, `increment`,
+`removeByValue`) commit the *intent* of the write and drop their own
+incidental read of the container from the conflict set, so concurrent
+appends or increments merge on the server instead of conflicting
 (`packages/runner/src/storage/mergeable-ops.ts`). And plain scalar sets —
 notably the writes two-way UI bindings issue — are **blind**: their reads
 are recorded for reactivity but excluded from commit preconditions, making

@@ -796,6 +796,96 @@ describe("legacy-envelope tolerance on cold load", () => {
     return result.getAsQueryResult();
   };
 
+  for (const withData of [false, true]) {
+    it(`cold-loads a child with its parent's source roots${withData ? " and data" : ""}`, async () => {
+      const writer = newRuntime();
+      const fixture = await writer.harness.compileToRecordGraph({
+        main: "/parent.tsx",
+        sourceRoots: ["/attached.test.ts"],
+        dataFiles: withData ? ["/note.txt"] : [],
+        files: [
+          {
+            name: "/parent.tsx",
+            contents: `
+import { pattern } from "commonfabric";
+import Child from "./child.tsx";
+export const offset = 11;
+export const childPattern = () => Child;
+export default pattern<{value: number}>(({value}) => ({value}));
+`,
+          },
+          {
+            name: "/child.tsx",
+            contents: `
+import { computed, pattern, dataFile } from "commonfabric";
+import { offset } from "./parent.tsx";
+export default pattern<{value: number}>(({value}) => ({
+  result: computed(() => value + offset),
+${withData ? '  note: dataFile("./note.txt"),' : ""}
+}));
+`,
+          },
+          { name: "/attached.test.ts", contents: "export const fixture = 17;" },
+          { name: "/note.txt", contents: "Attached bytes, not TypeScript." },
+        ],
+      });
+      await persist(writer, fixture);
+      const child = fixture.modules.find((module) =>
+        module.filename === "/child.tsx"
+      );
+      expect(child).toBeDefined();
+      if (!child) throw new Error("Missing child fixture");
+      const reader = newRuntime();
+      const loaded = await reader.patternManager.loadPatternByIdentity(
+        child.identity,
+        "default",
+        space,
+      );
+      expect(typeof loaded).toBe("function");
+      expect(await runPattern(reader, loaded, 4, "source-package child"))
+        .toEqual(
+          {
+            result: 15,
+            ...(withData ? { note: "Attached bytes, not TypeScript." } : {}),
+          },
+        );
+      await reader.patternManager.flushCompileCacheWrites();
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      expect(runtimeVersion).toBeDefined();
+      if (!runtimeVersion) throw new Error("Missing runtime version");
+      const readTx = reader.edit();
+      try {
+        const repaired = await loadCompiledClosure(
+          reader,
+          space,
+          child.identity,
+          { runtimeVersion },
+          readTx,
+        );
+        const parent = repaired?.get(fixture.entryIdentity);
+        expect(
+          parent?.imports.filter((edge) =>
+            edge.specifier.startsWith("cf:source-root/") ||
+            edge.specifier.startsWith("cf:data-file/")
+          ),
+        )
+          .toEqual(
+            fixture.modules.find((module) =>
+              module.identity === fixture.entryIdentity
+            )?.imports.filter((edge) =>
+              edge.specifier.startsWith("cf:source-root/") ||
+              edge.specifier.startsWith("cf:data-file/")
+            ).map(({ specifier, targetIdentity }) => ({
+              specifier,
+              identity: targetIdentity,
+            })),
+          );
+      } finally {
+        readTx.abort("source-package assertions complete");
+      }
+    });
+  }
+
   it("T1: heals a legacy-envelope closure on cold load, preserving identity", async () => {
     const rt1 = newRuntime();
     const legacy = await buildLegacyClosure(rt1.harness as Engine, PROGRAM);

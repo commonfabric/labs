@@ -11,6 +11,7 @@ import {
   type MemorySpace,
   type NormalizedFullLink,
   Runtime,
+  type sendEvent,
 } from "@commonfabric/runner";
 import {
   createLLMFriendlyLink,
@@ -65,16 +66,16 @@ import {
   UnknownPieceVerbError,
 } from "../lib/piece.ts";
 import type { ExecutedPieceCallable } from "../lib/piece.ts";
-import { cf, stripAnsi } from "./utils.ts";
+import { cf, sendThroughStandIn, stripAnsi } from "./utils.ts";
 
 /**
- * The runner's own stream-send options, derived from `Cell["send"]` rather
+ * The runner's own stream-send options, derived from `sendEvent()` rather
  * than restated by hand — so a runner-side rename (`session`, `eventId`)
  * fails `deno task check` on this file instead of leaving these doubles
  * green while production breaks: the #5505/#5582 drift class, one layer
  * down.
  */
-type CellSendOptions = NonNullable<Parameters<Cell<unknown>["send"]>[2]>;
+type CellSendOptions = NonNullable<Parameters<typeof sendEvent>[3]>;
 
 // The session an invocation id is chosen within, for the calls whose subject
 // is something else: a call names the pair or it names no invocation.
@@ -203,6 +204,7 @@ describe("executePieceCallable", () => {
       "refresh",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: (config) => {
           managerConfig = config;
           return Promise.resolve(harness.pieces);
@@ -242,6 +244,7 @@ describe("executePieceCallable", () => {
       "refresh",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: (config) => {
           managerConfig = config;
           return Promise.resolve(harness.pieces);
@@ -283,6 +286,7 @@ describe("executePieceCallable", () => {
       "recordMessage",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
       },
@@ -430,6 +434,7 @@ describe("executePieceCallable", () => {
       "recordMessage",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => false,
@@ -477,6 +482,7 @@ describe("executePieceCallable", () => {
       "refreshFeed",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => true,
@@ -607,6 +613,7 @@ describe("executePieceCallable", () => {
       "recordMessage",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: (_manager, _pieceId, scope) => {
           resolvedScope = scope;
@@ -682,6 +689,7 @@ describe("executePieceCallable", () => {
       "editContent",
       ["--value-file", "/tmp/content.md"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         readTextFile: () => Promise.resolve("# Title\n\nUse `cat` here"),
@@ -725,6 +733,7 @@ describe("executePieceCallable", () => {
       "editContent",
       ["--json-file", "/tmp/input.json"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         readTextFile: () =>
@@ -804,6 +813,7 @@ describe("executePieceCallable", () => {
       "editContent",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => false,
@@ -848,6 +858,7 @@ describe("executePieceCallable", () => {
       "editContent",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => false,
@@ -887,6 +898,7 @@ describe("executePieceCallable", () => {
       "archive",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => false,
@@ -1004,17 +1016,21 @@ describe("executePieceCallable", () => {
     };
 
     const bare = declaring();
-    await expect(executePieceCallable(config, "record", [], {
-      loadPieces: () => Promise.resolve(bare.pieces),
-      loadPiece: () => Promise.resolve(bare.piece),
-      isStdinTerminal: () => true,
-    })).rejects.toThrow(/Handler requires input/);
+    await expect(
+      executePieceCallable(config, "record", [], {
+        sendEvent: sendThroughStandIn,
+        loadPieces: () => Promise.resolve(bare.pieces),
+        loadPiece: () => Promise.resolve(bare.piece),
+        isStdinTerminal: () => true,
+      }),
+    ).rejects.toThrow(/Handler requires input/);
     expect(bare.tracker.handlerWrites).toStrictEqual([]);
 
     // And a pipe is input, so the same line dispatches: the projection was
     // never the verb's to read, and stdin fills the section it left empty.
     const piped = declaring();
     await executePieceCallable(config, "record", [], {
+      sendEvent: sendThroughStandIn,
       loadPieces: () => Promise.resolve(piped.pieces),
       loadPiece: () => Promise.resolve(piped.piece),
       isStdinTerminal: () => false,
@@ -1114,6 +1130,7 @@ describe("executePieceCallable", () => {
         "recordMessage",
         ["--message", "milk"],
         {
+          sendEvent: sendThroughStandIn,
           loadPieces: () => Promise.resolve(harness.pieces),
           loadPiece: () => Promise.resolve(harness.piece),
         },
@@ -1147,6 +1164,7 @@ describe("executePieceCallable", () => {
         "recordMessage",
         ["--message", "milk"],
         {
+          sendEvent: sendThroughStandIn,
           loadPieces: () => Promise.resolve(harness.pieces),
           loadPiece: () => Promise.resolve(harness.piece),
         },
@@ -1181,6 +1199,7 @@ describe("executePieceCallable", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-123", session: callerSession },
@@ -1233,6 +1252,7 @@ describe("executePieceCallable", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-123", session: "ses-abc" },
@@ -1283,6 +1303,7 @@ describe("executePieceCallable", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
       },
@@ -1322,6 +1343,7 @@ describe("executePieceCallable", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-dup", session: callerSession },
@@ -1368,6 +1390,7 @@ describe("executePieceCallable", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-settled-address", session: callerSession },
@@ -1401,6 +1424,7 @@ describe("executePieceCallable", () => {
       "refresh",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => true,
@@ -1443,6 +1467,7 @@ describe("executePieceCallable", () => {
       "exportBytes",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => true,
@@ -1480,6 +1505,7 @@ describe("executePieceCallable", () => {
       "exportLink",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => true,
@@ -1509,6 +1535,7 @@ describe("executePieceCallable", () => {
       "refresh",
       [],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => true,
@@ -1982,6 +2009,7 @@ describe("forced-stream fallback dispatch", () => {
       "hiddenPing",
       ["--note", "hi"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces as never),
         loadPiece: () => Promise.resolve(harness.piece as never),
         isStdinTerminal: () => true,
@@ -2012,6 +2040,7 @@ describe("forced-stream fallback dispatch", () => {
       },
     };
     await executePieceCallable(config, "hiddenPing", ["--note", "hi"], {
+      sendEvent: sendThroughStandIn,
       loadPieces: () => Promise.resolve(harness.pieces as never),
       loadPiece: () => Promise.resolve(piece as never),
       isStdinTerminal: () => true,
@@ -2027,6 +2056,7 @@ describe("forced-stream fallback dispatch", () => {
       getPattern: () => Promise.reject(new Error("pattern unavailable")),
     };
     await executePieceCallable(config, "hiddenPing", ["--note", "hi"], {
+      sendEvent: sendThroughStandIn,
       loadPieces: () => Promise.resolve(harness.pieces as never),
       loadPiece: () => Promise.resolve(piece as never),
       isStdinTerminal: () => true,
@@ -2062,6 +2092,7 @@ describe("forced-stream fallback dispatch", () => {
       "hiddenPing",
       ["--note", "hi"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces as never),
         loadPiece: () => Promise.resolve(harness.piece as never),
         isStdinTerminal: () => true,
@@ -2624,6 +2655,7 @@ describe("call stdin payloads", () => {
       "recordMessage",
       ["--json-file", "-"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => false,
@@ -2663,6 +2695,7 @@ describe("call stdin payloads", () => {
       "recordMessage",
       ["--json", "-"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         isStdinTerminal: () => false,
@@ -2818,6 +2851,7 @@ describe("call wait control", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-no-readback", session: callerSession },
@@ -2870,6 +2904,7 @@ describe("call wait control", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-detached-address", session: callerSession },
@@ -2908,6 +2943,7 @@ describe("call wait control", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-no-receipt", session: callerSession },
@@ -2926,6 +2962,7 @@ describe("call wait control", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-no-receipt-settled", session: callerSession },
@@ -2958,6 +2995,7 @@ describe("call wait control", () => {
 
     const error = await boundedSettlement(
       executePieceCallable(config, "addComment", ["--message", "milk"], {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-held-commit", session: callerSession },
@@ -2994,6 +3032,7 @@ describe("call wait control", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-dup-no-readback", session: callerSession },
@@ -3033,6 +3072,7 @@ describe("call wait control", () => {
     // is reported exactly as it would be on the default path.
     await expect(
       executePieceCallable(config, "recordMessage", ["--message", "milk"], {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-failed-commit", session: callerSession },
@@ -3629,6 +3669,7 @@ describe("call --show-links", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-links", session: callerSession },
@@ -3669,6 +3710,7 @@ describe("call --show-links", () => {
       "addComment",
       ["--message", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-no-links", session: callerSession },
@@ -3696,6 +3738,7 @@ describe("call --show-links", () => {
     });
 
     const result = await executePieceCallable(config, "refresh", [], {
+      sendEvent: sendThroughStandIn,
       loadPieces: () => Promise.resolve(harness.pieces),
       loadPiece: () => Promise.resolve(harness.piece),
       isStdinTerminal: () => true,
@@ -3839,6 +3882,7 @@ describe("call selection", () => {
       "addTopic",
       ["--title", "Ship it"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-select", session: callerSession },
@@ -3871,6 +3915,7 @@ describe("call selection", () => {
       "addTopic",
       ["--title", "Ship it"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-plain", session: callerSession },
@@ -3900,6 +3945,7 @@ describe("call selection", () => {
     const selector = recordingSelector({ never: true });
 
     const result = await executePieceCallable(config, "refresh", [], {
+      sendEvent: sendThroughStandIn,
       loadPieces: () => Promise.resolve(harness.pieces),
       loadPiece: () => Promise.resolve(harness.piece),
       isStdinTerminal: () => true,
@@ -3928,6 +3974,7 @@ describe("call selection", () => {
 
     await expect(
       executePieceCallable(config, "addTopic", ["--title", "Ship it"], {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-empty-select", session: callerSession },
@@ -4008,6 +4055,7 @@ describe("call selection", () => {
       "addTopic",
       ["--title", "Ship it"],
       {
+        sendEvent: sendThroughStandIn,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
         invocation: { id: "inv-select-links", session: callerSession },
@@ -4203,6 +4251,7 @@ describe("call over a live runtime", () => {
       resolved,
       { title: "Ship it" },
       {
+        sendEvent: sendThroughStandIn,
         invocation: { id: "inv-live", session: callerSession },
         selection: await parseCellSelectionOptions({ select: "topics.title" }),
       },
@@ -4227,6 +4276,7 @@ describe("call over a live runtime", () => {
       resolved,
       { title: "Ship it" },
       {
+        sendEvent: sendThroughStandIn,
         invocation: { id: "inv-live-filter", session: callerSession },
         selection: await parseCellSelectionOptions({
           filter: '.status == "open"',
@@ -4258,6 +4308,7 @@ describe("call over a live runtime", () => {
       resolved,
       { title: "Ship it" },
       {
+        sendEvent: sendThroughStandIn,
         invocation: { id: "inv-live-link", session: callerSession },
         selection: await parseCellSelectionOptions({
           schema: '{"properties":{"topic":{"$link":true}}}',
@@ -4283,6 +4334,7 @@ describe("call over a live runtime", () => {
 
     await expect(
       executeResolvedCallable(resolved, { title: "Ship it" }, {
+        sendEvent: sendThroughStandIn,
         invocation: { id: "inv-live-nothing", session: callerSession },
         selection: await parseCellSelectionOptions({
           schema: '{"type":"string"}',
@@ -4305,6 +4357,7 @@ describe("call over a live runtime", () => {
       resolved,
       { title: "Ship it" },
       {
+        sendEvent: sendThroughStandIn,
         invocation: { id: "inv-live-detached", session: callerSession },
         skipReadback: true,
       },
@@ -4860,7 +4913,7 @@ describe("the pre-dispatch gate on the forced-stream path", () => {
 
     const executed = await executeResolvedCallable(resolved, {
       title: "Ship it",
-    });
+    }, { sendEvent: sendThroughStandIn });
 
     expect(sends).toEqual([{ title: "Ship it" }]);
     expect(executed).toEqual({});

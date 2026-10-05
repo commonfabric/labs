@@ -507,6 +507,14 @@ export function resolveLink(
      * resolutions leave relevance to the write-policy gate.
      */
     markIfcCrossings?: boolean;
+
+    /**
+     * Whether to kick a sync of each hop target in another space. On by
+     * default. A caller that resolves a link some read in the same pass has
+     * already resolved turns it off, since that read's resolution kicks the
+     * same targets and a second, unreserved kick would repeat the pull.
+     */
+    kickCrossSpaceTargets?: boolean;
   } = {},
 ): ResolvedFullLink {
   return resolveLinkTracingDereferences(runtime, tx, link, lastNode, options)
@@ -547,6 +555,14 @@ export function resolveLinkTracingDereferences(
      * resolutions leave relevance to the write-policy gate.
      */
     markIfcCrossings?: boolean;
+
+    /**
+     * Whether to kick a sync of each hop target in another space. On by
+     * default. A caller that resolves a link some read in the same pass has
+     * already resolved turns it off, since that read's resolution kicks the
+     * same targets and a second, unreserved kick would repeat the pull.
+     */
+    kickCrossSpaceTargets?: boolean;
   } = {},
 ): {
   link: ResolvedFullLink;
@@ -569,8 +585,10 @@ export function resolveLinkTracingDereferences(
         markIfcBearingLinkCrossing(tx, hop.space, hop.schema, hop.id);
       }
     }
-    for (const target of cached.crossSpaceTargets) {
-      kickDocPull(runtime, target, false);
+    if (options.kickCrossSpaceTargets !== false) {
+      for (const target of cached.crossSpaceTargets) {
+        kickDocPull(runtime, target, false);
+      }
     }
     return {
       // A copy, so a caller that mutates what it got back cannot reach into
@@ -908,6 +926,20 @@ export function resolveLinkTracingDereferences(
           ...link,
           schema: schemaForSpaceCrossing(tx, nextHop.source.space, link.schema),
         };
+      } else if (link.schema !== nextLink.schema) {
+        // A carried reader schema keeps its reference form within a space,
+        // but its documents must still be at hand before anything reads
+        // through it: load the closure from the space the hop starts in,
+        // exactly as a crossing does, so the reader's `$ref` resolves.
+        //
+        // Unlike a crossing, an incomplete closure does not narrow the link
+        // to `false`. A crossing must hand the target space a self-contained
+        // schema, so a missing document leaves nothing honest to carry. Here
+        // the reference stays: while a document is missing, the read selects
+        // nothing (an unresolvable `$ref` matches no value), and once it
+        // arrives, the same link reads. A `false` would stay blind for as
+        // long as the link is held.
+        ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
       }
       const mgr = runtime.storageManager;
       const reserved = !crossSpace &&
@@ -918,7 +950,9 @@ export function resolveLinkTracingDereferences(
         // kick it either — and if the sync fails and retracts the reservation,
         // the read that retries is in a later transaction with its own memo.
         if (crossSpace) crossSpaceTargets.push(link);
-        kickDocPull(runtime, link, reserved);
+        if (!crossSpace || options.kickCrossSpaceTargets !== false) {
+          kickDocPull(runtime, link, reserved);
+        }
       }
       addressKey = linkAddressKey(link);
     } else {

@@ -72,6 +72,166 @@ export const combineIfcLabels = (
 };
 
 /**
+ * Whether `held` already declares every label `labels` does: each
+ * confidentiality atom, and every other key alike.
+ */
+export const holdsIfcLabels = (
+  held: IfcLabels,
+  labels: IfcLabels,
+): boolean =>
+  Object.entries(labels).every(([key, declared]) => {
+    if (declared === undefined) return true;
+    const existing = held[key];
+    return key === "confidentiality" && Array.isArray(existing) &&
+        Array.isArray(declared)
+      ? declared.every((atom) =>
+        existing.some((have) =>
+          valueEqual(have as FabricValue, atom as FabricValue)
+        )
+      )
+      : existing !== undefined &&
+        valueEqual(existing as FabricValue, declared as FabricValue);
+  });
+
+/**
+ * The labels of a value that may be any one of `members`, a union's, under
+ * the union's own `labels`: every confidentiality atom any of them declares,
+ * the union's other labels, and each other label every member declares alike.
+ * A member's other labels bind only while the value is that member.
+ */
+export const joinMemberIfcLabels = (
+  labels: IfcLabels,
+  members: readonly IfcLabels[],
+): Record<string, unknown> | undefined => {
+  const joined: Record<string, unknown> = { ...labels };
+  const atoms = [labels, ...members].flatMap(({ confidentiality }) =>
+    Array.isArray(confidentiality) ? confidentiality : []
+  );
+  if (atoms.length > 0) {
+    joined.confidentiality = dedupeByValueEqual(atoms as FabricValue[]);
+  }
+  const [first, ...rest] = members;
+  for (const [key, declared] of Object.entries(first ?? {})) {
+    if (key === "confidentiality" || declared === undefined || key in joined) {
+      continue;
+    }
+    if (
+      rest.every((member) =>
+        member[key] !== undefined &&
+        valueEqual(member[key] as FabricValue, declared as FabricValue)
+      )
+    ) {
+      joined[key] = declared;
+    }
+  }
+  return Object.keys(joined).length > 0 ? joined : undefined;
+};
+
+/**
+ * `schema` with `labels` combined into its own, as an outer declaration's.
+ */
+export const withIfcLabels = (
+  schema: MutableJSONSchema,
+  labels: IfcLabels,
+): MutableJSONSchema => {
+  if (typeof schema === "boolean") {
+    return schema === false ? { not: true, ifc: labels } : { ifc: labels };
+  }
+  const existing = isObjectOrArray(schema.ifc) ? schema.ifc : {};
+  return { ...schema, ifc: combineIfcLabels(existing, labels) };
+};
+
+/**
+ * `position` and the definitions its chain of local references reaches in
+ * `definitions`, nearest first. A chain that comes back to a definition
+ * already on it ends there: walking it again would add nothing.
+ */
+const referenceChain = (
+  position: MutableJSONSchemaObj,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): MutableJSONSchemaObj[] => {
+  const chain = [position];
+  const reached = new Set<string>();
+  for (let at = position;;) {
+    const ref = at.$ref;
+    if (typeof ref !== "string" || !ref.startsWith(LOCAL_DEFINITION_PREFIX)) {
+      return chain;
+    }
+    const name = ref.slice(LOCAL_DEFINITION_PREFIX.length);
+    const definition = definitions[name];
+    if (reached.has(name) || !isObjectOrArray(definition)) return chain;
+    reached.add(name);
+    chain.push(definition);
+    at = definition;
+  }
+};
+
+/**
+ * The labels of every declaration along `position`'s reference chain in
+ * `definitions`, combined, or `undefined` where none declares any. The
+ * farthest definition's labels are the innermost declaration.
+ */
+export const declaredIfcLabels = (
+  position: MutableJSONSchema,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): Record<string, unknown> | undefined => {
+  if (!isObjectOrArray(position)) return undefined;
+  let labels: Record<string, unknown> | undefined;
+  for (const declaring of referenceChain(position, definitions).reverse()) {
+    if (isObjectOrArray(declaring.ifc)) {
+      labels = combineIfcLabels(labels ?? {}, declaring.ifc);
+    }
+  }
+  return labels;
+};
+
+/**
+ * Whether `schema` accepts only `null`, `undefined`, or both: written so, or a
+ * bare local reference whose definition in `definitions`, through any further
+ * bare references, is.
+ */
+const isNullishSchema = (
+  schema: MutableJSONSchema,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): boolean => {
+  if (!isObjectOrArray(schema)) return false;
+  const chain = referenceChain(schema, definitions);
+  const last = chain[chain.length - 1]!;
+  return chain.every((link) => Object.keys(link).length === 1) &&
+    (Array.isArray(last.type) ? last.type : [last.type]).every((type) =>
+      type === "null" || type === "undefined"
+    );
+};
+
+/**
+ * The value member of `position`, a union of one value with `null` or
+ * `undefined`, where the member declares labels, as the labels in
+ * `definitions` its references reach count, and the union declares none of
+ * its own: a value that may be missing, whose labels formatting put on its
+ * value member. `undefined` for any other position.
+ */
+export const labeledValueMember = (
+  position: MutableJSONSchema,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): MutableJSONSchemaObj | undefined => {
+  if (
+    !isObjectOrArray(position) || !Array.isArray(position.anyOf) ||
+    isObjectOrArray(position.ifc)
+  ) {
+    return undefined;
+  }
+  const values = position.anyOf.filter((member) =>
+    !isNullishSchema(member, definitions)
+  );
+  const [member] = values;
+  return values.length === 1 && values.length < position.anyOf.length &&
+      isObjectOrArray(member) &&
+      declaredIfcLabels(member, definitions) !== undefined
+    ? member
+    : undefined;
+};
+
+/**
  * Writes beside each local `$ref` that carries `ifc` the labels of the
  * definitions it reaches, combined with its own, so that resolving the
  * reference keeps all of them. A definition keeps its own labels, which are
@@ -84,41 +244,14 @@ export const stateReferencedIfcLabels = (schema: MutableJSONSchema): void => {
   if (!isObjectOrArray(schema)) return;
   const definitions = isObjectOrArray(schema.$defs) ? schema.$defs : {};
 
-  // A position and the definitions its reference chain reaches, nearest
-  // first. A chain that comes back to a definition already on it ends there:
-  // walking it again would add nothing.
-  const chainOf = (position: MutableJSONSchemaObj): MutableJSONSchemaObj[] => {
-    const chain = [position];
-    const reached = new Set<string>();
-    for (let at = position;;) {
-      const ref = at.$ref;
-      if (
-        typeof ref !== "string" || !ref.startsWith(LOCAL_DEFINITION_PREFIX)
-      ) {
-        return chain;
-      }
-      const name = ref.slice(LOCAL_DEFINITION_PREFIX.length);
-      const definition = definitions[name];
-      if (reached.has(name) || !isObjectOrArray(definition)) return chain;
-      reached.add(name);
-      chain.push(definition);
-      at = definition;
-    }
-  };
-
   const visited = new Set<MutableJSONSchema>();
   const visit = (node: MutableJSONSchema): void => {
     if (!isObjectOrArray(node) || visited.has(node)) return;
     visited.add(node);
     if (typeof node.$ref === "string" && isObjectOrArray(node.ifc)) {
-      // The farthest definition's labels are the innermost declaration.
-      let labels: IfcLabels = {};
-      for (const declaring of chainOf(node).reverse()) {
-        if (isObjectOrArray(declaring.ifc)) {
-          labels = combineIfcLabels(labels, declaring.ifc);
-        }
-      }
-      node.ifc = labels as NonNullable<MutableJSONSchemaObj["ifc"]>;
+      node.ifc = declaredIfcLabels(node, definitions) as NonNullable<
+        MutableJSONSchemaObj["ifc"]
+      >;
     }
     // Every keyword the walk reads as holding schemas, `$defs` included (this
     // generator emits no `definitions`); `default`, `const` and `enum` hold

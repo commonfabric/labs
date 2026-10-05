@@ -1,0 +1,142 @@
+{
+  "argumentSchema": {
+    "asCell": [
+      "opaque"
+    ]
+  },
+  "pattern": "system/default-app.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_3": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_3"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AnonymousType_3"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_3"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "additionalProperties": {
+      "type": "unknown"
+    },
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addParticipant": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds a labeled profile to `participants` once.",
+        "properties": {
+          "profile": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "addPiece": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/MentionablePiece"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "backlinksIndex": {
+        "properties": {
+          "mentionable": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/AnonymousType_3"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mentionable"
+        ],
+        "type": "object"
+      },
+      "participants": {
+        "description": "Fabric profiles of the space's participants, each the live profile cell\nin its own space, in the order they were added. Any participant may add\nany profile, so an entry is a claim: it does not say that the profile's\nprincipal holds access to the space.",
+        "items": {
+          "properties": {
+            "avatar": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pieceRegistry": {
+        "$ref": "#/$defs/AnonymousType_3"
+      },
+      "sidebarUI": {
+        "type": "unknown"
+      }
+    },
+    "required": [
+      "backlinksIndex",
+      "pieceRegistry",
+      "addPiece",
+      "participants",
+      "addParticipant",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

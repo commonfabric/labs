@@ -21,6 +21,7 @@ import {
   setOwnWriteEchoConfig,
 } from "../v2.ts";
 import { createGraphFixture } from "./v2-graph.fixture.ts";
+import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
 
 const HELLO_FLAGS = getMemoryProtocolFlags();
 const HELLO = {
@@ -995,13 +996,7 @@ Deno.test("memory v2 server direct document helpers round-trip values", async ()
 Deno.test("memory v2 server binds resumed sessions to the original principal", async () => {
   const server = new Server({
     store: new URL("memory://memory-v2-server-session-principal"),
-    authorizeSessionOpen(message) {
-      return typeof (message.authorization as { principal?: unknown })
-          ?.principal ===
-          "string"
-        ? (message.authorization as { principal: string }).principal
-        : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: {
       audience: TEST_AUDIENCE,
     },
@@ -1310,7 +1305,7 @@ Deno.test("memory v2 server rejects handshakes when modernCellRep flags disagree
         name: "ProtocolError",
         message: debugStr`memory flag mismatch: client=$quote,long${{
           modernCellRep: !HELLO_FLAGS.modernCellRep,
-        }} server=$quote,long${HELLO_FLAGS}`,
+        }} server=$quote,long${server.memoryProtocolFlags()}`,
       },
     });
   } finally {

@@ -9,8 +9,12 @@ import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {
+  type MappedResult,
   ValueVisitor,
-  type VisitedResult,
+  type VisitingEntryResult,
+  type VisitingGapResult,
+  type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -28,37 +32,61 @@ export abstract class BaseValueVisitor<
   //
 
   /** @inheritDoc */
+  abstract mappedFabricArrayElement(
+    array: FabricArrayPlus<PlusType>,
+    index: number,
+    value: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract mappedFabricInstanceState(
+    instance: FabricInstancePlus<PlusType>,
+    state: FabricValuePlus<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract mappedFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<PlusType>,
+    key: string,
+    value: FabricValuePlus<PlusType>,
+    resultKey: string,
+    resultValue: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /** @inheritDoc */
   abstract visitValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricValuePlusTag | null,
   ): VisitResult<PlusType, ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricArrayElement(
+  abstract visitingFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): VisitedResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricArrayGap(
+  abstract visitingFabricArrayGap(
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): VisitedResult<ResultType>;
+  ): VisitingGapResult<PlusType, ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricInstance(
+  abstract visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): VisitedResult<ResultType>;
+  ): VisitingStateResult<PlusType, ResultType>;
 
   /** @inheritDoc */
-  abstract visitedFabricPlainObjectEntry(
+  abstract visitingFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
-    key: FabricValuePlus<PlusType>,
+    key: string,
     value: FabricValuePlus<PlusType>,
-  ): VisitedResult<ResultType>;
+  ): VisitingEntryResult<PlusType, ResultType>;
 
   //
   // Instance methods
@@ -137,5 +165,10 @@ export abstract class BaseValueVisitor<
     throw new Error(
       debugStr`Shouldn't happen: \`${methodName}()\` called on $quote${this}`,
     );
+  }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
   }
 }

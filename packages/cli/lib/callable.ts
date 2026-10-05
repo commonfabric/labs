@@ -9,6 +9,7 @@ import {
   type MemorySpace,
   type NormalizedFullLink,
   renderCellReference,
+  sendEvent,
 } from "@commonfabric/runner";
 import {
   cfcSchemaResolvedRoot,
@@ -203,6 +204,9 @@ export interface CallableExecutionDeps {
 
   /** @internal Seam for tests, mirroring `getCellValue`'s. */
   deriveSelectedValue?: typeof deriveSelectedValue;
+
+  /** @internal Seam for tests, which dispatch to a stand-in handler. */
+  sendEvent?: typeof sendEvent;
 }
 
 /** A backing-cell address published in an Invocation, written in the
@@ -322,10 +326,11 @@ export interface ExecutedCallable {
 /** Read a tool callable's stored `pattern` slot as the pattern the runner
  * will run. Only the record shape is checked here; a record missing the
  * schemas reaches `runtime.run` the same way any malformed stored pattern
- * does. */
+ * does. The cast goes by way of `unknown` because a `Pattern` is not a record
+ * type, so a record says nothing about being one. */
 function asCallablePattern(value: unknown): Pattern | undefined {
   if (!isObjectNotArray(value)) return undefined;
-  return value as Pattern;
+  return value as unknown as Pattern;
 }
 
 function asExtraParams(value: unknown): Record<string, unknown> {
@@ -1693,16 +1698,21 @@ export async function executeResolvedCallable(
             handled.resolve(committedTx);
           };
           try {
-            resolved.callableCell.send(dispatchInput, onCommit, {
-              ...(invocation === undefined ? {} : {
-                // The id and the session that chose it travel together:
-                // an id is the caller's own word, and only the pair
-                // decides which receipt this handling files under.
-                eventId: invocation.id,
-                session: invocation.session,
-              }),
-              onAppended,
-            });
+            (deps.sendEvent ?? sendEvent)(
+              resolved.callableCell,
+              dispatchInput,
+              onCommit,
+              {
+                ...(invocation === undefined ? {} : {
+                  // The id and the session that chose it travel together:
+                  // an id is the caller's own word, and only the pair
+                  // decides which receipt this handling files under.
+                  eventId: invocation.id,
+                  session: invocation.session,
+                }),
+                onAppended,
+              },
+            );
           } catch (error) {
             reject(error);
           }

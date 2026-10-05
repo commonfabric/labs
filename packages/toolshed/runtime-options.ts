@@ -37,9 +37,9 @@ type OtelEnv = Pick<ToolshedEnv, "OTEL_ENABLED" | "OTEL_SERVICE_NAME" | "ENV">;
  * Construct this toolshed's Runtime and, when OTel is enabled, bridge its
  * telemetry bus to OpenTelemetry as a second consumer of the same marker
  * stream the debug tooling uses. Toolshed's Runtime only executes patterns
- * for webhook deliveries (interactive patterns run in browser/bg-piece
- * runtimes), so the bridge is low-volume — but without it those runs emit
- * markers into the void.
+ * for webhook deliveries (interactive patterns run in browser runtimes), so
+ * the bridge is low-volume — but without it those runs emit markers into the
+ * void.
  *
  * The attach is fire-and-forget off the startup path (dynamic imports defer
  * OTel module load); the promise is returned so tests can await it. Failures

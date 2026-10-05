@@ -4,9 +4,12 @@ import {
   memberTasks,
   memberTestFiles,
   parseTestTask,
-  readShardedRunnerArguments,
+  readBatchRunnerArguments,
+  runnerPaths,
+  slashSeparated,
   taskEnvironment,
   testBatches,
+  testBatchOf,
   unmatchedGlobs,
   unquote,
 } from "./deno-task.ts";
@@ -127,15 +130,14 @@ describe("reading a member's test task", () => {
   });
 });
 
-describe("reading a task that runs the sharded runner", () => {
-  // The runner walks a directory, keeps the files assigned to its shard, and
-  // runs `deno test` over them with the flags written after the separator. A
-  // lane is pointed at files rather than at a shard, so it needs only that
-  // directory and those flags.
+describe("reading a task that runs the batch runner", () => {
+  // The runner walks a directory and runs `deno test` over what it finds with
+  // the flags written after the separator. A lane is pointed at files out of
+  // that directory, so it needs only the directory and those flags.
 
   const TASK = "deno run --allow-env --allow-read " +
     '--allow-run="$(deno eval "console.log(Deno.execPath())")" ' +
-    "../../tasks/run-sharded-test-files.ts PIECE_TEST_SHARD piece . " +
+    "../../tasks/run-test-batches.ts . " +
     "-- --no-check --allow-ffi";
 
   it("returns the directory the runner walks as the path to enumerate", () => {
@@ -163,11 +165,11 @@ describe("reading a task that runs the sharded runner", () => {
   });
 
   it("refuses a path written among the flags after the separator", () => {
-    // The runner appends its chosen files after those words, so a path there
+    // The runner appends its files after those words, so a path there
     // would run alongside whatever a lane asked for.
     expect(
       parseTestTask(
-        "deno run -A ../../tasks/run-sharded-test-files.ts X piece . " +
+        "deno run -A ../../tasks/run-test-batches.ts . " +
           "-- --no-check extra.test.ts",
       ),
     ).toBeUndefined();
@@ -176,14 +178,14 @@ describe("reading a task that runs the sharded runner", () => {
   it("refuses a run of the runner with no separator where one belongs", () => {
     expect(
       parseTestTask(
-        "deno run -A ../../tasks/run-sharded-test-files.ts X piece .",
+        "deno run -A ../../tasks/run-test-batches.ts .",
       ),
     ).toBeUndefined();
   });
 
   it("reads the files the runner's options give flags of their own", () => {
     const parsed = parseTestTask(
-      "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+      "deno run -A ../../tasks/run-test-batches.ts . " +
         "--serial='**/*.serial.test.ts' --all-access=a.test.ts,b.test.ts " +
         "-- --parallel",
     );
@@ -202,7 +204,7 @@ describe("reading a task that runs the sharded runner", () => {
     // The runner walks the directory itself and hands `deno test` the files
     // it chose, so what the flag leaves out has to come out of the walk.
     const parsed = parseTestTask(
-      "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+      "deno run -A ../../tasks/run-test-batches.ts . " +
         "-- --no-check --ignore='**/*.test.tsx',fixtures/",
     );
     expect(parsed?.ignores).toEqual(["**/*.test.tsx", "fixtures/"]);
@@ -214,7 +216,7 @@ describe("reading a task that runs the sharded runner", () => {
     // an argument to the test modules rather than to `deno test`.
     expect(
       parseTestTask(
-        "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+        "deno run -A ../../tasks/run-test-batches.ts . " +
           "-- --no-check -- --parallel",
       ),
     ).toBeUndefined();
@@ -223,7 +225,7 @@ describe("reading a task that runs the sharded runner", () => {
   it("refuses an option the runner does not take", () => {
     expect(
       parseTestTask(
-        "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+        "deno run -A ../../tasks/run-test-batches.ts . " +
           "--parallel -- --no-check",
       ),
     ).toBeUndefined();
@@ -239,37 +241,33 @@ describe("reading a task that runs the sharded runner", () => {
   });
 });
 
-describe("reading the sharded runner's own arguments", () => {
+describe("reading the batch runner's own arguments", () => {
   it("keeps a flag's value that follows it as a word of its own", () => {
     // What the runner is handed at run time includes whatever a caller
     // appended, and `--filter "a name"` is two words. Only a task line is
     // held to flags alone.
     expect(
-      readShardedRunnerArguments(
-        ["X", "cli", ".", "--", "--no-check", "--filter", "a name"],
-      )?.test.flags,
+      readBatchRunnerArguments(
+        [".", "--", "--no-check", "--filter", "a name"],
+      )?.flags,
     ).toEqual(["--no-check", "--filter", "a name"]);
   });
 
-  it("names the shard variable and the profile", () => {
-    const args = readShardedRunnerArguments(["CLI_SHARD", "cli", "test", "--"]);
-    expect(args?.shardVariable).toBe("CLI_SHARD");
-    expect(args?.profile).toBe("cli");
-    expect(args?.test.paths).toEqual(["test"]);
+  it("names the directory it walks as the one path", () => {
+    expect(readBatchRunnerArguments(["test", "--"])?.paths).toEqual(["test"]);
   });
 
   it("refuses a second separator", () => {
     // Every word after it, the files the runner appends included, would be
     // an argument to the test modules rather than to `deno test`.
     expect(
-      readShardedRunnerArguments(["X", "cli", ".", "--", "-A", "--", "x"]),
+      readBatchRunnerArguments([".", "--", "-A", "--", "x"]),
     ).toBeUndefined();
   });
 
   it("refuses arguments with no separator", () => {
-    expect(readShardedRunnerArguments(["X", "cli", ".", "--no-check"]))
-      .toBeUndefined();
-    expect(readShardedRunnerArguments(["X", "cli"])).toBeUndefined();
+    expect(readBatchRunnerArguments([".", "--no-check"])).toBeUndefined();
+    expect(readBatchRunnerArguments([])).toBeUndefined();
   });
 });
 
@@ -279,6 +277,23 @@ describe("splitting a member's files by the flags they need", () => {
     serial: ["**/*.serial.test.ts"],
     allAccess: ["test/proc.test.ts"],
   };
+
+  it("numbers each file's run the same whatever files run beside it", () => {
+    // The number names the `deno test` process a file runs in, and the
+    // packer charges that process's setup once for all of the files in it.
+    const files = [
+      "test/a.test.ts",
+      "test/proc.test.ts",
+      "test/b.serial.test.ts",
+      "test/proc.serial.test.ts",
+    ];
+    const task = { ...TASK, allAccess: ["test/proc*.test.ts"] };
+    expect(files.map((file) => testBatchOf(task, file))).toEqual([0, 1, 2, 3]);
+    for (const batch of testBatches(task, files)) {
+      expect(new Set(batch.files.map((file) => testBatchOf(task, file))).size)
+        .toBe(1);
+    }
+  });
 
   it("runs a serial file without `--parallel`, apart from the rest", () => {
     expect(
@@ -505,6 +520,25 @@ describe("listing a member's test files", () => {
   });
 });
 
+describe("writing a member-relative path with slashes", () => {
+  it("returns a Windows path slash-separated, which a manifest's glob matches", () => {
+    const file = slashSeparated("test\\slow\\one.test.ts", "\\");
+    expect(file).toBe("test/slow/one.test.ts");
+    expect(
+      testBatches(
+        { flags: ["--parallel"], serial: ["test/slow/**"], allAccess: [] },
+        [file],
+      ),
+    ).toEqual([{ flags: [], files: ["test/slow/one.test.ts"] }]);
+  });
+
+  it("returns a POSIX path holding a backslash unchanged", () => {
+    expect(slashSeparated("test/one\\two.test.ts", "/")).toBe(
+      "test/one\\two.test.ts",
+    );
+  });
+});
+
 describe("resolving which task a member's tests run through", () => {
   it("prefers the Deno-only half where a member names one", async () => {
     const dir = await member({
@@ -517,6 +551,7 @@ describe("resolving which task a member's tests run through", () => {
     const tasks = await memberTasks(dir);
     expect(tasks.denoTestTask).toBe("deno-test");
     expect(tasks.browserTest).toBe(true);
+    expect(tasks.browserPaths).toEqual(["test/*.test.ts"]);
   });
 
   it("reaches through a task written as a dependency list", async () => {
@@ -555,6 +590,41 @@ describe("resolving which task a member's tests run through", () => {
   it("reports a member that says it has no tests as no surface", async () => {
     const dir = await member({ tasks: { test: "echo 'No tests defined.'" } });
     expect((await memberTasks(dir)).present).toBe(false);
+  });
+});
+
+describe("reading the paths a test runner's task names", () => {
+  it("takes the words after the script that are not flags", () => {
+    expect(
+      runnerPaths(
+        "deno run --allow-read ../deno-web-test/cli.ts --verbose " +
+          "'**/*.browser.test.ts' a.test.ts",
+      ),
+    ).toEqual(["**/*.browser.test.ts", "a.test.ts"]);
+  });
+
+  it("reads past the assignments standing before the command", () => {
+    expect(runnerPaths("HEADLESS=1 deno run -A cli.ts a.test.ts"))
+      .toEqual(["a.test.ts"]);
+  });
+
+  it("names nothing for a runner given no paths", () => {
+    expect(runnerPaths("deno run -A ../deno-web-test/cli.ts")).toEqual([]);
+  });
+
+  it("names nothing for a task that is not a deno run", () => {
+    expect(runnerPaths("deno test -A a.test.ts")).toEqual([]);
+    expect(runnerPaths("")).toEqual([]);
+  });
+
+  it("names nothing for a deno run naming no script", () => {
+    expect(runnerPaths("deno run -A")).toEqual([]);
+  });
+
+  it("names nothing for a task that is two commands", () => {
+    expect(
+      runnerPaths("deno run -A cli.ts a.test.ts && deno run -A cli.ts b"),
+    ).toEqual([]);
   });
 });
 

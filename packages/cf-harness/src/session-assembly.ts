@@ -20,6 +20,7 @@
  * nowhere else.
  */
 
+import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
 import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
@@ -55,6 +56,7 @@ import {
 import { patternRefsContextMessage } from "./pattern-refs.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
 import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
@@ -87,6 +89,16 @@ export interface HarnessSessionConfig {
 
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
+
+  /**
+   * The runsc sandbox (`--sandbox-runtime runsc`): no Docker, sessions
+   * honoured. Absent means the docker sandbox.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
 
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
@@ -139,7 +151,7 @@ export interface HarnessSessionConfig {
 
   /**
    * Connector handles every session on this console is granted, named by the
-   * CFC class the loom instance behind it declares for each.
+   * loom connection behind each and described by the CFC classes it declares.
    */
   connectorGrants: readonly HarnessConnectorGrantSpec[];
 
@@ -277,6 +289,21 @@ export const harnessSessionEngineOptions = (
     ...(config.sandboxDockerRuntime !== undefined
       ? { sandboxDockerRuntime: config.sandboxDockerRuntime }
       : {}),
+    ...(config.sandboxRuntimeKind !== undefined
+      ? { sandboxRuntimeKind: config.sandboxRuntimeKind }
+      : {}),
+    ...(config.sandboxRootfs !== undefined
+      ? { sandboxRootfs: config.sandboxRootfs }
+      : {}),
+    ...(config.sandboxCfcPolicy !== undefined
+      ? { sandboxCfcPolicy: config.sandboxCfcPolicy }
+      : {}),
+    ...(config.sandboxRunscBinary !== undefined
+      ? { sandboxRunscBinary: config.sandboxRunscBinary }
+      : {}),
+    ...(config.sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
+      : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }
       : {}),
@@ -371,7 +398,8 @@ export interface EstablishHarnessSessionContextOptions {
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
  * skills, the well-known grants of the session's space, host-supplied input
- * cells, and the guidance for selecting a piece target.
+ * cells, the guidance for selecting a piece target, and, for a run whose host
+ * opted in to `weaver_action`, the guidance for using the Weaver's commands.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
@@ -442,14 +470,18 @@ const establishContextMessages = async (
       options.onGrantsUnavailable?.(error);
     }
   }
-  messages.push(
-    ...pieceTargetingContextMessages(await engine.establishInputCells()),
-  );
+  const inputCells = await engine.establishInputCells();
+  for (const message of pieceTargetingContextMessages(inputCells)) {
+    messages.push(message);
+  }
   const patternRefsMessage = patternRefsContextMessage(
     await engine.establishPatternRefs(),
   );
   if (patternRefsMessage !== undefined) {
     messages.push(patternRefsMessage);
+  }
+  if (engine.clientActionsAvailable) {
+    messages.push(WEAVER_COMMAND_GUIDANCE);
   }
   messages.push(REVISION_VERIFICATION_GUIDANCE);
   return messages;

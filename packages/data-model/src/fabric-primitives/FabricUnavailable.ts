@@ -19,6 +19,7 @@ import type { MustBeTrue, Same } from "@commonfabric/utils/types";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -140,7 +141,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
     errorKind: UnavailableErrorKind | null = null,
     errorMessage: string | null = null,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricUnavailable);
 
     if (
       (typeof reason !== "string") ||
@@ -259,7 +260,8 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * The encoded state of `this`, which is what both codecs emit: the reason,
-   * the kind when there is one, and the message when one is stored.
+   * the kind when there is one, and the message when one is stored, as a
+   * frozen record.
    */
   #state(): FabricUnavailableState {
     const reason = this.#reason;
@@ -267,17 +269,22 @@ export class FabricUnavailable extends BaseFabricPrimitive
     const errorMessage = this.#errorMessage;
 
     if (errorKind === null) {
-      return { reason };
+      return Object.freeze({ reason });
     } else if (errorMessage === null) {
-      return { reason, errorKind };
+      return Object.freeze({ reason, errorKind });
     } else {
-      return { reason, errorKind, errorMessage };
+      return Object.freeze({ reason, errorKind, errorMessage });
     }
   }
 
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 
   /**
    * The message `errorMessage` returns for each kind when none was stored.
@@ -331,14 +338,16 @@ export class FabricUnavailable extends BaseFabricPrimitive
         typeTag: string,
         state: FabricUnavailableState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         try {
           return FabricUnavailable.#instanceForState(state);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Unavailable: ${(e instanceof Error) ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -372,14 +381,16 @@ export class FabricUnavailable extends BaseFabricPrimitive
         typeTag: string,
         state: FabricUnavailableState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         try {
           return FabricUnavailable.#instanceForState(state);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             (e instanceof Error) ? e.message : String(e),
+            mutable,
           );
         }
       }

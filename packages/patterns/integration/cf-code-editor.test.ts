@@ -20,6 +20,7 @@
 import { debugStr } from "@commonfabric/data-model";
 import {
   awaitViewSettled,
+  createTestSpace,
   env,
   Page,
   type ProbeApi,
@@ -29,9 +30,7 @@ import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   initializePiecesController,
   PieceController,
@@ -40,7 +39,7 @@ import {
 import { waitForRuntimeSynced } from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 // Debounce delay configured in cf-code-editor (default timingDelay)
 const DEBOUNCE_DELAY = 500;
@@ -112,12 +111,13 @@ async function waitForEditorReady(page: Page): Promise<void> {
  */
 async function openPiece(
   shell: ShellIntegration,
+  spaceDid: DID,
   pieceId: string,
   identity: Identity,
 ): Promise<Page> {
   await shell.goto({
     frontendUrl: FRONTEND_URL,
-    view: { spaceName: SPACE_NAME, pieceId },
+    view: { spaceDid, pieceId },
     identity,
   });
   const page = shell.page();
@@ -196,7 +196,7 @@ describe("cf-code-editor cursor stability", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity: identity,
     });
@@ -206,9 +206,6 @@ describe("cf-code-editor cursor stability", () => {
       ),
       { start: true },
     );
-
-    // Add permissions for ANYONE
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
 
     // In pull mode, create a sink to keep the piece reactive when inputs
     // change. The sink also drives awaitCellContent: it records the latest
@@ -254,7 +251,7 @@ describe("cf-code-editor cursor stability", () => {
   }
 
   it("should sync Cell value to editor", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
     const text = "initial";
 
     // Clear any initial state first and wait for editor to show empty
@@ -272,7 +269,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should maintain cursor position during normal typing with Cell echo", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -319,7 +316,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should maintain cursor during rapid typing (multiple chars in debounce window)", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -353,7 +350,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should maintain cursor when typing mid-document", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     const initialText = "Start End";
@@ -403,7 +400,7 @@ describe("cf-code-editor cursor stability", () => {
     // The "blur" strategy commits only on an explicit blur and arms no timer,
     // so the edit stays pending across the external write with nothing that can
     // fire mid-test; the blur at the end flushes it.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -447,7 +444,7 @@ describe("cf-code-editor cursor stability", () => {
     // This test verifies that external updates are applied when the user
     // is NOT actively typing (no debounce window active). Also tests
     // cursor clamping when content is shortened.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -479,7 +476,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should not apply Cell echo if content matches (own change)", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -511,7 +508,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should handle backspace and maintain cursor", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -546,7 +543,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should apply external update and move cursor after editor blur", async () => {
     // This is a NEGATIVE test: cursor SHOULD move when user is not actively editing
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -577,7 +574,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should apply external update after debounce window fully expires", async () => {
     // After debounce completes, external updates should apply
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -598,7 +595,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should handle multiple rapid external updates correctly", async () => {
     // Stress test: rapid Cell updates should all apply correctly
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -620,7 +617,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should handle undo operation and maintain correct state", async () => {
     // Undo triggers updateListener - verify echo detection doesn't cause issues
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -672,7 +669,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should handle text selection (anchor != head) during external update", async () => {
     // Test that selections are preserved/clamped correctly
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -787,7 +784,7 @@ describe("cf-code-editor cursor stability", () => {
     // This tests the race condition where a Cell update arrives exactly
     // when the debounce timer fires. Either side may win the race; the
     // invariant is that editor and Cell converge and the cursor stays valid.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -833,7 +830,7 @@ describe("cf-code-editor cursor stability", () => {
     // so every keystroke's edit stays pending and each external write is
     // delivered into the pending window; the blur at the end flushes the
     // accumulated edit.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -894,7 +891,7 @@ describe("cf-code-editor cursor stability", () => {
     // The "blur" strategy commits only on an explicit blur and arms no timer,
     // so the edit stays pending for the whole sequence with nothing that can
     // fire mid-test; the blur at the end flushes the accumulated edit.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -971,7 +968,7 @@ describe("cf-code-editor cursor stability", () => {
     // The "blur" strategy commits only on an explicit blur and arms no timer,
     // so the edit stays pending and the stored value stays empty throughout;
     // the blur at the end flushes the accumulated edit.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -1034,7 +1031,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Very long content replacement should clamp cursor correctly", async () => {
     // Test: set very long content, position cursor at end, then replace with short content.
     // Cursor should be clamped, not left at an invalid position.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1066,7 +1063,7 @@ describe("cf-code-editor cursor stability", () => {
     // Edge case: Cell echoes back content that's ALMOST the same as what
     // was typed but with a small modification (e.g., trailing whitespace trimmed).
     // The content comparison should detect this and apply the update.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1095,7 +1092,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Typing during blur should not lose content", async () => {
     // Edge case: user types, then blurs before debounce completes.
     // The blur handler should flush any pending content.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1118,7 +1115,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Special characters should not break echo detection", async () => {
     // Test with unicode, emoji, newlines - characters that might affect the
     // content comparison
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1145,7 +1142,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("ADVERSARIAL: Repeated identical Cell updates should be no-ops", async () => {
     // Sending the same content repeatedly to Cell should not cause cursor jumps
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1182,7 +1179,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Typing exactly at debounce expiry should commit correctly", async () => {
     // Type, wait until the first debounce commits, then type again.
     // Both inputs should be committed.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1211,7 +1208,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Rapid focus/blur cycles during typing should not corrupt content", async () => {
     // Focus, type, blur, focus, type - rapidly cycling while typing
     // Should maintain content integrity. Each blur flushes the pending edit.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1244,7 +1241,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: External update between blur and debounce should apply correctly", async () => {
     // Type, blur (triggers immediate commit), then send external update
     // External update should apply since user is no longer typing
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1291,7 +1288,7 @@ describe("cf-code-editor cursor stability", () => {
     // properly cancels pending updates and resets state.
     // Note: We can't easily create a second Cell in this test harness,
     // but we can verify the value property change path works.
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1369,7 +1366,7 @@ describe("cf-code-editor backlink title sync", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -1379,8 +1376,6 @@ describe("cf-code-editor backlink title sync", () => {
       ),
       { start: true },
     );
-
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
 
     // Keep the piece reactive (pull mode) and track its committed content, so a
     // browser-side write to the value cell is observed here.
@@ -1412,7 +1407,7 @@ describe("cf-code-editor backlink title sync", () => {
   //
 
   it("preserves a remote title change over a pending local edit", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
     const pieceId = "backlink-pending-edit-piece";
     const pill = `[[📝 Target (${pieceId})]]`;
     const renamedPill = `[[📝 New Target (${pieceId})]]`;
@@ -1462,7 +1457,7 @@ describe("cf-code-editor backlink title sync", () => {
   });
 
   it("persists a remote title change under the blur strategy without user interaction", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
     const pieceId = "backlink-blur-piece";
     const pill = `[[📝 Target (${pieceId})]]`;
     const renamedPill = `[[📝 New Target (${pieceId})]]`;

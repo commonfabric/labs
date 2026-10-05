@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { watchMetaReads } from "../../runner/test/support/watch-meta-reads.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("setsrc commit receipt");
@@ -47,9 +48,9 @@ describe("setsrc commit receipt", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `setsrc-commit-receipt-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -155,10 +156,6 @@ describe("setsrc commit receipt", () => {
       runtime,
     );
     const originalWarn = console.warn;
-    const cellPrototype = Object.getPrototypeOf(piece.getCell()) as {
-      getMetaRaw: (field: string, options?: unknown) => unknown;
-    };
-    const originalGetMetaRaw = cellPrototype.getMetaRaw;
     let commitReceiptIssued = false;
     let sourceHistoryReadsAfterReceipt = 0;
     console.warn = () => {};
@@ -173,15 +170,14 @@ describe("setsrc commit receipt", () => {
       commitReceiptIssued = true;
       return result;
     }) as typeof runtime.runSyncedWithCommit;
-    cellPrototype.getMetaRaw = function (field, options) {
-      if (commitReceiptIssued && field === "pieceSourceHistory") {
+    const unwatch = watchMetaReads("pieceSourceHistory", () => {
+      if (commitReceiptIssued) {
         sourceHistoryReadsAfterReceipt++;
         throw new Error(
           "the commit receipt must not be verified by rereading source history",
         );
       }
-      return originalGetMetaRaw.call(this, field, options);
-    };
+    });
 
     try {
       const receipt = await piece.setPattern(markedProgram("v2"));
@@ -202,7 +198,7 @@ describe("setsrc commit receipt", () => {
     } finally {
       pieces.syncPattern = originalSyncPattern;
       runtime.runSyncedWithCommit = originalRunSyncedWithCommit;
-      cellPrototype.getMetaRaw = originalGetMetaRaw;
+      unwatch();
       console.warn = originalWarn;
     }
   });

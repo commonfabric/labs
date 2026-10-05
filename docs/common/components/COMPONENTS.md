@@ -124,6 +124,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-code-editor` | Code/prose editor with highlighting and `[[`-mention completion | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
+| `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
+| `cf-custody-answer` | Asks the trusted host to publish a custody room's answer once per instance, and shows the answer the seal published (see [custody answer](#cf-custody-answer)) | `$terms`, `$policy`, `$output` |
 | `cf-dot-mark` | Scatter/dot mark rendered inside `cf-chart` | `$data` |
 | `cf-drag-source` | Wraps draggable content; pairs with `cf-drop-zone` (see [drag-and-drop](../patterns/meta/drag-and-drop.md)) | `$cell` |
 | `cf-draggable` | Absolutely-positioned draggable container (x/y) | |
@@ -139,6 +141,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-grid` | CSS Grid layout | |
 | `cf-heading` | Theme-compliant heading replacing `h1`–`h6` | |
 | `cf-hgroup` | Horizontal group with automatic gap management | |
+| `cf-hover-card` | A card that appears beside its content on hover or focus (see [cf-hover-card](#cf-hover-card)) | |
+| `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
 | `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, or service capabilities | |
@@ -183,7 +187,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
 | `cf-slider` | Range input slider | |
-| `cf-space-link` | Renders a space as a clickable navigation pill | |
+| `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
+| `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
 | `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
@@ -206,7 +211,6 @@ cell means none confirmed — check the component source before assuming.
 | `cf-tool-call` | Expandable tool-call display | |
 | `cf-toolbar` | Horizontal toolbar for grouping controls | |
 | `cf-tools-chip` | Pill revealing a read-only tool list on hover/tap | `$tools` |
-| `cf-updater` | Button registering pieces for background updates | `$state` |
 | `cf-vgroup` | Vertical group with automatic gap management | |
 | `cf-voice-input` | Voice recording and transcription | `$transcription` |
 | `cf-vscroll` | Vertical scroll container (snap-to-bottom, fade edges) | |
@@ -394,6 +398,34 @@ const gridView = GridView({ items });
 
 See [composition](../patterns/composition.md) for more on pattern composition.
 
+A piece bound to `cf-render` with `$cell` passes the same confidentiality gates
+as when it is opened by its address, so what the viewer may not see renders as
+the policy placeholder in the same places. The exceptions:
+
+- A piece whose own document the viewer may not see shows nothing at all, where
+  opening it shows the placeholder.
+- A `cf-cfc-render-boundary` that only declassifies does not reach into the
+  piece: what it would release shows as the placeholder. A boundary that also
+  lowers the ceiling falls under the next item.
+- Inside a `cf-cfc-render-boundary` that lowers the ceiling, or a
+  `cf-cfc-authorship` that verifies text integrity, `cf-render` shows a piece
+  only when the boundary's ceiling admits everything the piece reaches, and
+  nothing otherwise. A nested render does not verify text integrity, so under
+  an authorship boundary the piece's own text shows whether or not it carries
+  the required endorsement.
+
+`cf-picker` shows each of its `$items` through a `cf-render` of its own, so
+each item passes the same gates as a piece bound to `cf-render`, with the same
+exceptions. Where a `cf-render` would show nothing for one item, the picker
+shows nothing at all, since it is handed the whole list or none of it.
+`cf-map` shows each marker's and circle's `popup` the same way. Where the
+`$value`'s type holds each popup as a cell, each popup passes the gates of a
+piece bound to `cf-render`; otherwise the map reads everything its popups
+reach, and shows its value only when the viewer may see all of it.
+
+[Render-boundary composition](../../specs/cfc-render-boundary-composition.md)
+holds the rules.
+
 ### UI variants (CT-1321)
 
 A piece can expose a **size spectrum** of renderings as optional sibling output
@@ -418,12 +450,23 @@ Pick a variant with the `variant` attribute (default `"full"`):
 export the requested variant key, `cf-render` substitutes a per-variant platform
 default:
 
-- `chip` → a `cf-cell-link` bound to the piece (renders it by its `[NAME]`).
+- `chip` → a chip showing the piece's `[NAME]` and the short form of its id,
+  which navigates to the piece when clicked and drags it as a `cf-cell-link`
+  does. The name is a render of its own, so a name the viewer may not see shows
+  as the policy placeholder.
 - `tile` → the full `[UI]` rendered small at ~0.5 scale, clipped to a static
   preview and clickable to navigate to the piece (like `cf-cell-link`).
 
 Because `full`/`[UI]` is the universal floor, a piece that exports only `[UI]`
 still renders correctly at `chip` and `tile`.
+
+A piece exports a variant when its own document holds any value at the key,
+`null` included: `cf-render` decides by whether the key holds something, not by
+what it holds, so a key holding `null` renders as an empty variant rather than
+the default. Leave the key out to get the default.
+
+A `cf-render` with no cell shows nothing; it shows its loading state only while
+the cell it holds is rendering.
 
 A pattern exports the spectrum by returning the sibling keys:
 
@@ -544,21 +587,23 @@ other host, because a reader receives only what its own demand declares.
 Right-clicking a rendered piece opens `cf-piece-menu` for it. **View source**
 shows the piece's retained authored files. **Origin and history** shows its
 active origin and recorded source revisions. **Clone fresh piece into new
-space** creates a copy with default input data in a unique named space and opens
-it. **Clone piece and copy data into new space** instead seeds the copy with
-detached snapshots of the selected piece's current input and stateful internal
-data. Computed values are recomputed in the new space. Data linked from another
-space is rejected because it cannot be captured atomically. Both actions show
-their progress and any failure in a dialog. A detached piece becomes the copy's
-origin. A piece that already follows an origin passes that origin to the copy.
-A followed piece also has **Stop following source**, which keeps the exact
-current source and clears the origin. Historical entries can restore
-their retained source version or resume following their earlier origin. Each
-entry links to its exact retained source. A mutable Fabric piece origin links
-to that piece in its own space, and the space fact links to the space's default
-piece. The menu warns before applying a structurally incompatible historical
-source. Its confirmation remains bound to the exact candidate that produced
-the warning.
+space** creates a space with a random DID, lists it in the user's Home space
+list under the label `Piece copy`, copies the piece into it with default input
+data, and opens the copy by the space's DID. A clone that fails takes the space
+back out of the Home space list. **Clone piece and copy data into new space**
+instead seeds the copy with detached snapshots of the selected piece's current
+input and stateful internal data. Computed values are recomputed in the new
+space. Data linked from another space is rejected because it cannot be captured
+atomically. Both actions show their progress and any failure in a dialog. A
+detached piece becomes the copy's origin. A piece that already follows an origin
+passes that origin to the copy. A followed piece also has **Stop following
+source**, which keeps the exact current source and clears the origin. Historical
+entries can restore their retained source version or resume following their
+earlier origin. Each entry links to its exact retained source. A mutable Fabric
+piece origin links to that piece in its own space, and the space fact links to
+the space's default piece. The menu warns before applying a structurally
+incompatible historical source. Its confirmation remains bound to the exact
+candidate that produced the warning.
 
 **Data** shows the piece's argument and result values (both stay live while
 the menu is open; linked cells appear as `{"@cell": …}` stubs), and
@@ -650,6 +695,61 @@ slot. Optional `icon` and `action` slots render above and below the message.
     Add first item
   </cf-button>
 </cf-empty-state>
+```
+
+---
+
+## cf-hover-card
+
+A small card that appears beside its content while the pointer rests on the
+content or focus is inside it, as a reaction count shows who reacted. What the
+card shows goes in the `card` slot. The card sits above the content, or below
+when there is no room above, in the browser's top layer, so no ancestor that
+clips its overflow can cut it off, and it follows the content as the page
+scrolls. It hides when the pointer and focus have both left. The pointer cannot
+reach the card, so what it shows is for reading, not for clicking; to have it
+read as a description of its content, point `aria-describedby` from the content
+to the element in the `card` slot.
+
+Showing and hiding is the component's own, so hovering runs no handler and
+writes no state.
+
+```tsx
+// Shown as JSX element children.
+<cf-hover-card>
+  <cf-button size="sm" aria-describedby="cats-reactors">😺 2</cf-button>
+  <cf-vstack id="cats-reactors" slot="card" gap="1">
+    <cf-text>Alice</cf-text>
+    <cf-text>Bob</cf-text>
+  </cf-vstack>
+</cf-hover-card>
+```
+
+---
+
+## cf-hover-reveal
+
+Content with controls that appear while the pointer rests on it or focus is
+inside it, as a chat message shows its reaction button. The controls go in the
+`actions` slot and stay laid out while hidden, so revealing them never moves
+the content. Set `revealed` to keep them shown, for instance while a picker
+they opened is still open. On a device that cannot hover, they are always
+shown.
+
+The reveal is the component's own CSS, so hovering runs no handler and writes
+no state.
+
+```tsx
+// Shown inside a pattern body.
+const pickerOpen = new Writable.perSession(false);
+const togglePicker = action(() => pickerOpen.set(!pickerOpen.get()));
+
+<cf-hover-reveal revealed={pickerOpen}>
+  <cf-text>Lunch at noon?</cf-text>
+  <cf-button slot="actions" size="sm" onClick={togglePicker}>
+    React
+  </cf-button>
+</cf-hover-reveal>
 ```
 
 ---
@@ -1039,9 +1139,27 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
 ## cf-owner-view
 
 `cf-owner-view` checks whether the runtime's authenticated principal matches
-the single root `represents-principal` attestation on `$originator`. It writes
-the result to the per-user boolean `$result` cell and renders no content of its
-own. A missing, unreadable, or conflicting attestation leaves the result false.
+the single root `represents-principal` attestation on `$originator`, and writes
+the answer to the per-user `$result` cell, which holds a `boolean | null`:
+`true` when the attestation names the acting principal, `false` when it names
+another, and `null` when it is missing, unreadable, or conflicting, when the
+acting principal is unknown, or before the component has decided. The component
+renders no content of its own.
+
+The component follows `$originator` through a subscription of its own that
+carries labels, so a change to the label alone reaches it even when another
+handle on the same cell subscribed first for the value alone. It decides when
+it binds and again on each update that subscription delivers, from the label
+the update carries, or from a read of the label when the update carries none.
+An attestation that is not readable when the component binds, as when its
+document has not loaded yet, decides the result once an update brings it, and
+an update that finds the attestation no longer readable sets the result back
+to `null`. The client drops an update whose value is undefined, which it treats
+as a conflict that a settled value follows, so such an update decides nothing.
+The component writes a decision once for each label it decides from, until the
+label or the binding changes. It stops following while disconnected and
+follows again once reconnected, as after a move to another parent.
+
 The component does not use the selected `#profile`, which may represent a
 different persona. The predicate selects presentation; CFC labels govern reads.
 
@@ -1071,6 +1189,101 @@ successfully, the component emits `cf-shared` with no payload. A consuming
 handler reads its bound result cell; the event does not carry source values or
 identity claims.
 
+## cf-custody-seal
+
+`cf-custody-seal` seals the actor's draft into the custody of a room's trusted
+declassifier policy, as the [custody seal](../../specs/cfc-custody-seal.md)
+specifies. Bind `$draft` to the value to seal, `$terms` to the room's terms
+document, `$policy` to the room's custody policy, and `$sources` to the actor's
+source policy: a list of the actor's own `Context` and `Resource` atoms in the
+actor's home space. Optionally bind `$box` to a writable cell that receives a
+link to the instance's box once the value is sealed.
+
+A room pattern needs no DID and no reference it cannot write. Its terms name
+each seat by a cell whose stored label attests one member, such as that
+member's profile, and the runtime seals the DID the cell attests. `$policy` may
+be any cell the pattern declares `PolicyOf` its custody rules: the runtime
+reads the policy from that cell's label, where the reference, its module
+identity, digest and room subject, is bound. The box `$box` receives is the one
+document the room's projector reads; reading it is label-gated like any other
+read. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room
+built this way, which shows its answer through `cf-custody-answer`.
+
+The button opens a native modal dialog. Its first part comes from what the
+runtime read and checked, not from anything the pattern renders: the room space;
+who can read it now, and so see the answer, including the room space's own key;
+the seats; the policy that decides what comes out, shown by the manifest digest
+a statement in the runtime's trust configuration names (the host declares it,
+and an attach cannot change it), beside the symbol and module the room's
+reference names; and which of the actor's sources go in. Each reader, seat and
+the room is shown in a bidirectionally isolated element of its own, with the
+dialog's annotations (`you`, `no seat`, `Anyone`) as separate elements beside
+it. The room's owners can add readers after the seal, and the dialog says so.
+Its second part, set apart, is what the room's terms say: the `question` and the
+`answers` the terms list, and, for `k` distinct answers, the bound of `log₂ k`
+bits on what one of them reveals. Nothing checks that the room's policy releases
+only the listed answers, so the dialog states the bound as conditional on it.
+When the room's policy does not require the seal's input witness on everything
+it releases, a member's own code can learn the actor's stance one answer at a
+time, so the dialog shows a warning saying so in place of the bound.
+Room-authored text is shown with control, format (direction overrides and
+zero-width characters among them) and line-separator characters removed and is
+capped in length. The exact sealed values and the terms are under a collapsed
+details section.
+
+The actor confirms with one trusted browser gesture on **Seal & consent**; a
+scripted click cannot seal. Changing a binding, dismissing the dialog, or
+disconnecting the component invalidates the review, and the runtime refuses a
+seal when the draft, the terms, the room's policy, the room's readers or the
+actor's source policy changed after preparation, up to the moment the entry is
+written. The seal writes the link to the box into `$box` in the transaction
+that writes the actor's entry, and the component then emits `cf-sealed` with `detail.instance`, the digest of the terms with each seat
+resolved to its DID. It names no member, but code holding it can test a guess
+at the whole set of seat DIDs against it. The event carries neither the value
+nor the key of the actor's entry in the room. The box's entries carry the
+room's policy, and a read through the link carries it, so `$box` need declare
+none. Known limitation: a `$box` whose entries do declare a label makes the
+seal's commit fail (see the `TODO(custody-box-link)` repro in
+`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
+leaves the component without that event even if the seal committed, so a
+pattern that must know should read the room rather than rely on it; the
+seal still writes the box link to the `$box` bound when the actor reviewed.
+
+## cf-custody-answer
+
+`cf-custody-answer` shows a custody room's answer: the one the seal published
+for the room's current instance, never the room's projection itself. A room
+binds `$terms` to its terms document, `$policy` to the cell declaring its
+custody policy, and `$output` to its projected answer:
+`<cf-custody-answer $terms={terms} $policy={policy} $output={choice} />`.
+
+Each time the projected answer or the terms change, the component asks the
+host to publish. The seal publishes an instance's answer once, and only when
+every rule of the room's policy requires the seal's witness and releases only
+to the seal, a rule of the room's policy releases the answer to the seal, and
+every seat has sealed; it refuses every later request. The seal writes the
+answer into the instance's answer slot, labeled for the room's readers, and the
+component shows what that slot holds, read and verified by the host. The shown
+answer is the slot of the instance the bound `$terms` digest to, under the
+policy the bound `$policy` cell names. The slot is create-only and the seal's
+alone to write, so the answer published for an instance never changes. Which
+instance the component shows is not held against a room member's own code: the
+bindings are pattern data the room space's members can write, so a member's
+code can point them at another instance's terms, or at terms whose slot is
+empty. A writer claim on the room's cells does not close that in general,
+because write authority is keyed by code rather than by piece (normative CFC
+§8.15.8); the spec says what it would take. The projection is released to the
+seal alone, so no member reads it.
+
+The seal's refusals while an answer is not yet, or is already, published leave
+the component quiet, and it asks nothing before the room has terms. Any other
+failure, such as a lost worker connection or a slot the seal did not write,
+shows as an alert. It fires `cf-published` once the published answer is shown,
+with `detail.instance` when this component published it.
+`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room built
+this way; the [custody seal spec](../../specs/cfc-custody-seal.md) says what it
+does not cover.
+
 ## CFC Authorship
 
 `cf-cfc-authorship` can enforce text-integrity policy for its children when
@@ -1078,16 +1291,26 @@ identity claims.
 is provided, the renderer uses that explicit atom list.
 
 When no explicit requirement is provided and `$author`/`author` is a cell whose
-CFC label carries `represents-principal` at its root or on its top-level fields
-(a profile's owner-protected fields carry its owner's), the renderer infers a
-required `{ kind: "authored-by", subject }` atom for each principal those atoms
-name. One principal is the usual case; for an author naming several, text must
-carry `authored-by` for each of them. With no principal and no explicit
-requirement, the boundary admits no cell text at all. This means a cell-backed
+value's CFC label carries `represents-principal` at its root or on its top-level
+fields (a profile's owner-protected fields carry its owner's), the renderer
+infers a required `{ kind: "authored-by", subject }` atom for each principal
+those atoms name. One principal is the usual case; for an author naming several,
+text must carry `authored-by` for each of them. With no principal and no
+explicit requirement, the boundary admits no cell text at all, even inside
+another boundary whose requirement the text meets. This means a cell-backed
 author can make previously display-only text require matching authorship
 integrity. Use an explicit `requiredTextIntegrity` when a component needs a
 different policy, and avoid cell-backed `$author` for purely decorative author
 names.
 
 The component itself checks its value's `authored-by` against the same
-principal, and marks the content verified when they match.
+principal, and marks the content verified when they match. Verified means
+that a run acting for that principal wrote the content, not that they asked
+for it. When either check
+matches a principal claim, it reads the atom only as the object the runtime
+writes, `{ kind, subject }`, taking the subject exactly as written and ignoring
+any other field; a `represents-principal` subject counts only when it is a
+well-formed DID, and the `authored-by:<subject>` string form is not read. The
+component's own badge verifies only the kinds `authored-by` and
+`represents-principal`; an explicit `requiredTextIntegrity` or
+`requiredIntegrity` list is matched as given.

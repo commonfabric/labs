@@ -1,3 +1,7 @@
+import {
+  CFC_ATOM_TYPE,
+  type CfcModulePolicyRefAtom,
+} from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
@@ -5,12 +9,90 @@ import {
   isAtomPattern,
   isAtomVarPlaceholder,
 } from "./atom-pattern.ts";
+import { isCfcFieldCommitment } from "./label-representation.ts";
+import type { JSONSchema } from "../builder/types.ts";
 
 export const CFC_POLICY_MANIFEST_ID_PREFIX = "of:cfc-policy-manifest:";
 
 export const cfcPolicyManifestDocId = (
   policyDigest: string,
 ): `of:${string}` => `${CFC_POLICY_MANIFEST_ID_PREFIX}${policyDigest}`;
+
+/**
+ * The schema a policy manifest document is read and loaded with. A stored
+ * manifest keeps each of its rules in a document its root links to, and a
+ * load under this schema brings those documents in with the root.
+ */
+export const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+} as const satisfies JSONSchema;
+
+/**
+ * Adds to `digests` the digest of every module policy `schema` names, such as
+ * the `PolicyOf` markers in a compiled pattern's schemas.
+ */
+export const collectModulePolicyDigests = (
+  schema: unknown,
+  digests: Set<string>,
+): void => {
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (!isObjectOrArray(value) || seen.has(value)) return;
+    seen.add(value);
+    if (
+      value.type === CFC_ATOM_TYPE.Policy &&
+      value.policyRefKind === "module" &&
+      typeof value.policyDigest === "string"
+    ) {
+      digests.add(value.policyDigest);
+      return;
+    }
+    for (const entry of Object.values(value)) visit(entry);
+  };
+  visit(schema);
+};
+
+const MODULE_POLICY_REF_KEYS = new Set([
+  "type",
+  "policyRefKind",
+  "moduleIdentity",
+  "symbol",
+  "policyDigest",
+  "subject",
+]);
+
+/** A complete module-policy reference, with nothing missing or extra. */
+export const isExactModulePolicyRef = (
+  value: unknown,
+): value is CfcModulePolicyRefAtom => {
+  if (!isObjectNotArray(value)) return false;
+  if (
+    value.type !== CFC_ATOM_TYPE.Policy || value.policyRefKind !== "module" ||
+    typeof value.moduleIdentity !== "string" ||
+    value.moduleIdentity.length === 0 || typeof value.symbol !== "string" ||
+    value.symbol.length === 0 || typeof value.policyDigest !== "string" ||
+    value.policyDigest.length === 0 ||
+    !(
+      (typeof value.subject === "string" && value.subject.length > 0) ||
+      isCfcFieldCommitment(value.subject)
+    )
+  ) {
+    return false;
+  }
+  // The six fields must be the atom's own enumerable data properties and its
+  // only keys, so an inherited, accessor or hidden field cannot pass.
+  const ownKeys = Reflect.ownKeys(value);
+  return ownKeys.length === MODULE_POLICY_REF_KEYS.size &&
+    ownKeys.every((key) => {
+      if (typeof key !== "string" || !MODULE_POLICY_REF_KEYS.has(key)) {
+        return false;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor !== undefined && descriptor.enumerable === true &&
+        "value" in descriptor;
+    });
+};
 
 /**
  * Policy records + exchange rules (spec §4.3/§4.4, Epic B2 of
@@ -800,10 +882,24 @@ export const buildCfcPolicyArtifactManifest = (
   });
 };
 
+/**
+ * The artifacts {@link validateCfcPolicyArtifactManifest} has returned. Each is
+ * deep-frozen, so one handed back for validation again is still exactly what
+ * passed, and is returned without recomputing its digest. The display
+ * boundary validates the same kept artifact on every render. The set is
+ * process-global, shared by every runtime in the process; that is sound
+ * because membership says only that validation produced this exact frozen
+ * object, which no runtime can change, and a `WeakSet` retains nothing.
+ */
+const validatedArtifacts = new WeakSet<PolicyArtifactManifestV1>();
+
 /** Trusted-ingestion validation for a transported manifest envelope. */
 export const validateCfcPolicyArtifactManifest = (
   input: unknown,
 ): PolicyArtifactManifestV1 => {
+  if (validatedArtifacts.has(input as PolicyArtifactManifestV1)) {
+    return input as PolicyArtifactManifestV1;
+  }
   if (!isPlainRecord(input)) {
     throw new Error("cfcPolicyManifest: envelope must be an object");
   }
@@ -823,6 +919,7 @@ export const validateCfcPolicyArtifactManifest = (
       `cfcPolicyManifest: policyDigest mismatch (expected ${built.policyDigest})`,
     );
   }
+  validatedArtifacts.add(built);
   return built;
 };
 

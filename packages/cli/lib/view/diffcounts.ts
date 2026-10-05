@@ -5,7 +5,8 @@
  */
 
 import { type DiffFile, type DiffLine, parseDiff } from "./diff.ts";
-import { languageForFile } from "./languages/language.ts";
+import { type DiffFileLanguages, diffLanguages } from "./diffdoc.ts";
+import type { Language } from "./languages/language.ts";
 import type { Line, TokenClass } from "./model.ts";
 
 /** The line-count policies available in the diff jump list. */
@@ -36,8 +37,13 @@ export interface DiffCounts {
   readonly files: readonly DiffLineCounts[];
 }
 
-/** Complete file text available to resolve syntax across omitted diff lines. */
+/**
+ * What the diff view knows about one file beyond the diff text: the languages
+ * of its sides, and complete file text to resolve syntax across omitted diff
+ * lines.
+ */
 export interface DiffCountFileContext {
+  readonly languages: DiffFileLanguages;
   readonly oldLines?: readonly Line[];
   readonly newLines?: readonly Line[];
 }
@@ -67,7 +73,10 @@ interface MutableCounts {
   dels: number;
 }
 
-/** Computes added and removed counts under `mode`. */
+/**
+ * Computes added and removed counts under `mode`. A file without a context
+ * reads its sides in the languages the diff's own paths and content decide.
+ */
 export function diffCounts(
   text: string,
   lines: readonly Line[],
@@ -81,14 +90,18 @@ export function diffCounts(
   const counts: MutableCounts[] = model.files.map(() => ({ adds: 0, dels: 0 }));
   const byFile: ChangedLine[][] = model.files.map(() => []);
   const changed: ChangedLine[] = [];
+  let decided: readonly DiffFileLanguages[] | undefined;
   for (const [fileIndex, file] of model.files.entries()) {
+    const context = contexts?.[fileIndex];
     const fallback = mode === "comments"
       ? fallbackCommentLines(
         raw,
         model.lines,
         lines,
         file,
-        contexts?.[fileIndex],
+        context?.languages ??
+          (decided ??= diffLanguages(text, model))[fileIndex],
+        context,
       )
       : new Map<number, string>();
     for (let i = file.headerLine; i <= file.endLine; i++) {
@@ -255,10 +268,11 @@ function fallbackCommentLines(
   diffLines: readonly DiffLine[],
   renderedLines: readonly Line[],
   file: DiffFile,
+  { oldLanguage, newLanguage }: DiffFileLanguages,
   context: DiffCountFileContext | undefined,
 ): ReadonlyMap<number, string> {
-  const oldSyntax = fallbackSyntaxFor(file.oldPath);
-  const newSyntax = fallbackSyntaxFor(file.newPath);
+  const oldSyntax = fallbackSyntaxFor(file.oldPath, oldLanguage);
+  const newSyntax = fallbackSyntaxFor(file.newPath, newLanguage);
   if (!oldSyntax && !newSyntax) return new Map();
 
   const result = new Map<number, string>();
@@ -451,6 +465,12 @@ function hasVisibleClose(
   return quote !== "" && tokenInsideCurrentQuote;
 }
 
+/** Whether `offset` lies inside a `((` that `text` has not closed before it. */
+function insideArithmetic(text: string, offset: number): boolean {
+  const before = text.slice(0, offset);
+  return before.split("((").length > before.split("))").length;
+}
+
 function isHeredocEnd(text: string, heredoc: HeredocState): boolean {
   const candidate = heredoc.stripTabs ? text.replace(/^\t+/u, "") : text;
   return candidate === heredoc.end;
@@ -485,10 +505,14 @@ function shouldScanFallback(
 
 function fallbackSyntaxFor(
   path: string | undefined,
+  language: Language,
 ): CommentSyntax | undefined {
-  const language = languageForFile(path).id;
-  if (language !== "plain-text" && language !== "markdown") return undefined;
-  const syntax = commentSyntaxFor(path ?? "");
+  // Shell's highlighting colors each hunk on its own, and this scanner carries
+  // a heredoc across the lines between hunks.
+  if (!["plain-text", "markdown", "shell"].includes(language.id)) {
+    return undefined;
+  }
+  const syntax = commentSyntaxFor(path ?? "", language);
   return syntax.lines.length > 0 || syntax.blocks.length > 0
     ? syntax
     : undefined;
@@ -569,8 +593,11 @@ function stripCommonComments(
       i = after;
       continue;
     }
-    if (syntax.heredocs) {
-      const match = /^<<(-)?\s*(['"]?)([A-Za-z_]\w*)\2/u.exec(text.slice(i));
+    // `<<<` is a here-string, and `<<` inside `((` is a shift.
+    if (syntax.heredocs && text[i - 1] !== "<" && !insideArithmetic(text, i)) {
+      const match = /^<<(-)?\s*\\?(['"]?)([A-Za-z_]\w*)\2/u.exec(
+        text.slice(i),
+      );
       if (match) {
         heredocs.push({ end: match[3], stripTabs: match[1] === "-" });
       }
@@ -624,8 +651,14 @@ function closingQuote(text: string, start: number, quote: string): number {
   return -1;
 }
 
-function commentSyntaxFor(path: string): CommentSyntax {
+/**
+ * The comment forms of a file's syntax. Shell's come from its language, which
+ * a shebang can select for a path with no extension; the rest come from the
+ * path's extension or name.
+ */
+function commentSyntaxFor(path: string, language: Language): CommentSyntax {
   const lower = path.toLowerCase();
+  const shell = language.id === "shell";
   const lines: string[] = [];
   const blocks: [string, string][] = [];
   let nestedBlocks = false;
@@ -658,11 +691,13 @@ function commentSyntaxFor(path: string): CommentSyntax {
     /\.(?:py|pyi|pyw|ya?ml|sh|bash|zsh|fish|rb|pl|pm|r|ex|exs|php|tf|hcl|toml|ini|cfg|conf|properties)$/
       .test(
         lower,
-      ) || /(?:^|\/)(?:dockerfile|makefile|gnumakefile)(?:\..*)?$/.test(lower)
+      ) ||
+    /(?:^|\/)(?:dockerfile|makefile|gnumakefile)(?:\..*)?$/.test(lower) ||
+    shell
   ) {
     addLine("#");
   }
-  if (/\.(?:sh|bash|zsh)$/.test(lower)) heredocs = true;
+  if (shell || /\.(?:sh|bash|zsh)$/.test(lower)) heredocs = true;
   if (/\.sql$/.test(lower)) {
     addLine("--");
     addBlock("/*", "*/");

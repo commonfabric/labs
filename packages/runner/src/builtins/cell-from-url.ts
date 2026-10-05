@@ -1,5 +1,7 @@
+import { isDID } from "@commonfabric/identity/did";
+
 import { type Cell } from "../cell.ts";
-import { parseFabricUrl } from "../fabric-url.ts";
+import { type FabricUrlTarget, parseFabricUrl } from "../fabric-url.ts";
 import { getMetaLink } from "../link-utils.ts";
 import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
@@ -29,12 +31,10 @@ import type {
  * synchronous. Callers get the `{ pending, … }` shape every other builtin has,
  * so none of them changes when the work behind it grows.
  *
- * **What this implementation does not do yet.** It resolves from the host list
- * it is given and from space names the runtime has already cached
- * (`resolveSpaceNameSync`). A URL naming a space by a name this runtime has
- * not seen resolves to no cell rather than waiting for one — the narrow case,
- * since a same-space URL carries no space at all and a cross-space one usually
- * carries a DID.
+ * A URL naming a space by a legacy name resolves through
+ * `Runtime.resolveLegacySpaceName`. The first time this runtime meets a name,
+ * the result stays pending until the derivation finishes, and the action runs
+ * again then.
  */
 export function cellFromUrl(
   inputsCell: Cell<{
@@ -73,15 +73,32 @@ export function cellFromUrl(
     sendResult(tx, { pending, cell });
 
     const inputs = inputsCell.withTx(tx);
-    const url = inputs.key("url").get();
-    const hosts = inputs.key("hosts").get();
     const spaceHost = inputs.key("spaceHost").get();
-
-    const target = typeof url === "string"
-      ? parseFabricUrl(url, { hosts: Array.isArray(hosts) ? hosts : undefined })
-      : undefined;
+    const target = targetOf(inputsCell, tx);
 
     const space = resolveSpace(runtime, parentCell.space, target?.space);
+    if (target?.space !== undefined && space === undefined) {
+      // Pending until the name is derived; clearing the flag then is the
+      // write that runs this action again. A derivation that finishes after
+      // the input has stopped naming its name leaves the flag alone, since
+      // whatever the input names now is still unanswered.
+      const pendingWithTx = pending.withTx(tx);
+      if (pendingWithTx.get() !== true) pendingWithTx.set(true);
+      const name = target.space;
+      runtime.trackAsyncWork(
+        runtime.resolveLegacySpaceName(name).then(
+          () =>
+            runtime.editWithRetry((retryTx) => {
+              if (targetOf(inputsCell, retryTx)?.space !== name) return;
+              pending.withTx(retryTx).set(false);
+            }),
+          (error) =>
+            console.error("cellFromUrl: deriving a space name:", error),
+        ),
+        parentCell,
+      );
+      return;
+    }
     const routed = target?.space === undefined || typeof spaceHost !== "string"
       ? true
       : space !== undefined && routeSpace(runtime, space, spaceHost);
@@ -123,6 +140,19 @@ export function cellFromUrl(
   };
 }
 
+/** The address the builtin's `url` input names, read within `tx`. */
+function targetOf(
+  inputsCell: Cell<{ url: string; hosts?: string[] }>,
+  tx: IExtendedStorageTransaction,
+): FabricUrlTarget | undefined {
+  const inputs = inputsCell.withTx(tx);
+  const url = inputs.key("url").get();
+  const hosts = inputs.key("hosts").get();
+  return typeof url === "string"
+    ? parseFabricUrl(url, { hosts: Array.isArray(hosts) ? hosts : undefined })
+    : undefined;
+}
+
 /**
  * Applies an explicit route without overriding a route the runtime already
  * fixed. A storage manager without remote routing can still confirm its own
@@ -154,7 +184,7 @@ function resolveSpace(
   named: string | undefined,
 ): MemorySpace | undefined {
   if (named === undefined) return ownSpace;
-  return runtime.resolveSpaceNameSync(named);
+  return isDID(named) ? named : runtime.legacySpaceDidSync(named);
 }
 
 /**

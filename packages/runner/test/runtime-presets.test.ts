@@ -251,6 +251,13 @@ describe("runtimePresets conformance", () => {
     const spaceHostMap = { "did:key:zSpace": "https://host.example" };
     const readCeiling = ["did:key:zOwner", { anyOf: ["a", "b"] }];
     const onPatternInstantiated = () => {};
+    const trustConfig = {
+      delegations: [{
+        delegator: "*",
+        verifier: "did:web:review.example",
+        concepts: ["https://commonfabric.org/cfc/concepts/example"],
+      }],
+    };
 
     it("productionServer", () => {
       const patternApiUrl = new URL("https://public.example/api");
@@ -331,6 +338,7 @@ describe("runtimePresets conformance", () => {
         cfcFlowLabels: "observe",
         cfcReadMaxConfidentiality: readCeiling,
         cfcReadOnExceed: "skip",
+        cfcTrustConfig: trustConfig,
         trustSnapshotProvider,
         telemetry,
         consoleHandler,
@@ -345,6 +353,7 @@ describe("runtimePresets conformance", () => {
         cfcFlowLabels: "observe",
         cfcReadMaxConfidentiality: readCeiling,
         cfcReadOnExceed: "skip",
+        cfcTrustConfig: trustConfig,
         trustSnapshotProvider,
         telemetry,
         consoleHandler,

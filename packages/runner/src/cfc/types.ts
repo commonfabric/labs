@@ -25,6 +25,10 @@ export type {
   LabelObservationClass,
 } from "./label-view-core.ts";
 
+// A result field a setup projects to one of the piece's own internal cells:
+// `target` is the field, `sources` the internal cell holding its value. The
+// setup creates that cell and initializes it, so the prepare gate takes the
+// marker for the field and for the cell alike.
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
@@ -84,9 +88,8 @@ export const CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE =
 /**
  * Marks a write-policy input as one the runtime itself recorded.
  *
- * `recordCfcWritePolicyInput` is on the public transaction interface, and
- * pattern-authored code runs in the runtime's own realm holding runtime cells,
- * so it reaches `cell.tx` and can record an input naming whatever it likes.
+ * `recordCfcWritePolicyInput` is on the public transaction interface, so any
+ * code holding a transaction can record an input naming whatever it likes.
  * An input a gate ACTS on — rather than one a gate measures — therefore has to
  * say who recorded it. This is the mark, and it works the way
  * `rawMetaWriteAuthorization` does: a symbol cannot be named by a module that
@@ -286,6 +289,17 @@ export type CfcSandboxResult = {
  *   stamp they accompany; concrete `observes:"shape"` existence entries
  *   freeze at creation). Readers that predate this component treat its
  *   entries as covering (over-taint, fail-safe).
+ * - `minted`: integrity a write's own schema stamped onto the value it wrote
+ *   (`ifc.addIntegrity`), principal claims excepted. It labels that value
+ *   and no later one: a write changing the value, or part of it, withdraws
+ *   the entry unless the writing transaction's schema stamps what it wrote
+ *   with the same atoms, and a schema the document merely stores mints
+ *   nothing. A
+ *   `*`-path entry states that every value the path matches carries the
+ *   stamp, and is replaced by per-value entries by the first write that
+ *   leaves one of them without it. A position holding a reference carries no
+ *   entry: the value behind it is labeled in its own document. See
+ *   `minted-integrity.ts`.
  * - `external-ingest`: the `ExternalIngest` provenance mark a vouched ingest
  *   channel mints onto the value it durably appends. Builtin-authored from
  *   verified channel metadata only (the split-mint), so it bypasses the
@@ -312,6 +326,7 @@ export type LabelEntryOrigin =
   | "link"
   | "derived"
   | "structure"
+  | "minted"
   | "external-ingest"
   | "label-metadata";
 
@@ -411,13 +426,27 @@ export type StoredCfcMetadata =
  * Label references resolve under the same policy, so a consumer holding a
  * `CfcMetadata` holds every label inline; `version` records which stored
  * spelling it was resolved from.
+ *
+ * The stored label map holds payload entries and document-rooted entries in
+ * one list. A reader decodes them apart (spec §4.6.4): `labelMap.entries`
+ * holds the payload entries alone, so no lookup over it can match a
+ * document-rooted entry, and the persist path writes both back into the one
+ * stored list.
  */
 export type CfcMetadata = {
   version: CfcMetadataVersion;
   schemaHash: string;
   labelMap: {
     version: 1;
+    /** The payload entries, each keyed relative to `value`. */
     entries: Array<LabelMapEntry>;
+
+    /**
+     * The document-rooted entries, each keyed relative to the stored
+     * document: the label-metadata templates of spec §4.6.4.2, which the
+     * introspection surface alone resolves. Absent where there are none.
+     */
+    documentEntries?: Array<LabelMapEntry>;
   };
 };
 
@@ -440,8 +469,22 @@ export type CfcAddress = Immutable<{
   path: string[];
 }>;
 
+/**
+ * The address a prepared-digest record binds, which carries exactly one of
+ * two paths: `path`, a payload path relative to `value`, or `metaPath`, a path
+ * relative to the stored document that names one of the document's own
+ * members, such as `source`. A consumer reaches a member's address only
+ * through `metaPath`, so it cannot take one for the payload field of the same
+ * name (spec §4.6.4).
+ */
+export type CfcRecordAddress =
+  | (CfcAddress & { readonly metaPath?: never })
+  | (Omit<CfcAddress, "path"> & Immutable<{ metaPath: string[] }> & {
+    readonly path?: never;
+  });
+
 export type ConsumedRead =
-  & CfcAddress
+  & CfcRecordAddress
   & Immutable<{
     meta?: Metadata;
     nonRecursive?: boolean;
@@ -510,7 +553,19 @@ export type CfcLabelMetadataObservation = Immutable<{
 }>;
 
 export type ImplementationIdentity =
-  | { kind: "builtin"; builtinId: string }
+  | {
+    kind: "builtin";
+    builtinId: string;
+
+    /**
+     * The one instance a builtin that acts per instance acted for, as the
+     * custody seal acts for one custody instance. It rides into the
+     * `TransformedBy` the builtin's writes carry, so a witness over them names
+     * the instance, while a guard that names the builtin alone still matches
+     * by subset.
+     */
+    instance?: string;
+  }
   | {
     kind: "verified";
 
@@ -568,6 +623,25 @@ export type WritePolicyInput =
     readonly value: FabricValue;
   }
   | {
+    /**
+     * The transaction is a release of a piece (setup, a pattern swap, a start
+     * repair): it names one of the piece's stores and the modules of the
+     * program it installs, whose writer stamps the release's schema can adopt
+     * over unstamped stored claims. Authority is the runtime's mark.
+     */
+    readonly kind: "release-program";
+    readonly target: CfcAddress;
+    readonly modules: readonly string[];
+  }
+  | {
+    /**
+     * A host's application of a schema to a document it does not write
+     * (`applyCfcPolicyToExistingValue`). Authority is the runtime's mark.
+     */
+    readonly kind: "policy-application";
+    readonly target: CfcAddress;
+  }
+  | {
     /** An explicit host-authorized acceptance of existing unlabeled bytes. */
     readonly kind: "owner-adoption";
     readonly target: CfcAddress;
@@ -577,17 +651,31 @@ export type WritePolicyInput =
   | {
     /**
      * Authority is carried by the runtime's private mark, never this record
-     * alone. A `"reference"` initialization stages a link to a cell that exists
-     * already and none of what the cell holds, so its `value` is that link.
-     * A `"replay"` record names an argument slot a runtime replaying a
-     * piece's setup carries over from the stored argument document, with
-     * the bytes it holds; it permits nothing but leaving those bytes as they
-     * are.
+     * alone. A `"capture"` initialization stages a link to a cell that exists
+     * already into a slot, and none of what the cell holds, so its `value` is
+     * that link: a list's entry or the list itself handed to a sub-pattern,
+     * or a binding a callback captures. It is matched by the cell the link
+     * names and by whether the link is a write redirect, not by the link's
+     * bytes, which can carry the binding's schema beside the address, and it
+     * never re-points a slot that held a link to another cell. A `"binding"`
+     * initialization is a binding a setup stages into an argument or a result
+     * field: matched the same way, but re-established on every setup, so a
+     * later setup may re-point it at the cell the pattern now names. A
+     * `"replay"` record
+     * names an argument slot a runtime replaying a piece's setup carries over
+     * from the stored argument document, with the bytes it holds; it permits
+     * nothing but leaving those bytes as they are.
      */
     readonly kind: "initialization";
     readonly target: CfcAddress;
     readonly value: FabricValue;
-    readonly mode: "seed" | "default" | "projection" | "reference" | "replay";
+    readonly mode:
+      | "seed"
+      | "default"
+      | "projection"
+      | "capture"
+      | "binding"
+      | "replay";
   }
   | {
     readonly kind: "schema";
@@ -603,6 +691,14 @@ export type WritePolicyInput =
      * at rest.
      */
     readonly schemaRole?: "output";
+
+    /**
+     * Present only when the schema is the one the target document stores,
+     * standing in for a writer that brought none. Such a writer answers to
+     * the claims that schema makes and is stamped nothing by it: a value
+     * stamp (`ifc.addIntegrity`) is the stamping write's own.
+     */
+    readonly storedSchema?: true;
   }
   | {
     readonly kind: "structural-provenance";
@@ -668,8 +764,8 @@ export type ConsultedPolicyManifest = {
 
 export type PreparedDigestInput = {
   readonly consumedReads: readonly ConsumedRead[];
-  readonly attemptedWrites: readonly AttemptedWrite[];
-  readonly writes: readonly AttemptedWrite[];
+  readonly attemptedWrites: readonly CfcRecordAddress[];
+  readonly writes: readonly CfcRecordAddress[];
 
   /**
    * The ordered write-attempt log (see `OrderedWriteAttempt`). Mandatory in
@@ -716,6 +812,34 @@ export type PreparedDigestInput = {
    */
   readonly externalContentObservations?:
     readonly CfcExternalContentObservation[];
+
+  /**
+   * Whole-value write destinations and the identity that recorded each
+   * (`CfcTxState.assertedValueRoots`). They decide where preparation stamps
+   * the writer's flow label, so a transaction whose roots change must not
+   * keep its digest. Absent when empty, so a transaction that recorded none
+   * keeps the established prepared-digest spelling.
+   */
+  readonly assertedValueRoots?: readonly CfcAssertedValueRoot[];
+
+  /**
+   * List-coordinator containers whose membership preparation re-stamps
+   * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
+   */
+  readonly structureContainers?: readonly CfcAddress[];
+};
+
+/**
+ * A destination the runtime wrote a whole value to (`CfcTxState.assertedValueRoots`),
+ * with the implementation identity that made the write. `reference` names
+ * the document root a pointer the runtime stored at this path refers to: the
+ * box the custody seal links a room to, or the entity document anchoring split
+ * an array element into.
+ */
+export type CfcAssertedValueRoot = {
+  readonly address: CfcAddress;
+  readonly identity: ImplementationIdentity | undefined;
+  readonly reference?: CfcAddress;
 };
 
 /**
@@ -948,6 +1072,23 @@ export type CfcTxState = {
   // fix, the dual of the input-read over-taint). map does NOT declare: it is
   // length-preserving with no membership secret, so its container stays clean.
   structureContainers: CfcAddress[];
+  // Destinations the runtime wrote a whole value to (`Cell.set`): the value
+  // there after the transaction is the one the writer supplied, however the
+  // diff split the write. Flow labels stamp such a destination as written,
+  // so what the writer asserted carries its `TransformedBy` even where the
+  // diff found a container already in place (`assertedValueRootPaths` in
+  // `prepare.ts`). Recorded only under the runtime's authorization, with the
+  // implementation identity that made the write, so a root stamps only for
+  // the identity the flow join names.
+  //
+  // A root recorded with a `reference` holds a pointer the runtime itself
+  // chose for the writer: the custody seal's link from a room to its box, or
+  // the reference anchoring stores at an array slot after splitting the plain
+  // object the writer put there into an entity document of its own
+  // (`anchorValueAsEntity` in `data-updating.ts`; both halves are recorded,
+  // the entity's root and the slot with the entity as its `reference`). That
+  // one pointer, at that one path, is part of the value the writer supplied.
+  assertedValueRoots: CfcAssertedValueRoot[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so
   // they join the flow-label derivation even when the run never re-reads
@@ -981,6 +1122,19 @@ export type CfcTxState = {
     identity?: ImplementationIdentity;
   };
   trustSnapshot?: TrustSnapshot;
+  // Whether a value the runtime initializes in this transaction — a
+  // constructed cell's seed, the reference exposing it, a new field's
+  // default, a pattern's setup projection — is attributed to the acting
+  // principal: true for the transaction of a handler run they invoked, for
+  // one that brings a piece into being outside any scheduled action on their
+  // behalf, and for a start or result pattern deferred from either; false
+  // otherwise. Preparation mints the integrity a schema adds about the
+  // current principal, and binds an owner, for an initialization only when
+  // this is true. Set only through the privileged
+  // `markCfcAttributedInitialization` (runtime authorization); once set it
+  // holds for the transaction, so a setup that must not be attributed runs
+  // in a transaction of its own.
+  attributedInitialization: boolean;
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.
@@ -1049,5 +1203,7 @@ export type CfcPreparationWork =
   | "overlapWildcardQueries"
   | "overlapConcreteQueries"
   | "authoritativeCoverCalls"
+  | "stagedReferenceDerivations"
+  | "stagedReferenceCacheHits"
   | "flowTemplateEntriesMinted"
   | "flowTemplateContainers";

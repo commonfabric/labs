@@ -44,8 +44,8 @@ class BlobPayloadTooLarge extends Error {
 }
 
 /**
- * Interprets a decoded request body as bytes, or returns `undefined` when it
- * is not byte-shaped. The result is always freshly allocated and unshared, so
+ * Interprets a stored blob's body as bytes, or returns `undefined` when it is
+ * not byte-shaped. The result is always freshly allocated and unshared, so
  * a caller may cede it to something that takes ownership of a buffer.
  */
 const toByteArray = (value: unknown): Uint8Array | undefined => {
@@ -85,7 +85,21 @@ const toByteArray = (value: unknown): Uint8Array | undefined => {
   return Uint8Array.from(entries.map(([, item]) => item as number));
 };
 
-const asBlobContents = (value: unknown): BlobContents | undefined => {
+/**
+ * Returns `value` as blob contents if its body is a `FabricBytes`, the one form
+ * an upload may take, or `undefined` otherwise.
+ */
+const asBlobContents = (value: unknown): BlobContents | undefined =>
+  isObjectNotArray(value) && typeof value.type === "string" &&
+    value.body instanceof FabricBytes
+    ? { type: value.type, body: value.body }
+    : undefined;
+
+/**
+ * Like {@link asBlobContents}, except that the body may also be one of the
+ * byte-shaped forms {@link toByteArray} reads, which a stored blob may hold.
+ */
+const asStoredBlobContents = (value: unknown): BlobContents | undefined => {
   if (!isObjectNotArray(value) || typeof value.type !== "string") {
     return undefined;
   }
@@ -175,7 +189,7 @@ const loadBlobContents = async (
     spaceDid,
     `cid:${id}`,
   );
-  return asBlobContents(document?.value);
+  return asStoredBlobContents(document?.value);
 };
 
 const upload = async (c: Context) => {

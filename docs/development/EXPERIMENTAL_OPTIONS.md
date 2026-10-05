@@ -21,7 +21,7 @@ in the same change.
 flags](#appendix-a-removed-and-never-shipped-flags) rather than deleting the
 > record, so the history stays discoverable.
 
-**Last reviewed:** 2026-09-21. Each flag's section carries the date its status
+**Last reviewed:** 2026-09-29. Each flag's section carries the date its status
 was last checked against the code.
 
 ## Summary table
@@ -38,6 +38,8 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env / shell build define, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
+| [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
 | [`cfcFlowLabels`](#cfcflowlabels)                                           | `RuntimeOptions.cfcFlowLabels`                                                                                                                  | `persist`                                                                            | Bernhard Seefeld (#4011)                              | move toward `persist`                                                                                                                                                                                                             | implemented, on by default at `persist`                                         |
@@ -86,10 +88,10 @@ this category default off unless their section says otherwise.
 The mapping from environment variable to flag is defined once, canonically, as
 `EXPERIMENTAL_ENV_VARS` in
 [`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts),
-and read by `experimentalOptionsFromEnv(envReader)`. The toolshed, the CLI, and
-the background piece service all go through that one mapping, so their wirings
-cannot drift; the shell reads the same variables from its build-time defines
-through the same canonical parser, for the flags it defines;
+and read by `experimentalOptionsFromEnv(envReader)`. The toolshed and the CLI
+both go through that one mapping, so their wirings cannot drift; the shell
+reads the same variables from its build-time defines through the same canonical
+parser, for the flags it defines;
 `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts` are the
 authority on which those are. A CI lane builds the binaries it caches with
 every define's variable unset unless `cachedBinaries()` in
@@ -401,8 +403,8 @@ server](#clients-that-are-not-built-alongside-their-server).
   ordered gates still apply; a flip record does not establish their
   current verdicts. The default
   is read by every deployed-topology entry point — the `productionServer` / `remoteClient` construction presets
-  (toolshed's operator runtime, the background piece service, the CLI,
-  every pieces controller and integration harness against a toolshed),
+  (toolshed's operator runtime, the CLI, every pieces controller and
+  integration harness against a toolshed),
   toolshed's serving-host gate and its memory ACL principal lists (the
   DELEGATING class since OW31's build — the process identity is no
   longer an implicit-OWNER service principal), and the browser
@@ -426,23 +428,35 @@ server](#clients-that-are-not-built-alongside-their-server).
   run the derive-and-commit model (which is why the flip does not reach
   the no-server pattern-tests lane and its `topics/multi-user.test.tsx`,
   the lane-posture item the topics measurement report recorded for the
-  flip decision); the ON posture's unit coverage sets the
-  flag explicitly (the `executor-*` suites) and its integration coverage
-  is whichever CI role resolves ON. In CI (testing.md §2), `default`
+  flip decision). A test that runs ON in one process needs a serving loop
+  beside its memory server, or the events its clients append are admitted
+  and never delivered;
+  `@commonfabric/runner/executor/serving-memory-server.deno` supplies one,
+  in-process (`startServingMemoryServer`) or on a localhost websocket for
+  `remoteClient` runtimes (`listenServingMemoryServer`), with its serving
+  runtimes built by the factory toolshed uses
+  ([TESTING.md](TESTING.md#the-on-topology-in-one-process)). The ON
+  posture's unit coverage sets the flag explicitly on clients of such a
+  server (the `executor-*` suites, the served-lifecycle verbs); the pattern
+  `MultiRuntimeHarness` and the CLI's agent-connections test resolve the
+  posture as a deployed entry point does and host a serving server when it
+  is ON, so they follow the default and the CI role; the rest of the
+  integration coverage is whichever CI role resolves ON. In CI (testing.md §2), `default`
   follows the constant and `opposite` is its explicit inverse; both are
   probed through the shared role
-  resolver; the opposite lane uses `build-toolshed-opposite`, whose shell
-  define is baked from the resolved inverse. The
-  `deployed-topology-gate` job exercises the real `bg-piece-service`
-  binary and cf-harness's fabric session at the default resolution, and
-  the CLI lanes probe the server their `cf` adopts its posture from —
-  with ON-arm skips and OFF-arm authored coverage following the resolved arm.
-  Skips are only through `tasks/server-execution-on-skips.ts`, printed loudly
-  (EMPTY at the flip, its stated precondition). End
-  state: after a soak on main at the ON default, the flag retires and the
-  OFF code path is removed — a separate post-soak
-  PR (the plan's Phase 7 task 2; it also removes the opposite guard lanes and
-  `build-toolshed-opposite`).
+  resolver; the opposite suites use the `toolshed-baked-opposite` capability,
+  whose shell define is baked from the resolved inverse, and the
+  `binaries-opposite` suite compiles that toolshed. The `deployed-topology`
+  suite exercises cf-harness's fabric session at the default resolution, and the
+  CLI suites probe the server their `cf` adopts its posture from — with ON-arm
+  skips and OFF-arm authored coverage following the resolved arm. Skips are only
+  through `tasks/server-execution-on-skips.ts`. The test topology declares each
+  entry unavailable in the ON suite, and the selection manifest records it with
+  its phase and reason. The registry was EMPTY at the flip, its stated
+  precondition. End state: after a soak on main at the ON default, the flag
+  retires and the OFF code path is removed — a separate post-soak PR (the plan's
+  Phase 7 task 2; it also removes the opposite suites and the
+  `toolshed-baked-opposite` capability).
 - **Status on 2026-09-11 (the served source update).** Under ON,
   `setsrc` runs on the space's serving runtime as well, and `cf piece
   setsrc` requests it: the update's setup transaction commits directly to
@@ -525,7 +539,8 @@ server](#clients-that-are-not-built-alongside-their-server).
   (effects + outbox) remains.
 - **Path to removal.** Soak on main at the ON default; then the post-soak PR
   retires the flag, removes the OFF path (and the opposite regression-guard
-  lanes + `build-toolshed-opposite`), and closes out this entry.
+  suites and the `toolshed-baked-opposite` capability), and closes out this
+  entry.
 
 ---
 
@@ -669,7 +684,9 @@ holds the measurements and the conditions for revisiting.
   §5.3.4 for the query-pipeline context.
 - **Current default and planned end state.** On by default; an explicit
   `false` restores the strict pseudo-intersection (`combineSchema`) at link
-  crossings as a rollback override. The rollback is plain ambient
+  crossings as a rollback override, and a read addressed at a link slot then
+  projects by the link's stored schema rather than resolving it against the
+  reader's. The rollback is plain ambient
   last-construction-wins state: each Runtime construction sets it from its
   resolved option, and dispose deliberately does NOT reset it — a server
   runs one serving runtime per space and disposes idle ones while the rest
@@ -724,6 +741,46 @@ holds the measurements and the conditions for revisiting.
   `packages/runner/test/agent-sink-governance.test.ts`.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority entry, and the refusal branch after the default-on posture soaks.
+
+### `sharedMemoryConnection`
+
+- **Toggle via.** `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` environment variable
+  (through the canonical env registry), the shell build define of the same
+  name, or `RuntimeOptions.experimental.sharedMemoryConnection`.
+  Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection
+  may carry several spaces is a property of how the deployment routes
+  connections, so a client follows what the deployment publishes.
+- **Added by.** Bernhard Seefeld, 2026-09-29
+  ([`docs/specs/memory-v2/connection-multiplexing.md`](../specs/memory-v2/connection-multiplexing.md)).
+- **Purpose.** With the flag on, the runner's storage manager opens one
+  memory connection per host, dialed without a space in its address, and
+  mounts the session of every space on that host on it. Each key
+  authenticates once per connection with `connection.auth`, and its sessions
+  open without a signature of their own. Toolshed under the flag verifies
+  `connection.auth` and advertises the [`connectionAuth`](#connectionauth)
+  capability. With the flag off, each space has a connection of its own
+  whose address names the space, every `session.open` is signed, and
+  toolshed advertises no `connectionAuth`. A client with the flag on
+  against a server that does not advertise `connectionAuth` still shares
+  the connection, and signs each `session.open` on it, one at a time.
+- **Current default and planned end state.** Off by default. A deployment
+  that routes a memory connection to a toolshed by the space its address
+  names cannot serve a connection that carries several spaces, so the flag
+  stays off there until a router terminates client connections. The end
+  state is always-on.
+- **Status on 2026-09-29.** Implemented behind the flag. The server side is
+  covered by `packages/memory/test/v2-server-connection-auth.test.ts`, the
+  client library by `packages/memory/test/v2-client-connection-auth.test.ts`,
+  and the runner's connection sharing by
+  `packages/runner/test/remote-session-shared-connection.test.ts`. Three
+  server behaviors that a connection carrying one space cannot observe are
+  not gated: a connection handles frames for different spaces independently,
+  `session.close` ends one session, and a presence membership belongs to a
+  session.
+- **Path to removal.** Turn the default on once every deployment serves
+  shared connections; then remove the env mapping, the runtime option and its
+  authority entry, the shell define, `RemoteSessionFactory`'s
+  connection-per-space path, and the `?space=` address parameter.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
@@ -1038,7 +1095,9 @@ the per-epic implementation notes).
   byte-identical to before the dial existed; `observe` evaluates the gated
   labels to a fixpoint and emits diagnostics while still deciding on the
   un-rewritten label; `enforce` decides on the rewritten label and fails closed
-  when the evaluation runs out of fuel.
+  when the evaluation runs out of fuel. The dial governs the commit and sink
+  gates; the display boundary evaluates whenever `cfcRenderCeiling` is on, as
+  its own switch.
 - **Current default and planned end state.** `enforce` by default, which is
   where the dial rests.
 - **Status on 2026-09-17.** Implemented and rolled out.
@@ -1156,6 +1215,25 @@ the per-epic implementation notes).
   capability only as part of a protocol version that requires view support.
 - **Status (2026-09-09):** optional; the runtime feature remains off by default.
 
+
+### `connectionAuth`
+
+- **Added by:** Bernhard Seefeld, 2026-09-29.
+- **Toggle and default:** a Memory hello capability, advertised by a server
+  whose host verifies `connection.auth` (`Server` option
+  `authorizeConnection`). Toolshed configures it under
+  [`sharedMemoryConnection`](#sharedmemoryconnection); the standalone server
+  takes a `connectionAuth` option. An absent field means unsupported.
+- **Gates:** `connection.auth`, `connection.challenge`, `connection.release`,
+  and a `session.open` that names an authenticated principal in place of
+  carrying a signature
+  ([`04-protocol.md`](../specs/memory-v2/04-protocol.md), section 4.5.1).
+- **End state and removal:** retain the negotiation while deployments may
+  contain clients that sign each `session.open`. Remove the capability as
+  part of a protocol version that requires connection authentication.
+- **Status (2026-09-29):** optional. Toolshed advertises it exactly when
+  `sharedMemoryConnection` is on; the standalone server advertises it when
+  started with `connectionAuth: true`, whatever the flag says.
 
 ### `conflictAdmissionMode`
 
@@ -1333,6 +1411,13 @@ the per-epic implementation notes).
 > - **`entityIdLookup`** is a build-inherent capability, hardwired to `true`. It
 >   advertises identifier-only `entity-id.exists` point lookup. Older servers
 >   omit it, which parses as `false`. It is permanent.
+> - **`presenceV1`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server relays ephemeral presence rooms — the
+>   `presence.*` commands and `presence/*` pushes of the memory protocol
+>   chapter's section 4.13 — over the memory connection. Older servers omit
+>   it, which parses as `false`, and a client then reports presence as
+>   unavailable rather than sending a message the server would refuse. It is
+>   permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
@@ -1398,18 +1483,28 @@ the per-epic implementation notes).
   ceiling behind a shell dogfood flag (Epic H3a)" (#4550, 2026-07-07).
 - **Purpose.** Populates the CFC render confidentiality ceiling in the shell's
   runtime. Display sinks admit the acting user's identity and personal-space
-  atoms plus allow-listed influence-class caveat kinds. Before the fit check,
-  the worker resolves shared `Space` labels through verified reader membership;
-  a delegate's access to the session workspace requires its own membership
-  evidence. Confidentiality the ceiling does not satisfy stays blocked, and
-  author-supplied render-boundary declassification is denied.
+  atoms plus the prompt-caveat family (SC-54). Before the fit check,
+  the worker resolves shared `Space` labels through verified reader membership,
+  and runs the exchange rules of any module policy (`PolicyOf`) a label
+  selects, reading that policy's manifest from the space the label is stored
+  in and verifying its digest; a delegate's access to the session workspace
+  requires its own membership evidence. Confidentiality the ceiling does not
+  satisfy stays blocked, and author-supplied render-boundary declassification
+  is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the
   toggle and make the ceiling unconditional.
-- **Status on 2026-09-08.** Exchange resolution is implemented. Where reader
-  membership is required, missing or unsynced ACL evidence keeps the content
-  blocked; a reader grant admits it and a revocation blocks it again.
+- **Status on 2026-09-23.** Exchange resolution is implemented, including
+  module policies. Where reader membership is required, missing or unsynced
+  ACL evidence keeps the content blocked; a reader grant admits it and a
+  revocation blocks it again. A module policy whose manifest is missing, has
+  not synced, or fails verification keeps its content blocked until a
+  verifying manifest arrives. A rule guarded on reader membership of a subject
+  held in commitment form, as it is on a value copied across spaces, releases
+  only to a viewer whose membership in that subject the render boundary
+  already verified for another reason: the viewer's own or session space, or
+  a `Space` atom the same label names. The commitment is never opened.
 - **Path to removal.** Retire the opt-out once no profile needs it, then make
   the ceiling unconditional.
 
@@ -1482,25 +1577,24 @@ the per-epic implementation notes).
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust
   conditions that authorized it, and because authorization rests on the memory
-  ACL — which, for a NAMED space, is only as strong as a key currently derived
-  from the public passphrase `"common user"`
-  ([`packages/identity/src/session.ts`](../../packages/identity/src/session.ts)).
-  Anyone can derive that key today, so on a deployment with named spaces the
-  owner check is not yet a real boundary. That derivation supports the legacy
-  space names used during development and nothing else, and is removed once
-  those development-only spaces have been migrated
-  ([random space identities](../plans/random-space-identities.md)). The end
+  ACL. New spaces get random keys and the memory server grants a space's own
+  DID nothing past genesis
+  ([random space identities](../specs/random-space-identities.md)), but a
+  legacy named space was given a key derived from the public passphrase
+  `"common user"`, and while the server treated that key as a permanent owner,
+  anyone who could reach the server could have granted themselves OWNER on
+  such a space, and such a grant survives until an operator removes it. The end
   state is on by default.
-- **Status on 2026-08-07.** Implemented, off by default. The derivation
-  weakness is pinned by a tripwire test
-  ([`space-key-derivation-tripwire.test.ts`](../../packages/toolshed/routes/ingest-channels/space-key-derivation-tripwire.test.ts))
-  that FAILS once the derivation is fixed — the signal to flip the default and
-  to sweep any channels minted under the old trust conditions with
-  `retire-ingest-channels`. See
-  [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md).
-- **Path to removal.** Fix named-space key derivation, run the retirement
-  sweep, turn the flag on by default, then delete the gate and mount the router
-  unconditionally.
+- **Status on 2026-09-29.** Implemented, off by default. Space creation
+  generates a random key. Every deployment has been reachable only on the
+  team's private network, so nobody outside the team minted a channel or
+  granted themselves OWNER under the old trust conditions; a deployment
+  reachable more widely would first retire its channels with
+  `retire-ingest-channels` and review its space ACLs, as
+  [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md)
+  describes.
+- **Path to removal.** Turn the flag on by default, then delete the gate and
+  mount the router unconditionally.
 
 ### `SERVER_EXECUTION_STORE_READ_THROUGH`
 
@@ -1531,6 +1625,26 @@ the per-epic implementation notes).
   record. What stands between it and a default is soak with the posture forced
   on. The end state is on by default, then the session read path for the home
   space goes.
+- **Status on 2026-09-25.** Implemented, off by default. The feed's refresh
+  re-reads the stream sidecars the serving loop's own commits touch: admission
+  stamps each appended entry's seq and advances the stream's `eventWatermark`
+  in the sidecar the store keeps, and the event drain queues an entry only once
+  the serving replica's view holds it at that seq. Without that re-read a
+  same-space event a served handler emits into a sidecar, and that the drain
+  has to dispatch, is deferred on every drain pass, and every later event in
+  the space waits behind it. That is how
+  the topic-board navigation benchmark's `comment` segment stalled under the
+  posture in [#8068](https://github.com/commonfabric/labs/pull/8068): the
+  profile-create surface's handler emits such an event to seed the new
+  Profile's name. `packages/runner/test/executor-events-down.test.ts` pins the
+  re-read. Measured in #8068's record
+  ([`docs/history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md`](../history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md)),
+  one run per arm on a shared four-core machine, with the browser, the bench
+  process and the toolshed contending for it: the served navigation `journey`
+  ran in 6.19 s against 6.89 s without the posture, a difference within that
+  record's noise floor of about a fifth; seeding a 30-topic board took 63 to
+  67 s against 79 to 125 s; and a cold board load after the space parked took
+  15.8 s against 21.9 to 22.8 s.
 - **Status on 2026-09-11.** Implemented, off by default. With the posture
   forced on, the runner's executor suites pass except two steps whose
   expectations are session-specific: a precondition probe that reads the
@@ -1541,8 +1655,7 @@ the per-epic implementation notes).
   `packages/runner/test/executor-fan-out.test.ts`: the run that discovers
   session depth serves the session instance at the moved ratchet, and a later
   session-scoped write re-runs it under the session key. The toolshed-backed
-  integration lanes pass. Measured on the topic-board navigation benchmark:
-  the served journey runs in roughly a third of the time.
+  integration lanes pass.
 - **Path to removal.** Soak with the posture forced on, flip the default, then
   delete the knob and the home-space session read path it replaces.
 
@@ -1692,11 +1805,8 @@ Server Process (Deno)
   +-- toolshed/index.ts           --> new Runtime(toolshedRuntimeOptions(...))
 ```
 
-The background piece service's main and worker processes use the same mapping
-and the same presets, so the server-side wirings agree on how a value parses.
-
-The CLI is not one of them. `cf`, the pieces controller behind it, the agents
-host, the GitHub connector host and `cast-admin` are clients of a deployment
+The CLI is not a server-side process. `cf`, the pieces controller behind it,
+the agents host and the GitHub connector host are clients of a deployment
 rather than part of one, and
 they resolve their posture from that deployment first — the environment
 supplies their overrides, not their starting point. Their wiring is
@@ -1739,7 +1849,7 @@ The shell disagrees with its server only by explicit define: toolshed bakes
 the defines and serves the bundle, so the two ship one posture per deploy.
 Every other client is installed, deployed, or checked out on its own
 schedule — the `cf` binary, the pieces controller a FUSE mount opens, the
-agents host, the GitHub connector host, the background-piece admin CLI — and
+agents host, the GitHub connector host — and
 the environment they read
 belongs to whoever launched them, not to the deployment they talk to. Left
 there, the operator has to know a deployment's flags and set them by hand, and
@@ -1750,7 +1860,7 @@ These clients take the posture from the server instead. Each one calls
 before constructing its `Runtime`:
 
 ```
-cf / pieces controller / agents host / github host / cast-admin
+cf / pieces controller / agents host / github host
   |
   +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... } }
   |     the posture the SERVER runs at
@@ -1822,9 +1932,7 @@ stopped wanting a posture at all.
 
 Presets that run against local emulated storage — `cf test`, `cf check`, the
 pattern harnesses — have no server to ask and keep reading the environment
-alone. The background piece service's own main and worker processes have one
-but do not ask it: they are deployed with the same environment as the toolshed
-they serve alongside, and read it directly through `productionServer`.
+alone.
 
 The adoption happens before `new Runtime(...)`, not at the memory handshake,
 even though `hello`/`hello.ok` already carries capability flags in both
@@ -1834,14 +1942,6 @@ would arrive after the process had already committed to a serialization. The
 handshake's job stays what it is: refusing a connection whose peer resolved a
 wire contract differently — which, for a client that adopts, is a mismatch
 that should no longer arise.
-
-### Background piece service
-
-The background piece service reads the same environment variables and builds its
-main and worker runtimes through the `productionServer` preset, so set the same
-`EXPERIMENTAL_*` variables when starting it. Its `cast-admin` CLI is the
-exception: that one is a client of whatever toolshed it is pointed at, and
-adopts the deployment's posture like the others above.
 
 ## Enabling flags locally
 

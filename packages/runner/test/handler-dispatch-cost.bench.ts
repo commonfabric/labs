@@ -28,6 +28,7 @@
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { sendEvent } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
@@ -197,7 +198,7 @@ async function prepare(size: number, readStats: boolean) {
   const dispatch = async (workload: Workload): Promise<number> => {
     const settled = Promise.withResolvers<{ status: string; end: number }>();
     const start = performance.now();
-    (result.key(workload) as unknown as Sender).send({}, (commitTx) => {
+    sendEvent(result.key(workload), {}, (commitTx) => {
       settled.resolve({
         status: commitTx.status().status,
         end: performance.now(),

@@ -57,6 +57,19 @@ The list coordinators are the case this rule exists for — a per-element patter
 run and the links that make a result container reachable are both writes the
 coordinator remembers making.
 
+On a serving runtime, a commit succeeds when the transaction is sealed into a
+wave, and its writes become durable only when the wave commits. The wave can
+still withdraw a sealed transaction after that: it drops a contribution that
+read a pending write the wave dropped, requeues an event, and withdraws
+everything sealed into it when it is abandoned. The commit callbacks have
+already run by then and never learn of it. A compensation therefore also
+follows the wave's verdict on the transaction, which `waveSettlementOf()` in
+`executor/wave.ts` returns, and treats a withdrawal as writes that are not all
+in place. A withdrawal does not say which writes landed: a wave that drops some
+of a superseded derivation's documents commits the rest, and withdraws the
+transaction all the same. State that is published only once a transaction is
+accepted waits for the same verdict.
+
 External side effects belong in the post-commit outbox instead, which runs only
 after a successful commit.
 

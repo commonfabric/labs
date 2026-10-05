@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import { createSession, Identity } from "@commonfabric/identity";
+import { Identity } from "@commonfabric/identity";
 import { assignSlug, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { entityIdFrom, Runtime, slugIdForSpace } from "@commonfabric/runner";
@@ -21,6 +21,7 @@ import { PIECE_TARGETING_GUIDANCE } from "../../src/piece-targeting.ts";
 import { CfHarnessPromptLoop } from "../../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../../src/sandbox/types.ts";
 import { getBuiltinTool } from "../../src/tools/registry.ts";
+import { openLegacySpace } from "../support/legacy-space.ts";
 import { directPromptSlotBindingFor } from "../support/prompt-slot-binding.ts";
 import {
   chatViewOfRequest,
@@ -72,10 +73,7 @@ describe("resolve-piece", () => {
       apiUrl: new URL("http://toolshed.test"),
       storageManager: storage,
     });
-    pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
-      runtime,
-    );
+    pieces = await openLegacySpace(signer, runtime, spaceName);
     await pieces.synced();
     const piece = await pieces.create(source, { input: {} });
     pieceId = piece.id;

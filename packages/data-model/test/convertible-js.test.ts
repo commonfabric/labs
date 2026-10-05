@@ -37,7 +37,6 @@ import {
   FabricInstance,
   type FabricPrimitive,
   type FabricValue,
-  isDeepFrozen,
   isValidFabricConvertibleJsValue,
   shallowCleanArray,
   shallowCleanPlainObject,
@@ -47,9 +46,13 @@ import {
 import {
   CODEC,
   CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  type LiveEnvironment,
   ProblematicValue,
+  REALM_CODEC,
   UnknownValue,
 } from "@/codec-common";
+import { BigIntCodec } from "@/codec-json/BigIntCodec.ts";
 import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
@@ -57,11 +60,22 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
-import { FabricError, FabricMap, FabricSet } from "@/fabric-instances";
+import {
+  FabricError,
+  FabricLink,
+  FabricMap,
+  FabricSet,
+} from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
+  FabricEpochDay,
   FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
   FabricRegExp,
+  FabricUnavailable,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
@@ -410,66 +424,219 @@ describe("convertible-js", () => {
     });
   });
 
-  describe("codec `decode()` honors `shouldDeepFreeze`", () => {
-    const frozenCtx = new DummyLiveEnvironment(true);
-    const mutableCtx = new DummyLiveEnvironment(false);
+  describe("codec `decode()` honors `mutable`", () => {
+    const env = new DummyLiveEnvironment();
 
     describe("FabricError", () => {
-      it("is deep-frozen when `shouldDeepFreeze` is `true`, mutable when `false`", () => {
+      const tag = CODEC_TYPE_TAGS.Error;
+
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
         const state = {
           type: "Error",
           name: null,
           message: "boom",
         };
-        const frozen = FabricError[CODEC].decode(
-          CODEC_TYPE_TAGS.Error,
-          state,
-          frozenCtx,
+        const codec = FabricError[CODEC];
+
+        expect(Object.isFrozen(codec.decode(tag, state, env))).toBe(true);
+        expect(Object.isFrozen(codec.decode(tag, state, env, true))).toBe(
+          false,
         );
-        expect(isDeepFrozen(frozen)).toBe(true);
-        const mutable = FabricError[CODEC].decode(
-          CODEC_TYPE_TAGS.Error,
+      });
+
+      it("leaves its `cause` as it finds it", () => {
+        const cause = { x: 1 };
+        const state = { type: "Error", name: null, message: "boom", cause };
+        const result = FabricError[CODEC].decode(
+          tag,
           state,
-          mutableCtx,
-        );
+          env,
+        ) as FabricError;
+
+        expect(result.cause).toBe(cause);
+        expect(Object.isFrozen(cause)).toBe(false);
+      });
+    });
+
+    describe("FabricLink", () => {
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
+        const state = { id: "fid1:abc" };
+        const codec = FabricLink[CODEC];
+
+        expect(Object.isFrozen(codec.decode(CODEC_TYPE_TAGS.Link, state, env)))
+          .toBe(true);
+        expect(
+          Object.isFrozen(codec.decode(CODEC_TYPE_TAGS.Link, state, env, true)),
+        )
+          .toBe(false);
+      });
+
+      it("returns a `ProblematicValue` for a payload it refuses, frozen by default, mutable when `mutable` is `true`", () => {
+        // `JSON.parse()` makes `__proto__` an own key, which a payload may not
+        // have.
+        const state = JSON.parse('{"id":"fid1:abc","__proto__":1}');
+        const codec = FabricLink[CODEC];
+        const frozen = codec.decode(CODEC_TYPE_TAGS.Link, state, env);
+        const mutable = codec.decode(CODEC_TYPE_TAGS.Link, state, env, true);
+
+        expect(frozen).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(frozen)).toBe(true);
+        expect(mutable).toBeInstanceOf(ProblematicValue);
         expect(Object.isFrozen(mutable)).toBe(false);
       });
     });
 
     describe("ProblematicValue", () => {
-      it("is deep-frozen when `shouldDeepFreeze` is `true`, mutable when `false`", () => {
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
         // Tag travels separately; the bare inner state is the codec payload,
         // which for this class is a record of the three facts it preserves.
 
         const state = { tag: "Bad@1", state: { x: 1 }, error: "oops" };
-        const frozen = ProblematicValue[CODEC].decode(
+        const codec = ProblematicValue[CODEC];
+
+        expect(Object.isFrozen(codec.decode("Bad@1", state, env))).toBe(true);
+        expect(Object.isFrozen(codec.decode("Bad@1", state, env, true)))
+          .toBe(false);
+      });
+
+      it("leaves the state it preserves as it finds it", () => {
+        const preserved = { x: 1 };
+        const state = { tag: "Bad@1", state: preserved, error: "oops" };
+        const result = ProblematicValue[CODEC].decode(
           "Bad@1",
           state,
-          frozenCtx,
-        );
-        expect(isDeepFrozen(frozen)).toBe(true);
-        const mutable = ProblematicValue[CODEC].decode(
-          "Bad@1",
-          state,
-          mutableCtx,
-        );
-        expect(Object.isFrozen(mutable)).toBe(false);
+          env,
+        ) as ProblematicValue;
+
+        expect(result.state).toBe(preserved);
+        expect(Object.isFrozen(preserved)).toBe(false);
       });
     });
 
     describe("UnknownValue", () => {
-      it("is deep-frozen when `shouldDeepFreeze` is `true`, mutable when `false`", () => {
+      it("is frozen by default, mutable when `mutable` is `true`", () => {
         const state = { y: 2 };
-        const frozen = UnknownValue[CODEC].decode("Fancy@3", state, frozenCtx);
-        expect(isDeepFrozen(frozen)).toBe(true);
-        const mutable = UnknownValue[CODEC].decode(
+        const codec = UnknownValue[CODEC];
+
+        expect(Object.isFrozen(codec.decode("Fancy@3", state, env))).toBe(
+          true,
+        );
+        expect(Object.isFrozen(codec.decode("Fancy@3", state, env, true)))
+          .toBe(false);
+      });
+
+      it("leaves its state as it finds it", () => {
+        const state = { y: 2 };
+        const result = UnknownValue[CODEC].decode(
           "Fancy@3",
           state,
-          mutableCtx,
-        );
-        expect(Object.isFrozen(mutable)).toBe(false);
+          env,
+        ) as UnknownValue;
+
+        expect(result.state).toBe(state);
+        expect(Object.isFrozen(state)).toBe(false);
       });
     });
+  });
+
+  describe("codec `decode()` fallbacks honor `mutable`", () => {
+    // Each codec here decodes a state it cannot build a value from to a
+    // `ProblematicValue`, which follows `mutable` like any value a decode
+    // builds.
+
+    const env = new DummyLiveEnvironment();
+
+    /** One codec, and a state it falls back on. */
+    interface FallbackCase {
+      /** Which codec, as a test name. */
+      name: string;
+
+      /** The codec. */
+      codec: {
+        decode(
+          typeTag: string,
+          state: never,
+          env: LiveEnvironment,
+          mutable?: boolean,
+        ): unknown;
+      };
+
+      /** A state the codec falls back on. */
+      state: unknown;
+    }
+
+    const badRegExp = { flavor: "es2025", source: "(", flags: "" };
+    const badUnavailable = { reason: "error" };
+    const cases: FallbackCase[] = [
+      { name: "`BigInt@1`", codec: new BigIntCodec(), state: "" },
+      {
+        name: "`FabricBytes` JSON",
+        codec: FabricBytes[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricDurationDay` JSON",
+        codec: FabricDurationDay[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricDurationNsec` JSON",
+        codec: FabricDurationNsec[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricEpochDay` JSON",
+        codec: FabricEpochDay[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricEpochNsec` JSON",
+        codec: FabricEpochNsec[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricHash` JSON",
+        codec: FabricHash[JSON_CODEC],
+        state: { tag: "fid1", hash: "!" },
+      },
+      {
+        name: "`FabricKeyPair` JSON",
+        codec: FabricKeyPair[JSON_CODEC],
+        state: { algorithm: "Ed25519", publicKey: "!", privateKey: "!" },
+      },
+      {
+        name: "`FabricRegExp` JSON",
+        codec: FabricRegExp[JSON_CODEC],
+        state: badRegExp,
+      },
+      {
+        name: "`FabricRegExp` realm",
+        codec: FabricRegExp[REALM_CODEC],
+        state: badRegExp,
+      },
+      {
+        name: "`FabricUnavailable` JSON",
+        codec: FabricUnavailable[JSON_CODEC],
+        state: badUnavailable,
+      },
+      {
+        name: "`FabricUnavailable` realm",
+        codec: FabricUnavailable[REALM_CODEC],
+        state: badUnavailable,
+      },
+    ];
+
+    for (const { name, codec, state } of cases) {
+      it(`${name} returns a frozen \`ProblematicValue\` by default, mutable when \`mutable\` is \`true\``, () => {
+        const frozen = codec.decode("Some@1", state as never, env);
+        const mutable = codec.decode("Some@1", state as never, env, true);
+
+        expect(frozen).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(frozen)).toBe(true);
+        expect(mutable).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(mutable)).toBe(false);
+      });
+    }
   });
 
   describe("cycle behavior via `[DEEP_FREEZE]`", () => {

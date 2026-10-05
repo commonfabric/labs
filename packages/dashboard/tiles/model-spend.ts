@@ -1,9 +1,11 @@
 /**
  * Reports month-to-date API cost across the language-model providers we use,
  * projected to a full-month total against an optional monthly budget. Each
- * provider's authoritative billing API is read in real US dollars: OpenAI and
- * Anthropic through organization Admin keys, which expose per-day cost, and
- * OpenRouter through a key, which exposes only a running monthly total.
+ * provider's authoritative billing API is read in real US dollars: OpenAI
+ * through an organization Admin key and Anthropic through its Admin API (a
+ * federated token in-cluster, see anthropic-auth.ts), both of which expose
+ * per-day cost, and OpenRouter through a key, which exposes only a running
+ * monthly total.
  *
  * The two providers with a daily series are charted as one line each over the
  * trailing 45 days or so, dimmed except for the daily-rate window that feeds
@@ -36,6 +38,7 @@ import {
   summarizeDailySpend,
 } from "../spend.ts";
 import { themedChartSeries } from "../theme.ts";
+import { anthropicAdminConfigured, anthropicAdminHeaders, FEDERATION_VARS } from "../anthropic-auth.ts";
 
 // The provider billing APIs are slow — OpenAI's costs endpoint alone takes ~12-16s
 // for a 46-day query and slows further under repeated calls — and this tile pages
@@ -105,7 +108,11 @@ async function openaiDaily(key: string, startSec: number): Promise<Map<string, n
 
 // Daily billable USD, keyed by "YYYY-MM-DD", from Anthropic's cost report (whose
 // amounts are USD cents).
-async function anthropicDaily(key: string, startISO: string): Promise<Map<string, number>> {
+async function anthropicDaily(
+  env: (k: string) => string | undefined,
+  startISO: string,
+): Promise<Map<string, number>> {
+  const headers = await anthropicAdminHeaders(env);
   const byDay = new Map<string, number>();
   let page: string | undefined;
   for (let i = 0; i < 12; i++) {
@@ -114,7 +121,7 @@ async function anthropicDaily(key: string, startISO: string): Promise<Map<string
     url.searchParams.set("limit", "31"); // Anthropic's cost_report rejects limit > 31; it pages instead
     if (page) url.searchParams.set("page", page);
     const res = await fetch(url, {
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+      headers,
       signal: AbortSignal.timeout(TIMEOUT),
     });
     if (!res.ok) throw new Error(`Anthropic cost_report HTTP ${res.status}`);
@@ -154,10 +161,10 @@ export const modelSpend: Tile = {
   intervalMs: 3_600_000,
   async collect(ctx): Promise<TileView> {
     const oaKey = ctx.env("OPENAI_ADMIN_KEY");
-    const anKey = ctx.env("ANTHROPIC_ADMIN_KEY");
+    const anKey = anthropicAdminConfigured(ctx.env);
     const orKey = ctx.env("OPENROUTER_KEY");
     if (!oaKey && !anKey && !orKey) {
-      return { status: "unknown", value: "—", sub: "set OPENAI_ADMIN_KEY / ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY" };
+      return { status: "unknown", value: "—", sub: `set OPENAI_ADMIN_KEY / ${FEDERATION_VARS.join(" + ")} or ANTHROPIC_ADMIN_KEY / OPENROUTER_KEY` };
     }
 
     const now = new Date();
@@ -173,7 +180,15 @@ export const modelSpend: Tile = {
     // errored, or the report it returned has stopped being written.
     const [oaRead, anRead, orMonthly] = await Promise.all([
       oaKey ? openaiDaily(oaKey, startSec).catch(() => null) : Promise.resolve(null),
-      anKey ? anthropicDaily(anKey, startISO).catch(() => null) : Promise.resolve(null),
+      // Anthropic's failure is logged: with federation, the metadata server, the
+      // token exchange, and the cost report can each fail, and the tile's $???
+      // does not say which.
+      anKey
+        ? anthropicDaily(ctx.env, startISO).catch((e) => {
+          console.error("model spend: Anthropic read failed:", e instanceof Error ? e.message : e);
+          return null;
+        })
+        : Promise.resolve(null),
       orKey ? openrouterMonthly(orKey).catch(() => null) : Promise.resolve(null),
     ]);
     const oaMap = stillReporting(oaRead, now);

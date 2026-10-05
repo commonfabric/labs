@@ -26,7 +26,7 @@ import { loadCliSuites } from "./test-topology/cli.ts";
 import { loadGateSuites } from "./test-topology/gates.ts";
 import { loadPackageIntegrationSuites } from "./test-topology/package-integration.ts";
 import { loadPatternSuites } from "./test-topology/patterns.ts";
-import { loadUnitSuites } from "./test-topology/unit.ts";
+import { loadUnitSuites, RUNS_WHOLE } from "./test-topology/unit.ts";
 import type { Suite } from "./test-topology/suite.ts";
 
 export type {
@@ -57,7 +57,7 @@ export async function loadTopology(
 ): Promise<Suite[]> {
   return [
     ...await loadGateSuites(root),
-    ...await loadUnitSuites(root),
+    ...await loadUnitSuites(root, RUNS_WHOLE),
     ...await loadPatternSuites(root),
     ...await loadPackageIntegrationSuites(root),
     ...await loadCliSuites(root),
@@ -92,6 +92,23 @@ export function wholeUnits(suites: readonly Suite[]): Set<string> {
   return new Set(
     suites.flatMap((suite) =>
       suite.whole.map((unit) => `${suite.id}\t${unit}`)
+    ),
+  );
+}
+
+/**
+ * The process each unit runs in, where its suite names one, against the
+ * unit written as `<suite>\t<unit>`. The packer charges a suite's process
+ * setup once for each process a lane starts.
+ */
+export function unitProcesses(
+  suites: readonly Suite[],
+): Map<string, string> {
+  return new Map(
+    suites.flatMap((suite) =>
+      [...suite.processes ?? []].map((
+        [unit, process],
+      ) => [`${suite.id}\t${unit}`, process])
     ),
   );
 }

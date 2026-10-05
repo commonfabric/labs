@@ -13,21 +13,24 @@ import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import type { Cell } from "../cell.ts";
+import { type Cell, cellRuntime } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
-import type {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "../storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type CfcConfClause, clauseAlternatives } from "./clause.ts";
+import {
+  evidenceHolds,
+  isTrustedGestureOn,
+  readEvidence,
+} from "./host-review.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
 import { collectConsumedLabel } from "./prepare.ts";
+import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
-import { isRendererTrustedEvent } from "./ui-contract.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Destination whose stored identity or resolved space determines the audience. */
 export type SnapshotShareAudience =
@@ -91,7 +94,8 @@ interface ConsentState {
 }
 
 const consents = new WeakMap<SnapshotShareConsent, ConsentState>();
-const SHARE_WRITER = "cfc-share-snapshot";
+/** Builtin implementation identity that alone writes reviewed snapshot copies. */
+export const SNAPSHOT_SHARE_WRITER = "cfc-share-snapshot";
 
 /** Follows a host binding's one pointer without observing its private target. */
 function appendTarget(
@@ -107,7 +111,7 @@ function appendTarget(
   if (!link?.id || !link.space) {
     throw new Error("Snapshot recommendation binding is not a cell link");
   }
-  return cell.runtime.getCellFromLink(link);
+  return cellRuntime(cell).getCellFromLink(link);
 }
 
 /** Resolves an audience from persisted identity evidence, never authored schema. */
@@ -130,13 +134,14 @@ function resolveAudience(
   const metadata = readStoredCfcMetadata(tx, destination);
   const view = cfcLabelViewFromMetadata(metadata, destination.path);
   const subjects = new Set(
-    view?.entries.filter((entry) => entry.path.length === 0)
+    view?.entries.filter((entry) =>
+      entry.path.length === 0 && entry.observes !== "followRef"
+    )
       .flatMap((entry) => entry.label.integrity ?? [])
-      .filter((atom) =>
-        isObjectNotArray(atom) && atom.kind === "represents-principal" &&
-        isDID(atom.subject)
-      )
-      .map((atom) => (atom as { subject: string }).subject),
+      .flatMap((atom) => {
+        const subject = representsPrincipalSubject(atom);
+        return subject === undefined ? [] : [subject];
+      }),
   );
   if (subjects.size !== 1) {
     throw new Error(
@@ -148,7 +153,7 @@ function resolveAudience(
 
 /** Reads the exact snapshot and verifies ownership of every released clause. */
 function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
-  const runtime = source.runtime;
+  const runtime = cellRuntime(source);
   const tx = runtime.edit();
   try {
     const actor = tx.getCfcState().trustSnapshot?.actingPrincipal;
@@ -156,7 +161,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
       throw new Error("Snapshot sharing requires an authenticated actor");
     }
     const target = "user" in requested ? requested.user : requested.space;
-    if (target.runtime !== runtime) {
+    if (cellRuntime(target) !== runtime) {
       throw new Error("Snapshot handles must belong to the same runtime");
     }
     const sourceLink = source.withTx(tx).resolveAsCell()
@@ -187,25 +192,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
       }
       retained.push(clause);
     }
-    const readActivities = tx.getReadActivities?.();
-    if (readActivities === undefined) {
-      throw new Error("Snapshot sharing requires a verifiable read journal");
-    }
-    const evidence = [...readActivities].map((read) => {
-      const address: IMemorySpaceAddress = {
-        space: read.space,
-        id: read.id,
-        type: read.type,
-        scope: read.scope,
-        path: [...read.path],
-      };
-      return {
-        address,
-        digest: hashStringOf(
-          tx.readOrThrow(address, { meta: internalVerifierRead }),
-        ),
-      };
-    });
+    const evidence = readEvidence(tx, "Snapshot sharing");
     return {
       actor,
       sourceLink,
@@ -233,10 +220,10 @@ export function prepareSnapshotShare(
   let boundAppendTargets: ConsentState["appendBooksTo"];
   if (appendBooksTo) {
     if (
-      appendBooksTo.recommended.runtime !== source.runtime ||
-      appendBooksTo.received.runtime !== source.runtime
+      cellRuntime(appendBooksTo.recommended) !== cellRuntime(source) ||
+      cellRuntime(appendBooksTo.received) !== cellRuntime(source)
     ) throw new Error("Snapshot append targets must use the source runtime");
-    const tx = source.runtime.edit();
+    const tx = cellRuntime(source).edit();
     let recommendedLink: NormalizedFullLink;
     let receivedLink: NormalizedFullLink;
     try {
@@ -291,13 +278,7 @@ export async function commitSnapshotShare(
     throw new Error("Snapshot consent is unknown or already consumed");
   }
   consents.delete(consent);
-  if (
-    !isRendererTrustedEvent(event) || !isObjectNotArray(event) ||
-    !isObjectNotArray(event.provenance) || event.provenance.origin !== "dom" ||
-    event.provenance.trusted !== true ||
-    !isObjectNotArray(event.provenance.ui) ||
-    event.provenance.ui.pattern !== "ShareSnapshot"
-  ) {
+  if (!isTrustedGestureOn(event, "ShareSnapshot")) {
     throw new Error("Snapshot sharing requires a trusted host share gesture");
   }
   const current = inspect(state.source, state.requestedAudience);
@@ -311,7 +292,7 @@ export async function commitSnapshotShare(
       "Snapshot review is stale; review the value and audience again",
     );
   }
-  const runtime = state.source.runtime;
+  const runtime = cellRuntime(state.source);
   const tx = runtime.edit();
   try {
     if (tx.getCfcState().trustSnapshot?.actingPrincipal !== state.actor) {
@@ -321,17 +302,12 @@ export async function commitSnapshotShare(
     // transaction. They authorize only this immutable, separately reviewed
     // copy; verifier reads retain conflict checks without adding the private
     // source's label back to the explicitly released output.
-    for (const read of current.evidence) {
-      const stored = tx.readOrThrow(read.address, {
-        meta: internalVerifierRead,
-      });
-      if (hashStringOf(stored) !== read.digest) {
-        throw new Error("Snapshot review changed before commit");
-      }
+    if (!evidenceHolds(tx, current.evidence)) {
+      throw new Error("Snapshot review changed before commit");
     }
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
-      builtinId: SHARE_WRITER,
+      builtinId: SNAPSHOT_SHARE_WRITER,
     });
     const confidentiality = [...current.retained, {
       anyOf: [cfcAtom.user(state.actor), state.audience],
@@ -339,7 +315,7 @@ export async function commitSnapshotShare(
     const shared = runtime.getCell<JSONValue>(state.destination.space, {
       sharedSnapshot: state.eventId,
     }, {
-      ifc: { confidentiality, writeAuthorizedBy: [SHARE_WRITER] },
+      ifc: { confidentiality, writeAuthorizedBy: [SNAPSHOT_SHARE_WRITER] },
     }, tx);
     shared.set(state.value);
     if (state.appendBooksTo) {
@@ -376,7 +352,7 @@ export async function commitSnapshotShare(
       additionalProperties: true,
       ifc: {
         confidentiality: [...current.retained, cfcAtom.user(state.actor)],
-        writeAuthorizedBy: [SHARE_WRITER],
+        writeAuthorizedBy: [SNAPSHOT_SHARE_WRITER],
       },
     }, tx);
     receipt.set({

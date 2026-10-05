@@ -2,13 +2,14 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { createSession, Identity } from "@commonfabric/identity";
-import { PiecesController } from "@commonfabric/piece/ops";
+import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { readConsoleTurnResult } from "../console/turn-result.ts";
+import { readHarnessRunState } from "../src/artifacts.ts";
 import type { HarnessFabricSessionConfig } from "../src/config.ts";
+import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
 import type {
   HarnessAssistantTranscriptMessage,
   HarnessTranscriptEvent,
@@ -20,6 +21,7 @@ import { PIECE_OUTPUT_GUIDANCE } from "../src/piece-output.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import { createHarnessRunState } from "../src/run-state.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 
 const sandbox: SandboxRuntime = {
@@ -77,10 +79,7 @@ describe("piece-output", () => {
       apiUrl: new URL(fabricSession.apiUrl),
       storageManager,
     });
-    const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: fabricSession.space }),
-      runtime,
-    );
+    const pieces = await openLegacySpace(signer, runtime, fabricSession.space);
     const requests: HarnessModelTurnRequest[] = [];
     try {
       await pieces.synced();
@@ -305,6 +304,167 @@ describe("piece-output", () => {
     expect(loop.engine.getRunState().terminalReason).toBe("max_model_turns");
   });
 
+  // Every shape of tool list a Fabric run holds without `assign_slug`: one
+  // unrelated tool, `finish_task` alone (it ends a run but names nothing), and
+  // the interactive chat's default parent tools, which hold `finish_task` too.
+  for (
+    const [holding, allowedToolIds] of [
+      ["read_file alone", ["read_file"]],
+      ["finish_task alone", ["finish_task"]],
+      ["the default parent tools", DEFAULT_PARENT_TOOL_IDS],
+    ] as const
+  ) {
+    it(`completes on the first plain-text answer when a Fabric run holding ${holding} cannot name a piece`, async () => {
+      // Loom's GTD lane opens a Fabric session but grants no piece-naming
+      // tool; a contract it could never meet refused every answer until the
+      // budget ran out.
+      expect(allowedToolIds).not.toContain("assign_slug");
+      const requests: HarnessModelTurnRequest[] = [];
+      const loop = new CfHarnessPromptLoop({
+        sandboxRuntime: sandbox,
+        fabricSession,
+        model: "test-model",
+        allowedToolIds: [...allowedToolIds],
+        fabricSessionFactory: () => {
+          throw new Error("A plain-text answer must not open Fabric");
+        },
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            requests.push({ ...request, transcript: [...request.transcript] });
+            return Promise.resolve({
+              assistant: { role: "assistant", content: "Linux cf-harness" },
+            });
+          },
+        },
+      });
+      const result = await loop.runPrompt({
+        prompt: "Run uname -a and report the output.",
+        maxModelTurns: 3,
+        promptSlotBinding: directPromptSlotBindingFor("no-naming-tool"),
+      });
+      expect(requests).toHaveLength(1);
+      expect(
+        requests[0].transcript.some((message) =>
+          message.content === PIECE_OUTPUT_GUIDANCE
+        ),
+      ).toBe(false);
+      expect(result.finalAssistantText).toBe("Linux cf-harness");
+      expect(result.runState.assignedPieces).toBeUndefined();
+    });
+  }
+
+  it("refuses a plain-text answer from a Fabric run holding assign_slug without finish_task", async () => {
+    let requests = 0;
+    const loop = new CfHarnessPromptLoop({
+      sandboxRuntime: sandbox,
+      fabricSession,
+      model: "test-model",
+      allowedToolIds: ["assign_slug"],
+      fabricSessionFactory: () => {
+        throw new Error("A plain-text answer must not open Fabric");
+      },
+      modelClient: {
+        providerId: "test-provider",
+        complete: () => {
+          requests += 1;
+          return Promise.resolve({
+            assistant: { role: "assistant", content: "Done." },
+          });
+        },
+      },
+    });
+    await expect(loop.runPrompt({
+      prompt: "Make a page.",
+      maxModelTurns: 2,
+      promptSlotBinding: directPromptSlotBindingFor("naming-tool"),
+    })).rejects.toThrow("exceeded max model turns (2)");
+    expect(requests).toBe(2);
+  });
+
+  // `--resume-run` without Fabric connection flags has no session, so it
+  // cannot back `assign_slug`; the run it resumes decided whether a piece was
+  // required, and that decision has to survive the run-state file and a
+  // second resume, whose own tool list says nothing about it.
+  for (const required of [false, true]) {
+    it(`keeps a resumed run's recorded ${required ? "piece requirement" : "text contract"} across two resumes without Fabric flags`, async () => {
+      const directory = await Deno.makeTempDir();
+      const answering = (requests: HarnessModelTurnRequest[]) => ({
+        providerId: "test-provider",
+        complete: (request: HarnessModelTurnRequest) => {
+          requests.push({ ...request, transcript: [...request.transcript] });
+          const corrected = request.transcript.some((message) =>
+            message.content.startsWith("Host completion check")
+          );
+          return Promise.resolve({
+            assistant: corrected
+              ? toolCall("finish_task", {
+                outcome: "question",
+                message: "Which inbox should I triage?",
+              }, "question")
+              : {
+                role: "assistant" as const,
+                content: "Next action: reply to the landlord.",
+              },
+          });
+        },
+      });
+      try {
+        const opened: HarnessModelTurnRequest[] = [];
+        const fresh = await new CfHarnessPromptLoop({
+          engine: new CfHarnessEngine({
+            sandboxRuntime: sandbox,
+            model: "test-model",
+            fabricSession,
+            artifactRoot: directory,
+            fabricSessionFactory: () => {
+              throw new Error("A plain-text answer must not open Fabric");
+            },
+          }),
+          allowedToolIds: required
+            ? ["assign_slug", "finish_task"]
+            : ["read_file", "finish_task"],
+          modelClient: answering(opened),
+        }).runPrompt({
+          prompt: "Triage my inbox.",
+          maxModelTurns: 2,
+          promptSlotBinding: directPromptSlotBindingFor("fresh"),
+        });
+        expect(opened).toHaveLength(required ? 2 : 1);
+        let runRoot = fresh.runState.artifactRoot;
+        for (const resume of ["first", "second"]) {
+          if (runRoot === undefined) throw new Error("the run wrote no record");
+          const requests: HarnessModelTurnRequest[] = [];
+          const result = await new CfHarnessPromptLoop({
+            engine: new CfHarnessEngine({
+              sandboxRuntime: sandbox,
+              model: "test-model",
+              runState: await readHarnessRunState(
+                join(runRoot, "run-state.json"),
+              ),
+            }),
+            allowedToolIds: ["read_file", "finish_task"],
+            modelClient: answering(requests),
+          }).runTranscript({
+            transcript: [{ role: "user", content: "Continue." }],
+            maxModelTurns: 2,
+            promptSlotBinding: directPromptSlotBindingFor(`${resume}-resume`),
+          });
+          expect({ resume, requests: requests.length }).toEqual({
+            resume,
+            requests: required ? 2 : 1,
+          });
+          expect(result.taskOutcome?.outcome).toBe(
+            required ? "question" : "completed",
+          );
+          runRoot = result.runState.artifactRoot;
+        }
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  }
+
   for (const outcome of ["question", "gave-up"] as const) {
     it(`allows a piece-less ${outcome} after refusing a plain-text ending`, async () => {
       const requests: HarnessModelTurnRequest[] = [];
@@ -312,7 +472,7 @@ describe("piece-output", () => {
         sandboxRuntime: sandbox,
         fabricSession,
         model: "test-model",
-        allowedToolIds: ["finish_task"],
+        allowedToolIds: ["assign_slug", "finish_task"],
         modelClient: {
           providerId: "test-provider",
           complete: (request) => {
@@ -338,6 +498,53 @@ describe("piece-output", () => {
       expect(result.runState.assignedPieces).toBeUndefined();
     });
   }
+
+  it("ends a Fabric task on a completed finish_task answer without a piece", async () => {
+    // The chat case: "weather in brisbane?" is answered in words, and the
+    // piece contract accepts that ending in one model turn.
+    const requests: HarnessModelTurnRequest[] = [];
+    const actions = [
+      { kind: "open_loom", loomId: "loom-0123456789abcdef" },
+      { kind: "command", line: "/ask what is next" },
+      { kind: "open_url", url: "https://example.com/forecast" },
+    ];
+    const loop = new CfHarnessPromptLoop({
+      sandboxRuntime: sandbox,
+      fabricSession,
+      model: "test-model",
+      allowedToolIds: ["run_pattern", "assign_slug", "finish_task"],
+      modelClient: {
+        providerId: "test-provider",
+        complete: (request) => {
+          requests.push({ ...request, transcript: [...request.transcript] });
+          return Promise.resolve({
+            assistant: toolCall("finish_task", {
+              outcome: "completed",
+              message: "It is 24°C and sunny in Brisbane.",
+              actions,
+            }, "finish"),
+          });
+        },
+      },
+    });
+    const result = await loop.runPrompt({
+      prompt: "weather in brisbane?",
+      maxModelTurns: 1,
+      promptSlotBinding: directPromptSlotBindingFor("terminal"),
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].transcript[0].content).toBe(PIECE_OUTPUT_GUIDANCE);
+    expect(result.finalAssistantText).toBe(
+      "It is 24°C and sunny in Brisbane.",
+    );
+    expect(result.taskOutcome).toEqual({
+      outcome: "completed",
+      answer: "It is 24°C and sunny in Brisbane.",
+      actions,
+    });
+    expect(result.runState.status).toBe("completed");
+    expect(result.runState.assignedPieces).toBeUndefined();
+  });
 
   for (const resumed of [false, true]) {
     it(`returns a structured document from a ${resumed ? "resumed" : "fresh"} Fabric agent request without requiring a UI piece`, async () => {
@@ -474,7 +681,13 @@ describe("piece-output", () => {
         engine,
         ...(mode === "child" ? { requirePieceOutput: true } : {}),
         finalizeOnTurnLimit: mode === "budget",
-        allowedToolIds: ["finish_task"],
+        // A resume without Fabric flags cannot ask for `assign_slug`: the CLI
+        // refuses `--allow-tool assign_slug` without a session. Granting it here
+        // would decide the contract from the tool list and never reach the
+        // clause that covers a resume.
+        allowedToolIds: mode === "unconfigured-resume"
+          ? ["finish_task"]
+          : ["assign_slug", "finish_task"],
         modelClient: {
           providerId: "test-provider",
           complete: () => {

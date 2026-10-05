@@ -1,7 +1,8 @@
 /**
  * spendChart: the shared multi-source daily-spend chart. Each source's line
- * covers only the days that source is known for — reported days plus settled
- * quiet days — so one source's freshness never pads another with zeros. Plus
+ * covers only the days that source's reporting lag has settled, so a day still
+ * being reported is never drawn as a partial figure, and one source's
+ * freshness never pads another with zeros. Plus
  * the two readings a tile takes of a source's reports to decide whether the
  * quiet days are quiet at all.
  */
@@ -30,11 +31,13 @@ const source = (
   lagDays: number,
   color: string,
   knownMonths?: string[],
+  knownDays?: string[],
 ) => ({
   spend: { byDay: new Map(entries) },
   color,
   lagDays,
   ...(knownMonths ? { knownMonths: new Set(knownMonths) } : {}),
+  ...(knownDays ? { knownDays: new Set(knownDays) } : {}),
 });
 
 // Every polyline in the chart, as [x, y] point lists in drawing order.
@@ -73,20 +76,30 @@ describe("spend", () => {
     expect(reportLagDays("2025-12-31", NOW)).toBe(20);
   });
 
-  it("ends a lagging source at its own known day instead of padding it with zeros", () => {
-    const github = source(run("2026-01-01", 20, 1), 2, "#58a6ff");
-    const secondary = source(run("2026-01-01", 19, 2), 1, "#f59e0b");
+  // Two sources that already carry a row for the 20th, which is still under
+  // way and has so far spent a fraction of a whole day.
+  const unfinished = (amount: number): Array<[string, number]> => [
+    ...run("2026-01-01", 19, amount),
+    ["2026-01-20", amount / 10],
+  ];
+
+  it("ends a lagging source at its own settled day instead of padding it with zeros", () => {
+    const github = source(unfinished(1), 2, "#58a6ff");
+    const secondary = source(unfinished(2), 1, "#f59e0b");
     const { chart, duration } = spendChart([github, secondary], NOW);
-    expect(duration).toBe(20 * DAY);
+    expect(duration).toBe(19 * DAY);
     const lines = polylines(chart);
     expect(lines.length).toBe(2);
     const [first, second] = lines;
-    expect(first.length).toBe(20);
-    expect(first[first.length - 1][0]).toBe(220);
-    // The shorter line stops one day column short of the chart's right edge,
-    // and holds its $2 height there instead of plunging to a padded zero.
+    // The 1-day lag settles the 19th, which is the chart's right edge.
     expect(second.length).toBe(19);
-    expect(second[second.length - 1][0]).toBeCloseTo((18 / 19) * 220, 1);
+    expect(second[second.length - 1][0]).toBe(220);
+    // The 2-day lag stops one day column short of that edge, on the 18th.
+    expect(first.length).toBe(18);
+    expect(first[first.length - 1][0]).toBeCloseTo((17 / 18) * 220, 1);
+    // Neither line draws the 20th's partial figure, so each holds its height
+    // to the end rather than dropping on the day still being reported.
+    expect(new Set(first.map(([, y]) => y)).size).toBe(1);
     expect(new Set(second.map(([, y]) => y)).size).toBe(1);
   });
 
@@ -116,8 +129,8 @@ describe("spend", () => {
   });
 
   it("aligns each line's highlight to the shared trailing window", () => {
-    const github = source(run("2026-01-01", 20, 1), 2, "#58a6ff");
-    const secondary = source(run("2026-01-01", 19, 2), 1, "#f59e0b");
+    const github = source(unfinished(1), 2, "#58a6ff");
+    const secondary = source(unfinished(2), 1, "#f59e0b");
     const { chart } = spendChart([github, secondary], NOW, 5);
     const lines = polylines(chart);
     // Two bases, then the two bright trailing slices.
@@ -125,8 +138,8 @@ describe("spend", () => {
     const [, , firstTint, secondTint] = lines;
     // The window is the last five day columns; the shorter line has four of
     // them, and both slices start at the same column.
-    expect(firstTint.length).toBe(5);
-    expect(secondTint.length).toBe(4);
+    expect(firstTint.length).toBe(4);
+    expect(secondTint.length).toBe(5);
     expect(secondTint[0][0]).toBe(firstTint[0][0]);
   });
 
@@ -176,6 +189,36 @@ describe("spend", () => {
     const december = lines[0].slice(11, 42).map(([, y]) => y);
     expect(new Set(december).size).toBe(1);
     expect(december[0]).toBeGreaterThan(lines[0][10][1]);
+  });
+
+  it("breaks individual report holes and highlights every sampled day", () => {
+    const knownDays = run("2026-01-01", 18, 0)
+      .map(([day]) => day)
+      .filter((day) => day !== "2026-01-06");
+    const github = source(
+      run("2026-01-01", 10, 18).filter(([day]) => day !== "2026-01-06"),
+      2,
+      "#58a6ff",
+      ["2026-01"],
+      knownDays,
+    );
+    const { chart, duration } = spendChart(
+      [github],
+      NOW,
+      knownDays.length,
+      knownDays[0],
+    );
+    expect(duration).toBe(18 * DAY);
+    const lines = polylines(chart);
+    // The entire sampled window stays highlighted, so it is two pieces rather
+    // than base pieces followed by shorter highlighted copies.
+    expect(lines.length).toBe(2);
+    expect(lines[0].length).toBe(5);
+    expect(lines[1].length).toBe(12);
+    expect(lines[0].length + lines[1].length).toBe(knownDays.length);
+    expect(
+      lines.flat().some(([x]) => Math.abs(x - (5 / 17) * 220) < 0.1),
+    ).toBe(false);
   });
 
   it("starts at known quiet days before the first spend row", () => {

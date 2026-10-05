@@ -226,6 +226,21 @@ export const highestAuthoredSeq = (engine: Engine.Engine): number =>
   ).get() as { seq: number | null }).seq ?? 0;
 
 /**
+ * {@link waitForSettled} under the stuck-condition net: resolves with the
+ * watermark once it covers `seq`, and fails the run if it never does — a
+ * space whose serving never resumes leaves the watermark where it is.
+ */
+export const awaitSettled = (
+  runtime: Runtime,
+  space: MemorySpace,
+  seq: number,
+): Promise<number> =>
+  withStuckNet(
+    waitForSettled(runtime, space, seq),
+    `the watermark to cover seq ${seq}`,
+  );
+
+/**
  * The settle barrier: flush `runtime`'s own pending work, then wait until the
  * space's watermark covers every authored commit in it. W ≥ seq is the settled
  * contract as a client applies it (protocol.md §4), and it orders this point
@@ -247,6 +262,6 @@ export const settleServing = async (
   await runtime.idle();
   await runtime.storageManager.synced();
   const target = highestAuthoredSeq(engine);
-  await waitForSettled(runtime, space, target);
+  await awaitSettled(runtime, space, target);
   return target;
 };

@@ -36,6 +36,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   applyCommit,
   applyWaveCommit,
@@ -314,9 +315,7 @@ Deno.test("event-append admission: the authored row, end to end", async (t) => {
         // The SpaceServer consequences both entries and advances the
         // per-stream watermark past them (derived-class, shape-exempt).
         const value = sidecarValue(engine);
-        const topSeq = Math.max(
-          ...value.entries!.map((entry) => entry.seq ?? 0),
-        );
+        const topSeq = maxOf(value.entries!.map((entry) => entry.seq ?? 0));
         waveSetSidecar(engine, holder, 100, {
           entries: value.entries!.map((entry) => ({
             ...entry,
@@ -899,7 +898,7 @@ Deno.test("event-append admission: LT1 derived carriage and delegated stamping",
         // per-stream watermark — the SpaceServer's §4 write shape.
         waveSetSidecar(engine, holder, 5, {
           entries: stored.map((entry) => ({ ...entry, consequenced: true })),
-          eventWatermark: Math.max(...stored.map((e) => e.seq ?? 0)),
+          eventWatermark: maxOf(stored.map((e) => e.seq ?? 0)),
         });
         assertEquals(
           sidecarValue(engine).entries!.every((e) => e.consequenced === true),

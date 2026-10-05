@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 // FIXTURE: generic-helper-type-parameters-unknown
 // Verifies: generic definition-site helper wrappers degrade injected schemas to unknown
 //   wish<T>({ query }) → wish<T>({ query }, { type: "unknown" })
-//   generateObject<T>({ ... }) → generateObject<T>({ ..., schema: { type: "unknown" } })
+//   generateObject<T>({ ... }) → generateObject<T>({ schema: { type: "unknown" }, ... })
 //   new Cell<T>(value) → new Cell<T>(value, { type: "unknown" })
 export function buildWishExplicit<T>(path: string) {
     return wish<T>({ query: path }, {
@@ -24,11 +24,11 @@ export function buildWishExplicit<T>(path: string) {
 __cfHardenFn(buildWishExplicit);
 export function buildObjectExplicit<T>(prompt: string) {
     return generateObject<T>({
-        model: "gpt-4o-mini",
-        prompt,
         schema: {
             type: "unknown"
-        } as const satisfies __cfHelpers.JSONSchema
+        } as const satisfies __cfHelpers.JSONSchema,
+        model: "gpt-4o-mini",
+        prompt
     });
 }
 __cfHardenFn(buildObjectExplicit);

@@ -70,4 +70,9 @@ export class SpecialNumberCodec
   ): FabricValue {
     return SPECIAL_NUMBERS[state];
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

@@ -204,6 +204,16 @@ export class FrozenMap<K, V> implements Map<K, V> {
   // Static members
   //
 
+  static {
+    // Re-parented rather than declared with `extends`, so that `instanceof
+    // Map` holds without an instance carrying `Map`'s internal slots
+    // (see the file header).
+    Object.setPrototypeOf(this.prototype, Map.prototype);
+    Object.setPrototypeOf(this, Map);
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Returns a builder that can be used to populate a `FrozenMap` incrementally
    * before freezing it. Call `set()` to add entries, then `finish()` to freeze
@@ -233,9 +243,6 @@ export class FrozenMap<K, V> implements Map<K, V> {
     };
   }
 }
-
-Object.setPrototypeOf(FrozenMap.prototype, Map.prototype);
-Object.setPrototypeOf(FrozenMap, Map);
 
 /**
  * Effectively-immutable `Set` wrapper. Read methods and set-algebra methods
@@ -412,6 +419,16 @@ export class FrozenSet<T> implements Set<T> {
   // Static members
   //
 
+  static {
+    // Re-parented rather than declared with `extends`, so that `instanceof
+    // Set` holds without an instance carrying `Set`'s internal slots
+    // (see the file header).
+    Object.setPrototypeOf(this.prototype, Set.prototype);
+    Object.setPrototypeOf(this, Set);
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Returns a builder that can be used to populate a `FrozenSet` incrementally
    * before freezing it. Call `add()` to add values, then `finish()` to freeze
@@ -441,6 +458,3 @@ export class FrozenSet<T> implements Set<T> {
     };
   }
 }
-
-Object.setPrototypeOf(FrozenSet.prototype, Set.prototype);
-Object.setPrototypeOf(FrozenSet, Set);

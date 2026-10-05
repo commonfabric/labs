@@ -3,7 +3,7 @@
   "name": "@commonfabric/integration",
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check -A"
   },
   "exports": {
     ".": "./index.ts",
@@ -12,6 +12,7 @@
     "./shell-utils": "./shell-utils.ts",
     "./pattern-coverage": "./pattern-coverage.ts",
     "./temp-identity": "./temp-identity.ts",
+    "./test-space": "./test-space.ts",
     "./wait-for-cell-value": "./wait-for-cell-value.ts"
   }
 }

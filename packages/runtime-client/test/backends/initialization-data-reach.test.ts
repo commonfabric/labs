@@ -29,6 +29,7 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { type DID, Identity } from "@commonfabric/identity";
 import type { Runtime } from "@commonfabric/runner";
+import { createTrustResolver } from "@commonfabric/runner/cfc";
 import type { Options as StorageOptions } from "@commonfabric/runner/storage/cache";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -57,8 +58,6 @@ const SENT = {
   spaceHostMap: { [federatedSpace]: federatedHost },
   identity: signer.keyPair,
   spaceDid: space,
-  spaceName: "reach",
-  spaceIdentity: spaceSigner.keyPair,
   experimental: {
     agentBuiltin: false,
     webViewScopedReplication: true,
@@ -68,6 +67,24 @@ const SENT = {
   cfcFlowLabels: "persist",
   cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
   cfcReadOnExceed: "skip",
+  cfcTrustConfig: {
+    statements: [{
+      concrete: {
+        type: "https://commonfabric.org/cfc/atom/Policy",
+        policyRefKind: "module",
+        moduleIdentity: "sha256:reach-module",
+        symbol: "reachRules",
+        policyDigest: "sha256:reach-digest",
+      },
+      implements: "https://commonfabric.org/cfc/concepts/reach",
+      verifier: "did:web:reach.example",
+    }],
+    delegations: [{
+      delegator: "*",
+      verifier: "did:web:reach.example",
+      concepts: ["https://commonfabric.org/cfc/concepts/reach"],
+    }],
+  },
   renderDeclassificationPolicy: "deny",
   renderConfidentialityCeiling: {
     atoms: [cfcAtom.user(signer.did())],
@@ -81,6 +98,7 @@ const SENT = {
   forwardWorkerConsole: true,
   patternCoverage: true,
   concurrentWatchRefresh: true,
+  awaitHealth: true,
 } satisfies
   & InitializationData
   & Record<keyof Required<InitializationData>, unknown>;
@@ -123,17 +141,6 @@ const REACH = {
     reads: (o) => o.processor.accessForTestingOnly.cc.getSpace(),
     expected: space,
   },
-  spaceName: {
-    reads: (o) => o.processor.accessForTestingOnly.cc.getSpaceName(),
-    expected: "reach",
-  },
-  spaceIdentity: {
-    // A space's key pair derives the space, so this reads back the same DID
-    // `spaceDid` does. What the case pins is that the key pair reached
-    // storage, not which space it names.
-    reads: (o) => o.storage.spaceIdentity?.did(),
-    expected: space,
-  },
   experimental: {
     // Read back as a pair, so the case turns on the record arriving with its
     // contents rather than on one key of it.
@@ -164,6 +171,24 @@ const REACH = {
     reads: (o) => o.runtime.cfcReadOnExceed,
     expected: "skip",
   },
+  cfcTrustConfig: {
+    // The runtime's own validated copy, so the case turns on the statement
+    // reaching the resolver the concept guards consult.
+    reads: (o) =>
+      createTrustResolver(o.runtime.cfcTrustConfig).conceptSatisfied(
+        "https://commonfabric.org/cfc/concepts/reach",
+        [{
+          type: "https://commonfabric.org/cfc/atom/Policy",
+          policyRefKind: "module",
+          moduleIdentity: "sha256:reach-module",
+          symbol: "reachRules",
+          policyDigest: "sha256:reach-digest",
+          subject: space,
+        }],
+        signer.did(),
+      ),
+    expected: true,
+  },
   renderDeclassificationPolicy: {
     reads: (o) => o.processor.accessForTestingOnly.renderDeclassificationPolicy,
     expected: "deny",
@@ -191,6 +216,10 @@ const REACH = {
     reads: (o) => o.storage.settings?.experimentalConcurrentWatchRefresh,
     expected: true,
   },
+  awaitHealth: {
+    reads: (o) => o.processor.accessForTestingOnly.awaitedHealth,
+    expected: true,
+  },
 } satisfies Record<keyof Required<InitializationData>, FieldReach>;
 
 /** The client that owns the worker. What the worker posts back is not read. */
@@ -205,7 +234,7 @@ const owner: WorkerClient = { id: 0, post: () => true };
  * Storage is emulated and the backend is stood down, since what these cases
  * turn on is where each declared value arrives rather than whether a backend
  * answers. The options storage is opened with are recorded, which is the only
- * place two of the fields reach.
+ * place one of the fields reaches.
  */
 async function observeWorkerInitialization(): Promise<{
   observed: Observed;

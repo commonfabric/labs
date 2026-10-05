@@ -10,8 +10,8 @@
  * actually type — is dead too.
  *
  * CI already resolves `cf` by name — `packages/cli/integration/integration.sh`
- * runs `command cf`, and the workflow puts the downloaded binary on
- * `$GITHUB_PATH` — but it constructs that PATH itself, and local runs of the
+ * runs `command cf`, and a lane's `cf` capability puts the checkout's `bin/`
+ * first on PATH — but it constructs that PATH itself, and local runs of the
  * same scripts set `CF_CLI_INTEGRATION_USE_LOCAL` to force the source CLI
  * instead. Completion is therefore the first thing to require `cf` on PATH on
  * a *developer's own machine*, where nothing sets it up. This check makes that

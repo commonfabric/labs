@@ -24,8 +24,9 @@
  * bound to it.
  */
 import { debugStr } from "@commonfabric/data-model";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
+  createTestSpace,
   env,
   type Page,
   type ProbeApi,
@@ -51,7 +52,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 const TOPIC_TITLE = "Retraction controls";
 const AGENT = "Retraction controls test";
@@ -161,6 +162,7 @@ describe("Topics retraction controls", () => {
   shell.bindLifecycle();
 
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let topic: PieceController;
   // deno-lint-ignore no-explicit-any
@@ -169,8 +171,9 @@ describe("Topics retraction controls", () => {
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -256,10 +259,10 @@ describe("Topics retraction controls", () => {
     const page = shell.page();
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId: topic.id },
+      view: { spaceDid, pieceId: topic.id },
       identity,
     });
-    await waitForPieceView(page, SPACE_NAME, topic.id);
+    await waitForPieceView(page, spaceDid, topic.id);
     await waitForRuntimeIdle(page);
 
     // A fresh identity has no Profile, and the controls stay disabled without

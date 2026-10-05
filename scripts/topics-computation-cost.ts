@@ -24,6 +24,7 @@ import { fromFileUrl } from "@std/path";
 // deno-lint-ignore no-external-import
 import { getHeapStatistics } from "node:v8";
 
+import { maxOf } from "@commonfabric/utils/math";
 import {
   BOARD_NOT_MEASURED,
   caseNamed,
@@ -185,7 +186,7 @@ async function runProbe(options: RunOptions): Promise<void> {
         case: id,
         series,
         size,
-        largestBuilt: smaller.length === 0 ? null : Math.max(...smaller),
+        largestBuilt: smaller.length === 0 ? null : maxOf(smaller),
         heapSizeLimitBytes: outcome.heapSizeLimitBytes,
         elapsedMs: outcome.elapsedMs,
         signal: outcome.signal,
@@ -474,7 +475,7 @@ async function deriveLimits(v8Flags: readonly string[]): Promise<void> {
           }
           return [
             measure,
-            repeated ? limitFor(Math.max(...counts)) : { ungated: counts },
+            repeated ? limitFor(maxOf(counts)) : { ungated: counts },
           ];
         }),
       ) as ReadBudgetLimits[string][string];

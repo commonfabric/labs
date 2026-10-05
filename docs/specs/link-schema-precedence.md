@@ -60,36 +60,65 @@ agnostic reader adopted — later links no longer reshape it.
 
 A read addressed at a slot that holds a link — a keyed cell's `get()`, a
 handle minted by `resolveAsCell()` — crosses that link before its
-traversal starts, and that crossing follows link resolution's rule rather
-than the combine above: a stored schema that constrains replaces the
-schema the reader carried in, one that constrains nothing (`true`, `{}`,
-or a `cid:` reference resolving to either) leaves the reader's traveling,
-and a stored `false` selects nothing. The traversal then starts at the
-target with whichever schema won. A reader wrapped in `asCell` is not
-addressed at the slot this way: its handle is minted at the traversal
-boundary, where the crossing is a hop and combines, so the handle keeps
-the reader's own schema (the asCell handle arm in
-`stored-link-schema-precedence.test.ts`).
+traversal starts. Link resolution carries the nearest stored schema that
+constrains across the crossing (one that constrains nothing — `true`,
+`{}`, or a `cid:` reference resolving to either — leaves the reader's
+traveling), and the entry then resolves that stored schema against the
+reader's by the same precedence as a hop: a shaped reader's schema stands,
+an agnostic reader adopts the stored one, and a `false` reader selects
+nothing. The traversal starts at the target with whichever schema won. So
+an element read by its own path projects the same as that element read
+within its array, where the array's traversal crosses the same link under
+the reader's item schema; and a renderer reading a link slot by its own
+schema reads the target's UI whatever narrower view the link was written
+from.
 
-So the two ways of reaching one element answer differently when its link
-carries a constraining schema: read by its own path, the element projects
-by the stored schema; read within its array, the array's traversal crosses
-the same link under the reader's item schema and the element projects by
-the reader's. `{ "type": "unknown" }` follows the same split in both
-directions — a reader typed `unknown` adopts the stored schema at the
-entry, and a stored `unknown` keeps a shaped reader's read by path a
-reference while the same reader reads through it within the array (no
-`set()` mints such a link: a cell written into a slot carries its own
-schema, never the slot's). A lazy view's re-entry at a link slot is a
-hop, not an entry, and combines. One policy for the entry and the hops is
-not stated here yet; the pins in `stored-link-schema-precedence.test.ts`
-record both answers as they stand.
+What the entry crossing compares against is the reader's own schema. An
+agnostic reader whose read passes through one link to reach a slot
+holding another adopts the second link's schema, which describes the
+value the read lands on, rather than keeping the first link's description
+of the slot.
+
+Four cases keep the stored schema at the entry whatever the reader
+declared:
+
+- A stored `false` selects nothing, a shaped reader's read by path
+  included, where at a hop it blocks only a reader that brought no shape.
+- A stored `unknown` keeps a shaped reader's read by path a reference,
+  where within the array the same reader reads through it (no `set()`
+  mints such a link: a cell written into a slot carries its own schema,
+  never the slot's).
+- A reader typed `unknown` adopts the stored schema, where at a hop it
+  wins the crossing and stays a reference. A keyed read off a handle typed
+  `{ "type": "unknown", "asCell": ["cell"] }` reads the value the stored
+  schema describes.
+- With `readerSchemaPrecedence` off, the entry keeps link resolution's
+  rule and projects by the stored schema, while every hop falls back to the
+  strict pseudo-intersection.
+
+These are the points where the entry and the hops answer differently,
+and `stored-link-schema-precedence.test.ts` pins each. A reader wrapped
+in `asCell` is not addressed at the slot this way: its handle is minted
+at the traversal boundary, where the crossing is a hop and combines, so
+the handle keeps the reader's own schema (the asCell handle arm in that
+file). A lazy view's re-entry at a link slot is a hop, not an entry, and
+combines in every case: the four above, and an agnostic reader along a
+chain, which keeps the first link's description of the slot.
+
+A render follows the same rule, with nothing of its own to opt into. The
+renderer's schema (`rendererVDOMSchema`) is shaped, so the read the worker
+reconciler takes of the cell it mounts, and the walk of a view's roots
+that collects what the view renders, keep that schema at the entry: a
+piece reached through a link typed by a narrow view of it, one that
+leaves out `[UI]`, still renders its `[UI]`. Through a stored `false` or
+a stored `unknown`, a render gets the entry's answer from the list above,
+selecting nothing or holding a reference.
 
 A link into another space carries its stored schema across the boundary
 recomposed into a self-contained form, its `cid:` closure loaded from the
 space that holds the link
 ([`content-addressed-schemas.md`](content-addressed-schemas.md), "Space
-boundaries"), and the entry projects by it the same way.
+boundaries"), and the entry resolves against it the same way.
 
 The strict pseudo-intersection (`combineSchema`) remains in use for one
 job: merging a compound schema's base keywords with its own
@@ -225,9 +254,15 @@ a shaped reader reads on, and what it legibly declares still marks).
 `packages/runner/test/schema-ifc.test.ts` pins the closure loader's
 broken-declaration arms.
 `packages/runner/test/stored-link-schema-precedence.test.ts` pins the
-cell-level reads — the entry rule (by path against within the array, a
-stored `false`, both `unknown` directions, a link into another space), the
-asCell handle regression, and the inherited default.
+cell-level reads — the entry rule (by path the same as within the array, a
+`false` reader, a renderer's read past a narrower stored view, an agnostic
+reader along a chain, a link into another space) and the four cases that
+keep the stored schema (a stored `false`, both `unknown` directions, the
+rollback), the asCell handle regression, and the inherited default.
+`packages/runner/test/render-read-link-schema.test.ts` pins a render read
+under the entry rule, `packages/html/test/in-process-link-schema.test.ts`
+the reconciler's root mount, and
+`packages/runner/test/view-render-reads.test.ts` the walk of a view's roots.
 `packages/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
 recomposition route by route, and
 `packages/patterns/collection-naming/board.test.tsx` pins a lift's view

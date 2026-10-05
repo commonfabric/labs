@@ -59,6 +59,7 @@ export const EXPERIMENTAL_ENV_VARS = {
   serverExecution: "EXPERIMENTAL_SERVER_EXECUTION",
   viewScopedReplication: "EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
   webViewScopedReplication: "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+  sharedMemoryConnection: "EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
 } as const satisfies Record<keyof ExperimentalOptions, string | null>;
 
 /**
@@ -154,6 +155,10 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // read the same stored data, so adoption is safe either way — but both
   // sides must run the same one.
   readerSchemaPrecedence: "server",
+  // The deployment decides whether a connection may carry several spaces:
+  // one that routes a connection by the space its address names cannot
+  // serve a client that shares connections.
+  sharedMemoryConnection: "server",
 } as const satisfies Record<
   keyof ExperimentalOptions,
   ExperimentalFlagAuthority

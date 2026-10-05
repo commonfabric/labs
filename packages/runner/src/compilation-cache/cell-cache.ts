@@ -40,6 +40,8 @@ import {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
+import { COMPILE_CACHE_WRITER } from "./writer-identity.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("cell-cache");
 
@@ -1004,14 +1006,14 @@ function withCompileCacheBuiltin<T>(
   action: () => T,
 ): T {
   const priorIdentity = tx.getCfcState().implementationIdentity;
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
-    builtinId: "compile-cache",
+    builtinId: COMPILE_CACHE_WRITER,
   });
   try {
     return action();
   } finally {
-    tx.setCfcImplementationIdentity(priorIdentity);
+    setCfcImplementationIdentity(tx, priorIdentity);
   }
 }
 
@@ -1358,9 +1360,14 @@ const compiledDocProperties = {
     type: "array",
     items: { type: "object", additionalProperties: true },
   },
+  // Delegation metadata is also written on its own, to a document already
+  // stored. A write of part of a stamped value keeps the value's stamp only
+  // where it stamps what it writes, so this property carries the compiler's
+  // stamp as the document does.
   delegatedModuleIdentities: {
     type: "array",
     items: { type: "string" },
+    ifc: { addIntegrity: [COMPILED_INTEGRITY_ATOM] },
   },
   imports: {
     type: "array",

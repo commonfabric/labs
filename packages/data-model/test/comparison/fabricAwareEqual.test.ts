@@ -264,7 +264,7 @@ describe("fabricAwareEqual()", () => {
       const [a, b] = distinct();
 
       expect(() => fabricAwareEqual(new Proxy(a, {}), new Proxy(b, {})))
-        .toThrow(TypeError);
+        .toThrow("Detected counterfeit `FabricPrimitive`");
     });
 
     it("returns `true` for two distinct ones where it does not", () => {
@@ -318,7 +318,7 @@ describe("fabricAwareEqual()", () => {
 
     it("returns `false` for a null-prototype record against a plain one", () => {
       // This walk separates records by constructor even when their contents
-      // agree; `valueEqual()` treats both prototypes as plain records.
+      // agree; `valueEqual()` refuses the null-prototype one outright.
 
       const nullProto = Object.create(null) as Record<string, unknown>;
       nullProto.a = 1;

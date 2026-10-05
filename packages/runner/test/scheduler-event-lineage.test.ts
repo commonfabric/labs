@@ -1,4 +1,5 @@
 import { Identity } from "@commonfabric/identity";
+import { cellTx, sendEvent } from "../src/cell.ts";
 import {
   afterEach,
   beforeEach,
@@ -830,7 +831,7 @@ describe("scheduler event lineage", () => {
 
     let dropCallbacks = 0;
     let dropStatus: string | undefined;
-    stream.withTx(originTx).send("dropped origin payload", (commitTx) => {
+    sendEvent(stream.withTx(originTx), "dropped origin payload", (commitTx) => {
       dropCallbacks++;
       dropStatus = commitTx.status().status;
     });
@@ -940,7 +941,7 @@ describe("scheduler event lineage", () => {
       },
       (_event, { source }) => {
         handlerAttempts++;
-        const handlerTx = source.tx;
+        const handlerTx = cellTx(source);
         if (handlerTx === undefined) {
           throw new Error("handler source must carry the dispatch transaction");
         }
@@ -1055,7 +1056,7 @@ describe("scheduler event lineage", () => {
         },
         (_event, { source }) => {
           handlerAttempts++;
-          const handlerTx = source.tx;
+          const handlerTx = cellTx(source);
           if (handlerTx === undefined) {
             throw new Error(
               "handler source must carry the dispatch transaction",

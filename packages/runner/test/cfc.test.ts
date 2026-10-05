@@ -881,6 +881,32 @@ describe("CFC schema reference discovery", () => {
     expect(validateSchemaValue(schema, vnode, refSiteRoot)).toBeDefined();
   });
 
+  it("keeps a missing transitive ref-site name unresolved in a target defining it", () => {
+    const target: JSONSchemaObj = {
+      type: "object",
+      $defs: { Missing: { type: "string" } },
+    };
+    const hash = internSchemaAsTaggedHashString(target);
+    registerSchemaDocument(hash, target);
+    const schema: JSONSchemaObj = {
+      $ref: `cid:${hash}`,
+      properties: { value: { $ref: "#/$defs/Entry" } },
+      $defs: {
+        Entry: { $ref: "#/$defs/Missing" },
+        Unused: { type: "boolean" },
+      },
+    };
+
+    const resolved = resolveCfcSchemaRefs(schema) as JSONSchemaObj;
+    expect(Object.keys(resolved.$defs!)).toHaveLength(2);
+    expect(resolveCfcSchemaRef(resolved, "#/$defs/Missing"))
+      .toMatchObject({ type: "string" });
+    expect(resolveCfcSchemaRefs(
+      resolved.properties!.value as JSONSchemaObj,
+      resolved,
+    )).toBeUndefined();
+  });
+
   it("removes a `$defs` below the document's map while pruning", () => {
     const schema: JSONSchema = {
       type: "object",

@@ -11,6 +11,7 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import {
   type Options,
   type SessionFactory,
@@ -123,7 +124,7 @@ export class LoopbackStorageManager extends StorageManager {
    * a registration that resets the provisional replica while every new
    * session still uses the co-hosted server.
    */
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed(): SpaceHostRegistration {
+    return { accepted: false, reason: "no-remote-resolution" };
   }
 }

@@ -15,19 +15,31 @@ describe("BaseValueVisitor", () => {
       return undefined;
     }
 
-    override visitedFabricArrayElement(): undefined {
+    override mappedFabricArrayElement(): undefined {
       return undefined;
     }
 
-    override visitedFabricArrayGap(): undefined {
+    override mappedFabricInstanceState(): undefined {
       return undefined;
     }
 
-    override visitedFabricInstance(): undefined {
+    override mappedFabricPlainObjectEntry(): undefined {
       return undefined;
     }
 
-    override visitedFabricPlainObjectEntry(): undefined {
+    override visitingFabricArrayElement(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricArrayGap(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricInstanceState(): undefined {
+      return undefined;
+    }
+
+    override visitingFabricPlainObjectEntry(): undefined {
       return undefined;
     }
   }
@@ -64,7 +76,7 @@ describe("BaseValueVisitor", () => {
             value: unknown,
           ): VisitResult<unknown, unknown> {
             return Array.isArray(value)
-              ? { type: "recurse", doKeys: false, doValues: true }
+              ? { type: "recurse", doKeys: false }
               : undefined;
           }
         }
@@ -72,7 +84,9 @@ describe("BaseValueVisitor", () => {
         const value: unknown[] = [];
         value.push(value);
 
-        expect(() => new VisitInProgress(new Recursing()).visit(value))
+        expect(() =>
+          new VisitInProgress(new Recursing(), { mode: "visit" }).visit(value)
+        )
           .toThrow(/Cannot visit cyclic value: /);
       });
     });
@@ -88,7 +102,9 @@ describe("BaseValueVisitor", () => {
         const value: Record<string, unknown> = {};
         value.self = value;
 
-        expect(() => new VisitInProgress(new NoCycles()).visit(value))
+        expect(() =>
+          new VisitInProgress(new NoCycles(), { mode: "visit" }).visit(value)
+        )
           .toThrow(/Cannot visit cyclic value: /);
       });
     });
@@ -101,7 +117,9 @@ describe("BaseValueVisitor", () => {
           }
         }
 
-        expect(() => new VisitInProgress(new Refusing()).visit(1))
+        expect(() =>
+          new VisitInProgress(new Refusing(), { mode: "visit" }).visit(1)
+        )
           .toThrow(
             /Shouldn't happen: `visitNumber\(\)` called on `.*Refusing/,
           );

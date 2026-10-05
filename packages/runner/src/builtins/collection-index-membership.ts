@@ -3,7 +3,11 @@
 import { hashStringOf } from "@commonfabric/data-model";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import { type Cell, recordRelevantSchemaWritePolicyInput } from "../cell.ts";
+import {
+  type Cell,
+  cellRuntime,
+  recordRelevantSchemaWritePolicyInput,
+} from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -160,7 +164,7 @@ function updateUniqueBucket(
       ? member
       : snapshotQueryResult(readMember(winnerId)!);
     output.key("buckets").key(bucket).set(
-      output.runtime.getCellFromLink(selected.element, undefined, tx),
+      cellRuntime(output).getCellFromLink(selected.element, undefined, tx),
     );
   }
   return true;
@@ -207,7 +211,7 @@ function updateGroupBucket(
       group.splice(
         low,
         present ? 1 : 0,
-        output.runtime.getCellFromLink(member.element, undefined, tx),
+        cellRuntime(output).getCellFromLink(member.element, undefined, tx),
       );
     } else if (present) {
       order.splice(low, 1);
@@ -219,7 +223,7 @@ function updateGroupBucket(
       .sort((a, b) => utf8Compare(a.occurrence, b.occurrence));
     order = sorted.map((entry) => entry.occurrence);
     group = sorted.map((entry) =>
-      output.runtime.getCellFromLink(entry.element, undefined, tx)
+      cellRuntime(output).getCellFromLink(entry.element, undefined, tx)
     );
   }
   if (order.length === 0) {

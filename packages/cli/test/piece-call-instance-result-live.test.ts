@@ -6,6 +6,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 import type { CallableResolution } from "../lib/callable.ts";
 import { executeResolvedCallable } from "../lib/callable.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /**
  * A `FabricInstance` crossing `Cell.pull()` arrives as a query-result proxy
@@ -72,6 +73,7 @@ describe("piece-call-instance-result-live", () => {
     } as unknown as CallableResolution;
 
     return await executeResolvedCallable(resolution, {}, {
+      sendEvent: sendThroughStandIn,
       invocation: { id: `inv-${cause}`, session: "ses:instance-live" },
     });
   }

@@ -91,26 +91,45 @@ function processItem(item: AutocompleteItem): ProcessedItem {
 
   // Add words from label
   if (item.label) {
-    words.push(...splitIntoWords(item.label));
+    for (const word of splitIntoWords(item.label)) words.push(word);
   }
 
   // Add words from value
-  words.push(...splitIntoWords(item.value));
+  for (const word of splitIntoWords(item.value)) words.push(word);
 
   // Add words from group
   if (item.group) {
-    words.push(...splitIntoWords(item.group));
+    for (const word of splitIntoWords(item.group)) words.push(word);
   }
 
   // Add words from all searchAliases
   if (item.searchAliases) {
     for (const alias of item.searchAliases) {
-      words.push(...splitIntoWords(alias));
+      for (const word of splitIntoWords(alias)) words.push(word);
     }
   }
 
   // Deduplicate words
   return { item, words: [...new Set(words)] };
+}
+
+/**
+ * The values a multi-select's cell holds: none where it holds no list, as
+ * a cell that holds nothing does.
+ */
+function selectedOf(
+  held: Readonly<string | string[]> | undefined,
+): string[] {
+  return typeof held === "object" && held !== null ? [...held] : [];
+}
+
+/** `held`'s values with `value` among them, once. */
+function withSelected(
+  held: Readonly<string | string[]> | undefined,
+  value: string,
+): string[] {
+  const selected = selectedOf(held);
+  return selected.includes(value) ? selected : [...selected, value];
 }
 
 /**
@@ -1004,12 +1023,12 @@ export class CFAutocomplete extends BaseElement {
 
     // Update value through cell controller
     if (this.multiple) {
-      // Add to array
-      const current =
-        (this._getCurrentValue() as readonly string[] | undefined) || [];
-      if (!current.includes(item.value)) {
-        this._cellController.setValue([...current, item.value]);
-      }
+      // Add to array: computed from what the cell holds, so made from the
+      // worker's answer where the cell has read nothing yet, which may
+      // already hold it, in which case nothing is written.
+      void this._cellController.updateValue((held) =>
+        withSelected(held, item.value)
+      );
     } else {
       // Replace single value
       this._cellController.setValue(item.value);
@@ -1034,12 +1053,12 @@ export class CFAutocomplete extends BaseElement {
 
     // Update value through cell controller
     if (this.multiple) {
-      // Add to array
-      const current =
-        (this._getCurrentValue() as readonly string[] | undefined) || [];
-      if (!current.includes(customValue)) {
-        this._cellController.setValue([...current, customValue]);
-      }
+      // Add to array: computed from what the cell holds, so made from the
+      // worker's answer where the cell has read nothing yet, which may
+      // already hold it, in which case nothing is written.
+      void this._cellController.updateValue((held) =>
+        withSelected(held, customValue)
+      );
     } else {
       // Replace single value
       this._cellController.setValue(customValue);
@@ -1082,10 +1101,9 @@ export class CFAutocomplete extends BaseElement {
   private _removeItem(item: AutocompleteItem) {
     if (!this.multiple) return;
 
-    const current =
-      (this._getCurrentValue() as readonly string[] | undefined) || [];
-    const newValue = current.filter((v) => v !== item.value);
-    this._cellController.setValue(newValue);
+    void this._cellController.updateValue((held) =>
+      selectedOf(held).filter((v) => v !== item.value)
+    );
 
     // Don't close - user might want to remove more or add new ones
     this._query = "";

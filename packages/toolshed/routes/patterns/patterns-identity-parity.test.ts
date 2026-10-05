@@ -110,4 +110,17 @@ describe("?identity parity with a worker HTTP compile", () => {
     );
     expect(endpoint).toBe(worker);
   });
+
+  it("phonetic-speller.tsx, which reads a data file: endpoint identity == worker compile", async () => {
+    // The worker attaches each file a `dataFile()` call names and folds it into
+    // the entry's hash, so the endpoint has to find the same files.
+
+    const file = "examples/phonetic-speller.tsx";
+    expect(await Deno.readTextFile(new URL(file, patternsRoot))).toContain(
+      "dataFile(",
+    );
+    const worker = await workerCompiledIdentity(file);
+    const endpoint = await createPatternsRoute().identity(file);
+    expect(endpoint).toBe(worker);
+  });
 });

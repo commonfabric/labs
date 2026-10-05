@@ -290,7 +290,7 @@ const schemaForValue = (
   const anyOf = matchingBranches(resolved.anyOf, value, fullSchema, reserved);
   if (anyOf.length > 0) {
     base = schemaWithoutBranchKeyword(base as Record<string, unknown>, "anyOf");
-    branches.push(...anyOf);
+    for (const branch of anyOf) branches.push(branch);
   }
   return branches.length === 0 ? resolved : combineAllOf([base, ...branches]);
 };

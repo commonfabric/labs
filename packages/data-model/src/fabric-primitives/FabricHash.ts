@@ -11,6 +11,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -79,7 +80,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
     tag: string,
     transfer: boolean = false,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricHash);
     this.#hash = toOwnedUint8Array(hash, transfer);
     this.#tag = tag;
     this.#justHashString = toUnpaddedBase64url(this.#hash);
@@ -150,6 +151,11 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #jsonCodec = Object.freeze(
     new (class HashCodec extends BaseNonterminalCodec<never, FabricHashState> {
       /** Constructs an instance. */
@@ -159,7 +165,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
 
       /** @inheritDoc */
       encode(value: FabricHash, _env: LiveEnvironment): FabricHashState {
-        return { tag: value.tag, hash: value.hashString };
+        return Object.freeze({ tag: value.tag, hash: value.hashString });
       }
 
       /** @inheritDoc */
@@ -173,16 +179,18 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
         typeTag: string,
         state: FabricHashState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const { tag, hash } = state;
 
         try {
           return new FabricHash(fromBase64url(hash), tag, true);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Hash: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -205,7 +213,10 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
        * with this instance would leave a transferred value hollow.
        */
       encode(value: FabricHash, _env: LiveEnvironment): RealmCodecValue {
-        return { tag: value.tag, hash: value.#hash.buffer.slice(0) };
+        return Object.freeze({
+          tag: value.tag,
+          hash: value.#hash.buffer.slice(0),
+        });
       }
 
       /** @inheritDoc */

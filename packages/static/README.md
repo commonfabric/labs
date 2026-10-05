@@ -71,6 +71,7 @@ in CI:
   libraries, run `deno task test` in both packages, and regenerate the
   transformer goldens with `UPDATE_GOLDENS=1` (see
   `packages/ts-transformers/AGENTS.md`).
-- The Performance Check job ratchets `packages/static` uncovered lines. New code
-  under `scripts/` needs matching tests, or it trips the ratchet. Neither
-  `cfcheck` nor `deno task check` measures coverage.
+- The coverage gate holds `packages/static`'s measured set, its `deno-test`
+  half, to its baseline on a pull request that changes the package and reaches
+  at most two measured sets. New code under `scripts/` needs matching tests, or
+  it fails the gate. Neither `cfcheck` nor `deno task check` measures coverage.

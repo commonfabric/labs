@@ -18,6 +18,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
+  newLoopbackServer,
   type Options,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
@@ -51,6 +52,10 @@ import {
   type GitCommandRunner,
   GitContextResolver,
 } from "../src/git-context.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 async function publishedManifestCell(
   connection: Parameters<typeof readStableCellGraphValue>[0],
@@ -126,8 +131,6 @@ Deno.test("Fabric target validates a discovered checkout", async () => {
     await storageManager.close();
   }
 });
-
-const EMULATED_AUDIENCE = "did:key:z6Mk-agent-connector-isolation-test";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(
@@ -400,7 +403,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       agentOwnerSchema(space),
     );
     const malformedReceiptTx = runtime.edit();
-    malformedReceiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(malformedReceiptTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -428,7 +431,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       agentOwnerSchema(space),
     );
     const wrongOwnerReceiptTx = runtime.edit();
-    wrongOwnerReceiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(wrongOwnerReceiptTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -613,7 +616,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
     try {
       const command = JSON.stringify({ id: "command-2" });
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity:
           commandWriterAuthorization.__ctWriterIdentityOf.moduleIdentity,
@@ -838,20 +841,13 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
 });
 
 Deno.test("Fabric target releases graph storage after every session", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const identity = await Identity.fromPassphrase(
     "agent graph storage release test",
   );
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `agent-graph-release-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const mainStorage = SharedServerStorageManager.connectTo(server, {
     as: session.as,
@@ -1047,11 +1043,11 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
     inspect.abort();
 
     const attack = runtime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: `principal:${otherOwner.did()}`,
       actingPrincipal: otherOwner.did(),
     });
-    attack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(attack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -1068,21 +1064,14 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
 });
 
 Deno.test("shared-space agent discovery and commands are owner-isolated", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("shared agent graph owner");
   const otherOwner = await Identity.fromPassphrase(
     "shared agent graph other owner",
   );
-  const ownerSession = await createSession({
+  const ownerSession = createSession({
     identity: owner,
-    spaceName: `shared-agent-graph-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const ownerStorage = SharedServerStorageManager.connectTo(server, {
     as: ownerSession.as,
@@ -1162,7 +1151,7 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
       true,
     );
 
-    const otherSession = await createSession({
+    const otherSession = createSession({
       identity: otherOwner,
       spaceDid: ownerSession.space,
     });
@@ -1225,23 +1214,16 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
 });
 
 Deno.test("stable graph checks remote children before adoption", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("stable graph remote owner");
   const otherOwner = await Identity.fromPassphrase(
     "stable graph remote squatter",
   );
-  const ownerSession = await createSession({
+  const ownerSession = createSession({
     identity: owner,
-    spaceName: `stable-graph-remote-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
-  const otherSession = await createSession({
+  const otherSession = createSession({
     identity: otherOwner,
     spaceDid: ownerSession.space,
   });
@@ -1537,7 +1519,7 @@ Deno.test("Fabric target refuses an owner root with another writer", async () =>
       agentPrincipalSchema(owner.did(), [otherWriter]),
     );
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "builtin",
       builtinId: otherWriter,
     });
@@ -2766,7 +2748,7 @@ Deno.test("publication refuses a stored index whose source surfaces are malforme
     // A surface that is not a string, written into the stored row past the
     // connector; a pattern reading `surfaces` would otherwise throw on it.
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -2824,7 +2806,7 @@ Deno.test("publication refuses a stored index whose source capabilities are malf
     // A capability flag that is not a boolean, written into the stored row
     // past the connector, as a row the connector never produced would be.
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -2871,7 +2853,7 @@ Deno.test("Fabric target binds producer queues and reads commands from every bou
     value: string,
   ) => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: authorization.__ctWriterIdentityOf.moduleIdentity,
       sourceFile: authorization.__ctWriterIdentityOf.file,

@@ -42,7 +42,9 @@ export type InviteRequest = InviteOperation & {
   space: string;
   principal: string;
   now: number | (() => number);
-  /** Effective access only; invitation administration requires explicit OWNER. */
+  /** Whether the principal is a configured service DID, which holds OWNER on
+   *  every space. Effective access only; invitation administration requires
+   *  explicit OWNER. */
   implicitOwner?: boolean;
 };
 
@@ -142,7 +144,7 @@ export function executeInvite(
       ? value
       : null;
     const capability = () =>
-      request.implicitOwner || principal === space
+      request.implicitOwner
         ? "OWNER" as const
         : acl === null
         ? null

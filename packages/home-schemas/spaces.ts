@@ -6,6 +6,17 @@
 import type { JSONSchema } from "@commonfabric/api";
 import type { Schema } from "@commonfabric/api/schema";
 
+/**
+ * One entry in a user's Home space list. An entry with a `did` opens that
+ * space, and its `name` is only what the entry is called: two entries may share
+ * one, and renaming one changes nothing else. An entry with no `did` was written
+ * before spaces had random identities, and its `name` resolves as a legacy
+ * space name until the runtime adopts it under the DID the name resolves to.
+ *
+ * Anything with Home write access can add an entry, so an entry is a label
+ * and a route and never authority: one a user did not create can mislead them
+ * about what a space is called, and grants nothing.
+ */
 export const spaceEntrySchema = {
   type: "object",
   properties: {

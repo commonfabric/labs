@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
+import { readPatternTestList } from "../integration.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import { loadPatternSuites } from "./patterns.ts";
 import { loadPackageIntegrationSuites } from "./package-integration.ts";
@@ -48,20 +49,6 @@ describe("the pattern and package suites", () => {
     expect(invocation!.cwd).toBe(`${root}/packages/patterns`);
     expect(invocation!.env?.HEADLESS).toBe("1");
     expect(invocation!.junit?.[0]?.scope).toBe("patterns");
-  });
-
-  it("leaves the pattern integration type check to the type check", async () => {
-    // `packages/patterns/integration` is one of the paths
-    // `tasks/typecheck.ts` lists, so a run that checks them again is
-    // doing that work twice.
-    for (const id of ["pattern-integration", "pattern-integration-opposite"]) {
-      const suite = byId(id);
-      const [invocation] = await suite.command(
-        [{ unit: suite.units[0]!, skip: [] }],
-        { root, outputDir: await outputDir(), spoolDir: "/spool" },
-      );
-      expect(invocation!.command).toContain("--no-check");
-    }
   });
 
   it("gives every suite that measures a pattern somewhere to report it", async () => {
@@ -231,20 +218,17 @@ describe("the pattern and package suites", () => {
       .toEqual(["runner", "shell"]);
   });
 
-  it("owns both deployed-topology posture gates", async () => {
+  it("owns the deployed-topology posture gate", async () => {
     const suite = byId("deployed-topology");
     expect(suite.units).toEqual([
-      "packages/background-piece-service/integration/posture-gate.test.ts",
       "packages/cf-harness/integration/fabric-session-posture-gate.test.ts",
     ]);
-    expect(suite.needs).toContain("bg-piece-service-binary");
     expect(suite.needs).toContain("toolshed");
     const made = await suite.command(
       suite.units.map((unit) => ({ unit, skip: [] })),
       { root, outputDir: await outputDir(), spoolDir: "/spool" },
     );
     expect(made.map((invocation) => invocation.junit?.[0]?.scope)).toEqual([
-      "background-piece-service",
       "cf-harness",
     ]);
   });
@@ -296,6 +280,22 @@ describe("the pattern and package suites", () => {
     const flag = invocation!.command.find((arg) => arg.startsWith("--files="))!;
     const listed = await Deno.readTextFile(flag.slice("--files=".length));
     expect(listed.trim().split("\n")).toEqual(chosen);
+  });
+
+  it("hands the pattern unit tests the cost of each file that has one", async () => {
+    const suite = byId("pattern-unit");
+    const out = await outputDir();
+    const [priced, unpriced] = suite.units;
+    const [invocation] = await suite.command(
+      [{ unit: priced!, skip: [], cost: 12.5 }, { unit: unpriced!, skip: [] }],
+      { root, outputDir: out, spoolDir: "/spool" },
+    );
+    const flag = invocation!.command.find((arg) => arg.startsWith("--files="))!;
+    const listed = readPatternTestList(
+      await Deno.readTextFile(flag.slice("--files=".length)),
+    );
+    expect(listed.files).toEqual([priced, unpriced]);
+    expect([...listed.costs]).toEqual([[priced, 12.5]]);
   });
 
   it("names a pattern test by its own path", () => {

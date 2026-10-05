@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { testIdentityKey } from "@commonfabric/test-support/records";
 
-import { census, unknownIdentity } from "./census.ts";
+import { census, pricedForRun, unknownIdentity } from "./census.ts";
 import {
   type Manifest,
   MANIFEST_SCHEMA_VERSION,
@@ -627,5 +627,97 @@ describe("what a measured set makes mandatory", () => {
     expect(seen.mandatory.size).toBe(0);
     expect(seen.coverage.off).toBeDefined();
     expect(seen.coverage.reached).toHaveLength(3);
+  });
+});
+
+describe("what a run charges a suite it measures", () => {
+  const plain = { overhead: 2, correction: 1, unitOverhead: 0.1 };
+  const instrumented = { overhead: 5, correction: 3, unitOverhead: 0.4 };
+  const oven = suite({ id: "oven-unit" });
+  const glaze = suite({ id: "glaze-unit" });
+
+  /** A census whose coverage gate scores the sets over `gated`. */
+  function seenGating(gated: readonly Suite[]) {
+    const refs = gated.map((gatedSuite) => ({
+      suite: gatedSuite.id,
+      set: { member: "packages/bakery", reachedBy: [], units: [] },
+    }));
+    const manifest = manifestOf([]);
+    return {
+      manifest: {
+        ...manifest,
+        calibration: {
+          ...manifest.calibration,
+          suites: { "oven-unit": plain, "glaze-unit": plain },
+          suitesWithCoverage: { "oven-unit": instrumented },
+        },
+      },
+      mandatory: new Map(),
+      unmeasured: 0,
+      coverage: { sets: refs, reached: refs },
+    };
+  }
+
+  it("charges a suite the gate measures what it costs with coverage on", () => {
+    const priced = pricedForRun(seenGating([oven]), [oven, glaze], false);
+    expect(priced.manifest.calibration.suites["oven-unit"]).toEqual(
+      instrumented,
+    );
+    expect(priced.manifest.calibration.suites["glaze-unit"]).toEqual(plain);
+    expect([...priced.manifest.fitted].sort()).toEqual([
+      "glaze-unit",
+      "oven-unit",
+    ]);
+  });
+
+  it("keeps a suite's process fit only where the suite names its processes", () => {
+    // Everything reading a run's census prices a suite from here, so a
+    // process fit this topology cannot charge any setup to is dropped once.
+    const process = { setup: 8, overhead: 1, correction: 1, unitOverhead: 0 };
+    const seen = seenGating([]);
+    const withProcess = {
+      ...seen,
+      manifest: {
+        ...seen.manifest,
+        calibration: {
+          ...seen.manifest.calibration,
+          suites: {
+            "oven-unit": { ...plain, process },
+            "glaze-unit": { ...plain, process },
+          },
+        },
+      },
+    };
+    const named = suite({
+      id: "oven-unit",
+      units: ["packages/bakery/oven.test.ts"],
+      processes: new Map([["packages/bakery/oven.test.ts", "bakery"]]),
+    });
+    const priced = pricedForRun(withProcess, [named, glaze], false);
+    expect(priced.manifest.calibration.suites["oven-unit"])
+      .toEqual({ ...plain, process });
+    expect(priced.manifest.calibration.suites["glaze-unit"]).toEqual(plain);
+  });
+
+  it("charges a suite no set measures what it costs without", () => {
+    const priced = pricedForRun(seenGating([]), [oven, glaze], false);
+    expect(priced.manifest.calibration.suites["oven-unit"]).toEqual(plain);
+  });
+
+  it("carries no coverage fits for a reader to apply a second time", () => {
+    const priced = pricedForRun(seenGating([]), [oven, glaze], true);
+    expect(priced.manifest.calibration.suitesWithCoverage).toBeUndefined();
+  });
+
+  it("charges every suite the full run measures its coverage-on cost", () => {
+    const priced = pricedForRun(seenGating([]), [oven, glaze], true);
+    expect(priced.manifest.calibration.suites["oven-unit"]).toEqual(
+      instrumented,
+    );
+    // A suite no lane has run with coverage on keeps what it costs
+    // without, which is all anything knows about it, and is not counted
+    // among the charges this run measured.
+    expect(priced.manifest.calibration.suites["glaze-unit"]).toEqual(plain);
+    expect([...priced.manifest.fitted]).toEqual(["oven-unit"]);
   });
 });

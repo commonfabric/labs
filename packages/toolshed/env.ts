@@ -227,6 +227,8 @@ export const EnvSchema = z.object({
   // ACL state and fresh-space genesis violations still block. `enforce` also
   // denies access shortfalls. See packages/memory/v2/server.ts.
   MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
+  // A tracked private Mode A policy file. Empty leaves the endpoint disabled.
+  MEMORY_ROUTER_CONFIG_FILE: z.string().default(""),
 
   // Bounds for each space's decoded-document cache on the memory v2 server
   // (packages/memory/v2/engine.ts, DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES): a
@@ -259,15 +261,11 @@ export const EnvSchema = z.object({
   //
   // Minting issues a durable, operator-backed append capability into a user's
   // space, and it is only as trustworthy as the claim "this DID owns that
-  // space". Where named-space keys derive from a public passphrase, anyone who
-  // knows a space NAME can reconstruct its key, grant themselves OWNER, and
-  // mint legitimately — and repairing the derivation later does NOT retract
-  // what was issued. Enabling this before that repair converts a temporary
-  // takeover into persistence beyond remediation.
-  //
-  // Turn it on only where space keys are not derivable from public inputs. The
-  // tripwire in packages/toolshed/routes/ingest-channels/ and
-  // `deno task check-tripwires` fire when that repair lands.
+  // space". A legacy named space's key derives from a public passphrase, so
+  // anyone who could reach a deployment could have granted themselves OWNER on
+  // one, and such a grant outlives the random keys new spaces get. On a
+  // deployment others could reach, review the space ACLs before turning this
+  // on; see docs/features/self-serve-ingest-channels.md.
   INGEST_SELF_SERVE_ENABLED: boolFlag(),
 
   // Comma-separated DIDs with implicit OWNER on every space (e.g. the
@@ -301,8 +299,8 @@ export const EnvSchema = z.object({
   // EXPERIMENTAL_* feature flags are no longer declared here: the runtime
   // construction site reads them through the canonical mapping
   // (`experimentalOptionsFromEnv` / EXPERIMENTAL_ENV_VARS in
-  // @commonfabric/runner runtime-presets), shared with the CLI and the
-  // background-piece-service so the wirings cannot drift (CT-1814).
+  // @commonfabric/runner runtime-presets), shared with the CLI so the wirings
+  // cannot drift (CT-1814).
 
   // Git SHA of the deployed commit. Set at deploy time; takes priority over
   // the build-baked SHA (see lib/build-info.ts).
