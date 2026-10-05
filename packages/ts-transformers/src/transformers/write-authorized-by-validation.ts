@@ -252,8 +252,10 @@ function declaredAlias(
 /**
  * Whether `reference` is a CFC carrier's record of its policy, `CfcStamp`, as
  * the carrier itself writes it: within the body of the `Cfc` alias declared
- * beside it. An author's own alias of that name, written anywhere else, is an
- * ordinary type whose arguments are walked.
+ * beside it, which holds the payload the record names outside the record too
+ * (`holdsPayloadBeside()`). An author's own alias of that name, written
+ * anywhere else, is an ordinary type whose arguments are walked, and so is a
+ * record whose payload nothing else holds.
  */
 function isCarrierRecord(
   reference: ts.TypeReferenceNode,
@@ -266,7 +268,37 @@ function isCarrierRecord(
     enclosing = enclosing.parent;
   }
   return enclosing !== undefined && enclosing.name.text === "Cfc" &&
-    enclosing.getSourceFile() === record.getSourceFile();
+    enclosing.getSourceFile() === record.getSourceFile() &&
+    holdsPayloadBeside(enclosing, reference);
+}
+
+/**
+ * Whether `carrier`, a `Cfc` alias, holds the payload `record` names beside
+ * the record as well: its body intersects the type parameter the record
+ * names as its payload with the record, as
+ * `T & { readonly __ct_cfc__?: CfcStamp<T, M> }` does, so walking the body
+ * reaches every policy in the payload without the record.
+ */
+function holdsPayloadBeside(
+  carrier: ts.TypeAliasDeclaration,
+  record: ts.TypeReferenceNode,
+): boolean {
+  const payload = record.typeArguments?.[0];
+  if (
+    !payload || !ts.isTypeReferenceNode(payload) ||
+    !ts.isIdentifier(payload.typeName) || payload.typeArguments?.length
+  ) {
+    return false;
+  }
+  const name = payload.typeName.text;
+  return (carrier.typeParameters ?? []).some((parameter) =>
+    parameter.name.text === name
+  ) &&
+    ts.isIntersectionTypeNode(carrier.type) &&
+    carrier.type.types.some((member) =>
+      ts.isTypeReferenceNode(member) && ts.isIdentifier(member.typeName) &&
+      member.typeName.text === name && !member.typeArguments?.length
+    );
 }
 
 /**

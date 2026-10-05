@@ -8,7 +8,7 @@ import {
   CFC_ATOM_TYPE,
   CFC_CANONICAL_ALIAS_NAMES,
 } from "@commonfabric/api/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
@@ -774,7 +774,7 @@ const placeLabelsOn = (
 ): MutableJSONSchema => {
   if (members === "all") return withIfcLabels(schema, labels);
   if (members.length === 0 || context.labelsOnly) return schema;
-  const properties = isObjectOrArray(schema) && !Array.isArray(schema) &&
+  const properties = isObjectNotArray(schema) &&
       isObjectOrArray(schema.properties)
     ? schema.properties as Record<string, MutableJSONSchema>
     : undefined;
