@@ -105,8 +105,8 @@ without persisting derived labels. `--cfc-shell-posture` selects
 `enforce-explicit` and `persist`, the shell's two CFC dial defaults. It
 conflicts with either individual dial, in either argument order. The shorthand
 changes these two dials only; it does not simulate the browser or enable every
-CFC gate. An omitted dial retains the pattern-test preset (enforcement
-`enforce-explicit`, flow labels `off`). Every runtime prints its resolved
+CFC gate. An omitted dial retains the pattern-test preset, which inherits the
+runtime defaults (enforcement `enforce-strict`, flow labels `persist`). Every runtime prints its resolved
 posture, including each multi-user participant. Programmatic callers use
 `TestRunnerOptions.cfcFlowLabels` with the runtime names `off`, `observe`, or
 `persist`.

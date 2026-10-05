@@ -110,15 +110,14 @@ close-ended system gets trapped. In an open-ended one it blossoms.
 is the physics and the hardware.
 
 Most of what is here is early, and all of it is readable. What runs
-today: the compiler; the checker, rejecting at explicit boundaries — the
-third of four rungs — in every host and test, with no flag set; a
-hundred and twenty-odd patterns with recorded baselines; labels that
-survive into the store in the browser shell; row-level clearance on
-shared tables; and access control on spaces, enforced on the production
-server. Every dial the flow checker has is built, and the harness that
-dogfoods it runs the full set. What is left is mostly wiring: the
-stricter dials are off in the core preset while they roll out,
-strict-by-default is the current work, a space still has a host that
+today: the compiler; the checker, enforcing at its strictest rung by
+default in every host, where a test that wants a laxer rung names one; a hundred and twenty-odd
+patterns with recorded baselines; labels that survive into the store;
+row-level clearance on shared tables; and access control on spaces,
+enforced on the production server. Every dial the flow checker has is
+built, every enforcement dial defaults to its strictest sound rung, and the harness that
+dogfoods it goes further still. What is left: one dial still observes
+rather than refuses, a space still has a host that
 can revoke a participant, and the machine that would prove which
 runtime it is before your data arrives is provisioned but not yet
 proving anything. Robustness and performance are not there yet. The
