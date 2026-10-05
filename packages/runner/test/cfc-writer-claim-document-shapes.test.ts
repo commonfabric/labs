@@ -311,6 +311,28 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
       });
     }
 
+    for (
+      const returned of ["{ viewed, fresh }", "{ fresh, viewed }"] as const
+    ) {
+      it(`refuses it returned as ${returned}, beside a view of the same named type`, async () => {
+        const tx = runtime.edit();
+        await expect(
+          runtime.patternManager.compilePattern(
+            program(
+              `interface Erased<T> { value: [T][0] }
+interface Item { box: Erased<Owned<string, typeof writerA>> }
+export default pattern<{ initial: string }>((input) => {`,
+              `const viewed = computed(() => ({ box: { value: "seed" } }) as Item);
+  const fresh = { box: { value: "seed" } } as Item;`,
+              returned,
+            ),
+            { space, tx },
+          ),
+        ).rejects.toThrow("could not be read");
+        tx.abort();
+      });
+    }
+
     it("stores the whole policy through a constant whose declared type is an index signature, which refuses other writers", async () => {
       expect(
         await memberWriteError(

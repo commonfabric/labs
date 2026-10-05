@@ -406,7 +406,9 @@ types.
 
 Every type with a usable name is hoisted into `$defs` and referenced by
 `{ "$ref": "#/$defs/<Name>" }` at non-root occurrences
-(`src/schema-generator.ts`). The emitted container key is `$defs` —
+(`src/schema-generator.ts`). A reading under the `definesDocument` hint inside
+a schema that views other documents is hoisted as `<Name>_document` (§13), so
+it never shares a definition with the view's reading of the same type. The emitted container key is `$defs` —
 never `definitions` (0 of 73 expected fixtures contain a `definitions` key; 29
 contain `$defs`, as of this writing); only the *internal* context field is
 still named `definitions` (`interface.ts`), and the README's `definitions`
@@ -1724,7 +1726,10 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   document holds itself rather than a view of another document, as a fresh
   value a pattern's inferred result returns is. The node and everything under
   it are read as `definesDocument` would read them (§14), whatever the schema
-  around them is.
+  around them is. A named type read there is stored under a definition of its
+  own, `<Name>_document` (§5), apart from the view's reading of the same type:
+  the view leaves out a writer it cannot read, which this reading reports, so
+  neither definition can stand for the other.
 
   The node's own hints still apply.
 

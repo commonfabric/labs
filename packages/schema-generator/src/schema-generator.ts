@@ -1439,7 +1439,7 @@ export class SchemaGenerator {
       typeNode && !context.definesDocument &&
       context.schemaHints?.get(typeNode)?.definesDocument
     ) {
-      context = { ...context, definesDocument: true };
+      context = { ...context, definesDocument: true, documentWithinView: true };
     }
     // A bound type parameter reads as its argument: its node where it has one,
     // under the bindings of the place it is written, and its type where it
@@ -1934,10 +1934,12 @@ export class SchemaGenerator {
   ): MutableJSONSchema {
     const checker = context.typeChecker;
     const aliasScope = scopeOfAliasChain(type, checker);
-    const key =
+    const key = this.#definitionKey(
       (aliasScope === undefined
         ? this.#namedReadingKey(type, context)
-        : undefined) ?? this.#ensureSyntheticName(type, context);
+        : undefined) ?? this.#ensureSyntheticName(type, context),
+      context,
+    );
     context.inProgressNames.add(key);
     context.emittedRefs.add(key);
     return aliasScope === undefined
@@ -2225,6 +2227,16 @@ export class SchemaGenerator {
         )
       ? alias.name
       : key;
+  }
+
+  /**
+   * The name a reading of a type named `name` is stored under in
+   * `$defs`. A reading that defines a document inside a schema that views
+   * others (`GenerationContext.documentWithinView`) stores its own, since the
+   * view's reading of the same type leaves out a writer it cannot read.
+   */
+  #definitionKey(name: string, context: GenerationContext): string {
+    return context.documentWithinView ? `${name}_document` : name;
   }
 
   /**
@@ -2599,6 +2611,8 @@ export class SchemaGenerator {
       const synthetic = this.#anonymousName(type, context);
       if (synthetic) namedKey = synthetic;
     }
+    const readingName = namedKey;
+    if (namedKey) namedKey = this.#definitionKey(namedKey, context);
 
     // Check if this type is already being built or exists
     if (namedKey) {
@@ -2615,7 +2629,7 @@ export class SchemaGenerator {
       if (key !== undefined) {
         this.#boundAnonymousNames.set(
           `${this.#bindingId(this.#bindingType(type, context))}|${key}`,
-          namedKey,
+          readingName!,
         );
       }
       // Start building this named type; we'll store the result below
@@ -2684,7 +2698,10 @@ export class SchemaGenerator {
       // and naming it would name the type for every schema this generator
       // writes afterwards.
       if (context.labelsOnly) return {};
-      const syntheticKey = this.#ensureSyntheticName(type, context);
+      const syntheticKey = this.#definitionKey(
+        this.#ensureSyntheticName(type, context),
+        context,
+      );
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
       return aliasScope === undefined
@@ -2720,8 +2737,11 @@ export class SchemaGenerator {
         // We already computed namedKey above with wrapper checks, so reuse it.
         // Only look up synthetic names if namedKey wasn't already set and we're
         // not in a wrapper context (to avoid storing wrapper results).
+        const anonymousName = isWrapperContext
+          ? undefined
+          : this.#anonymousName(type, context);
         const keyForDef = namedKey ??
-          (isWrapperContext ? undefined : this.#anonymousName(type, context));
+          (anonymousName && this.#definitionKey(anonymousName, context));
         if (keyForDef) {
           const scopeOnReference = aliasScope !== undefined &&
               isObjectOrArray(result) && result.scope === aliasScope

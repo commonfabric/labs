@@ -243,6 +243,15 @@ export interface GenerationContext {
   definesDocument?: boolean;
 
   /**
+   * Whether this reading defines a document inside a schema that views
+   * others: data a pattern's inferred result holds itself
+   * (`SchemaHint.definesDocument`). The named types it reads are stored apart
+   * from the view's, since a view leaves out a writer it cannot read, which
+   * this reading reports.
+   */
+  documentWithinView?: boolean;
+
+  /**
    * The root type node of a schema whose root policy's writer the caller
    * supplies (`SchemaGenerationOptions.rootWriterSupplied`).
    */

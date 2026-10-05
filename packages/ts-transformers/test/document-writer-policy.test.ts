@@ -686,6 +686,26 @@ export default pattern<{}>(() => {
       });
     }
 
+    for (
+      const returned of ["{ viewed, fresh }", "{ fresh, viewed }"] as const
+    ) {
+      it(`refuses a writer read from the type of fresh data an inferred result returns as ${returned}, beside a view of the same named type`, async () => {
+        // The view of the type leaves out the writer it cannot read, so the
+        // fresh data's schema cannot be the view's definition of it.
+        const result = await transform(
+          `interface Item { value: Erased<${POLICY}> }
+export default pattern<{}>(() => {
+  const viewed = computed(() => ({ value: { value: "" } }) as Item);
+  const fresh = { value: { value: "" } } as Item;
+  return ${returned};
+});`,
+        );
+
+        expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
+          .toBe("refused");
+      });
+    }
+
     it("keeps the claim on fresh data an inferred result returns through a constant whose declared type is an index signature", async () => {
       // The declaration's index signature names the writer, so the result
       // document stores the claim.

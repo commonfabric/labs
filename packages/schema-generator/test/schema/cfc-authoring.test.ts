@@ -4298,6 +4298,68 @@ describe("Schema: CFC authoring aliases", () => {
       ).toEqual(["cfc-write-authorized-by:unread"]);
     });
 
+    for (const first of ["viewed", "fresh"] as const) {
+      it(`reports a writer unread in a named type the \`definesDocument\` hint marks, read beside a view of it, ${first} first`, async () => {
+        // The view leaves out the writer it cannot read, so a definition it
+        // writes for the type cannot stand for the data the document holds.
+        const members = first === "viewed"
+          ? "viewed: Item; fresh: Item;"
+          : "fresh: Item; viewed: Item;";
+        const { type, checker, typeNode } = await getTypeFromCode(
+          `${DECLARATIONS}
+          interface Item { value: Erased<WriteAuthorizedBy<string, typeof save>> }
+          type SchemaRoot = { ${members} };`,
+          "SchemaRoot",
+        );
+        const fresh = (typeNode as ts.TypeLiteralNode).members.find((member) =>
+          (member.name as ts.Identifier).text === "fresh"
+        ) as ts.PropertySignature;
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
+        const schema = new SchemaGenerator().generateSchema(
+          type,
+          checker,
+          typeNode,
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+          new WeakMap([[fresh.type!, { definesDocument: true }]]),
+        );
+
+        expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+          "cfc-write-authorized-by:unread",
+        ]);
+        expect(
+          (schema as { properties: Record<string, unknown> }).properties.fresh,
+        ).not.toEqual(
+          (schema as { properties: Record<string, unknown> }).properties.viewed,
+        );
+      });
+    }
+
+    it("keeps a writer a named type declares in both a document the `definesDocument` hint marks and a view of it beside it", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${DECLARATIONS}
+        interface Item { value: WriteAuthorizedBy<string, typeof save> }
+        type SchemaRoot = { viewed: Item; fresh: Item };`,
+        "SchemaRoot",
+      );
+      const [, fresh] = (typeNode as ts.TypeLiteralNode).members;
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+        new WeakMap([[(fresh as ts.PropertySignature).type!, {
+          definesDocument: true,
+        }]]),
+      ) as { $defs: Record<string, unknown> };
+
+      expect(diagnostics).toEqual([]);
+      expect(JSON.stringify(schema.$defs.Item)).toContain(
+        '"writeAuthorizedBy"',
+      );
+      expect(schema.$defs.Item_document).toEqual(schema.$defs.Item);
+    });
+
     it("leaves an owner policy's principal claims out of a view with the writer it cannot read", async () => {
       // Without its writer, an owner or a claim naming the current principal
       // refuses every write against it, its own writer's included. The
