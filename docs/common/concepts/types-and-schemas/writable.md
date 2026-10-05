@@ -22,7 +22,6 @@ With `Writable<T>` in your signature:
 | `.removeByValue(item)` | Remove every element equal to `item` by stored value (mergeable) |
 | `.key(...keys)` | Navigate nested data, e.g. `.key("property")` |
 | `.elementById(idKey)` | Cell for one array element addressed by a stable key (see below) |
-| `.pinDocument()` | In a handler, commit only if this cell's document is unchanged (see below) |
 
 Without `Writable<>`, you can still display values in JSX, pass to `computed()`, and map over arrays - all reactively. Note: Outside of JSX, filtering and transformations must be done in `computed()`.
 
@@ -91,58 +90,6 @@ write to it, which lands on whatever is there.
 
 A `push` or `addUnique` onto a list that does not exist yet, or that was set
 to `undefined`, starts the list with what it adds.
-
-## Confirming what a handler read: `pinDocument`
-
-With server execution on, a handler runs on the server, and its commit is
-checked against the documents it writes. A document it only read is not
-checked. So a handler that reads a document, decides something from it, and
-writes the decision somewhere else — an outcome, a receipt, a reply — can
-commit a decision that a concurrent change to that document has already made
-stale. Writing the same value back does not help, since a write that changes
-nothing is not committed.
-
-`cell.pinDocument()` closes that gap. Called in a handler, it makes the commit
-conditional on the document the cell lives in still holding, when the commit
-lands, the value it holds now. If another commit has changed it, this one is
-refused as a conflict, and handled as any other conflict is: an event delivered
-with retries, the default, runs the handler again against the new value. With
-server execution off, the server already refuses a commit whose reads went
-stale, and the pin holds the same way there.
-
-```tsx
-// Shown at module scope.
-import { handler, Writable } from "commonfabric";
-
-type Entry = { state: string; revision: string };
-
-export const confirm = handler<
-  unknown,
-  { entry: Writable<Entry>; outcome: Writable<{ revision?: string }> }
->((_event, { entry, outcome }) => {
-  entry.pinDocument();
-  outcome.set({ revision: entry.get().revision });
-});
-```
-
-- **Pin first, then decide and write.** The first pin of a document holds for
-  the rest of the run: a later call is a no-op, and a write after the pin does
-  not move it. Pinning a document the handler has already written throws,
-  since the run would read back its own uncommitted write and pin that. The
-  write is no substitute for the pin: a handler's write to some fields of a
-  document can be merged past a concurrent change to its other fields, which
-  the pin refuses.
-- **The whole document, and only it.** The pin covers the whole document,
-  wherever in it the cell points, so `entry.key("state").pinDocument()` pins
-  all of `entry`'s document. A cell that reaches its document through a link
-  pins that document, not the ones holding the link.
-- **Where it works.** Only in a handler, and only for a space-scoped document;
-  anywhere else it throws. A handler's commit goes to one space, and a pin
-  claims its document's space as a write does: pinning a document in another
-  space than the handler has written throws, and so does a write to another
-  space after a pin.
-- **What it reads.** Pinning reads the whole document, so a confidentiality
-  label anywhere in it applies to the handler as any read of it would.
 
 ## Addressing one array element: `elementById`
 

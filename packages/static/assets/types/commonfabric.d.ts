@@ -1167,41 +1167,6 @@ export interface IReadable<T> {
    * contract from {@link IReadable} applies.
    */
   sample(): Readonly<StripDefaultBrand<T>>;
-
-  /**
-   * Commit the running handler only if the document this cell's value lives
-   * in still holds, when the commit lands, the value it holds now. Otherwise
-   * the commit is refused as a conflict, and handled as any other conflict
-   * is: an event delivered with retries, the default, runs the handler again
-   * against fresh state. So a handler that reads a document and writes
-   * nothing to it cannot report an observation a concurrent commit has
-   * already made stale.
-   *
-   * The pin covers the whole document, wherever in it this cell points, and
-   * not the documents a link was followed through to reach it. The first pin
-   * of a document holds for the rest of the run, and calling again is a
-   * no-op. It is a read of the whole document, with the same consequences
-   * for the handler's labels as `get()` of the document's root.
-   *
-   * Pin first, then decide and write: a pin taken before the handler writes
-   * the document still holds the value the handler observed. A write alone
-   * does not stand in for one, because a write to some fields of a document
-   * can be merged past a concurrent change to its other fields.
-   *
-   * A handler's commit goes to one space, and a pin claims its document's
-   * space for it as a write does. So pinning a document in another space than
-   * the handler has already written throws, and so does a write to another
-   * space after a pin.
-   *
-   * @throws Error outside a handler, or on a cell bound to some other
-   *   transaction; for a document that is not space-scoped; for a document
-   *   the handler has already written without pinning it first, since the run
-   *   would then pin its own uncommitted write; for a document in another
-   *   space than the handler has already written; and on a transaction that
-   *   cannot carry a commit precondition, since a pin dropped there would let
-   *   the commit through ungated.
-   */
-  pinDocument(): void;
 }
 
 /**
