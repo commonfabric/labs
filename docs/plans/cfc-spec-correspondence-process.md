@@ -363,12 +363,17 @@ carries nothing the `AGENTS.md` paragraph does not; the Codex-side equivalent
 is a follow-up made from Codex. Done when a fresh agent asked to change a CFC
 rule opens the specification first.
 
-**Stage 2: visibility.** The snapshot task, the manifest with a row per critical
-function marked `missing` where no kernel exists yet, `check-cfc-correspondence`
-in CI, the conformance statement, and the migration of the eighteen open
-entries to specs pull requests. Done when the check is green with every
-critical function accounted for, `cfc-spec-changes.md` is an index, and the
-labs pin is a single committed value.
+**Stage 2: visibility.** In place: `deno task cfc-spec-snapshot` and the
+snapshot it writes, pinned to specs `9e751d58`; the manifest with its
+twenty-one rows, every one `missing`, each naming the runtime symbols that
+decide it today or `unknown`, plus the companion list for the helpers those
+sections define beside them; the `@spec` header format and its parser;
+`deno task check-cfc-correspondence` as a repository gate, green on first
+run with one exempted citation; and the conformance statement at
+`docs/specs/cfc-conformance-statement.md`. Still owed to this stage: the
+specs-side job that runs the check from the specification's side, and the
+migration of the open entries to specs pull requests. Done when
+`cfc-spec-changes.md` is an index.
 
 **Stage 3: the kernel.** Critical functions move into the chapter files under
 `kernel/` one at a time, each with its red test from the pseudocode's cases and
