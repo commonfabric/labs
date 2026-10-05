@@ -28,8 +28,11 @@ document here that no longer matches the code is a defect.
 The repository is private; this one is public. A comment or document here may
 cite the specification by section, and nothing the public build runs may read
 it. The developer checkout is at `~/src/specs/cfc`, or wherever `CF_SPECS_DIR`
-points; without a checkout, read it on GitHub. Cite sections by number
-(`§8.10.3`) and chapter file, never by line.
+points; without a checkout, read it on GitHub. Cite a section by number
+(`§8.10.3`) and chapter file, and quote the sentence the point rests on.
+Never cite a line number: it names a different sentence the moment a paragraph
+is inserted above it. `cfc/13-11-decisions.md` predates this rule and cites
+lines; the rule wins.
 
 ## The standard this repository holds to
 
@@ -67,13 +70,20 @@ The vocabulary:
 
 1. **Read the specification before the code.** A change under
    `packages/runner/src/cfc/`, to the render boundaries in
-   `packages/html/src/worker/reconciler.ts`, to the CFC enforcement in
-   `packages/cf-harness/`, or to a `docs/specs/cfc-*.md` document starts by
-   reading the governing section at the pin, and the kernel function for any
-   critical function the change touches. A `§` citation in the code you are
-   about to change is the pointer; follow it.
+   `packages/html/src/worker/reconciler.ts`, or to a `docs/specs/cfc-*.md`
+   document starts by reading the governing section at the pin, and the kernel
+   function for any critical function the change touches. A `§` citation in
+   the code you are about to change is the pointer; follow it. Then read every
+   section the governing rule itself cites, not only the one named: a rule
+   about an address or an identifier also answers to §2.4, whose rule that a
+   derived identifier joins the labels of all its inputs can contradict a
+   local edit. The agent harness's CFC checks have their own correspondence
+   record, `docs/specs/agent-harness/04-cfc-spec-correspondence.md`, and
+   follow it.
 
-2. **Classify the change.** Exactly one of:
+2. **Classify the change.** Exactly one of the three below. A fourth
+   activity, filing or migrating a ruling, has no labs diff to classify and
+   carries its own required statement instead; "Filing a gap" has it.
 
    - **Host arrangement.** The specification is silent by design, because
      chapter 18 leaves it to the implementation profile: where the boundary
@@ -95,8 +105,11 @@ The vocabulary:
    spec text, and the change that writes it is a semantic gap.
 
 3. **For a semantic gap, open the specs pull request first.** It carries the
-   prose delta and the pseudocode delta; the Lean delta, or a dated entry in
-   `cfc/notes/FUTURE-SPEC-WORK.md` naming the proof it owes; and an edit to
+   prose delta and the pseudocode delta; the Lean delta, or an entry in
+   `cfc/notes/FUTURE-SPEC-WORK.md` naming the proof it owes, in that file's
+   shape (a `## <Topic> Follow-Ups` heading with `### Formal proof tasks`,
+   `### Paper tasks` and `### Runtime tasks` beneath it, the first sentence
+   dating the entry and naming the ruling pull request); and an edit to
    `cfc/paper/README-paper-notes.md` when a paper claim is affected. Write it
    as a ruling when the question has more than one defensible answer. The labs
    pull request links it in its description.
@@ -139,14 +152,45 @@ New gaps are filed as specs pull requests, not as entries in
 closed to new entries; its open rows are being migrated to specs pull requests,
 and it is archived once every row points at one.
 
-A specs pull request that settles a question carries, in order: the question
-in one sentence; why the current text leaves it open, with the sections
-quoted; the options, each stated so that an implementer could build it; the
-proposed text for the option recommended; and, once decided, who ruled and who
-reviewed. `cfc/13-11-decisions.md` in the specs repository is seven worked
-examples of the form.
+### The ruling form in a pull request
 
-The labs pull request that implements the ruling says in its description which
+`cfc/13-11-decisions.md` in the specs repository is the form written as a
+chapter: for each block, the question, why it is open, lettered options, the
+proposed spec text, the cases it determines, and a decision record. In a pull
+request the diff is the proposed text, and the body carries the rest, in this
+order, for each question the request settles:
+
+1. the question, in one sentence;
+2. why the current text leaves it open, with the sections quoted;
+3. the options, lettered, each stated so that an implementer could build it;
+4. which option the diff applies, and why;
+5. the conformance statement: whether this runtime conforms to the current
+   text (and if not, in which direction it errs, over-taint or under-taint),
+   whether it conforms to the applied option, and whether a labs code change
+   follows;
+6. the cases the ruling determines, where a worked case exists;
+7. a decision record, a table of ruling, ruled by, date and notes, left for
+   the CFC owner, who rules by merging.
+
+Specs pull requests 36 and 39 show the loop closing, from a labs review to a
+ruling to a runner change, and are not examples of the form.
+
+### Migrating an entry from the change list
+
+- Re-read the section at specs `main` first, and say in the body whether the
+  entry is already answered there. The entries are frozen prose written
+  against an older text.
+- One pull request per group the plan names. Entries in a group can depend on
+  one another, and the body says which depends on which.
+- Commit subjects follow the house style visible in `git log` (`cfc: …`);
+  your harness's attribution trailers apply. A pull request that touches no
+  file under `cfc/formal/` needs no local `lake build`; the specs workflow
+  runs it regardless.
+- When the pull request is open, the labs row's status becomes `proposed`,
+  naming the request and the option applied; when it merges, `adopted` or
+  `applied` as the change list's legend defines them.
+
+The labs pull request that implements a ruling says in its description which
 specs pull request it implements and which class the change is. A reviewer who
 cannot find that sentence asks for it before reading the diff.
 
@@ -156,8 +200,12 @@ The `cf-review` skill carries the reviewer's side: classify the change
 independently of the author, check the kernel header for every critical
 function touched, and treat a semantic gap with no linked specs pull request,
 a kernel function given an input the pseudocode lacks, or a MUST-force rule in
-a labs document as a blocking finding. Ian Hickson reviews the pull requests
-that change this procedure or the machinery behind it.
+a labs document as a blocking finding. A reviewer of a specs ruling pull
+request checks that the body says whether the entry was already answered at
+specs `main`, states the runtime's conformance under the current and the
+applied text, and names the `FUTURE-SPEC-WORK.md` entry for any proof it owes.
+Ian Hickson reviews the pull requests that change this procedure or the
+machinery behind it; the CFC owner rules.
 
 ## What checks what
 

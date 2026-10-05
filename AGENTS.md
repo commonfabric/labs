@@ -197,9 +197,11 @@ and a paper that are kept equivalent, and the runtime here implements that
 specification. A change that alters what CFC decides goes through the
 specification first. `docs/development/cfc-spec-correspondence.md` is the
 procedure: how to classify a change as host arrangement, conforming
-implementation, or semantic gap, and what to do while a ruling is pending. It
-governs `packages/runner/src/cfc/`, the render boundaries in `packages/html`,
-and every `docs/specs/cfc-*.md`.
+implementation, or semantic gap, what to do while a ruling is pending, and how a
+gap is filed as a specs pull request. It governs `packages/runner/src/cfc/`, its
+tests, the render boundaries in `packages/html/src/worker/reconciler.ts`, and
+every `docs/specs/cfc-*.md`; the agent harness's CFC checks keep their own
+record in `docs/specs/agent-harness/04-cfc-spec-correspondence.md`.
 
 Everything else is indexed rather than listed here. `docs/README.md` maps the
 whole documentation tree. `docs/development/README.md` indexes the rest of the

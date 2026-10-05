@@ -2,9 +2,7 @@
 
 _Proposed 2026-10-05 from the findings in
 [the correspondence assessment](../history/specs/cfc-spec-correspondence-assessment-2026-10-05.md).
-Nothing here is in force until stage 1 lands; until then the only standing
-instruction is the preamble of
-[`cfc-spec-changes.md`](../specs/cfc-spec-changes.md)._
+Stage 1 is in force; each later stage says whether it is in place._
 
 ## What this plan holds to
 
@@ -251,7 +249,8 @@ The migration is also the test drive of the process. Three groups of entries
 stand alone and between them exercise every leg:
 
 - `SC-49`, `SC-50`, `SC-51`: three items on §8.17.6 rule 4, prose only, from
-  one build. The ruling form is the whole exercise.
+  one build, and dependent on one another (`SC-51`'s answer differs under
+  `SC-49`'s two derivations). Proposed as `commonfabric/specs#47`.
 - `SC-52`: a space's own DID is not a member of the space (§4.9.3, §18.4.5,
   `Cfc/Membership.lean`). The one open entry that names a Lean file, so prose
   and proof move in one ruling.
@@ -317,8 +316,8 @@ they were found:
   recorded for every ruling and not only the §13.11 set.
 
 The `lake build` and architecture-check workflow is independent of the rest
-and went in with stage 1 as `commonfabric/specs#46`; the cross-repository
-correspondence job joins that workflow at stage 2.
+and is proposed beside stage 1 as `commonfabric/specs#46`; the
+cross-repository correspondence job joins that workflow at stage 2.
 
 ## Where a document goes
 
