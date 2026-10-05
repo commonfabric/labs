@@ -176,11 +176,11 @@ export type PrivateInboxHolder = {
 };
 
 /** What the pointing step needs of each profile in Home's list. */
-type PointTarget = {
-  // The pointer is typed as reaching the inbox's name and nothing else. The
-  // inbox labels its offers confidential to its owner, and a link carries
-  // that label at the paths it reaches, so a read typed to reach the offers
-  // would join a confidential label from another space into this run.
+export type PointTarget = {
+  // The pointer is a typed link. The inbox labels its offers confidential to
+  // its owner, and the link carries that label; read as an untyped link, it
+  // joins that label from another space into this run, and the run is
+  // refused. `private-inbox.pointer-type.test.ts` pins the type.
   inbox?: { piece?: Cell<PrivateInboxPiece> };
   setInbox: Stream<SetProfileInboxEvent>;
 };

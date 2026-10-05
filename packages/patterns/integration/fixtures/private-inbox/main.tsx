@@ -151,8 +151,7 @@ const queueOffer = handler<OfferRequest, { send: Stream<OfferRequest> }>(
 
 /**
  * Sends an offer to the inbox the owner's first profile points at, reading
- * the pointer through the profile's own types, which reach the inbox's name
- * and nothing it labels.
+ * the pointer through the profile's own types, as a typed link.
  */
 const sendToPointedInbox = handler<
   OfferRequest,

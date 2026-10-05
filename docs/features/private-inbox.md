@@ -45,15 +45,17 @@ without an inbox. A profile of any vintage with a `setInbox` is pointed this
 way; one predating `setInbox` drops the event, and the runtime logs a warning
 that no handler took it.
 
-The pointing step reads each profile's pointer through a type that reaches the
-inbox's name and nothing else. A link carries the label of what it reaches at
-the paths it reaches, and the inbox labels its offers confidential to its
-owner. A read typed to reach the offers would join that label, from another
-space, into the served run in Home's space. When the event drain, rather than
-the wave that queued it, delivered such a run, writer-fit would refuse the
-run's record that it handled the event, and the event would be lost; the
-refusal also reaches the run's own sends, on either path. Read through the
-narrow type, the pointer joins no confidentiality.
+The pointing step reads each profile's pointer as a typed link,
+`Cell<PrivateInboxPiece>`. The link carries the label of what it reaches, and
+the inbox labels its offers confidential to its owner. Read as an untyped link,
+`Cell<unknown>`, the pointer joins that label, from another space, into the
+served run in Home's space. Writer-fit then refuses the run's own sends,
+whichever path delivered it. When the event drain, rather than the wave that
+queued it, delivered the run, it also refuses the run's record that it handled
+the event, and the event is lost. Read as the typed link, the pointer joins no
+confidentiality. `private-inbox.pointer-type.test.ts` fails to compile if
+either reader's pointer type becomes unconstrained, or names a member of the
+inbox's result other than its name.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them
@@ -126,9 +128,9 @@ space as a stream event the space's server runs. A client sending to `receive`
 directly is then refused, since it holds no `WRITE` in the space.
 
 The sender reads the pointer through `profile-home.tsx`'s own types, where
-`inbox.piece` reaches the inbox's name and nothing else, for the reason the
-pointing step does: a read typed to reach the offers joins their label into
-the sender's run, and that run is refused. `receive` stamps the offer with the
+`inbox.piece` is the typed link `Cell<ShareInboxPiece>`, for the reason the
+pointing step does: read as an untyped link, the pointer joins the offers'
+label into the sender's run, and the run's sends are refused. `receive` stamps the offer with the
 sender as `from`, including when the send comes from a handler that another
 of the sender's handlers queued.
 
