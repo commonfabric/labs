@@ -2,7 +2,7 @@
  * The FabriChat records, and the parts of the contracts that don't depend on
  * how a room stores its messages: the reviewed surfaces, recorded times,
  * profiles, a room's records and requests, how a message's reactions tally,
- * and the manager's records. `docs/specs/fabrichat/` states each of them, and
+ * the manager's records, and the displays an element shown by a prop takes. `docs/specs/fabrichat/` states each of them, and
  * the names here are the spec's. `room-records.tsx` defines the records a room
  * stores, and `room.tsx` the room's own output types over them.
  *
@@ -410,3 +410,17 @@ export interface ChatManagerNotice {
   /** The DID of the person admitted. */
   recipient: string;
 }
+
+//
+// Displays
+//
+
+/**
+ * What a FabriChat element shown or hidden by a prop has as its `display`,
+ * which a computed decides. Such an element also carries a static `hidden`,
+ * which keeps it out of view until the computed has a value and which only a
+ * concrete display outranks, so every shown state names one: a computed
+ * returning `""`, `undefined` or `null` to show its element would leave it
+ * hidden for good.
+ */
+export type ChatDisplay = "block" | "flex" | "inline-flex" | "none";

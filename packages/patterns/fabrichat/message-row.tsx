@@ -55,6 +55,7 @@ import {
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
   CHAT_UNREACT_ACTION,
+  type ChatDisplay,
   type ChatReaction,
   type ChatReactionTally,
   type ChatRoomKind,
@@ -276,13 +277,13 @@ export const FabriChatMessageRow = pattern<
       replies: threadReplyCounts(entries).get(own.key) ?? 0,
     };
   });
-  const rowDisplay = computed(() =>
+  const rowDisplay = computed((): ChatDisplay =>
     (inThread ? placement.inOpenThread : placement.inMain) ? "block" : "none"
   );
   const threadLabel = computed(() =>
     placement.replies === 1 ? "1 reply" : `${placement.replies} replies`
   );
-  const threadLinkDisplay = computed(() =>
+  const threadLinkDisplay = computed((): ChatDisplay =>
     !inThread && placement.replies > 0 ? "inline-flex" : "none"
   );
   // What differs by viewer or by session is shown or hidden through a prop,
@@ -292,14 +293,16 @@ export const FabriChatMessageRow = pattern<
   // static `hidden`, which keeps it out of view until its display computed has
   // a value and is outranked by that value once it has one, so an element
   // whose computed has yet to run stays hidden.
-  const ownDisplay = computed(() =>
+  const ownDisplay = computed((): ChatDisplay =>
     isMine && !isDeletedNow ? "inline-flex" : "none"
   );
-  const obliterateDisplay = computed(() =>
+  const obliterateDisplay = computed((): ChatDisplay =>
     canObliterate ? "inline-flex" : "none"
   );
-  const editorDisplay = computed(() => (isEditing ? "block" : "none"));
-  const pickerDisplay = computed(() =>
+  const editorDisplay = computed(
+    (): ChatDisplay => (isEditing ? "block" : "none"),
+  );
+  const pickerDisplay = computed((): ChatDisplay =>
     pickerOpen.get() === true ? "flex" : "none"
   );
   const pickerLabel = computed(() => (pickerOpen.get() === true ? "✕" : "☺+"));

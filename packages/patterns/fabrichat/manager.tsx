@@ -38,6 +38,7 @@ import {
   type AboutRecord,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
+  type ChatDisplay,
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatProfile,
@@ -633,11 +634,15 @@ export const FabriChatManagerCore = pattern<
     // stored once for every session, and runtimes that built it differently
     // overwrite each other without end. Each part is `hidden` until its
     // display has a value, as `FabriChatMessageRow` says.
-    const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
-    const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
+    const selectedDisplay = computed(
+      (): ChatDisplay => (hasSelection ? "block" : "none"),
+    );
+    const unselectedDisplay = computed(
+      (): ChatDisplay => (hasSelection ? "none" : "block"),
+    );
     // A refusal is the session's too, and is hidden by a prop for the same
     // reason.
-    const refusalDisplay = computed(() =>
+    const refusalDisplay = computed((): ChatDisplay =>
       startRefusal.get() === "" ? "none" : "block"
     );
     const noticeList = computed(
@@ -650,7 +655,7 @@ export const FabriChatManagerCore = pattern<
       principalOf(myProfile, "represents-principal") ?? ""
     );
     const addressDisplay = computed(
-      () => (myAddress === "" ? "none" : "block"),
+      (): ChatDisplay => (myAddress === "" ? "none" : "block"),
     );
     const streams = {
       openDirect: commitManager({ act: "openDirect", ...records }),

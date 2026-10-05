@@ -18,6 +18,7 @@ import {
   type VNode,
 } from "commonfabric";
 import { type FabriChatPlacementView, type PlacedRoom } from "./placement.tsx";
+import { type ChatDisplay } from "./schemas.tsx";
 
 /** A placement as an adapter reads it through its link. */
 export interface AdaptedPlacement {
@@ -62,8 +63,12 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
     // differently per viewer is stored once for everyone, and runtimes that
     // built it differently overwrite each other without end. Each part is
     // `hidden` until its display has a value, as `FabriChatMessageRow` says.
-    const roomDisplay = computed(() => (isMember ? "block" : "none"));
-    const unavailableDisplay = computed(() => (isMember ? "none" : "block"));
+    const roomDisplay = computed(
+      (): ChatDisplay => (isMember ? "block" : "none"),
+    );
+    const unavailableDisplay = computed(
+      (): ChatDisplay => (isMember ? "none" : "block"),
+    );
 
     return {
       [NAME]: computed(() =>
