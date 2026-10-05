@@ -351,7 +351,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "setAvatar"
                   ]
@@ -377,7 +377,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "setBio"
                   ]
@@ -402,7 +402,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "mutateElements"
                   ]
@@ -431,7 +431,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "mutateExternalProfileLinks"
                   ]
@@ -460,7 +460,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "setInbox"
                   ]
@@ -491,7 +491,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "setName"
                   ]
@@ -571,7 +571,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
+                  "moduleIdentity": "gOUjRth9k2e9ohkqrTOc6qr1PyK6xRhrk5ha61F2qRM",
                   "path": [
                     "publishVerifiedIdentities"
                   ]
@@ -1419,7 +1419,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-create.tsx",
-                  "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                  "moduleIdentity": "sYg8j0teTcZGZTfWaDGEFij_LFUTbAzbCYsQ5dDLRN0",
                   "path": [
                     "setDefaultProfile"
                   ]
@@ -1447,7 +1447,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "moduleIdentity": "sYg8j0teTcZGZTfWaDGEFij_LFUTbAzbCYsQ5dDLRN0",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1463,7 +1463,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "moduleIdentity": "sYg8j0teTcZGZTfWaDGEFij_LFUTbAzbCYsQ5dDLRN0",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1483,7 +1483,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+              "moduleIdentity": "sYg8j0teTcZGZTfWaDGEFij_LFUTbAzbCYsQ5dDLRN0",
               "path": [
                 "setMruProfile"
               ]
@@ -1507,7 +1507,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/packages/patterns/system/profile-create.tsx",
-                "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                "moduleIdentity": "sYg8j0teTcZGZTfWaDGEFij_LFUTbAzbCYsQ5dDLRN0",
                 "path": [
                   "setMruProfile"
                 ]
