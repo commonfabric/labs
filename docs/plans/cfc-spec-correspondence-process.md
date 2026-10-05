@@ -317,7 +317,8 @@ they were found:
   recorded for every ruling and not only the §13.11 set.
 
 The `lake build` and architecture-check workflow is independent of the rest
-and goes in with stage 1.
+and went in with stage 1 as `commonfabric/specs#46`; the cross-repository
+correspondence job joins that workflow at stage 2.
 
 ## Where a document goes
 
