@@ -631,7 +631,8 @@ export const FabriChatManagerCore = pattern<
     // The chosen room differs by session, so both parts are always rendered
     // and one is hidden by a prop: a tree built differently per session is
     // stored once for every session, and runtimes that built it differently
-    // overwrite each other without end.
+    // overwrite each other without end. Each part is `hidden` until its
+    // display has a value, as `FabriChatMessageRow` says.
     const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
     const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
     // A refusal is the session's too, and is hidden by a prop for the same
@@ -696,16 +697,25 @@ export const FabriChatManagerCore = pattern<
               </cf-hstack>
             ))}
           </cf-vstack>
-          <div id="fabrichat-selected" style={{ display: selectedDisplay }}>
+          <div
+            id="fabrichat-selected"
+            hidden
+            style={{ display: selectedDisplay }}
+          >
             <cf-render $cell={selectedRoom} />
           </div>
           <div
             id="fabrichat-unselected"
+            hidden
             style={{ display: unselectedDisplay }}
           >
             <cf-empty-state message="Choose a chat, or start one." />
           </div>
-          <div id="fabrichat-my-address" style={{ display: addressDisplay }}>
+          <div
+            id="fabrichat-my-address"
+            hidden
+            style={{ display: addressDisplay }}
+          >
             <cf-hstack gap="2" align="center">
               <cf-text variant="caption">
                 Your chat address: {myAddress}
@@ -751,6 +761,7 @@ export const FabriChatManagerCore = pattern<
               </cf-button>
               <div
                 id="fabrichat-start-refusal"
+                hidden
                 style={{ display: refusalDisplay }}
               >
                 <cf-alert status="error">{startRefusal}</cf-alert>

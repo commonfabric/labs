@@ -60,7 +60,8 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
     // Whether the viewer can read the room differs by viewer, so both parts
     // are always rendered and one is hidden by a prop: a tree built
     // differently per viewer is stored once for everyone, and runtimes that
-    // built it differently overwrite each other without end.
+    // built it differently overwrite each other without end. Each part is
+    // `hidden` until its display has a value, as `FabriChatMessageRow` says.
     const roomDisplay = computed(() => (isMember ? "block" : "none"));
     const unavailableDisplay = computed(() => (isMember ? "none" : "block"));
 
@@ -70,11 +71,16 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
       ),
       [UI]: (
         <cf-vstack>
-          <div id="fabrichat-adapter-room" style={{ display: roomDisplay }}>
+          <div
+            id="fabrichat-adapter-room"
+            hidden
+            style={{ display: roomDisplay }}
+          >
             <cf-render $cell={placement.room} />
           </div>
           <div
             id="fabrichat-adapter-unavailable"
+            hidden
             style={{ display: unavailableDisplay }}
           >
             <cf-empty-state message="This chat can't be read right now." />

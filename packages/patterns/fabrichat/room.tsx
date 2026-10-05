@@ -176,6 +176,7 @@ export const ParticipantChip = pattern<
         <span
           data-ui-pattern={CHAT_START_SURFACE}
           data-ui-event-integrity={CHAT_START_SURFACE}
+          hidden
           style={{ display: chatDisplay }}
         >
           <cf-button
@@ -254,6 +255,7 @@ export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
           id="fabrichat-add-to-chats"
           gap="2"
           align="center"
+          hidden
           style={{ display: addDisplay, padding: "1rem 1rem 0" }}
         >
           <cf-text variant="caption">
@@ -608,7 +610,12 @@ export const FabriChatRoomCore = pattern<
             : null}
         </cf-vstack>
 
-        <cf-hstack gap="2" align="center" style={{ display: replyDisplay }}>
+        <cf-hstack
+          gap="2"
+          align="center"
+          hidden
+          style={{ display: replyDisplay }}
+        >
           <cf-text variant="caption">Replying to: {replyingTo}</cf-text>
           <cf-button size="sm" variant="ghost" onClick={cancelReply}>
             Cancel
@@ -631,6 +638,7 @@ export const FabriChatRoomCore = pattern<
         <cf-vstack
           id="fabrichat-thread"
           gap="2"
+          hidden
           style={{
             display: threadDisplay,
             borderTop: "1px solid var(--cf-theme-color-border)",
@@ -740,7 +748,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       rooms: ChatIndexEntry[];
     }>({ query: "#chatManager" });
     const startsDirect = computed(() => managerWish.result !== undefined);
-    // Hidden by a prop rather than a branch, as `FabriChatMessageRow` says.
+    // Hidden by a prop rather than a branch, and `hidden` until the prop has a
+    // value, as `FabriChatMessageRow` says.
     const setupDisplay = computed(() =>
       profileWish.result === undefined ? "block" : "none"
     );
@@ -784,6 +793,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
           {room[UI]}
           <div
             id="fabrichat-profile-setup"
+            hidden
             style={{
               display: setupDisplay,
               padding: "0 1rem 1rem",
