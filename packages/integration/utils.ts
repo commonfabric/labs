@@ -314,10 +314,16 @@ function installWaiter(
         if (visited.has(node)) return;
         visited.add(node);
         if (node instanceof HTMLElement) {
+          // Hidden as drawn: a `hidden` attribute hides an element through
+          // the browser's `[hidden]` style, so a `display` that outranks it
+          // shows the element, and the computed style says which. A
+          // `hidden="until-found"` element keeps its display and hides its
+          // contents through `content-visibility`.
           const style = globalThis.getComputedStyle(node);
           const hidden = node instanceof HTMLStyleElement ||
-            node instanceof HTMLScriptElement || node.hidden ||
-            style.visibility === "hidden" || style.display === "none";
+            node instanceof HTMLScriptElement ||
+            style.visibility === "hidden" || style.display === "none" ||
+            style.contentVisibility === "hidden";
           if (!hidden) {
             const innerText = node.innerText ?? "";
             parts.push(

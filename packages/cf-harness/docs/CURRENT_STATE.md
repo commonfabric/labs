@@ -398,6 +398,10 @@ The current package provides:
   observation ceiling before it enters model context. A row loom returns without
   a label is given the query's label, an assumption the implementation profile
   publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
+- the commands a host admits, listed and run as the agent through the host's
+  scoped broker, which decides what is listed and what runs; each answer is
+  measured against the run's observation ceiling like a retrieval row. See
+  [Host commands](LOOM_COMMANDS.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
 - refusal of any flag an entrypoint does not declare — the batch CLI and its
