@@ -356,7 +356,8 @@ Taken by the CFC owner on 2026-10-05:
 5. **Specs CI** is wanted, as it is cheap. `lake build`, the architecture
    check and the pseudocode check run on every specs pull request since
    `commonfabric/specs#46` merged on 2026-10-05; the cross-repository
-   correspondence job joins that workflow at stage 2.
+   correspondence job joins that workflow at stage 4, with the rest of the
+   specs-side work.
 
 6. **Publishing the pseudocode.** Verbatim extraction makes the critical
    blocks public as the runner's source; accepted.
