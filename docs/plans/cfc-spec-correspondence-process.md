@@ -177,7 +177,8 @@ stand alone and between them exercise every leg:
 
 - `SC-49`, `SC-50`, `SC-51`: three items on §8.17.6 rule 4, prose only, from
   one build, and dependent on one another (`SC-51`'s answer differs under
-  `SC-49`'s two derivations). Proposed as `commonfabric/specs#47`.
+  `SC-49`'s two derivations). Proposed as `commonfabric/specs#47`, with its
+  Lean model in the same change.
 - `SC-52`: a space's own DID is not a member of the space (§4.9.3, §18.4.5,
   `Cfc/Membership.lean`). The one open entry that names a Lean file, so prose
   and proof move in one ruling.
@@ -228,8 +229,8 @@ the first is a stage on the way to it rather than an alternative.
 Changes proposed for `commonfabric/specs`, recorded here because labs is where
 they were found:
 
-- The continuous-integration workflow proposed as `commonfabric/specs#46`
-  beside stage 1 (`lake build`, `check-architecture.py`, the §8.10.3
+- The continuous-integration workflow `commonfabric/specs#46`, merged
+  2026-10-05 beside stage 1 (`lake build`, `check-architecture.py`, the §8.10.3
   pseudocode check; the full build took 56 seconds of wall-clock time on one
   machine on 2026-10-05) gains the generalized pseudocode check and the
   cross-repository correspondence job.
