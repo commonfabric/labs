@@ -192,6 +192,21 @@ export default pattern(() => {
     inbox.receive.send({ ...valid, id: "ftp-host", host: "ftp://example.com" });
     inbox.receive.send({ ...valid, id: "path-host", host: `${HOST}/path` });
     inbox.receive.send({ ...valid, id: "no-host", host: undefined });
+    inbox.receive.send({
+      ...valid,
+      id: "userinfo-host",
+      host: "https://good.example@evil.example",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "fragment-host",
+      host: "https://good.example#@evil.example",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "query-host",
+      host: "https://good.example?evil.example",
+    });
     inbox.receive.send({ ...valid, id: "not-me", from: SOMEONE_ELSE });
   });
   const assert_refused_offers_dropped = assert(() =>
@@ -203,6 +218,9 @@ export default pattern(() => {
       "ftp-host",
       "path-host",
       "no-host",
+      "userinfo-host",
+      "fragment-host",
+      "query-host",
       "not-me",
     ].every((id) => offerWithId(inbox.offers, id) === undefined)
   );
@@ -221,6 +239,24 @@ export default pattern(() => {
   const assert_duplicate_dropped = assert(() =>
     inbox.offers.filter((each) => each?.id === "loom-shaped").length === 1 &&
     offerWithId(inbox.offers, "loom-shaped")?.title === "Lunch"
+  );
+
+  // An inbox whose `offers` a writer replaced with something other than a
+  // list keeps nothing, and leaves it as it is.
+  const corruptOffers = new Writable<string>("not a list");
+  // deno-lint-ignore no-explicit-any
+  const corrupt = PrivateInbox({ offers: corruptOffers as any });
+  const action_receive_into_corrupt = action(() => {
+    corrupt.receive.send({
+      kind: "loom",
+      id: "into-corrupt",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+    });
+  });
+  const assert_corrupt_offers_left_as_they_were = assert(() =>
+    corruptOffers.get() === "not a list"
   );
 
   // Pointing profiles at an inbox: of the current vintage and of an earlier
@@ -279,6 +315,8 @@ export default pattern(() => {
       { assertion: assert_refused_offers_dropped },
       { action: action_receive_duplicate },
       { assertion: assert_duplicate_dropped },
+      { action: action_receive_into_corrupt },
+      { assertion: assert_corrupt_offers_left_as_they_were },
       { action: action_create_inboxes },
       { assertion: assert_inboxes_created },
       { action: action_point_one_elsewhere },

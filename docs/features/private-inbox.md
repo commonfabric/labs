@@ -4,9 +4,9 @@ Every identity has one private inbox: a piece, in a space of its own, where
 other principals deliver offers to the identity, such as a chat room to join.
 Its offers are labeled readable by the owner alone. Anyone can append to it,
 through its `receive` stream, which keeps an offer only when the offer names
-the principal sending it as its sender. This document says
-where the inbox lives, who creates it and when, what access its space grants,
-what `receive` accepts, and the limits on what it keeps private.
+the principal sending it as its sender. This document says where the inbox
+lives, who creates it and when, what access its space grants, what `receive`
+accepts, and the limits on what it keeps private.
 
 The pattern is `packages/patterns/system/private-inbox.tsx`.
 
@@ -34,9 +34,13 @@ nothing and re-points nothing.
 The host sends it once per runtime worker, when it first brings up the user's
 Home pattern: `PiecesController.ensurePrivateInbox()` in `packages/piece`,
 called from `RuntimeProcessor` in `packages/runtime-client`. A Home pattern
-without the stream is left alone. A failure is logged, and the next time the
-host brings up Home it sends the event again. A profile created after that
-point gets its pointer the next time the stream runs.
+without the stream is left alone. The host learns only whether the event was
+sent, not whether Home's handler committed: a stream's `send` returns before
+the handler runs. So an exception raised while sending it, such as Home
+failing to come up, is logged, and the next time that worker brings up Home it
+sends the event again; a failure inside the handler is not seen, and the event
+is not sent again until another worker brings Home up. A profile created after
+that point gets its pointer the next time the stream runs.
 
 The pointing runs as a second event, queued behind the one that creates the
 inbox, because the inbox piece exists only once that event's transaction has
@@ -62,10 +66,10 @@ The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them
 is replaced by Home's inbox.
 
-The link a profile receives names the inbox's own result
-document rather than the cell Home's link reaches it through: a link written
-into a profile's labeled `inbox` takes its label from the document it names,
-and the result document is the one with a schema to take it from.
+The link a profile receives names the inbox's own result document rather than
+the cell Home's link reaches it through: a link written into a profile's
+labeled `inbox` takes its label from the document it names, and the result
+document is the one with a schema to take it from.
 
 ## The access its space grants
 
@@ -126,11 +130,15 @@ does, and then checks the sender:
   `OFFER_ADDRESS_MAX_LENGTH` (256).
 - The event is dropped unless `space` and `from` are DIDs, `did:` and a
   lowercase method then an identifier with no spaces or slashes, and `host`
-  is an `http` or `https` origin with no path. `host` is cut before it is
-  checked, so an origin longer than the limit is kept cut.
+  is a bare `http` or `https` origin: a scheme and host characters alone, with
+  no path, user information (`@`), query (`?`) or fragment (`#`). A loom share
+  inbox admits those last three, so this inbox is the stricter. Each of the
+  four addresses is cut before it is checked, so one longer than the limit is
+  kept cut, and a cut `space` is a different DID.
 - What a sender leaves out is filled in: `kind` with `OFFER_DEFAULT_KIND`
   (`loom`), `sharedAt`, unless it is a positive number, with the time the
-  inbox received the offer, and `id` with `<space>@<sharedAt>`. An
+  inbox received the offer, and `id` with `<space>@<sharedAt>`, so a resend
+  with neither `id` nor `sharedAt` in a later second is kept again. An
   `ownerOrigin` that is not an origin is kept empty. A field the envelope does
   not name is not kept.
 - The event is dropped when its `from` is not the principal sending it, or
@@ -149,10 +157,26 @@ reader keeps its own record of the offers it has handled, keyed by `from` and
 `id`, wherever it keeps its own state. Two senders may choose the same `id`,
 and the inbox keeps an offer from each.
 
+A row's `from` is the sender's claim, not a fact the inbox vouches for.
+`receive` keeps an offer only when `from` is the principal sending it, but
+`receive` binds only an honest runtime, and any principal may write `offers`
+without it, naming any `from`. So a reader checks `from` itself before
+trusting a row. A loom reader checks that `from` holds its own `WRITE` or
+`OWNER` entry on the offered `space`, and the intake that reads this inbox is
+to check the same.
+
 ## What it does not protect
 
 - **The inbox is readable by anyone.** `WRITE` implies `READ`, and the label
   binds only an honest runtime, so anyone holding a memory client can read the
   offers, titles included, and can rewrite or remove them.
-- **Nothing limits how many offers arrive.** A sender can append as many as it
-  likes.
+- **Anyone can flood it.** Nothing limits how many offers arrive, and
+  `receive` reads every offer before it appends, so a flood slows every later
+  delivery.
+- **Anyone can corrupt it.** A writer bypassing `receive` can add rows naming
+  any `from`, as "Reading them" says. It can replace `offers` with something
+  other than a list: while it is one, `receive` keeps nothing and leaves the
+  value as it is, so delivery stops until something puts a list back. It can
+  also add an entry `receive` cannot read, such as a link into a space no
+  sender may read, which can make every delivery fail. A loom share inbox,
+  granting the same access, accepts the same.

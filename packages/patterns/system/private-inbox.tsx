@@ -6,10 +6,12 @@
  *
  * The list and each offer in it carry a confidentiality label for the
  * principal who created the inbox, so a runtime holding the inbox refuses to
- * let another principal's code read them or copy them out. The space grants
- * every principal `WRITE`, so anyone holding a memory client can also read
- * the offers, label or no label. `docs/features/private-inbox.md` describes
- * the whole arrangement.
+ * let another principal's code copy them out. It does not stop that code
+ * reading them: `receive` itself reads every offer, in the sender's runtime
+ * when server execution is off. The space grants every principal `WRITE`, so
+ * anyone holding a memory client can read, rewrite or remove the offers, label
+ * or no label, and a row's `from` is a claim a reader checks for itself.
+ * `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
 import {
@@ -118,8 +120,10 @@ export interface Offer {
   title: string;
 
   /**
-   * The DID of the principal who sent the offer. `receive` keeps an offer only
-   * when this is the event's actor, which nothing in the payload can choose.
+   * The DID the offer names as its sender. `receive` keeps an offer only when
+   * this is the event's actor, but any principal may write the list without
+   * `receive`, so to a reader this is the sender's claim, which it checks for
+   * itself before trusting it.
    */
   from: string;
 
@@ -187,8 +191,12 @@ export type PointTarget = {
 /** A DID, as an offer's `space` and `from` must be written. */
 const DID_PATTERN = /^did:[a-z0-9]+:[^\s/]+$/;
 
-/** An `http` or `https` origin, as an offer's `host` must be written. */
-const ORIGIN_PATTERN = /^https?:\/\/[^\s/]+$/;
+/**
+ * An `http` or `https` origin, as an offer's `host` must be written: a scheme
+ * and an authority of host characters alone, with no path, user information,
+ * query or fragment.
+ */
+const ORIGIN_PATTERN = /^https?:\/\/[^\s/?#@]+$/;
 
 /** `value` trimmed and cut to `max` characters, or empty if not a string. */
 function trimmedText(value: unknown, max: number): string {
@@ -237,7 +245,8 @@ function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
  * Nothing is appended for a refused event, for one whose `from` is not the
  * event's actor, or for one whose sender already has an offer in the inbox
  * under its `id`. Keying on the sender too means no writer can take another
- * sender's `id` first.
+ * sender's `id` first. Nothing is appended either while `offers` holds
+ * something other than a list, which is left as it is.
  */
 const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
   (event, { offers }) => {
@@ -253,7 +262,15 @@ const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
     ) {
       return;
     }
-    offers.push(offer);
+    // A writer bypassing `receive` can replace `offers` with something other
+    // than a list. The typed read above presents that as an empty list, and
+    // the append refuses it by throwing; the value is left as it is, and
+    // nothing is kept.
+    try {
+      offers.push(offer);
+    } catch {
+      return;
+    }
   },
 );
 
