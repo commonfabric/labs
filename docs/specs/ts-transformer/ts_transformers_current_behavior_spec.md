@@ -819,7 +819,10 @@ structurally representable.
   rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
-  (`reportUnknownPatternResult()` in `schema-injection.ts`)
+  (`reportUnknownPatternResult()` in `schema-injection.ts`). Under
+  `TransformationOptions.storedSource` it reports as a **Warning**: a reload of
+  stored source reconstructs what was admitted when it was deployed, which may
+  hold a shape this check covers only since
 - authors who intentionally want a permissive/opaque output boundary must make
   it explicit with `pattern<Input, Output>(...)`
 
@@ -841,6 +844,19 @@ out of an object's schema, a symbol-keyed member or a cell's internal marker
 it as a field. It stops at a type it is already inside, since a type with no
 name can hold itself through `typeof`, and walks a type reached again by
 another path under that path.
+
+Neither walk descends a named type: an alias, whether it names an object, an
+array, a tuple, or a union; an interface; a class; or an instance of a named
+class. A named type is a declaration, and `unknown` in a declaration is the form
+for a reference to another piece
+([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)). So an
+`unknown` reached only through a name is the declaration's, and the check
+leaves it alone. A pattern that returns another pattern's instance, whose
+declared result holds such references, passes them on without a report. The
+schema carries `{ type: "unknown" }` at those fields as it does at any
+reference. An alias of `unknown` itself is the exception: the checker keeps no
+name on `unknown`, so a field declared through `type Ref = unknown` is `unknown`
+to both walks, and is reported.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1164,8 +1180,9 @@ report these through the same collector (deduplicated via §2.2's
 - **Error** `pattern-context:inline-reactive-root-access`
   (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
   reactive-root read at a position that stage cannot lower
-- **Error** `pattern-result:unknown-type` (`schema-injection.ts:2621`) — see
-  §6.6
+- **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
+  `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
+  `TransformationOptions.storedSource`
 - **Error** `pattern-result:opaque-reserved-key`
   (`reserved-result-keys.ts`, called from `schema-generator.ts`) — a pattern's
   own result declares one of the framework's reserved keys `unknown` at its
@@ -2094,32 +2111,43 @@ adjustments:
   candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
-- a node built from part of a value keeps the value's CFC labels. The literal
-  a property chain builds, each node a type-driven or node-driven shrink
-  builds, and a node the narrowing of cells rebuilds is recorded as narrowing
-  the value it stands for, through the `narrowedFrom` schema hint, with the
-  node the value's declaration writes where one is at hand; schema generation
-  adds the labels that value's own formatting attaches at its top (the
-  schema-generator mapping spec's §13). A capture leaf printed from its type
-  stands for the value its declaration spells, which the print may not, as
-  with a `typeof` binding in a label. A node built from part of a narrowed
-  node or of such a print, rebuilt from one by a later pass, or built from the
-  type of one narrows the same value, its parts matched by property name and
-  array element (`recordNarrowedFrom` and `recordDeclaredValue` in
+- a node built from part of a value keeps the value's CFC labels. The literal a
+  property chain builds, each node a type-driven or node-driven shrink builds,
+  and a node the narrowing of cells rebuilds is recorded as narrowing the value
+  it stands for, through the `narrowedFrom` schema hint, with the node the
+  value's declaration writes where one is at hand; schema generation adds the
+  labels that value's own formatting attaches at its top (the schema-generator
+  mapping spec's §13). A capture leaf printed from its type stands for the value
+  its declaration spells, which the print may not, as with a `typeof` binding in
+  a label. A leaf written as a shorthand property (`{ x }`) has the declaration
+  of the binding `x` names, not that of the object literal's property. A node
+  built from the type of a member whose declaration writes that type, by the
+  type-driven shrink, narrows the value the declaration spells
+  (`readMemberAnnotation`), as a field read out of a wished result does. A
+  constructed cell's node, written with its constructor's type arguments
+  (`getConstructedCellTypeNode`, §12), records itself as the value it spells
+  where it is built (`expressionToTypeNode`), and a node a later pass rebuilds
+  it into from its type, which prints a `typeof` writer binding among those
+  arguments as a structural type, narrows that value. A node built from part of
+  a narrowed node or of such a print, rebuilt from one by a later pass, or built
+  from the type of one narrows the same value, its parts matched by property
+  name, array element, and the one value member of a union beside nullish
+  members (`recordNarrowedFrom` and `recordDeclaredValue` in
   `core/cross-stage-state.ts`; `recordNarrowing` and `carryNarrowing` in
-  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`).
-  A rest binding (`{ ...rest }`), and a binding under a computed key, reads
-  no one property, so no property's declaration spells its value
+  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`,
+  `test/protected-cell-policy.test.ts`). A rest binding (`{ ...rest }`), and a
+  binding under a computed key, reads no one property, so no property's
+  declaration spells its value
 - a capture leaf printed from its type is read as the annotation of the member
-  it holds the value of, where that annotation names a value binding, as
-  `PolicyOf<typeof rules>` does (`namesValueBinding` in
-  `ast/type-building.ts`). The print spells the binding as the structural type
-  of the value it names, from which schema generation could not tell the
-  binding. The leaf records the annotation as its `spelledBy` schema hint, and
-  a print of the same type that a later pass rebuilds it into keeps the hint;
-  schema generation reads the node as the annotation spells the type at hand
-  (the schema-generator mapping spec's §13). A value captured whole thus keeps
-  a label that names a binding, as a part of it does
+  or binding it holds the value of, where that annotation denotes the type at
+  hand and names a value binding, as `PolicyOf<typeof rules>` does
+  (`namesValueBinding` in `ast/type-building.ts`). The print spells the binding
+  as the structural type of the value it names, from which schema generation
+  could not tell the binding. The leaf records the annotation as its `spelledBy`
+  schema hint, and a print of the same type that a later pass rebuilds it into
+  keeps the hint; schema generation reads the node as the annotation spells the
+  type at hand (the schema-generator mapping spec's §13). A value captured whole
+  thus keeps a label that names a binding, as a part of it does
   (`buildTypeElementsFromCaptureTree` in `ast/type-building.ts`;
   `carryNarrowing` in `transformers/type-shrinking.ts`;
   `test/printed-type-node-schema.test.ts`). Distinct policy bindings on union
@@ -2500,12 +2528,17 @@ carry a repeated source-metadata helper implementation.
 ## 12. Schema Generation
 
 Cell constructors whose authored type arguments name a `typeof` value binding
-retain those arguments when their result is lowered into a lift
-(`getConstructedCellTypeNode`). Recovery follows `.for()` and unannotated
-`const` aliases, and also preserves the declaration in an inferred
+retain those arguments when their result is lowered into a lift or captured
+(`getConstructedCellTypeNode`), whether the cell is made by `new` or by the
+constructor's static `of()`. Recovery follows `.for()`, unannotated `const`
+aliases, and a binding an unannotated `const` destructures straight out of an
+object literal, and also preserves the declaration in an inferred
 object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
 writer instead of an inferred structural function type. Explicit variable
-annotations remain authoritative; mutable aliases are not followed.
+annotations remain authoritative; mutable aliases, and a property of an object
+held elsewhere, which a write can replace, are not followed. Two writers of the
+same signature give a policy one type, so a cell reached any other way has no
+syntax that names its writer.
 Pattern-local object value aliases retain their definitions in each generated
 schema.
 

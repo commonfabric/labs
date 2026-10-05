@@ -322,35 +322,26 @@ already calls its own exclusion "a profile decision, not a core-semantics
 fact" and mirrors it to "the write-side rule that the same addresses are not
 value-write targets".
 
-One narrowing landed alongside: the measurement quantifies over paths a
-schema could have declared a policy at, and the raw meta seam is not one.
+One narrowing landed alongside: the measurement quantifies over payload
+writes, and a write to one of a document's own members is not one.
 `setMetaRaw` lands on a document-root sibling of `value` (`schema`,
 `internal`, `patternIdentity`, and the rest of the `MetaField` union), which
-no value schema describes. The seam is outside the check at every rung, so a
-meta path raises neither a strict reject nor a persist-and-flag diagnostic.
+no value schema describes. Such a write names no payload path (§4.6.5), so it
+is neither a flow-label target nor measured, and raises neither a strict
+reject nor a persist-and-flag diagnostic. No declared entry reaches it
+either: a document-root declared entry labels the payload root, which a
+member is not. Measuring the seam would leave a piece un-updatable under
+strict whenever its pattern declares on a single result field, which is how a
+pattern normally labels one, because the pattern updater, `setsrc`, and setup
+over an existing piece all write meta.
 
-A ceiling can still resolve at a meta path, from a document-root declared
-entry by longest prefix, and that route is skipped too. The entry sits at
-logical `[]`, the payload root, and reaches the seam only because
-canonicalization strips a leading `value`. Honoring it would make a piece
-updatable or not according to whether its pattern carries a root `ifc`.
-Declaring on a single result field, which is how a pattern normally labels
-one, leaves the seam's ceiling empty; the piece is then un-updatable under
-strict, because the pattern updater, `setsrc`, and setup over an existing
-piece all stamp meta.
-
-Nothing is laundered. A path counts as meta only while no payload write
-landed on it too, so a transaction writing both leaves the path measured; the
-ancestor collapse runs over measured paths only, so an exempt meta path
-cannot shadow a value write beneath it; meta paths remain flow-label targets,
-so the join persists there and the egress, display, and observation gates
-read the unchanged label; and the seam shares the document, space, and
-replica set of the value surface beside it, so it reaches no further. The
-residual is the shared namespace: where a payload field carries a `MetaField`
-name, an exempt meta write can raise the stored derived label at their common
-logical path past what that field declares. That is over-taint, so reads stay
-protected, and giving the envelope seam its own path space is the fix. Shares
-the meta-seam predicate with the schema write-policy requirement (#6077).
+Nothing is laundered. The seam is the runtime's to read and write, and no
+pattern compiles against it. A member's read consumes no payload label just
+as its write stamps none, so no payload label is dropped on the way through
+it, and a payload field that carries a `MetaField` name is labeled and
+measured like any other. The seam shares the document, space, and replica
+set of the value surface beside it, so it reaches no further. The schema
+write-policy requirement (#6077) skips a member write for the same reason.
 
 A second narrowing follows the same rule over a document rather than a path,
 and covers two id classes.
@@ -418,8 +409,8 @@ the space running that module addresses it, and it outlives all of them —
 and on a second: route 2 leaves a `declared` entry per measured path, which
 §8.12.1 does not let back, on a document nothing collects.
 
-All three are outside the check at every rung, through the same
-predicate the meta seam uses, and the skip is scoped to a join the target's
+All three are outside the check at every rung, through one predicate
+(`isDeclarablePolicyStore`), and the skip is scoped to a join the target's
 own space produced: the join records the space each contributing document
 lived in, and a target whose join drew a clause from elsewhere is measured
 like any other document. The residency half of the ceiling therefore still
@@ -783,9 +774,10 @@ commitment-aware matching), stage 2 as labs#4657
 `labelMetadata` observation channel — the SC-6 revisit discharged)
 completed by template-population Stage B (labs#4660): the full per-field
 §4.6.4.2 profile persists as multi-`*` templates under `/cfc/labels/...`
-(`origin:"label-metadata"`, `observes:"labelMetadata"` — no payload read
-class consumes them), minted at the persist seam from each source-bearing
-derived-containment payload entry, resolved by `inspectConfLabel` at
+(`origin:"label-metadata"`, `observes:"labelMetadata"` — a reader decodes
+them apart from the payload entries, so no payload lookup sees one), minted
+at the persist seam from each source-bearing derived-containment payload
+entry, resolved by `inspectConfLabel` at
 concrete clause/alternative metadata paths with the interim rule staying
 the label source and the in-hand computation the fallback on template-less
 envelopes ([`cfc-template-population.md`](./cfc-template-population.md)
@@ -927,10 +919,9 @@ this file is the single tracking place:
   normative (audit 3.12). Not re-verified.
 - ~~`/value` envelope-prefix wire-format decision (audit Wave 4 #28)~~ —
   **decided (owner, 2026-09-30): value-relative entries stay, and §4.6.4
-  changes to match (SC-55).** The remaining work is **implementation
-  conformance** with §4.6.5: the runner converts a document path outside
-  `value`, such as `["source"]`, to the payload path of the same name, and
-  matches it against payload labels.
+  changes to match (SC-55).** The runner conforms to §4.6.5: a document path
+  outside `value`, such as `["source"]`, names no payload path, and is never
+  matched against payload labels.
 
 ## Also noted by the sweep (not previously tracked)
 
@@ -1659,9 +1650,10 @@ What the change exposes, for the spec edit and as follow-up work:
   that fetches its `url` makes a request when it renders. Model output that
   read injected text and the owner's data carries both labels; once the
   display admits the caveat, such output can put the owner's data in a URL a
-  render fetches. Those props need gating as network sinks, at the
-  public-only ceiling the fetch sinks already use, rather than admission as
-  display.
+  render fetches. SC-56 gates those props. (An earlier draft of this entry
+  said they should take "the public-only ceiling the fetch sinks already
+  use"; that ceiling exists only under the opt-in max-enforcement posture, and
+  the default fetch sinks have none.)
 - **Rendered output read back into a model is a model sink.** cf-harness's
   `browser` tool returns a page's snapshot and text into an agent's context
   with no label check; a page in the shell can now show it unscreened text.
@@ -1677,7 +1669,7 @@ map whose entry paths are relative to `value`: an entry at `["error", "code"]`
 labels what §4.6.4 spells `/value/error/code`, and an entry at the empty path
 labels the payload root. No entry can name an envelope member.
 
-**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `open`.
+**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `applied`.
 §4.6.4 requires persisted payload labels under an explicit `/value` prefix and
 allows an equivalent internal layout. The runner's map is such a layout, and it
 spares the common case, a payload label, from spelling `value` (owner decision
@@ -1692,3 +1684,108 @@ version reads an entry's `path` and `label` and ignores any other member, so
 it would take a `root` entry for a payload label. The first such entry
 therefore needs a new label-map version, which today's readers refuse. §4.6.5
 is unchanged: an envelope member's path is never matched as a payload path.
+
+The `root` entry is deferred (owner decision 2026-10-01). Until it exists, an
+envelope member carries no label: a write to one stamps nothing, and a read of
+one consumes nothing. The residual is that a runtime write of label-derived
+data into a member would arrive unlabeled. No pattern reaches the meta seam,
+and every runtime write there is a link, a pattern identity or definition, a
+schema, a source origin or reconciliation record, or a slug an operator
+chooses.
+
+`applied` — specs#39 (2026-10-03): §4.6.4 keys a payload label by its path
+relative to `value` and marks the label-metadata entries `root: "document"`,
+the only document-rooted entries it persists. Label lookup selects the root
+before matching a path, so an entry of the other root never takes part, and
+a runtime should decode the two kinds into distinct address forms before any
+lookup sees them. §4.6.5 and §8.10.1.1 keep envelope metadata out of payload
+matching.
+
+## From the render-time remote-load gate (2026-10-01)
+
+**SC-56 [normative] A render that loads a remote resource is network egress,
+decided under the remote-load policy — §8.10.6, §8.10.5.2.** `open`. Since
+SC-54 the default display ceiling admits the prompt-caveat family, so a view
+whose data carries a material-risk caveat renders for its owner. A prop that
+makes the browser load a URL when it is set is not display: setting it sends
+what the URL carries to the URL's host, with no click. That covers an `img`
+`src` or `srcset`, a `style` or `theme` that can name a URL, `innerHTML` and
+`srcdoc`, a `link` or `base` `href`, markdown or SVG content, a chat or a chat
+preview, a link preview's `url`, an avatar or profile, a nested render's `cell`
+or a picker's items, a sandboxed frame's `context`, and a map's viewport.
+Before SC-54 such a value was hidden at the display, so it never loaded
+anything.
+
+The reconciler now decides those props under the **remote-load policy**: the
+render policy with the material-risk caveat kinds taken out of its caveat
+allowance. For the default host ceiling that is the allowance as it stood
+before SC-54, which admitted only prompt influence. The reconciler derives the
+policy from the one it holds, so no host or wire field changes. Two checks
+apply:
+
+- **A prop's own read** is fitted under the remote-load policy. A literal
+  prop is fitted on the labels of the props it came from.
+- **The view.** A cell child or root whose data the remote-load policy
+  refuses renders with `remoteLoadsBlocked`. Under it, no prop that would load
+  is set anywhere in the subtree, whatever that prop's own label, because the
+  data chose it.
+  - The block is inherited; a render boundary inherits the whole parent
+    policy.
+  - A change in the block re-renders the subtree rather than reusing what the
+    old decision set.
+  - A style element's text is CSS, so it is decided under the remote-load
+    policy and blocked outright in a blocked view.
+
+Because a read's consumed labels already include every document it passed
+through (#8264), the first check refuses most of these loads on its own. The
+block keeps the subtree rule independent of that. It is what takes back a load
+when a view gains the caveat while a clean view it embeds does not change.
+
+A refused prop is not set, or is removed, and is reported as the
+`render-remote-load` denial. A style element's refused text reports as
+`render-confidentiality-ceiling`, since it goes through the display gate.
+
+`style` and `theme` are decided by value. A value counts as one that may load
+when it holds a `url`, an image function, `src(`, `@import`, a backslash, or
+a custom property definition. An object is decided entry by entry.
+
+Implemented in `packages/html/src/worker/reconciler.ts` (`REMOTE_LOAD_PROPS`,
+`#remoteLoadPolicyOf`). Tested in
+`packages/html/test/worker-reconciler-remote-loads.test.ts`.
+`packages/html/test/remote-load-props.test.ts` holds every ui component that
+shows a way to load to the table, or to a reason it loads nothing a value
+chooses.
+
+Proposed edit: §8.10.6 says the display ceiling governs what a display shows,
+not what a render loads. §8.10.5.2 names a render-time remote load as a
+network sink class whose default is the display ceiling without the
+material-risk kinds. The spec owner should say whether the default should
+instead be public-only. That would also stop an owner's own confidential image
+URLs from loading, which is email clients' default for remote images.
+
+What this costs, and what is not covered:
+
+- **Markdown, chat, a chat preview, a nested render and a picker are refused
+  whole under the caveat.** Caveated model output in a chat, or a caveated
+  nested piece, renders as nothing, so SC-54 helps plain text only. The fix is
+  a channel for the trusted renderer to tell a component its value may not
+  load: for example, a reconciler-owned prop that components honor by showing
+  images as links or alt text. cf-avatar's own `data:`-only rule is that
+  pattern.
+- **Data choosing among loads the author already wrote.** A caveated
+  `hidden`, `class` or attribute value can decide whether an author-chosen
+  lazy image or CSS background loads, or which of several fixed URLs clean
+  CSS names. The URL is the author's; which one loads is data's.
+- **A custom property value clean CSS reads as a URL.** A definition is
+  refused under the block. A value set some other way and read through
+  `image-set(var(--u))` is not decided here; no such CSS exists today.
+- **Fixed endpoints.** `/api/ai/img` sends a prompt to a fixed provider. A
+  caveated prompt reaching it through `src` is refused like any `src`.
+- **A click.** `<a href>`, forms and popups need a user action.
+- **A label change on a document a link only passes through.** A cell child
+  that follows a link subscribes to its target. A relabel of the linking
+  document is not observed until the target changes. This holds for the
+  display gate too, and predates SC-54.
+- **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
+  given. The gate keys on labels, not URLs, so a labelled value does not get
+  through; an unlabelled one is outside this entry.

@@ -6,21 +6,26 @@
  */
 
 import type { Cell } from "@commonfabric/api";
+import { containsExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 import { ANNOTATION_KEYS } from "@commonfabric/piece/schema-compatibility";
 import {
   ContextualFlowControl,
   createBuilder,
+  decomposeSchema,
   deepEqual,
   isLink,
   type JSONSchema,
   KeepAsCell,
+  lookupSchemaDocument,
   type MemorySpace,
   type NormalizedFullLink,
   parseLink,
   type Pattern,
+  recomposeSchema,
   type Runtime,
   sanitizeSchemaForLinks,
+  SchemaNotDecomposableError,
 } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
 import {
@@ -1703,15 +1708,48 @@ function ifcForSelection(
 }
 
 /**
+ * Helper for {@link schemaForSelection}, which returns `schema` with every
+ * reference to a content-addressed schema document replaced by the document
+ * it names, so that a walk over its subschemas reaches what those documents
+ * state. The result describes the same values `schema` does and names no
+ * document outside itself.
+ *
+ * A schema holding no such reference comes back as the same object, and so
+ * does one the decomposition refuses: a schema naming a document the registry
+ * does not hold, or a shape the decomposition cannot represent.
+ */
+function selfContainedSchema(schema: JSONSchema): JSONSchema {
+  if (!isObjectNotArray(schema) || !containsExternalSchemaRef(schema)) {
+    return schema;
+  }
+  try {
+    const { rootRef, documents } = decomposeSchema(schema, {
+      resolveDocument: lookupSchemaDocument,
+    });
+    return recomposeSchema(rootRef, (hash) => documents.get(hash));
+  } catch (error) {
+    if (error instanceof SchemaNotDecomposableError) return schema;
+    throw error;
+  }
+}
+
+/**
  * `schema` as a selection states it on the cells it writes and the links it
  * reads through: every position keeps the `ifc` keys
  * {@link SELECTION_IFC_KEYS} carries and loses the ones it drops. A schema
- * stating none of the dropped keys comes back as the same object.
+ * stating none of the dropped keys, and naming no content-addressed schema
+ * document, comes back as the same object. Like interning, this freezes a
+ * mutable `schema` in place where it names such a document.
  *
  * The rewrite reaches every subschema `schema` holds, the bodies of its
  * `$defs` included, so a position written as a reference into them is covered
- * by the definition it names. A reference to another schema document is left
- * as written, and so is a schema object at the point it holds itself.
+ * by the definition it names. A position written as a reference to a
+ * content-addressed document is covered by that document, which is inlined
+ * into the result for the purpose. Where the registry does not hold the
+ * document, the reference is left as written and what the document states
+ * reaches the selection's cells unchanged, so a write claim in it refuses the
+ * read rather than going missing. A schema object is also left as written at
+ * the point it holds itself.
  *
  * @internal Exported for focused schema tests.
  */
@@ -1734,7 +1772,7 @@ export function schemaForSelection(schema: JSONSchema): JSONSchema {
       active.delete(node);
     }
   };
-  return rewrite(schema);
+  return rewrite(selfContainedSchema(schema));
 }
 
 function filteredOutputSchema(

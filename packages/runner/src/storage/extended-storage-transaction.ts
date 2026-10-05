@@ -31,7 +31,6 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
-  type AttemptedWrite,
   canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   CFC_ENFORCEMENT_MODES,
@@ -54,6 +53,8 @@ import {
   cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
+  type CfcRecordAddress,
+  cfcRecordPath,
   CfcRefusalDetail,
   type CfcTriggerReadGating,
   type CfcTrustConfig,
@@ -73,7 +74,6 @@ import {
   DEFAULT_CFC_WRITE_FLOOR_MODE,
   externalIngestStamp,
   flowLabelWorkExists,
-  flowReadExcluded,
   gatedSinkRequestExists,
   type ImplementationIdentity,
   isCfcEnforcementMode,
@@ -1164,19 +1164,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.invalidateCfc("trigger-reads-after-prepare");
     }
     for (const read of reads) {
-      // Runtime-surface exclusion keys on the RAW notification path; this
-      // is the only point where it still exists (storage below holds the
-      // canonical form, where a user `value.source` is indistinguishable
-      // from the raw `["source"]` surface).
-      if (flowReadExcluded(read.id, read.path)) {
+      if (read.id.startsWith("cid:")) {
         continue;
       }
-      // A notification names a document-rooted address.
+      // A notification names a document-rooted address. A change to one of
+      // the document's own members, such as `source`, changed no payload, so
+      // no payload path is a trigger read for it (spec §4.6.5).
+      const path = canonicalizeDocumentPath(toDocumentPath(read.path));
+      if (path === undefined) {
+        continue;
+      }
       this.#cfcState.triggerReads.push(deepFreeze({
         space: read.space,
         id: read.id,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeDocumentPath(toDocumentPath(read.path)),
+        path,
       }));
     }
   }
@@ -1352,11 +1354,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // journal says so. The flow join keys on that: a recursive read
       // consumes every label-map entry at or below the path it names, and a
       // `nonRecursive` one consumes only the entry at that path. So this read
-      // consumes the document's root entry and nothing else. A read of a meta
-      // member instead consumes the user data an entry of the same name
-      // covers, because canonicalization strips a leading `value` and a
-      // document with a user field named `slug` labels it at the same logical
-      // path the raw `["slug"]` member reads.
+      // consumes the document's root entry and nothing else.
       //
       // `allowMutableTransactionRead` takes the stored value as it stands
       // rather than an isolated copy of it. A guard that tests each meta key
@@ -1504,14 +1502,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // `ignoreReadForCommit` keeps them out of the conflict set, so a blind
     // root write stays blind rather than becoming a read-modify-write that
     // loses the race against any advance of the document it replaces. They
-    // name a member rather than the document root, which the meta seam's guard
-    // cannot do: the logical path a raw meta member reads is the one a user
-    // field of the same name is labeled at, so reading `["slug"]` would
-    // consume `value.slug`. A reserved sibling's raw path is excluded from the
-    // flow join by name, so reading it consumes nothing whatever a user field
-    // called `cfc` holds. `internalVerifierRead` says what the read is: the
-    // runtime resolving a label, the same mark `readStoredCfcMetadata()`
-    // carries.
+    // name a member rather than the document root, and a read of one of the
+    // document's own members observes no payload, so it consumes nothing
+    // whatever a user field called `cfc` holds. `internalVerifierRead` says
+    // what the read is: the runtime resolving a label, the same mark
+    // `readStoredCfcMetadata()` carries.
     const envelope = isObjectOrArray(value)
       ? value as { readonly [key in ReservedSibling]?: FabricValue }
       : undefined;
@@ -2432,36 +2427,38 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
     const consumedReads: ConsumedRead[] = [];
     for (const { read, raw } of pendingReads) {
-      // Strip the raw stamp before the spread; re-attach its rank (or leave
-      // the field absent when the backend never stamped one — an explicit
-      // undefined would hash differently from absence).
-      const { journalIndex: _raw, ...bare } = read;
+      // Strip the raw stamp and path before the spread; re-attach the rank
+      // (or leave the field absent when the backend never stamped one — an
+      // explicit undefined would hash differently from absence), and the
+      // record's one path.
+      const { journalIndex: _raw, path, ...bare } = read;
       consumedReads.push(deepFreeze({
         ...bare,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeDocumentPath(read.path),
+        ...cfcRecordPath(path),
         ...(raw !== undefined ? { journalIndex: rankByRaw.get(raw)! } : {}),
       }));
     }
 
     const log = this.getReactivityLog();
-    const attemptedWrites: AttemptedWrite[] = (log.attemptedWrites ?? []).map(
-      (address) =>
+    const attemptedWrites: CfcRecordAddress[] = (log.attemptedWrites ?? [])
+      .map(({ path, ...address }) =>
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
           // The reactivity log records the journal's document-rooted paths.
-          path: canonicalizeDocumentPath(toDocumentPath(address.path)),
-        }),
-    );
+          ...cfcRecordPath(toDocumentPath(path)),
+        })
+      );
 
-    const writes: AttemptedWrite[] = [];
+    const writes: CfcRecordAddress[] = [];
     for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
+        const { path, ...address } = write.address;
         writes.push(deepFreeze({
-          ...write.address,
-          scope: normalizeCellScope(write.address.scope),
-          path: canonicalizeDocumentPath(write.address.path),
+          ...address,
+          scope: normalizeCellScope(address.scope),
+          ...cfcRecordPath(path),
         }));
       }
     }

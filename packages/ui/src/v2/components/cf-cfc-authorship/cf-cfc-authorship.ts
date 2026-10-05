@@ -1,4 +1,5 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import type { CellSubscribeOptions } from "@commonfabric/runtime-client";
 import {
   authorPrincipalCandidates,
   PRINCIPAL_CLAIM_KINDS,
@@ -24,7 +25,7 @@ type CfcLabelResolvableValue = {
 type CfcLabelSubscribableValue = {
   subscribe(
     callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
-    options?: { includeCfcLabel?: boolean },
+    options: CellSubscribeOptions,
   ): () => void;
 };
 
@@ -687,7 +688,19 @@ export class CFCFCAuthorship extends BaseElement {
     // the new label.
     this._unsubscribeValue = value.subscribe(() => {
       void this.refreshLabel();
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A value the worker will not show carries no attestation here, and
+      // none is read for it: the watch on the cell it resolved to ends too. A
+      // later readable value starts one again.
+      onRefused: () => {
+        this.#endLabelWatch("value");
+        this._labelRequestId++;
+        const previous = this.cfcLabel;
+        this.cfcLabel = undefined;
+        this.requestUpdate("cfcLabel", previous);
+      },
+    });
     return true;
   }
 
@@ -718,7 +731,18 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = claim;
       this.requestUpdate("author", previous);
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // An author the worker will not show makes no claim here, and the
+      // watch on the cell it resolved to ends.
+      onRefused: () => {
+        this.#endLabelWatch("author");
+        this._authorRequestId++;
+        const previous = this._authorClaim;
+        this._authorClaim = undefined;
+        this.requestUpdate("author", previous);
+      },
+    });
     return true;
   }
 
@@ -816,8 +840,9 @@ export class CFCFCAuthorship extends BaseElement {
    * marks the cell loaded and runs `refresh`, whose store read does see the
    * label; a read that still finds none once the cell has loaded ends the
    * watch. The watch ends too when a read finds the label, when `source`
-   * resolves to a different cell or to none, and when the element
-   * disconnects. An element that is not connected starts none.
+   * resolves to a different cell or to none, when the worker refuses the
+   * watched cell's read, or `source`'s own, and when the element disconnects.
+   * An element that is not connected starts none.
    */
   #watchUnloadedLabel(
     source: LabelSource,
@@ -848,7 +873,13 @@ export class CFCFCAuthorship extends BaseElement {
         watch.loaded = true;
         refresh();
       }
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A refused cell loads nothing the host may read, so the watch ends.
+      onRefused: () => {
+        if (this.#labelWatches[source] === watch) this.#endLabelWatch(source);
+      },
+    });
     // The first delivery is synchronous, and may already have ended the watch.
     if (this.#labelWatches[source] === watch) {
       watch.cancel = cancel;

@@ -6,6 +6,7 @@ import { BaseElement } from "../../core/base-element.ts";
 
 import "../cf-chip/index.ts";
 
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity/did";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
@@ -21,6 +22,7 @@ import {
   createDragPreview,
   endDrag,
   startDrag,
+  suppressClickAfterDrag,
   updateDragPointer,
 } from "../../core/drag-state.ts";
 import { LinkTargetWatch } from "../../core/link-target-watch.ts";
@@ -166,6 +168,7 @@ export class CFCellLink extends BaseElement {
     if (this._isDragging) {
       endDrag();
       this.classList.remove("dragging");
+      suppressClickAfterDrag(this);
     }
 
     this._isDragging = false;
@@ -315,6 +318,13 @@ export class CFCellLink extends BaseElement {
       this._subscribedCellKey = nextCellKey;
       this._unsubscribe = namedCell.subscribe((val) => {
         this._updateNameFromValue(val);
+      }, {
+        // A name the worker will not show is named as withheld, not shown as
+        // a link that has none.
+        onRefused: () => {
+          this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+          this.requestUpdate();
+        },
       });
     }
   }
@@ -435,7 +445,6 @@ export class CFCellLink extends BaseElement {
   }
 
   private _handleClick(e: MouseEvent) {
-    if (this._isDragging) return;
     e.stopPropagation();
     if (this._resolvedCell) {
       const { scope, path } = this._resolvedCell.ref();

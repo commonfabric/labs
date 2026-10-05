@@ -33,11 +33,11 @@ cannot establish retained memory cost.
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four
 hours on a schedule, on the dedicated runner group. It runs `deno bench --json`
 over `packages/runner/test/*.bench.ts` plus explicitly listed benchmarks in
-`packages/utils`, `packages/fuse`, `packages/memory`, `packages/dashboard`, and
-`packages/patterns`. It uploads JSON stdout and a copy of stderr in the
-`bench-results` artifact with 90-day retention. A bench file outside those paths
-does not run in CI until it is added to the workflow. The workflow's manual
-trigger measures a specific commit.
+`packages/utils`, `packages/fuse`, `packages/memory`, `packages/data-model`,
+`packages/piece`, `packages/dashboard`, and `packages/patterns`. It uploads JSON
+stdout and a copy of stderr in the `bench-results` artifact with 90-day
+retention. A bench file outside those paths does not run in CI until it is added
+to the workflow. The workflow's manual trigger measures a specific commit.
 
 The team ops dashboard charts benchmark trends on its `/bench` page, and its
 trend reads one completed run per four-hour window from those artifacts. Each
@@ -1523,6 +1523,35 @@ Existing persisted and wire key formats keep their protocol-defined encoding.
 The collector and scheduler effects are tracked by
 `packages/runner/test/cfc-consumed-source-dedup.bench.ts` and
 `packages/runner/test/scheduler-invalid-causes.bench.ts` respectively.
+
+## Cold-runtime piece operations
+
+`packages/piece/test/piece-cold-runtime.bench.ts` measures two
+`PiecesController` calls on a runtime that has never run the space it opens.
+Each sample first seeds a fresh emulated store: one runtime compiles a default
+pattern into a new space, runs it, links it as the space's default pattern, and
+runs pieces of a one-field pattern beside it. A second runtime and controller
+then open the same store, and only the call is timed.
+
+- `getDefaultPattern(runIt=true, fresh runtime)` times opening the space's root:
+  loading its pattern from the compiled closure stored in the space, and
+  starting it. Its seed runs 128 pieces and disposes its runtime before the
+  call, leaving the store open. The benchmark throws when the call finds no
+  default pattern, so an empty lookup cannot pass for a measurement.
+- `add(single persisted piece, fresh runtime)` times registering one persisted
+  piece. That loads and starts the root the same way, then sends its `addPiece`
+  event and waits for the commit. The seeding runtime is still running over
+  the store while the call is timed.
+
+Seeding, runtime construction, and teardown are outside the timed interval. The
+default pattern holds only the registry and its handler, so both numbers follow
+the fixed cost of loading and starting a root rather than the size of a real
+default app. The 128 pieces are never added to the registry, so the root starts
+with an empty one. Run with:
+
+```sh
+deno bench -A --json packages/piece/test/piece-cold-runtime.bench.ts
+```
 
 ## Labeled pattern-test mapped render
 

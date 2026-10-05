@@ -3394,4 +3394,164 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
   });
+
+  describe("a labeled cell that may be missing", () => {
+    /**
+     * The schema of `SchemaRoot`'s `field`, declared as `declaration`,
+     * generated with `options`.
+     */
+    const fieldSchema = async (
+      declaration: string,
+      options?: { widenLiterals?: boolean },
+    ) => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Confidential<T, X extends readonly unknown[]> =
+          Cfc<T, { confidentiality: X }>;
+        interface SchemaRoot { field: ${declaration} }
+      `,
+        "SchemaRoot",
+      );
+      return asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, undefined, options),
+      ).properties?.field;
+    };
+
+    const LABELED_CELL = {
+      type: "string",
+      asCell: ["cell"],
+      ifc: { confidentiality: ["b"] },
+    };
+
+    it("keeps the label of a cell beside `undefined`", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Cell<string>, readonly ["b"]> | undefined',
+        ),
+      ).toEqual({ anyOf: [{ type: "undefined" }, LABELED_CELL] });
+    });
+
+    it("keeps the label of a cell beside `null`", async () => {
+      expect(
+        await fieldSchema('Confidential<Cell<string>, readonly ["b"]> | null'),
+      ).toEqual({ anyOf: [LABELED_CELL, { type: "null" }] });
+    });
+
+    it("keeps the label of a stream beside `undefined`", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Stream<string>, readonly ["b"]> | undefined',
+        ),
+      ).toEqual({
+        anyOf: [{ type: "undefined" }, { ...LABELED_CELL, asCell: ["stream"] }],
+      });
+    });
+
+    it("keeps the label of a labeled cell beside an unlabeled one", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Cell<string>, readonly ["b"]> | Cell<number> | undefined',
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          LABELED_CELL,
+          { type: "number", asCell: ["cell"] },
+        ],
+      });
+    });
+
+    it("keeps two labeled cells of one type apart when widening literals", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Cell<string>, readonly ["b"]> | Confidential<Cell<string>, readonly ["d"]> | undefined',
+          { widenLiterals: true },
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          LABELED_CELL,
+          { ...LABELED_CELL, ifc: { confidentiality: ["d"] } },
+        ],
+      });
+    });
+
+    /**
+     * `SchemaRoot`'s schema, with `field` declared as `declaration` beside
+     * object types `A` and `B`, generated without and with widening.
+     */
+    const plainAndWidened = async (declaration: string) => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Confidential<T, X extends readonly unknown[]> =
+          Cfc<T, { confidentiality: X }>;
+        type A = { a: string };
+        type B = { b: number };
+        interface SchemaRoot { field: ${declaration} }
+      `,
+        "SchemaRoot",
+      );
+      const generator = new SchemaGenerator();
+      return {
+        plain: asObjectSchema(generator.generateSchema(type, checker)),
+        widened: asObjectSchema(
+          generator.generateSchema(type, checker, undefined, {
+            widenLiterals: true,
+          }),
+        ),
+      };
+    };
+
+    it("keeps labeled cells over different payloads apart when widening literals", async () => {
+      const { plain, widened } = await plainAndWidened(
+        'Confidential<Cell<A>, readonly ["b"]> | Confidential<Cell<B>, readonly ["b"]> | undefined',
+      );
+      expect(widened).toEqual(plain);
+      expect(widened.properties?.field).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          {
+            $ref: "#/$defs/A",
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+          {
+            $ref: "#/$defs/B",
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+        ],
+      });
+    });
+
+    it("keeps labeled cells over different payload unions apart when widening literals", async () => {
+      const { plain, widened } = await plainAndWidened(
+        'Confidential<Cell<A | string>, readonly ["b"]> | Confidential<Cell<B | number>, readonly ["b"]> | undefined',
+      );
+      expect(widened).toEqual(plain);
+      expect(widened.properties?.field).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          {
+            anyOf: [{ type: "string" }, { $ref: "#/$defs/A" }],
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+          {
+            anyOf: [{ type: "number" }, { $ref: "#/$defs/B" }],
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+        ],
+      });
+    });
+
+    it("reads an unlabeled cell beside `undefined` with no label", async () => {
+      expect(await fieldSchema("Cell<string> | undefined")).toEqual({
+        anyOf: [{ type: "undefined" }, { type: "string", asCell: ["cell"] }],
+      });
+    });
+  });
 });

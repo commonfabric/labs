@@ -89,16 +89,30 @@ most-recently-used (MRU) ordering:
 
 - `homeSpaceCell.defaultPattern.profiles` — the list of profile links (each a
   cross-space link to a `profile-home.tsx` default pattern in its own space).
-- `homeSpaceCell.defaultPattern.defaultProfile` — the profile `#profile`
-  resolves to in headless mode and that the picker selects by default.
+- `homeSpaceCell.defaultPattern.defaultProfile` — a slot holding, under
+  `profile`, the link to the profile `#profile` resolves to in headless mode and
+  that the picker selects by default; no `profile` while none is chosen. The
+  link sits under a key because a handle to a cell whose root holds a link
+  denotes the cell that link names, so a link stored at the root could be set
+  once and never re-pointed.
+- `homeSpaceCell.defaultPattern.legacyDefaultProfile` — a default chosen before
+  the slot, kept as a link at the root of its cell. It is the default while the
+  slot holds none, and nothing writes it. A home that has not yet run with the
+  slot keeps its default this way in `defaultProfile` itself; `#profile` reads
+  it from there, and the picker it shows for such a home offers no "Set
+  default".
 - `homeSpaceCell.defaultPattern.mru` — recency-ordered links; drives ordering
   after the default.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID owned by the creating user and readable by anyone, since its ACL
-grants the wildcard `"*"` READ (a *named* `inSpace(name)` would put every
-profile created under one name in one space) — running `/api/patterns/system/profile-home.tsx`; the link
+a random DID owned by the creating user and writable by anyone, since its ACL
+grants the wildcard `"*"` WRITE: a runtime showing a profile writes into the
+profile's space, so a visitor needs more than READ. CFC owner-protects the
+profile's data fields, and its view state is per session; nothing else in the
+space is protected from a visitor (a *named* `inSpace(name)` would put every
+profile created under one name in one space) —
+running `/api/patterns/system/profile-home.tsx`; the link
 is appended to `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
 the default, and stamp MRU. There is no `profileName` mirror field anymore.
@@ -183,6 +197,28 @@ A request made in a home space that holds no queue — its home pattern does not
 exist, or is a version without the field — ends `refused`.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
+
+## Chat Manager
+
+The home default pattern holds the user's FabriChat manager in
+`defaultPattern.chatManager`, a piece of
+`packages/patterns/fabrichat/manager.tsx`. It is discovered with
+`wish({ query: "#chatManager" })`, a well-known home-space target, and
+satisfies the `ChatManagerOutput` contract
+([FabriChat](../../specs/fabrichat/ChatManagerOutput.md)). Like the agent
+queue, it is not a favorite, so a hashtag search does not find it.
+
+It holds the user's index of chat rooms: `rooms`, every room they belong to and
+haven't forgotten; `direct`, the direct room shared with each counterpart, by
+principal; `requests`, the outcome of each request but a report that a notice
+was delivered, which records none; and `outgoingNotices`, the notices its
+requests produced for a client to deliver. It creates each room in
+a space of its own. Everything it holds is private to the user, as the home
+space is.
+
+Home holds it but renders it nowhere of its own: a page shows it at its path
+in home's result, `chatManager`, with the user's rooms, the room chosen among
+them, and the controls that start a direct or a group chat.
 
 ## Custom Home Pattern
 

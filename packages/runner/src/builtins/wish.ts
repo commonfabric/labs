@@ -36,6 +36,7 @@ import {
   createSigilLinkFromParsedLink,
   isPrimitiveCellLink,
   type NormalizedFullLink,
+  parseLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -59,6 +60,7 @@ import {
 import { scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
+  DocumentLoadError,
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
@@ -235,6 +237,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#learned":
     case "#learnedSummary":
     case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -286,6 +289,10 @@ export function tagMatchesHashtag(
 type WishContext = {
   runtime: Runtime;
   readiness: ReturnType<typeof createDocumentReadiness>;
+
+  /** Candidate load failures encountered during this resolution. */
+  candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -426,6 +433,28 @@ function profileCellIsValid(
 }
 
 /**
+ * Whether home `defaultPattern` keeps its default in a slot: whether its
+ * `defaultProfile` holds an object at its root, read in the cell the field
+ * names rather than through it. A home without the slot keeps its default as a
+ * link at the root of that cell, or has nothing there; one with the slot keeps
+ * such a link, chosen before the slot, as `legacyDefaultProfile`.
+ */
+function homeHasDefaultProfileSlot(
+  runtime: Runtime,
+  defaultPattern: Cell<unknown>,
+  tx: IExtendedStorageTransaction | undefined,
+): boolean {
+  const field = defaultPattern.key("defaultProfile");
+  const fieldRaw = field.getRaw();
+  const root = isPrimitiveCellLink(fieldRaw)
+    ? runtime.getCellFromLink(parseLink(fieldRaw, field), undefined, tx)
+      .getRaw()
+    : fieldRaw;
+  return isObjectOrArray(root) && !Array.isArray(root) &&
+    !isPrimitiveCellLink(root);
+}
+
+/**
  * Whether a `mru` / `defaultProfile` entry names the SAME profile as a candidate
  * from the home `profiles` list — compared by the profile's own SPACE, NOT by
  * `Cell.equals` or by entity id.
@@ -537,14 +566,33 @@ function getProfileCandidateCells(
     return { ordered: [], defaultValid: false };
   }
 
-  // Ordering inputs: the default link and the MRU list.
-  const defaultEntry = defaultPattern.key("defaultProfile");
-  const defaultCell = defaultEntry.resolveAsCell();
-  const defaultValid = profileCellIsValid(
-    defaultCell,
-    defaultEntry.getRaw() !== undefined,
-    homeSpaceCell.space,
+  // Ordering inputs: the default and the MRU list. The default is the link
+  // under `profile` in home's slot, or, while the slot holds none, the link a
+  // home keeps an earlier default in: `legacyDefaultProfile`, or
+  // `defaultProfile` itself for a home without the slot.
+  const hasSlot = homeHasDefaultProfileSlot(
+    ctx.runtime,
+    defaultPattern,
+    ctx.tx,
   );
+  const slotEntry = defaultPattern.key("defaultProfile").key("profile");
+  const slotCell = slotEntry.resolveAsCell();
+  const slotValid = hasSlot &&
+    profileCellIsValid(
+      slotCell,
+      slotEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
+  const legacyEntry = defaultPattern.key(
+    hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+  );
+  const defaultCell = slotValid ? slotCell : legacyEntry.resolveAsCell();
+  const defaultValid = slotValid ||
+    profileCellIsValid(
+      defaultCell,
+      legacyEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
 
   const mruCell = defaultPattern.key("mru");
   const mruRaw = mruCell.asSchema(profileLinkListSchema).get();
@@ -601,9 +649,28 @@ function formatTarget(parsed: ParsedWishTarget): string {
     (parsed.path.length > 0 ? "/" + parsed.path.join("/") : "");
 }
 
-/**
- * Search favorites in home space for pieces matching a hashtag.
- */
+/** Checks a discovery candidate, retaining load failures for an empty search. */
+function requireDiscoveryCandidate(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (!(error instanceof DocumentLoadError)) throw error;
+    ctx.candidateFailures.set(cell, error);
+    return false;
+  }
+}
+
+/** Reports a candidate load failure when no readable match remains. */
+function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
+  const failure = ctx.candidateFailures.values().next().value;
+  if (failure) throw failure;
+  throw new WishError(message);
+}
+
+/** Searches favorites in home space for pieces matching a hashtag. */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
@@ -649,7 +716,7 @@ function searchFavoritesForHashtag(
     () =>
       matches.flatMap((match) => {
         const cell = match.cell.resolveAsCell();
-        return ctx.readiness.requireDocument(cell, ctx.tx)
+        return requireDiscoveryCandidate(cell, ctx)
           ? [{ cell, pathPrefix }]
           : [];
       }),
@@ -693,6 +760,8 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
+        const resolved = pieceCell.resolveAsCell();
+        if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",
@@ -793,9 +862,13 @@ function searchProfileForHashtag(
     "profile-elements-result-map",
     queryKey,
     () =>
-      matches.flatMap((match) =>
-        match.cell ? [{ cell: match.cell, pathPrefix }] : []
-      ),
+      matches.flatMap((match) => {
+        if (!match.cell) return [];
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -867,7 +940,10 @@ function searchByHashtag(
       parts.push(`${arbitraryDIDs.length} space(s)`);
     }
     const scopeDesc = parts.join(" or ") || "favorites";
-    throw new WishError(`No ${scopeDesc} found matching "${searchTerm}"`);
+    throwNoDiscoveryMatch(
+      ctx,
+      `No ${scopeDesc} found matching "${searchTerm}"`,
+    );
   }
 
   return allMatches;
@@ -907,16 +983,19 @@ function resolveHomeSpaceTarget(
 
       const match = favorites.find((entry) => {
         const userTags = entry.userTags ?? [];
-        for (const t of userTags) {
-          if (t.toLowerCase().includes(searchTerm)) return true;
-        }
-
         // Match the discovery tags snapshotted when favorited.
-        return (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        const tagged = userTags.some((t) =>
+          t.toLowerCase().includes(searchTerm)
+        ) || (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        return tagged &&
+          requireDiscoveryCandidate(entry.cell.resolveAsCell(), ctx);
       });
 
       if (!match) {
-        throw new WishError(`No favorite found matching "${searchTerm}"`);
+        throwNoDiscoveryMatch(
+          ctx,
+          `No favorite found matching "${searchTerm}"`,
+        );
       }
 
       return [{
@@ -961,6 +1040,22 @@ function resolveHomeSpaceTarget(
       return [{
         cell: getHomeSpaceCell(ctx),
         pathPrefix: ["defaultPattern", "agentQueue"],
+      }];
+    }
+
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
 
@@ -1456,7 +1551,7 @@ function resolveBase(
 
     throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
   } finally {
-    ctx.readiness.requireLoadedReads(ctx.tx);
+    ctx.readiness.requireLoadedReads(ctx.tx, ctx.candidateFailures.keys());
   }
 }
 
@@ -1526,6 +1621,7 @@ function createSharedHashtagResolver(
     const sharedContext: WishContext = {
       runtime: ctx.runtime,
       readiness,
+      candidateFailures: new Map(),
       tx,
       parentCell: ctx.parentCell,
       scope: sharedScope,
@@ -2097,6 +2193,8 @@ export function wish(
     input?: {
       profiles: unknown;
       defaultProfile: unknown;
+      legacyDefaultProfile: unknown;
+      offersSetDefault: boolean;
       mru: unknown;
     };
     resultCell?: Cell<any>;
@@ -2866,13 +2964,31 @@ export function wish(
     );
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
+    // A home with the slot hands it over for "Set default" and its earlier
+    // default as `legacyDefaultProfile`. A home without hands over no slot and
+    // `offersSetDefault: false`, since a write through a cell whose root holds
+    // a link lands in the linked profile; its `defaultProfile` cell, holding
+    // the default that way, goes as `legacyDefaultProfile`.
+    const hasSlot = homeHasDefaultProfileSlot(
+      runtime,
+      homeDefaultPattern,
+      ctx.tx,
+    );
     slot.input = {
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
-      defaultProfile: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+      defaultProfile: hasSlot
+        ? createSigilLinkFromParsedLink(
+          homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+        )
+        : undefined,
+      legacyDefaultProfile: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key(
+          hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+        ).getAsNormalizedFullLink(),
       ),
+      offersSetDefault: hasSlot,
       mru: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
       ),
@@ -2903,6 +3019,8 @@ export function wish(
       return slot.input && {
         profiles: bindInputCell(slot.input.profiles),
         defaultProfile: bindInputCell(slot.input.defaultProfile),
+        legacyDefaultProfile: bindInputCell(slot.input.legacyDefaultProfile),
+        offersSetDefault: slot.input.offersSetDefault,
         mru: bindInputCell(slot.input.mru),
       };
     };
@@ -3030,6 +3148,7 @@ export function wish(
           const ctx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3341,6 +3460,7 @@ export function wish(
           const suggestionCtx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,

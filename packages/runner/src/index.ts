@@ -1,4 +1,8 @@
-export { decomposeSchema, recomposeSchema } from "./schema-decompose.ts";
+export {
+  decomposeSchema,
+  recomposeSchema,
+  SchemaNotDecomposableError,
+} from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
 export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
@@ -59,7 +63,7 @@ export type {
 } from "./unsafe-host-trust.ts";
 export * from "./interface.ts";
 export { raw } from "./module.ts";
-export type { Cell, SinkConsumedLabel, Stream } from "./cell.ts";
+export type { Cell, ProjectedRead, SinkConsumedLabel, Stream } from "./cell.ts";
 // The seam's vocabulary, which describes a document's shape and is read by
 // hosts. Its write authorization is deliberately not here: it rides the
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
@@ -120,11 +124,14 @@ export {
   convertCellsToLinks,
   encodeSqliteParams,
   exportCell,
+  hostValueOf,
   isCell,
   isReadableCell,
   isStream,
+  readProjected,
   sendEvent,
   setCell,
+  sinkProjected,
 } from "./cell.ts";
 export {
   getCellOrThrow,
