@@ -17,16 +17,18 @@ import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, Wr
 type Schema = ReturnType<typeof toSchema>;
 const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
 type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPrincipal: CurrentPrincipal }>>;
+interface Erased<W> { value: [W][0] }
 `;
 
 /** The policy the cases protect fields with, written in place. */
 const POLICY = "WriteAuthorizedBy<string, typeof setName>";
 
 /**
- * A type reaching `POLICY` where no syntax names its writer, so a schema that
- * defines a document fails on it and one that views a document drops it.
+ * A type reaching `POLICY` through an indexed access, which leaves no syntax
+ * naming its writer, so a schema that defines a document fails on it and one
+ * that views a document drops it.
  */
-const UNREAD = `{ byId: { [key: string]: ${POLICY} } }`;
+const UNREAD = `{ byId: Erased<${POLICY}> }`;
 
 /**
  * What became of a writer policy a document's schema reaches: its claim is in
@@ -235,7 +237,7 @@ export default pattern(
     it("refuses a writer the callback's return annotation reads where no syntax names it, beside an authored input schema", async () => {
       const result = await transform(`
 export default pattern(
-  (_: { value: string }): ${UNREAD} => ({ byId: {} }),
+  (_: { value: string }): ${UNREAD} => ({ byId: { value: "" as never } }),
   toSchema<{ value: string }>(),
 );`);
 
@@ -589,7 +591,7 @@ export default pattern<{ value: ${POLICY} }, { box: Box<${POLICY}> }>(
 
     it("refuses a writer the callback's return annotation reads where no syntax names it", async () => {
       const result = await transform(`
-export default pattern<{}>((): ${UNREAD} => ({ byId: {} }));`);
+export default pattern<{}>((): ${UNREAD} => ({ byId: { value: "" as never } }));`);
 
       expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
         .toBe("refused");
@@ -654,10 +656,6 @@ export default pattern<{}>((): ${UNREAD} => ({ byId: {} }));`);
           `const fresh: { [key: string]: unknown; [index: number]: ${POLICY} } = { 1: "" as never };\n  return { box: fresh };`,
         ],
         [
-          "returns through a constant whose declared type is an index signature",
-          `const fresh: { [key: string]: ${POLICY} } = { value: "" };\n  return { box: fresh };`,
-        ],
-        [
           "returns under a dynamic computed key",
           `const key = "value" as string;\n  return { box: { [key]: "" as ${POLICY} } };`,
         ],
@@ -687,6 +685,19 @@ export default pattern<{}>(() => {
           .toBe("refused");
       });
     }
+
+    it("keeps the claim on fresh data an inferred result returns through a constant whose declared type is an index signature", async () => {
+      // The declaration's index signature names the writer, so the result
+      // document stores the claim.
+      const result = await transform(`
+export default pattern<{}>(() => {
+  const fresh: { [key: string]: ${POLICY} } = { value: "" };
+  return { box: fresh };
+});`);
+
+      expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
+        .toBe("kept");
+    });
 
     it("keeps the claim on fresh data whose declaration names its writer, beside a protected value it views", async () => {
       const result = await transform(`
@@ -894,7 +905,7 @@ export default pattern<{}>(() => {
       // Only the root policy's writer is the transformer's to supply.
       const result = await transform(`
 export default pattern<{ initial: string }>(({ initial }) => {
-  const a = new Writable<WriteAuthorizedBy<{ inner: { [key: string]: ${POLICY} } }, typeof setName>>({ inner: {} }).for("a");
+  const a = new Writable<WriteAuthorizedBy<{ inner: Erased<${POLICY}> }, typeof setName>>(null as never).for("a");
   return { a };
 });`);
 

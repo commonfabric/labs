@@ -253,8 +253,9 @@ Normative behavior:
    `cfc-write-authorized-by:unread`. Without the claim the document stores no
    write restriction, and any writer writes the field. So a writer the schema
    reaches where no syntax names it fails there: through a type parameter
-   bound to an argument with no syntax, an index signature, a tuple element, a
-   carrier read from a type alone, or a cell value whose type is inferred.
+   bound to an argument with no syntax, a generic member's operator syntax
+   (rule 8), a number index signature beside a string one, a carrier read
+   from a type alone, or a cell value whose type is inferred.
    Stored source fails the same way. Every other schema views a document
    whose stored envelope already binds its writers, so a writer such a view
    reads from a type alone is left out of it and not reported. A result

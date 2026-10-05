@@ -1200,9 +1200,10 @@ report these through the same collector (deduplicated via §2.2's
   created cell's schema, data an inferred result returns under a writer
   policy that is not a reactive reference) also reports every writer it
   reaches where no
-  syntax names it: through a parameter bound to an argument with no syntax, an
-  index signature, a tuple, a carrier's metadata read from a type alone, or a
-  cell value whose type is inferred. Any other schema read from a type alone,
+  syntax names it: through a parameter bound to an argument with no syntax, a
+  generic member's indexed access or conditional type, a number index
+  signature beside a string one, a carrier's metadata read from a type alone,
+  or a cell value whose type is inferred. Any other schema read from a type alone,
   such as a computed's capture, a handler's state, a pattern result inferred
   from its callback, or the argument of a pattern lowered from an array
   method's callback, is not reported; it reads the policy whole or not at all,

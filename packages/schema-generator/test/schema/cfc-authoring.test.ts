@@ -4195,6 +4195,15 @@ describe("Schema: CFC authoring aliases", () => {
           "a library alias over a primitive",
           "{ name: Readonly<WriteAuthorizedBy<string, typeof save>> }",
         ],
+        [
+          "an index signature",
+          "{ byId: { [key: string]: WriteAuthorizedBy<string, typeof save> } }",
+        ],
+        ["a tuple", "{ pair: [WriteAuthorizedBy<string, typeof save>] }"],
+        [
+          "a library alias over a named policy alias",
+          "{ box: Readonly<Protected> }",
+        ],
       ] as const
     ) {
       it(`keeps a writer reached through ${reach}, which syntax names, in a document and elsewhere`, async () => {
@@ -4213,17 +4222,8 @@ describe("Schema: CFC authoring aliases", () => {
     for (
       const [reach, root] of [
         [
-          "an index signature",
-          "{ byId: { [key: string]: WriteAuthorizedBy<string, typeof save> } }",
-        ],
-        ["a tuple", "{ pair: [WriteAuthorizedBy<string, typeof save>] }"],
-        [
           "a carrier a mapped type folds into an object",
           "Mirror<WriteAuthorizedBy<{ a: string }, typeof save>>",
-        ],
-        [
-          "a library alias over a named policy alias",
-          "{ box: Readonly<Protected> }",
         ],
         [
           "a generic member's operator syntax",
@@ -4270,8 +4270,8 @@ describe("Schema: CFC authoring aliases", () => {
       // document holds itself, inside a result that views other documents.
       const { type, checker, typeNode } = await getTypeFromCode(
         `${DECLARATIONS} type SchemaRoot = {
-          fresh: { [key: string]: WriteAuthorizedBy<string, typeof save> };
-          viewed: { [key: string]: WriteAuthorizedBy<string, typeof save> };
+          fresh: Erased<WriteAuthorizedBy<string, typeof save>>;
+          viewed: Erased<WriteAuthorizedBy<string, typeof save>>;
         };`,
         "SchemaRoot",
       );
@@ -4304,11 +4304,11 @@ describe("Schema: CFC authoring aliases", () => {
       // document the view reads stores the whole policy.
       const { schema, diagnostics } = await generate(
         `{
-          byId: { [key: string]: Owned<string, typeof save> };
-          secret: [Confidential<Owned<string, typeof save>, ["secret"]>];
-          inner: {
-            [key: string]: WriteAuthorizedBy<RepresentsCurrentUser<string>, typeof save>;
-          };
+          owned: Erased<Owned<string, typeof save>>;
+          secret: Erased<Confidential<Owned<string, typeof save>, ["secret"]>>;
+          inner: Erased<
+            WriteAuthorizedBy<RepresentsCurrentUser<string>, typeof save>
+          >;
         }`,
         false,
       );
@@ -4317,22 +4317,25 @@ describe("Schema: CFC authoring aliases", () => {
       expect(schema).toEqual({
         type: "object",
         properties: {
-          byId: {
+          owned: {
             type: "object",
-            properties: {},
-            additionalProperties: { type: "string" },
+            properties: { value: { type: "string" } },
+            required: ["value"],
           },
           secret: {
-            type: "array",
-            items: { type: "string", ifc: { confidentiality: ["secret"] } },
+            type: "object",
+            properties: {
+              value: { type: "string", ifc: { confidentiality: ["secret"] } },
+            },
+            required: ["value"],
           },
           inner: {
             type: "object",
-            properties: {},
-            additionalProperties: { type: "string" },
+            properties: { value: { type: "string" } },
+            required: ["value"],
           },
         },
-        required: ["byId", "secret", "inner"],
+        required: ["owned", "secret", "inner"],
       });
     });
 

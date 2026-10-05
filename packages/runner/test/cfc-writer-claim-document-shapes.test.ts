@@ -136,6 +136,47 @@ describe("a writer policy a document's schema reaches", () => {
       : "enforced";
   };
 
+  /**
+   * Sets up `source` in a result cell named `name`, and returns the error, if
+   * any, of other code holding WRITE on the space writing the field at `path`
+   * of the result by its bare link.
+   */
+  const memberWriteError = async (
+    source: RuntimeProgram,
+    name: string,
+    path: readonly string[],
+  ): Promise<string | undefined> => {
+    const tx = runtime.edit();
+    const pattern = await runtime.patternManager.compilePattern(source, {
+      space,
+      tx,
+    });
+    const cell = runtime.getCell<unknown>(space, name, undefined, tx);
+    const running = runtime.run(tx, pattern, {}, cell);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    await running.pull();
+    await runtime.idle();
+
+    const field = path.reduce(
+      (target: Cell<unknown>, key) => target.key(key) as Cell<unknown>,
+      running as Cell<unknown>,
+    );
+    const { schema: _schema, ...bare } = field.resolveAsCell()
+      .getAsNormalizedFullLink();
+    const member = await runtime.editWithRetry((memberTx) => {
+      setCfcImplementationIdentity(memberTx, {
+        kind: "verified",
+        moduleIdentity: "sha256:member-code",
+        symbol: "member",
+        bindingPath: ["member"],
+      });
+      runtime.getCellFromLink(bare, { type: "string" } as JSONSchema, memberTx)
+        .set("from member code");
+    });
+    return member.error?.message;
+  };
+
   it("enforces a policy written on the input's own field", async () => {
     expect(
       await outcomeOf(
@@ -252,11 +293,6 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
             "{ nested: ".repeat(20)
           }"seed" as Owned<string, typeof writerA>${" }".repeat(20)} }`,
         ],
-        [
-          "a constant whose declared type is an index signature",
-          'const fresh: { [key: string]: Owned<string, typeof writerA> } = { value: "seed" };',
-          "{ box: fresh }",
-        ],
       ] as const
     ) {
       it(`refuses it through ${shape}`, async () => {
@@ -274,6 +310,20 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
         tx.abort();
       });
     }
+
+    it("stores the whole policy through a constant whose declared type is an index signature, which refuses other writers", async () => {
+      expect(
+        await memberWriteError(
+          program(
+            "export default pattern<{ initial: string }>((input) => {",
+            'const fresh: { [key: string]: Owned<string, typeof writerA> } = { value: "seed" };',
+            "{ box: fresh }",
+          ),
+          "fresh-index-signature",
+          ["box", "value"],
+        ),
+      ).toContain("writeAuthorizedBy failed at /box/value");
+    });
   });
 
   for (
@@ -327,6 +377,7 @@ export default pattern((input: In) => ({ value: input.value }), ${reference});
     const annotated = (resultType: string, returned: string) =>
       program(
         `type Box<T> = { value: T };
+type Erased<W> = { value: [W][0] };
 export default pattern<{ initial: string }>((input): ${resultType} => {`,
         "",
         returned,
@@ -352,13 +403,26 @@ export default pattern<{ initial: string }>((input): ${resultType} => {`,
       );
     });
 
-    it("refuses a policy declared through an index signature", async () => {
+    it("stores the whole policy declared through an index signature, which refuses other writers", async () => {
+      expect(
+        await memberWriteError(
+          annotated(
+            "{ byId: { [key: string]: Owned<string, typeof writerA> } }",
+            '{ byId: { k: "seed" } }',
+          ),
+          "annotated-index-signature",
+          ["byId", "k"],
+        ),
+      ).toContain("writeAuthorizedBy failed at /byId/k");
+    });
+
+    it("refuses a policy declared through an indexed access", async () => {
       const tx = runtime.edit();
       await expect(
         runtime.patternManager.compilePattern(
           annotated(
-            "{ byId: { [key: string]: Owned<string, typeof writerA> } }",
-            '{ byId: { k: "seed" } }',
+            "{ byId: Erased<Owned<string, typeof writerA>> }",
+            '{ byId: { value: "seed" } }',
           ),
           { space, tx },
         ),

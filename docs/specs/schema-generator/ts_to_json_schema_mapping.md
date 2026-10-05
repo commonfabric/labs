@@ -1544,10 +1544,10 @@ Mechanics:
   today. The checker sees schemas from elsewhere as well, and holds them to the
   same reading.
 - A writer read where no syntax names it leaves the schema without its write
-  claim: a declaration parameter bound to an argument with no node, a policy
-  reached through an index signature or a tuple element, or a carrier's
-  metadata read from a type alone (bare, under a default-library alias, or
-  folded into an object as a member). In a schema that defines a document
+  claim: a declaration parameter bound to an argument with no node, a generic
+  member's indexed access or conditional type that leaves the carrier without
+  binding syntax (§4.1), or a carrier's metadata read from a type alone (bare,
+  or folded into an object as a member). In a schema that defines a document
   (`definesDocument`, §14) that would be a document stored with no write
   restriction, writable by any writer, so each is the
   `cfc-write-authorized-by:unread` error, naming the policy
