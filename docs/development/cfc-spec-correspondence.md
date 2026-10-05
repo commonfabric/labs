@@ -45,9 +45,10 @@ first.
 
 The vocabulary:
 
-- **Critical function.** A function the specification states as pseudocode and
-  the Lean development mechanizes: the rows of the "Pseudocode Coverage Matrix"
-  in `cfc/formal/FORMALIZATION.md` that a reactive runtime executes.
+- **Critical function.** A function the specification states as pseudocode
+  that this runtime executes. The set is the manifest's rows; where the
+  "Pseudocode Coverage Matrix" in `cfc/formal/FORMALIZATION.md` has a row for
+  one, that row names its Lean source.
 - **Kernel.** The runtime's copies of the critical functions, grouped by spec
   chapter, each opening with a header naming its chapter file, section,
   pseudocode name, and the hash of the block it was derived from. A kernel

@@ -31,6 +31,8 @@ clauses, exchange-rule evaluation, pattern matching, trust closure and
 observation-class refinement. Most of the distance is fail-closed (the runtime
 over-restricts); the edges that are soundness holes are called out below.
 
+The epic bodies below were written on 2026-07-01, before Epics A to E and H shipped, and several of their claims about the runner (that it has no exchange-rule machinery, that `cfcFlowLabels` defaults to `off`, that `cfcTriggerReadGating` is `false`) are no longer true. Where a body and the conformance statement disagree, the statement is current; re-deriving the bodies against it is a stage 2 follow-up of the correspondence plan.
+
 ---
 
 # Tier 1 — Big chunks (close these first)
