@@ -2213,6 +2213,7 @@ export function wish(
   interface ProfileCreateSidecarSlot extends SidecarSurfaceState {
     input?: {
       profiles: unknown;
+      privateInbox: unknown;
       inputId: string;
       buttonId: string;
     };
@@ -2226,6 +2227,7 @@ export function wish(
       legacyDefaultProfile: unknown;
       offersSetDefault: boolean;
       mru: unknown;
+      privateInbox: unknown;
     };
     resultCell?: Cell<any>;
   }
@@ -2830,6 +2832,11 @@ export function wish(
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
+      // The home's private inbox, which a profile created here is pointed
+      // at; a home without one holds nothing at this path.
+      privateInbox: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
+      ),
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
@@ -2873,6 +2880,7 @@ export function wish(
       return slot.input && {
         ...slot.input,
         profiles: bindInputCell(slot.input.profiles),
+        privateInbox: bindInputCell(slot.input.privateInbox),
       };
     };
 
@@ -3022,6 +3030,11 @@ export function wish(
       mru: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
       ),
+      // As for the create surface: the picker's create section points a new
+      // profile at it.
+      privateInbox: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
+      ),
     };
     const tx = providedTx || runtime.edit();
 
@@ -3052,6 +3065,7 @@ export function wish(
         legacyDefaultProfile: bindInputCell(slot.input.legacyDefaultProfile),
         offersSetDefault: slot.input.offersSetDefault,
         mru: bindInputCell(slot.input.mru),
+        privateInbox: bindInputCell(slot.input.privateInbox),
       };
     };
 

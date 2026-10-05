@@ -10,7 +10,11 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import ProfileHome from "./profile-home.tsx";
+import { seedProfileName } from "./profile-create.tsx";
+import ProfileHome, {
+  type BackwardsCompatibleProfile,
+  type ProfileInbox,
+} from "./profile-home.tsx";
 import PrivateInbox, {
   isNonListAppendRefusal,
   type Offer,
@@ -79,6 +83,19 @@ const EarlierVintageProfile = pattern<
   const inbox = new Writable<Pointer>({}).for("inbox");
   return { inbox, setInbox: setStandInInbox({ inbox }) };
 });
+
+/**
+ * Stands in for the profile-create surface's seed step, the step that runs
+ * after each profile is created, with Home's inbox given or left out as an
+ * embedder gives it or leaves it out.
+ */
+const Seeder = pattern<
+  { profiles: BackwardsCompatibleProfile[]; privateInbox?: ProfileInbox },
+  { seed: Stream<{ name?: string; index?: number }> }
+>(({ profiles, privateInbox }) => ({
+  // deno-lint-ignore no-explicit-any
+  seed: seedProfileName({ profiles: profiles as any, privateInbox }),
+}));
 
 /** Records the actor's principal in `me`. */
 const introduce = handler<void, { me: Writable<string> }>((_event, { me }) => {
@@ -336,6 +353,42 @@ export default pattern(() => {
     equals(earlierUnpointed.inbox?.piece, home.get().piece)
   );
 
+  // A profile created after Home pointed its profiles is pointed by the seed
+  // step that follows its creation: when Home's inbox is given and the profile
+  // points at nothing, and not otherwise.
+  const freshForInbox = ProfileHome({ initialName: "" });
+  const freshWithoutInbox = ProfileHome({ initialName: "" });
+  const freshPointedElsewhere = ProfileHome({ initialName: "" });
+  // deno-lint-ignore no-explicit-any
+  const seederWithInbox = Seeder({
+    profiles: [freshForInbox] as any,
+    privateInbox: home,
+  });
+  // deno-lint-ignore no-explicit-any
+  const seederWithoutInbox = Seeder({ profiles: [freshWithoutInbox] as any });
+  const seederOverPointed = Seeder({
+    // deno-lint-ignore no-explicit-any
+    profiles: [freshPointedElsewhere] as any,
+    privateInbox: home,
+  });
+  const action_point_fresh_elsewhere = action(() => {
+    freshPointedElsewhere.setInbox.send({
+      inbox: elsewhere.get().piece?.resolveAsCell(),
+    });
+  });
+  const action_seed_fresh_profiles = action(() => {
+    seederWithInbox.seed.send({ name: "Fresh", index: 0 });
+    seederWithoutInbox.seed.send({ name: "Fresh", index: 0 });
+    seederOverPointed.seed.send({ name: "Fresh", index: 0 });
+  });
+  const assert_only_the_unpointed_fresh_profile_is_pointed = assert(() =>
+    equals(freshForInbox.inbox?.piece, home.get().piece) &&
+    freshForInbox.name === "Fresh" &&
+    freshWithoutInbox.inbox?.piece === undefined &&
+    freshWithoutInbox.name === "Fresh" &&
+    equals(freshPointedElsewhere.inbox?.piece, elsewhere.get().piece)
+  );
+
   return {
     [TESTS]: [
       { action: action_introduce },
@@ -362,6 +415,9 @@ export default pattern(() => {
       // Pointing again changes nothing.
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
+      { action: action_point_fresh_elsewhere },
+      { action: action_seed_fresh_profiles },
+      { assertion: assert_only_the_unpointed_fresh_profile_is_pointed },
     ],
   };
 });

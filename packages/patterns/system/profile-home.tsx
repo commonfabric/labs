@@ -193,6 +193,45 @@ export type SetProfileInboxEvent = {
   inbox?: Cell<ShareInboxPiece>;
 };
 
+/**
+ * What pointing a profile at an inbox needs of it: its pointer and the stream
+ * that sets it.
+ */
+export type InboxPointable = {
+  // The pointer is a typed link. An inbox labels its offers confidential to
+  // its owner, and the link carries that label; read as an untyped link from
+  // another space, it joins that label into the reading run, and the run is
+  // refused. `private-inbox.pointer-type.test.ts` pins the type.
+  inbox?: ProfileInbox;
+  // Optional so that a handler binding a list of these as a value still runs
+  // over a stored profile of a vintage without the stream.
+  setInbox?: Stream<SetProfileInboxEvent>;
+};
+
+/**
+ * Points `profile` at the inbox `holder` holds, through the profile's own
+ * `setInbox`, when the profile points at no inbox. Does nothing when `holder`
+ * holds no inbox, or when the profile points at an inbox already, whichever
+ * inbox it is. Call it from a handler, with `profile` bound as a value of type
+ * {@link InboxPointable}, so that the pointer is read as a typed link.
+ *
+ * The read and the `setInbox` it leads to are two transactions in two spaces,
+ * so a pointer set between them is replaced.
+ */
+export function pointAtInboxIfUnset(
+  profile: InboxPointable | undefined,
+  holder: ProfileInbox | undefined,
+): void {
+  // The holder's link reaches the inbox through the cell that wrote it. A link
+  // written into a profile's labeled `inbox` takes its label from the document
+  // it names, and only the inbox's own result document carries the schema
+  // that label comes from, so the profile is given that document.
+  const inbox = holder?.piece?.resolveAsCell();
+  if (inbox === undefined || profile === undefined) return;
+  if (profile.inbox?.piece !== undefined) return;
+  profile.setInbox?.send({ inbox });
+}
+
 type VerifiedIdentityListWrite<Binding> = OwnerProtectedProfileWrite<
   VerifiedExternalIdentityCell[],
   Binding

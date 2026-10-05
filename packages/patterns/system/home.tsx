@@ -296,9 +296,14 @@ const Home = pattern(
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
     // create a profile. The actual create UI lives in the profile picker below.
+    // Home's private inbox, which a profile is pointed at when it is created
+    // and when the host ensures the inbox.
+    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "privateInbox",
+    );
     const createProfileStream = submitProfileCreation({
       profiles: profiles as any,
-      seedName: seedProfileName({ profiles: profiles as any }),
+      seedName: seedProfileName({ profiles: profiles as any, privateInbox }),
     });
     // The home Profile tab IS the profile picker: it lists profiles natively,
     // sets the default, stamps MRU on selection, and creates more inline.
@@ -308,15 +313,13 @@ const Home = pattern(
       legacyDefaultProfile: legacyDefaultProfile as any,
       offersSetDefault: true,
       mru: mru as any,
+      privateInbox,
     });
 
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
     const chatManager = FabriChatManager({});
-    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
-      "privateInbox",
-    );
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
       pointProfiles: pointProfilesAtPrivateInbox({

@@ -39,8 +39,27 @@ sent, not whether Home's handler committed: a stream's `send` returns before
 the handler runs. So an exception raised while sending it, such as Home
 failing to come up, is logged, and the next time that worker brings up Home it
 sends the event again; a failure inside the handler is not seen, and the event
-is not sent again until another worker brings Home up. A profile created after
-that point gets its pointer the next time the stream runs.
+is not sent again until another worker brings Home up.
+
+A profile is pointed in one of two ways:
+
+- **When Home ensures the inbox**, as above: every profile in Home's list that
+  points at no inbox.
+- **When the profile is created.** Every way of creating one goes through
+  `submitProfileCreation` in `profile-create.tsx`, whose queued
+  `seedProfileName` step runs once the new profile's create has committed and
+  points it at Home's inbox, if Home holds one and the profile points at none.
+  That covers Home's own `createProfile` stream and the profile picker's create
+  section, which Home hands its `privateInbox`, and the create surface a
+  `#profile` wish opens, which the runtime hands the `privateInbox` of the
+  demanding user's own Home, beside its `profiles`
+  (`packages/runner/src/builtins/wish.ts`). An embedder that hands no inbox
+  leaves the profile to the next ensure.
+
+So a profile created before Home holds an inbox is pointed by the next ensure
+after the inbox exists. Both ways go through `pointAtInboxIfUnset()` in
+`profile-home.tsx`, which reads the pointer as a typed link, as the next
+paragraphs require.
 
 The pointing runs as a second event, queued behind the one that creates the
 inbox, because the inbox piece exists only once that event's transaction has
@@ -50,17 +69,18 @@ without an inbox. A profile of any vintage with a `setInbox` is pointed this
 way; one predating `setInbox` drops the event, and the runtime logs a warning
 that no handler took it.
 
-The pointing step reads each profile's pointer as a typed link,
-`Cell<PrivateInboxPiece>`. The link carries the label of what it reaches, and
+Pointing reads each profile's pointer as a typed link,
+`Cell<ShareInboxPiece>`. The link carries the label of what it reaches, and
 the inbox labels its offers confidential to its owner. Read as an untyped link,
 `Cell<unknown>`, the pointer joins that label, from another space, into the
-served run in Home's space. Writer-fit then refuses the run's own sends,
-whichever path delivered it. When the event drain, rather than the wave that
-queued it, delivered the run, it also refuses the run's record that it handled
-the event, and the event is lost. Read as the typed link, the pointer joins no
-confidentiality. `private-inbox.pointer-type.test.ts` fails to compile if
-either reader's pointer type becomes unconstrained, or names a member of the
-inbox's result other than its name.
+reading run. Writer-fit then refuses the run's own sends, whichever path
+delivered it. When the event drain, rather than the wave that queued it,
+delivered the run, it also refuses the run's record that it handled the event,
+and the event is lost. Read as the typed link, the pointer joins no
+confidentiality. `private-inbox.pointer-type.test.ts` fails to compile if any
+reader's pointer type, the pointing step's, the seed step's or the profile's
+own, becomes unconstrained, or names a member of the inbox's result other than
+its name.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them

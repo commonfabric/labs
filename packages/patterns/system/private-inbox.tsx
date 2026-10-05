@@ -29,7 +29,11 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import type { SetProfileInboxEvent, ShareInboxPiece } from "./profile-home.tsx";
+import {
+  type InboxPointable,
+  pointAtInboxIfUnset,
+  type ShareInboxPiece,
+} from "./profile-home.tsx";
 
 /** The longest `kind` an offer keeps; a longer one is cut to this length. */
 export const OFFER_KIND_MAX_LENGTH = 32;
@@ -180,14 +184,7 @@ export type PrivateInboxHolder = {
 };
 
 /** What the pointing step needs of each profile in Home's list. */
-export type PointTarget = {
-  // The pointer is a typed link. The inbox labels its offers confidential to
-  // its owner, and the link carries that label; read as an untyped link, it
-  // joins that label from another space into this run, and the run is
-  // refused. `private-inbox.pointer-type.test.ts` pins the type.
-  inbox?: { piece?: Cell<PrivateInboxPiece> };
-  setInbox: Stream<SetProfileInboxEvent>;
-};
+export type PointTarget = InboxPointable;
 
 /**
  * Whether `value` is an `http` or `https` origin written as its own canonical
@@ -360,15 +357,12 @@ export const ensurePrivateInbox = handler<
 });
 
 /**
- * Has each profile in `profiles` whose `inbox` points at nothing point at
- * Home's private inbox, through the profile's own `setInbox`. A profile that
- * points at an inbox already, whichever inbox it is, is left as it is.
+ * Points each profile in `profiles` that points at no inbox at Home's private
+ * inbox, as `pointAtInboxIfUnset()` does.
  *
  * The list is bound as a value: the runner resolves it before the body runs,
  * and withdraws the dispatch until every profile it names has loaded, so an
- * unloaded profile is never taken for one with no inbox. The read and the
- * `setInbox` it leads to are two transactions in two spaces, so a pointer
- * set between them is replaced.
+ * unloaded profile is never taken for one with no inbox.
  */
 export const pointProfilesAtPrivateInbox = handler<
   void,
@@ -377,15 +371,8 @@ export const pointProfilesAtPrivateInbox = handler<
     profiles: PointTarget[];
   }
 >((_event, { privateInbox, profiles }) => {
-  // The holder's link reaches the inbox through the cell the creating handler
-  // wrote. A link written into a profile's labeled `inbox` takes its label from
-  // the document it names, and only the inbox's own result document carries
-  // the schema that label comes from, so the profile is given that document.
-  const inbox = privateInbox?.piece?.resolveAsCell();
-  if (inbox === undefined) return;
   for (const profile of profiles ?? []) {
-    if (profile === undefined || profile.inbox?.piece !== undefined) continue;
-    profile.setInbox.send({ inbox });
+    pointAtInboxIfUnset(profile, privateInbox);
   }
 });
 

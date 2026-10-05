@@ -18,6 +18,7 @@ import {
   Writable,
 } from "commonfabric";
 import EarlierProfile from "./earlier-profile.tsx";
+import ProfileCreate from "../../../system/profile-create.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home.tsx";
@@ -243,6 +244,12 @@ export interface MainOutput {
 
   /** Copies the private inbox's offers into this piece. */
   copyOffers: Stream<void>;
+
+  /**
+   * Creates one of the owner's profiles the way the profile-create surface
+   * does, handing it the private inbox.
+   */
+  createProfileThroughSurface: Stream<{ name?: string }>;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -269,4 +276,10 @@ export default pattern<MainInput, MainOutput>((
   offer: offer({ profiles }),
   queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
   copyOffers: copyOffers({ privateInbox, copiedOffers }),
+  createProfileThroughSurface: ProfileCreate({
+    // deno-lint-ignore no-explicit-any
+    profiles: profiles as any,
+    // deno-lint-ignore no-explicit-any
+    privateInbox: privateInbox as any,
+  }).createProfile,
 }));

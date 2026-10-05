@@ -4,9 +4,10 @@
  * that reads a profile's pointer as an untyped link joins that label from
  * another space: its sends are then refused, and, when the event drain
  * delivers it, so is its record that it handled the event. Read as a typed
- * link, the pointer joins no confidentiality. Both readers, Home's pointing
- * step and a sender reading through `profile-home.tsx`'s own types, therefore
- * read it as a typed link.
+ * link, the pointer joins no confidentiality. Every reader, Home's pointing
+ * step, the seed step that points a profile once it is created, and a sender
+ * reading through `profile-home.tsx`'s own types, therefore reads it as a
+ * typed link.
  *
  * The check is made by the type checker. A pointee that is `unknown` or `any`
  * fails to compile here under `deno task check`, and so does one naming a
@@ -20,6 +21,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell, NAME } from "commonfabric";
 import type { PointTarget, PrivateInboxOutput } from "./private-inbox.tsx";
+import type { SeedProfileTarget } from "./profile-create.tsx";
 import type { ProfileInbox } from "./profile-home.tsx";
 
 /** The type a pointer holder's `piece` link reaches. */
@@ -45,6 +47,10 @@ const profileTypeReachesOnlyTheName: ReachesOnlyTheName<
   PointeeOf<ProfileInbox>
 > = true;
 
+const seedStepReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<NonNullable<SeedProfileTarget["inbox"]>>
+> = true;
+
 describe("private-inbox pointer type", () => {
   it("types the pointing step's pointer as a link naming only the inbox's name", () => {
     expect(pointingStepReachesOnlyTheName).toBe(true);
@@ -52,5 +58,9 @@ describe("private-inbox pointer type", () => {
 
   it("types a profile's pointer as a link naming only the inbox's name", () => {
     expect(profileTypeReachesOnlyTheName).toBe(true);
+  });
+
+  it("types the seed step's pointer as a link naming only the inbox's name", () => {
+    expect(seedStepReachesOnlyTheName).toBe(true);
   });
 });

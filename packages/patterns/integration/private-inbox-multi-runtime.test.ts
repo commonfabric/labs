@@ -186,6 +186,16 @@ describe("private inbox across runtimes", () => {
     expect((await profileInbox(2)).id).toBe(inbox.id);
   });
 
+  it("points a profile created through the profile-create surface after the inbox exists", async () => {
+    const count = ((await owner.readRaw(["profiles"])) as unknown[]).length;
+    await owner.send("createProfileThroughSurface", { name: "Later" });
+    await harness.settleUntil(async () =>
+      (await owner.read(["profiles", count, "inbox", "piece"])) !== undefined
+    );
+
+    expect((await profileInbox(count)).id).toBe(inbox.id);
+  });
+
   it("delivers each offer a sender's own handler sends, from the sender", async () => {
     const before = (await ownerOffers()).length;
 
