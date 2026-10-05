@@ -371,6 +371,17 @@ export default pattern(() => {
     profiles: [freshPointedElsewhere] as any,
     privateInbox: home,
   });
+  // An existing, named profile at the index the seed step is handed, as when
+  // the create read its index from a list it had not loaded: left alone.
+  const namedAtIndex = ProfileHome({ initialName: "" });
+  const seederOverNamed = Seeder({
+    // deno-lint-ignore no-explicit-any
+    profiles: [namedAtIndex] as any,
+    privateInbox: home,
+  });
+  const action_name_the_existing_profile = action(() => {
+    namedAtIndex.setName.send({ name: "Ada" });
+  });
   const action_point_fresh_elsewhere = action(() => {
     freshPointedElsewhere.setInbox.send({
       inbox: elsewhere.get().piece?.resolveAsCell(),
@@ -380,6 +391,7 @@ export default pattern(() => {
     seederWithInbox.seed.send({ name: "Fresh", index: 0 });
     seederWithoutInbox.seed.send({ name: "Fresh", index: 0 });
     seederOverPointed.seed.send({ name: "Fresh", index: 0 });
+    seederOverNamed.seed.send({ name: "Fresh", index: 0 });
   });
   const assert_only_the_unpointed_fresh_profile_is_pointed = assert(() =>
     equals(freshForInbox.inbox?.piece, home.get().piece) &&
@@ -387,6 +399,9 @@ export default pattern(() => {
     freshWithoutInbox.inbox?.piece === undefined &&
     freshWithoutInbox.name === "Fresh" &&
     equals(freshPointedElsewhere.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_existing_named_profile_left_alone = assert(() =>
+    namedAtIndex.inbox?.piece === undefined && namedAtIndex.name === "Ada"
   );
 
   return {
@@ -416,8 +431,10 @@ export default pattern(() => {
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
       { action: action_point_fresh_elsewhere },
+      { action: action_name_the_existing_profile },
       { action: action_seed_fresh_profiles },
       { assertion: assert_only_the_unpointed_fresh_profile_is_pointed },
+      { assertion: assert_existing_named_profile_left_alone },
     ],
   };
 });

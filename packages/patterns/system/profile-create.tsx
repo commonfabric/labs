@@ -114,14 +114,16 @@ export const seedProfileName = handler<
   const index = event.index;
   if (!name || typeof index !== "number") return;
   const target = profiles[index];
+  // The profile at `index` is the one just created only while its name is
+  // unstored; an index taken from a list this replica had not loaded may name
+  // an existing profile, which both steps below leave alone.
+  if (target === undefined || (target.name ?? "") !== "") return;
   // The profile is pointed at Home's private inbox here, after its create has
   // committed, for the same reason its name is stored here. Home's own pointing
   // step runs once per runtime worker, so a profile created later would
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
-  if (target === undefined || target.setName === undefined) return;
-  if ((target.name ?? "") !== "") return;
-  target.setName.send({ name });
+  target.setName?.send({ name });
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
