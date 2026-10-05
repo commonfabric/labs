@@ -341,11 +341,11 @@ and the cross-space exposure of label metadata.
 
 **What the runtime does.** Per-class entries are populated:
 `cfc/observation-classes.ts` (`entryObservationClass`, `readConsumesEntry`)
-classifies entries and reads; `walkIfcSchema` in `cfc/prepare.ts` maps `items`
-and record-only `additionalProperties` to the `*` template;
-`deriveLabelMetadataTemplateEntries` and
+classifies entries and reads; `cfcSchemaEntries` in `cfc/schema-label-view.ts`
+is the schema walk that gives `items` and record-only `additionalProperties`
+the `*` path; `deriveLabelMetadataTemplateEntries` and
 `resolveLabelMetadataTemplateConfidentiality` in
-`cfc/label-metadata-population.ts` derive the template entries; the persist
+`cfc/label-metadata-population.ts` mint the template entries; the persist
 region of `prepareBoundaryCommit` in `cfc/prepare.ts` re-mints an existence
 entry when a deleted path is re-created. Cross-space persistence commits the
 source-bearing fields of atoms through `transformCfcLabelForCrossSpacePersist`
