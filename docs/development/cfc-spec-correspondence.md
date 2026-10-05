@@ -118,7 +118,7 @@ The vocabulary:
    prose delta, the pseudocode delta, and the Lean delta together: the model
    and the theorems that make the new rule a proved property land in the same
    change, so the three artifacts never disagree at a commit. The Lean delta
-   is what the specs repository's `formal/docs/CONTRIBUTING.md` lists under
+   is what the specs repository's `cfc/formal/docs/CONTRIBUTING.md` lists under
    its required documentation updates: the model and proof modules,
    `FORMALIZATION.md`, `THEOREM-MAP.md`, `COVERAGE.md`, `MODULE-INDEX.md`
    when the module map changes, `PROOF-ROADMAP.md` when the frontier does, and

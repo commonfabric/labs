@@ -85,11 +85,11 @@ sized to its budget:
   repository, the live process document, and the rule that a semantic change
   to CFC goes through the specification first. This is the always-on line
   every agent sees, including those without path-scoped rules.
-- A path-scoped rule `.claude/rules/cfc.md` for `packages/runner/src/cfc/**`,
-  `packages/html/src/worker/reconciler.ts`, `packages/cf-harness/src/**` where
-  it enforces, and `docs/specs/cfc-*.md`. It carries the procedure above in
-  the short form, the classification test, and the two commands (snapshot
-  regeneration, correspondence check).
+- A path-scoped rule `.claude/rules/cfc.md` for the governed paths the
+  procedure document lists (the CFC runtime sources and tests, both render
+  boundary modules, the harness's CFC enforcement sources, and
+  `docs/specs/cfc-*.md`). It is a pointer at that document, with the two
+  commands (snapshot regeneration, correspondence check) once they exist.
 - A live document `docs/development/cfc-spec-correspondence.md` carrying the
   full procedure, the vocabulary, and the triage rule for documents. The rule
   and the `AGENTS.md` paragraph cite it rather than restate it.
@@ -217,8 +217,8 @@ the first is a stage on the way to it rather than an alternative.
 
 ### The specs side (stage 4)
 
-Changes proposed for `commonfabric/specs`, recorded here because labs is where
-they were found:
+Changes for `commonfabric/specs`, recorded here because labs is where they
+were found. The first is in place; the rest are proposed:
 
 - The continuous-integration workflow `commonfabric/specs#46`, merged
   2026-10-05 beside stage 1 (`lake build`, `check-architecture.py`, the §8.10.3
@@ -335,8 +335,10 @@ Taken by the CFC owner on 2026-10-05:
    default only when fail-closed, otherwise behind a dial.
 4. **The spec-change list** closes to new entries when stage 1 lands and
    drains through the test drive.
-5. **Specs CI** is wanted, as it is cheap: `lake build`, the architecture
-   check, the pseudocode check, and the cross-repository correspondence job.
+5. **Specs CI** is wanted, as it is cheap. `lake build`, the architecture
+   check and the pseudocode check run on every specs pull request since
+   `commonfabric/specs#46` merged on 2026-10-05; the cross-repository
+   correspondence job joins that workflow at stage 2.
 
 6. **Publishing the pseudocode.** Verbatim extraction makes the critical
    blocks public as the runner's source; accepted.
