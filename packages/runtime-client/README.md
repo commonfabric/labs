@@ -18,16 +18,17 @@ option should continue observing `RuntimeClient.hasPendingWrites()` and
 covers pending pattern work as well as commits. Operations that require
 durability should retain the default pull.
 
-What a pull finds reaches subscribers. The handle, and every other handle on the
-same cell under the same schema that has not written since the pull was made,
-takes what it found, and the subscribers of each handle it changes hear it, so
-`get()` after a pull agrees with the value each subscriber was last given. That
-includes `undefined`. The worker sends an update holding nothing for a document
-it has not loaded as well, so the connection delivers none, and a pull, which
-waits for the loads its read starts, is how a subscriber that was given a value
-learns that the cell now holds nothing. A `sync()` waits for no loads, and one
-that finds nothing leaves a value the handle holds in place, telling no
-subscriber.
+What a pull finds reaches subscribers. Unless the handle has written since the
+pull was made, or an update to the cell has reached any handle on it since, the
+handle takes what the pull found, and so does every other handle on the same
+cell under the same schema that has not written since. The subscribers of each
+handle it changes hear it, so `get()` after a pull agrees with the value each
+subscriber was last given. That includes `undefined`. The worker sends an update
+holding nothing for a document it has not loaded as well, so the connection
+delivers none, and a pull, which waits for the loads its read starts, is how a
+subscriber that was given a value learns that the cell now holds nothing. A
+`sync()` waits for no loads, and one that finds nothing leaves a value the
+handle holds in place, telling no subscriber.
 
 ## Refused reads
 

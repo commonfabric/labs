@@ -3359,5 +3359,21 @@ describe("cell-handle", () => {
       expect(peer.heard).toStrictEqual([["held"], ["written"]]);
       expect(peer.cell.get()).toStrictEqual(["written"]);
     });
+
+    it("keeps an update another handle took while a `pull()` was in flight", async () => {
+      const answer = Promise.withResolvers<string[] | undefined>();
+      const { subscribed } = answering(() => answer.promise);
+      const reader = subscribed();
+      const peer = subscribed();
+      const pulling = reader.cell.pull();
+      peer.cell[$onCellUpdate](["updated"]);
+
+      answer.resolve(undefined);
+      await pulling;
+
+      expect(reader.heard).toStrictEqual([["held"]]);
+      expect(peer.heard).toStrictEqual([["held"], ["updated"]]);
+      expect(peer.cell.get()).toStrictEqual(["updated"]);
+    });
   });
 });

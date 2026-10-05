@@ -805,8 +805,9 @@ export class CellHandle<T = unknown> {
    *
    * A change reaches `callback` through an update, or through what a read
    * finds, whether this handle made it or another on the same cell under the
-   * same schema did, unless this handle has written since that other read was
-   * made. Since no update holds nothing, a subscriber that was given a value
+   * same schema did, unless something newer than the read reached the handle
+   * first: a write through it, or an update to the cell, while the read was in
+   * flight. Since no update holds nothing, a subscriber that was given a value
    * hears that the cell now holds nothing only from a {@link pull}, as
    * `undefined`: a `sync()` that finds nothing may have found a document not
    * loaded yet, so the handle keeps the value it holds.
@@ -929,6 +930,8 @@ export class CellHandle<T = unknown> {
    * wherever it differs from what that handle holds, `undefined` included: a
    * pull waits for the loads its read starts, so finding nothing means the
    * cell holds nothing, and a subscriber that was given a value is told so.
+   * It reaches none of them when this handle has written since, or an update
+   * to the cell has reached any handle on it since, which is newer.
    *
    * @throws {CellReadRefusedError} When the worker refuses the read, as
    *   {@link sync} does.
@@ -997,7 +1000,9 @@ export class CellHandle<T = unknown> {
     if (settled) {
       // The connection drops an update that holds nothing, so another handle
       // on the cell can hold a value this read found gone, whatever this
-      // handle held.
+      // handle held. An update that reached any handle on the cell while the
+      // read was in flight moved the queue's authoritative generation, so a
+      // read that gets here is no older than what any peer took from one.
       for (const peer of this.#conn.peersOf(this)) {
         peer.#takeRead(response.value, startedAt);
       }
