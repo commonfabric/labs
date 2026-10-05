@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/utils/sandbox-contract";
@@ -11,7 +12,9 @@ import {
 } from "../src/builder/pattern-metadata.ts";
 import { moduleToEncodableForm } from "../src/builder/to-encodable-form.ts";
 import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
+import { CUSTODY_SEAL_WRITER } from "../src/cfc/custody-seal.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";
+import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { ExecutableRegistry } from "../src/harness/executable-registry.ts";
 import type { HarnessedFunction } from "../src/harness/types.ts";
 import {
@@ -1023,6 +1026,154 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       );
       expect(digest).toBe("");
       expect(result.error).toBeDefined();
+    });
+  });
+
+  describe("attack 13: a debugName carried in stored data never names a builtin", () => {
+    // Attack 13 — builtin identity from data. A builtin's policy identity is
+    // what host operations read as "this builtin wrote it": the custody seal's
+    // `TransformedBy` witness, reviewed snapshot copies, and the trusted-builtin
+    // arm of `writeAuthorizedBy`. A stored graph is data, and a module in it
+    // can carry any member, `debugName` among them. Run as-is, such a module
+    // executes on the unverified stringified-source fallback; its writes must
+    // stay unattributed, not stamped as the builtin the data names.
+
+    const COPY_PROGRAM = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+import { handler, pattern, Writable } from "commonfabric";
+
+const copy = handler<void, { from: string; to: Writable<string> }>(
+  (_event, { from, to }) => { to.set(from); },
+);
+
+export default pattern<{ from: string }>(({ from }) => {
+  const to = new Writable<string>("").for("to");
+  return { to, copy: copy({ from, to }) };
+});
+`,
+      }],
+    };
+
+    /** Every `TransformedBy` atom anywhere in `value`. */
+    const transformedByIn = (value: unknown): Record<string, unknown>[] => {
+      const found: Record<string, unknown>[] = [];
+      const visit = (node: unknown) => {
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+          return;
+        }
+        if (node === null || typeof node !== "object") return;
+        const record = node as Record<string, unknown>;
+        if (record.type === CFC_ATOM_TYPE.TransformedBy) found.push(record);
+        Object.values(record).forEach(visit);
+      };
+      visit(value);
+      return found;
+    };
+
+    const kindsOf = (atoms: Record<string, unknown>[]) =>
+      atoms.map((atom) => (atom.identity as { kind?: unknown }).kind);
+
+    /**
+     * Run the copy handler, its module first passed through `asStored`, over
+     * a confidential source document, and return the `TransformedBy` atoms
+     * stamped on the document it wrote.
+     */
+    const stampsFromCopy = async (
+      name: string,
+      asStored: (module: Module) => Module,
+    ) => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const pattern = await runtime.patternManager.compilePattern(
+        COPY_PROGRAM,
+      ) as Pattern;
+      await runtime.idle();
+      const module = handlerModules(pattern)[0];
+      const nodes = pattern.nodes.map((node) =>
+        node.module === module ? { ...node, module: asStored(module) } : node
+      );
+      const graph = { ...pattern, nodes } as unknown as Pattern;
+
+      const source = runtime.getCell<string>(signer.did(), `${name}-source`, {
+        type: "string",
+        ifc: { confidentiality: [cfcAtom.space(signer.did())] },
+      } as JSONSchema);
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          source.withTx(tx).set("confidential");
+        })).error,
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell<{ to: string }>(
+        signer.did(),
+        name,
+        undefined,
+        tx,
+      );
+      // deno-lint-ignore no-explicit-any
+      const result = runtime.run(
+        tx,
+        graph,
+        { from: source },
+        resultCell,
+      ) as any;
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      await result.pull();
+      await runtime.idle();
+
+      const sendTx = runtime.edit();
+      result.withTx(sendTx).key("copy").send(undefined);
+      expect((await sendTx.commit()).error).toBeUndefined();
+      await runtime.idle();
+      expect(await result.key("to").pull()).toBe("confidential");
+
+      const written = result.key("to").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const readTx = runtime.edit();
+      try {
+        const envelope = loadStoredCfcEnvelope(readTx, written);
+        expect(envelope.status).toBe("loaded");
+        return transformedByIn(envelope);
+      } finally {
+        readTx.abort();
+      }
+    };
+
+    it("control: the compiled handler's write is stamped with its verified identity", async () => {
+      const stamps = await stampsFromCopy("attack13-control", (m) => m);
+      expect(kindsOf(stamps)).toContain("verified");
+      expect(kindsOf(stamps)).not.toContain("builtin");
+    });
+
+    it("a stored handler module naming the custody seal writes unattributed, never as the seal", async () => {
+      // The handler module as a stored graph carries it: stringified source,
+      // no `$implRef`, and an enumerable `debugName` naming a host writer.
+      const stamps = await stampsFromCopy("attack13-stored", (module) => {
+        const encodable = (module as Module & {
+          toEncodableForm: () => unknown;
+        }).toEncodableForm() as Record<string, unknown>;
+        const { $implRef: _dropped, ...rest } = encodable;
+        return {
+          ...rest,
+          implementation: Function.prototype.toString.call(
+            module.implementation,
+          ),
+          debugName: CUSTODY_SEAL_WRITER,
+        } as unknown as Module;
+      });
+      expect(kindsOf(stamps)).not.toContain("builtin");
+      expect(stamps).toEqual([]);
     });
   });
 });
