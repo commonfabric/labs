@@ -1504,6 +1504,16 @@ export default pattern<{ location: ${location}; other: ${other}; name: string }>
             undefined,
           ],
           [
+            "a string index signature intersected with a labeled primitive",
+            `Integrity<string, ["gps"]> & Record<string, number>`,
+            undefined,
+          ],
+          [
+            "a number index signature intersected with a labeled primitive",
+            `Integrity<number, ["gps"]> & Record<number, string>`,
+            undefined,
+          ],
+          [
             "a kept member of an intersection",
             `Pick<Integrity<Point, ["gps"]> & { name: string }, "lat">`,
             gps,

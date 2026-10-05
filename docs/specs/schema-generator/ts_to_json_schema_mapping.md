@@ -1153,8 +1153,9 @@ Mechanics:
     value holds, so a payload that is or includes a primitive labels such a
     value whole: `Integrity<string, L>`, and the `string` alternative of
     `Confidential<string | { a: number }, L>`. A primitive intersected with
-    an object that holds data of its own, as in
-    `Integrity<string, L> & { name: string }`, is placed as an object.
+    an object that holds data of its own, under a name or an index
+    signature, as in `Integrity<string, L> & { name: string }` or
+    `Integrity<string, L> & Record<string, number>`, is placed as an object.
   - A carrier that records no payload, its metadata alone, is taken to have
     been written around the one member it is intersected with, where there is
     one. Beside more, a restriction labels the whole value and evidence lands

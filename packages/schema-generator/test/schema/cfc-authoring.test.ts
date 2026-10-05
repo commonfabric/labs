@@ -3969,6 +3969,16 @@ describe("Schema: CFC authoring aliases", () => {
             undefined,
             {},
           ],
+          [
+            'Integrity<string, readonly ["gps"]> & Record<string, number>',
+            undefined,
+            {},
+          ],
+          [
+            'Integrity<number, readonly ["gps"]> & Record<number, string>',
+            undefined,
+            {},
+          ],
           ["typeof twoPolicies", undefined, { pin: secret }],
         ] as const
       ) {
@@ -4002,6 +4012,11 @@ describe("Schema: CFC authoring aliases", () => {
           }],
           [
             'string & Confidential<{ payload: string }, readonly ["s"]>',
+            secret,
+            {},
+          ],
+          [
+            'Confidential<string, readonly ["s"]> & Record<string, number>',
             secret,
             {},
           ],

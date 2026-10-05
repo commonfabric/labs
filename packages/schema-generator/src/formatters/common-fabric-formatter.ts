@@ -551,18 +551,22 @@ const PRIMITIVE_TYPE_FLAGS = ts.TypeFlags.StringLike |
 /**
  * Whether `type` is a primitive, alone or intersected with carriers and
  * brands, so that the primitive is all the data a value of it holds. An
- * object it is intersected with that holds data of its own makes it no
- * primitive value.
+ * object it is intersected with that holds data of its own, under a name or
+ * an index signature, makes it no primitive value.
  */
-const isPrimitiveValue = (type: ts.Type): boolean => {
+const isPrimitiveValue = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean => {
   const parts = type.isIntersection() ? type.types : [type];
   return parts.some((part) => (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0) &&
     parts.every((part) =>
       (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0 ||
-      part.getProperties().every((property) =>
-        property.name === CFC_CARRIER_PROPERTY ||
-        property.name.startsWith("__@")
-      )
+      (checker.getIndexInfosOfType(part).length === 0 &&
+        part.getProperties().every((property) =>
+          property.name === CFC_CARRIER_PROPERTY ||
+          property.name.startsWith("__@")
+        ))
     );
 };
 
@@ -585,7 +589,7 @@ const dataMemberDeclarations = (
     if (
       (alternative.flags &
           (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) === 0 ||
-      isPrimitiveValue(alternative)
+      isPrimitiveValue(alternative, checker)
     ) continue;
     for (const property of checker.getPropertiesOfType(alternative)) {
       if (
@@ -698,8 +702,12 @@ const payloadReach = (
   // A primitive value of a payload one of whose alternatives is a primitive:
   // the value is that alternative, all of it the payload's data.
   if (
-    alternativesOf(type).every(isPrimitiveValue) &&
-    alternativesOf(of).some(isPrimitiveValue)
+    alternativesOf(type).every((alternative) =>
+      isPrimitiveValue(alternative, checker)
+    ) &&
+    alternativesOf(of).some((alternative) =>
+      isPrimitiveValue(alternative, checker)
+    )
   ) {
     return { may: "all", must: "all" };
   }
