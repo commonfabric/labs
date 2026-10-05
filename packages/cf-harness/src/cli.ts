@@ -382,6 +382,9 @@ export interface RunCfHarnessCliDependencies {
   cwd?: string;
   env?: Record<string, string | undefined>;
 
+  /** Current host job identity, passed only to brokered command processes. */
+  commandJobId?: string;
+
   /** Trusted, fixed binding supplied only by the dedicated local Loom host. */
   loomLocalHostBinding?: LoomLocalHostBinding;
 
@@ -1348,6 +1351,7 @@ export const parseCfHarnessCliArgs = async (
     | "readTextFile"
     | "pathExists"
     | "sandboxHomeDir"
+    | "commandJobId"
     | "providerSettingsStore"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
@@ -1741,6 +1745,7 @@ export const parseCfHarnessCliArgs = async (
       ? args["loom-commands-config"]
       : env.CF_HARNESS_LOOM_COMMANDS_CONFIG,
     readTextFile,
+    deps.commandJobId,
   );
   const inputCells = parseInputCells(
     args["input-cell"] as string | readonly string[] | undefined,
