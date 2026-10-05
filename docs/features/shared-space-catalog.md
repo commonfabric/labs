@@ -117,8 +117,14 @@ event after a later action can return the original successful outcome while the
 catalog shows the later choice. A new membership invocation carrying a stale
 observed revision conflicts. An ordinary transaction conflict can rerun the
 handler, but the request retains its original action ID and revision.
-`eventKey()` supplies a revision stable across retries and client/server
-execution of the same event.
+Registration uses `eventKey()` for its initial revision. Each membership
+transition hashes the previous revision together with `eventKey()`, using the
+Fabric's canonical `hashStringOf`. This keeps revisions bounded and stable
+across retries and client/server execution of the same transition. An event ID
+can be admitted again, including across execution modes; its event key alone
+would let a later transition restore an old revision and accept a stale choice.
+Callers must retain the same payload when retrying an invocation ID: the
+ordinary receipt is first-writer-wins even if a later admission runs a handler.
 
 Consumers subscribe through ordinary cells: reactive reads in patterns and
 `Cell.sink` in direct-runtime hosts. Updates may be optimistic and may roll

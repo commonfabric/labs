@@ -7,6 +7,7 @@
 import {
   eventKey,
   handler,
+  hashStringOf,
   isWellFormedDID,
   normalizeSpaceHost,
   toSchema,
@@ -308,7 +309,11 @@ export const changeSharedSpaceMembership = handler<
       };
     }
     catalog.key("entries", change.space, "state").set(change.state);
-    catalog.key("entries", change.space, "revision").set(eventKey());
+    // An event ID can be admitted again. Include the predecessor so a later
+    // transition under that ID cannot make an old observed revision current.
+    catalog.key("entries", change.space, "revision").set(
+      hashStringOf([current.revision, eventKey()]),
+    );
     catalog.key("entries", change.space, "lastAction").set({
       id: change.id,
       expectedRevision: change.expectedRevision,

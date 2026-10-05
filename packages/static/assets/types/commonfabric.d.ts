@@ -4678,6 +4678,13 @@ export type EqualsFunction = (
 export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
 
 /**
+ * Returns a Fabric value's canonical SHA-256 content hash as an unprefixed
+ * base64url string. Equal content has the same hash across runtimes; object
+ * property order is immaterial. Cells and links are not resolved.
+ */
+export declare function hashStringOf(value: FabricValue): string;
+
+/**
  * Multi-user pattern test descriptor (`cf test`). Export it as the test
  * file's default export to run each participant pattern in its own isolated
  * runtime (own identity) against one shared space. The optional `setup`

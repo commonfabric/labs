@@ -6,6 +6,7 @@ import {
   debugStr,
   FabricInstance,
   FabricPrimitive,
+  hashStringOf,
   toCompactDebugString,
   toIndentedDebugString,
   valueEqual,
@@ -374,8 +375,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     toIndentedDebugString,
     debugStr,
 
-    // Value comparison helper exposed for pattern code
+    // Canonical value comparison and hashing for pattern code.
     valueEqual,
+    hashStringOf,
     tagCollectionKey,
   };
 

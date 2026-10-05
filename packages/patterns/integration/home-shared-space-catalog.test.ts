@@ -224,7 +224,9 @@ async function withHome(
   body: (
     runtime: Runtime,
     home: Cell<HomeSurface>,
-    peer: () => Promise<{ runtime: Runtime; home: Cell<HomeSurface> }>,
+    peer: (
+      serverExecution?: boolean,
+    ) => Promise<{ runtime: Runtime; home: Cell<HomeSurface> }>,
     server: Server,
   ) => Promise<void>,
   decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
@@ -241,12 +243,12 @@ async function withHome(
     cancel?: () => void;
   }[] = [];
   let executor: ExecutorHost | undefined;
-  const fresh = () => {
+  const fresh = (executeOnServer = serverExecution) => {
     const storage = EmulatedStorageManager.connectTo(server, { as: owner });
     const runtime = new Runtime({
       apiUrl: new URL("https://home.example"),
       storageManager: storage,
-      experimental: { serverExecution },
+      experimental: { serverExecution: executeOnServer },
     });
     const client = {
       runtime,
@@ -289,8 +291,8 @@ async function withHome(
         policy: { flushDeadlineMs: 5000, idleParkMs: 600000 },
       });
     }
-    await body(first.runtime, home, async () => {
-      const client = fresh();
+    await body(first.runtime, home, async (executeOnServer) => {
+      const client = fresh(executeOnServer);
       const home = await openHome(client.runtime, false);
       client.cancel = home.key("sharedSpaceCatalog").sink(() => {});
       await client.runtime.idle();
@@ -310,6 +312,80 @@ async function withHome(
     await server.close();
   }
 }
+
+describe("Home catalog revisions across execution modes", () => {
+  it("keeps an old revision stale when an invocation ID is admitted again", async () => {
+    await withHome(true, async (runtime, home, fresh) => {
+      const client = await fresh(false);
+      const catalog = client.home.key("sharedSpaceCatalog");
+      const membership = client.home.key("changeSharedSpaceMembership");
+      await invoke(
+        client.runtime,
+        client.home.key("registerSharedSpace"),
+        registration,
+        "register",
+      );
+      const registered = (await catalog.pull()).entries[registration.space]
+        .revision;
+      const archive = {
+        space: registration.space,
+        id: "old-archive",
+        state: "archived",
+        expectedRevision: registered,
+      };
+      expect(
+        await invoke(client.runtime, membership, archive, "reused-event"),
+      ).toEqual({
+        status: "applied",
+        space: registration.space,
+        id: archive.id,
+      });
+      const oldRevision = (await catalog.pull()).entries[registration.space]
+        .revision;
+      const restore = {
+        space: registration.space,
+        id: "restore",
+        state: "saved",
+        expectedRevision: oldRevision,
+      };
+      await invoke(client.runtime, membership, restore, "restore-event");
+      const restored = (await catalog.pull()).entries[registration.space]
+        .revision;
+      expect(restored).not.toBe(oldRevision);
+
+      // Serving execution can admit an ID first handled on a client. Its
+      // receipt stays first-writer-wins, but the handler's writes still commit.
+      const servedMembership = home.key("changeSharedSpaceMembership");
+      expect(
+        await invoke(runtime, servedMembership, {
+          ...archive,
+          id: "new-archive",
+          expectedRevision: restored,
+        }, "reused-event"),
+      ).toEqual({
+        status: "applied",
+        space: registration.space,
+        id: archive.id,
+      });
+      const archived = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+      expect(archived.state).toBe("archived");
+      expect(archived.revision).not.toBe(oldRevision);
+      expect(archived.revision).not.toBe(restored);
+      expect(archived.revision.length).toBeLessThanOrEqual(320);
+      expect(
+        await invoke(runtime, servedMembership, {
+          ...restore,
+          id: "stale-choice",
+        }, "stale-choice-event"),
+      ).toEqual({ status: "conflict", reason: "revision" });
+      expect(
+        (await home.key("sharedSpaceCatalog").pull())
+          .entries[registration.space].state,
+      ).toBe("archived");
+    });
+  });
+});
 
 describe("Home shared-space catalog", () => {
   for (
