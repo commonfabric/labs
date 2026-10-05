@@ -627,10 +627,10 @@ const isCommandId = (value: unknown): value is string =>
 const REFERENT_TOKEN = new RegExp(`^${REFERENT_TOKEN_PATTERN.source}$`);
 
 /** A loom identifier as the service mints it. */
-const LOOM_ID = /^loom-[a-f0-9]{16}$/;
+export const HARNESS_LOOM_ID_PATTERN = /^loom-[a-f0-9]{16}$/;
 
 const isLoomId = (value: unknown): value is string =>
-  typeof value === "string" && LOOM_ID.test(value);
+  typeof value === "string" && HARNESS_LOOM_ID_PATTERN.test(value);
 
 /** The executor's actor vocabulary: `user` or `agent:<slug>`. */
 const LOOM_ACTOR = /^(?:user|agent:[a-z0-9][a-z0-9-]{0,63})$/;

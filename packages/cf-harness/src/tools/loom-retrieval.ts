@@ -308,9 +308,11 @@ const HANDLE_SIZE_STAND_IN = "cfh:v:22222";
  * measured in order, and an entry is added only while the serialized result
  * — the `reserved` size of everything beside the entries, the entries so
  * far, and this entry — stays within the output bound; the rows left out are
- * counted rather than carried.
+ * counted rather than carried. Every tool that shows the model Loom data
+ * measures it here, a host command's answer as one row, so one label rule
+ * covers all of it.
  */
-const measureRows = async (
+export const measureLoomRows = async (
   rows: readonly JSONValue[],
   ceiling: readonly CfcConfClause[] | undefined,
   queryLabel: IFCLabel | undefined,
@@ -468,7 +470,7 @@ const invoke = async <C extends LoomRetrievalCommand>(
     ...(envelope !== undefined ? { envelope } : {}),
   };
   const mint = context.mintReferentHandle?.bind(context);
-  const measured = await measureRows(
+  const measured = await measureLoomRows(
     split.rows,
     ceiling,
     context.toolInputCfcLabel,

@@ -100,10 +100,11 @@ export type HarnessHandleReferent =
 
     /**
      * Where the label came from: the row's own `ifc`; the label of the query,
-     * assigned because the row carried none; or the label a Weaver command's
-     * result was held under. A `command` label is metadata the result carries
-     * with it: what a model may do with the result under that label is
-     * decided by the read policy, not by the label source.
+     * assigned because the row carried none; or the label a command's result
+     * was held under, whether a Weaver or the host answered it. A `command`
+     * label is metadata the result carries with it: what a model may do with
+     * the result under that label is decided by the read policy, not by the
+     * label source.
      */
     labelSource: "row" | "query" | "command";
 
