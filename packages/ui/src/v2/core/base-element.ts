@@ -58,10 +58,15 @@ export abstract class BaseElement extends LitElement {
     return this.dispatchEvent(event);
   }
 
-  /** Adds `hiddenHostStyles` to every component's own styles. */
+  /**
+   * Adds `hiddenHostStyles` to a component's own styles. A component with no
+   * styles of its own gives its host no display, so the browser's `[hidden]`
+   * rule already applies to it, and it is left with none.
+   */
   protected static override finalizeStyles(
     styles?: CSSResultGroup,
   ): Array<CSSResultOrNative> {
-    return [...super.finalizeStyles(styles), hiddenHostStyles];
+    const own = super.finalizeStyles(styles);
+    return own.length === 0 ? own : [...own, hiddenHostStyles];
   }
 }
