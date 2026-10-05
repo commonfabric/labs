@@ -1,6 +1,6 @@
 import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join, resolve, toFileUrl } from "@std/path";
+import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
@@ -57,6 +57,7 @@ import {
   type HarnessChatTurnStatus,
 } from "../../src/contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
+import { harnessClientProtocolEcho } from "../../src/contracts/client-command.ts";
 
 /**
  * A loop that answers the task it was given and nothing else. The console
@@ -1373,6 +1374,52 @@ describe("console/server", () => {
   });
 
   describe("the module", () => {
+    // `deno run` can credit unexecuted top-level code from V8's code cache.
+    // The program cases disable it so their coverage measures the entry
+    // block they execute.
+
+    it("prints help and exits successfully when run as a program", async () => {
+      const repoRoot = resolve(import.meta.dirname!, "..", "..", "..", "..");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repoRoot,
+        args: (lock) => [
+          "run",
+          "--no-code-cache",
+          `--lock=${lock}`,
+          "--allow-env",
+          "packages/cf-harness/console/server.ts",
+          "--help",
+        ],
+      });
+
+      expect(output.code).toBe(0);
+      expect(new TextDecoder().decode(output.stdout)).toBe(
+        consoleHelpText(["--help"]) + "\n",
+      );
+      expect(output.stderr.length).toBe(0);
+    });
+
+    it("prints the startup error without a stack and exits 1 when a flag has no value", async () => {
+      const repoRoot = resolve(import.meta.dirname!, "..", "..", "..", "..");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repoRoot,
+        args: (lock) => [
+          "run",
+          "--no-code-cache",
+          `--lock=${lock}`,
+          "--allow-env",
+          "packages/cf-harness/console/server.ts",
+          "--port",
+        ],
+      });
+
+      expect(output.code).toBe(1);
+      expect(new TextDecoder().decode(output.stderr)).toBe(
+        "`--port` was given no value\n",
+      );
+      expect(output.stdout.length).toBe(0);
+    });
+
     it("loads on a host with no FFI permission", async () => {
       // The console promises a machine without the SQLite native library can
       // serve its page: a run reads its space through that library only as
@@ -1455,6 +1502,7 @@ describe("console/server", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         artifactRoot: (await config()).artifactRoot,
+        protocol: harnessClientProtocolEcho(),
         sessions: [],
       });
     });
@@ -2287,15 +2335,32 @@ describe("console/server", () => {
   });
 
   describe("POST /api/client-actions", () => {
+    it("returns 400 for malformed JSON before starting or settling a turn", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/client-actions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
     const loomId = "loom-0123456789abcdef";
 
     /**
      * A server whose model loop asks the client to open a loom through the
      * door the service hands it, then waits for that answer.
      */
-    const askingServer = async () => {
+    const askingServer = async (
+      actions: readonly unknown[] = [{ kind: "open_loom", loomId }],
+    ) => {
       const asked = Promise.withResolvers<{
-        outcomes: Promise<readonly { outcome: string; result?: string }[]>;
+        outcomes: Promise<readonly Record<string, unknown>[]>;
       }>();
       const options: Record<string, unknown>[] = [];
       let ids = 0;
@@ -2312,15 +2377,10 @@ describe("console/server", () => {
                     requestClientActions?: (
                       actions: readonly unknown[],
                       signal?: AbortSignal,
-                    ) => Promise<
-                      readonly { outcome: string; result?: string }[]
-                    >;
+                    ) => Promise<readonly Record<string, unknown>[]>;
                   }).requestClientActions;
                   if (request !== undefined) {
-                    const outcomes = request(
-                      [{ kind: "open_loom", loomId }],
-                      run.signal,
-                    );
+                    const outcomes = request(actions, run.signal);
                     asked.resolve({ outcomes });
                     await outcomes;
                   }
@@ -2427,6 +2487,94 @@ describe("console/server", () => {
       await server.service.waitForTurn(started.sessionId, started.turnId);
     });
 
+    /** A typed-command wire fixture, as the Weaver's Swift tests read it. */
+    const wire = (name: string): Record<string, unknown> =>
+      JSON.parse(
+        Deno.readTextFileSync(
+          fromFileUrl(
+            new URL(
+              `../fixtures/client-command-wire/${name}.json`,
+              import.meta.url,
+            ),
+          ),
+        ),
+      );
+    const wireAction = (name: string) =>
+      (wire(name).event as { action: unknown }).action;
+
+    it("settles a typed command with its settlement body, and takes a resend without a second event", async () => {
+      const { server, asked, actionId } = await askingServer([
+        wireAction("request-invoke-query"),
+      ]);
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "what is here", clientActions: true }),
+      )).json();
+      const { outcomes } = await asked.promise;
+      const body = {
+        ...wire("resolve-executed-success"),
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+      };
+
+      const response = await server.handle(
+        jsonRequest("/api/client-actions", body),
+      );
+      expect(response.status).toBe(200);
+      const resend = await server.handle(
+        jsonRequest("/api/client-actions", body),
+      );
+      expect(resend.status).toBe(200);
+      const [outcome] = await outcomes;
+      expect(outcome.settlement).toMatchObject({
+        status: "executed",
+        outcome: { ok: true, transportStatus: 200, id: "loom.inspect" },
+      });
+      const resolved = server.service.events(started.sessionId)
+        .map((e) => e.event)
+        .filter((e) => e.kind === "client_action_resolved");
+      expect(resolved).toHaveLength(1);
+      expect(resolved[0]).toMatchObject({
+        outcome: "done",
+        settlement: { status: "executed", outcome: { bodyBytes: 378 } },
+      });
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    it("settles a catalog request, and answers 400 for a settlement of the wrong form", async () => {
+      const { server, asked, actionId } = await askingServer([
+        wireAction("request-list-commands"),
+      ]);
+      const started = await (await server.handle(
+        jsonRequest("/api/task", {
+          text: "what can you do",
+          clientActions: true,
+        }),
+      )).json();
+      const { outcomes } = await asked.promise;
+      const address = {
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+      };
+
+      const wrong = await server.handle(jsonRequest("/api/client-actions", {
+        ...wire("resolve-declined"),
+        ...address,
+      }));
+      expect(wrong.status).toBe(400);
+      expect((await wrong.json()).error.code).toBe("invalid_request");
+      const response = await server.handle(jsonRequest("/api/client-actions", {
+        ...wire("resolve-executed-catalog"),
+        ...address,
+      }));
+      expect(response.status).toBe(200);
+      const [outcome] = await outcomes;
+      expect(
+        (outcome.settlement as { catalog: { entries: unknown[] } }).catalog
+          .entries,
+      ).toHaveLength(3);
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
     it("offers the tool only to a task that sets clientActions", async () => {
       const { server, options } = await askingServer();
       const started = await (await server.handle(
@@ -2446,6 +2594,67 @@ describe("console/server", () => {
   });
 
   describe("POST /api/task", () => {
+    it("returns 400 for malformed JSON before starting or settling a turn", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/task", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
+    it("refuses a host whose protocol requires an unserved feature, before any session starts", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "what is on this loom?",
+        protocol: {
+          protocolVersion: 1,
+          requires: ["typed_commands", "browser_host"],
+        },
+      }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: "this console does not serve browser_host",
+        code: "protocol_mismatch",
+        protocol: harnessClientProtocolEcho(),
+        requestedVersion: 1,
+        missing: ["browser_host"],
+      });
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("answers 400 for a malformed protocol declaration", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "what is on this loom?",
+        protocol: { protocolVersion: "1", requires: [] },
+      }));
+
+      expect(response.status).toBe(400);
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("echoes its protocol on an accepted task", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "track my books",
+        clientActions: true,
+        protocol: {
+          protocolVersion: 1,
+          requires: ["client_actions", "typed_commands"],
+        },
+      }));
+
+      expect(response.status).toBe(200);
+      const started = await response.json();
+      expect(started.protocol).toEqual(harnessClientProtocolEcho());
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
     it("starts a follow-up turn in the session the request names", async () => {
       const started = await startTask({ text: "track my books" });
 

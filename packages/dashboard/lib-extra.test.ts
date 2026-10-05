@@ -788,6 +788,18 @@ Deno.test("github: parsed JSON from api.github.com, with the auth and version he
   });
 });
 
+Deno.test("github: an endpoint can select a newer REST API version", async () => {
+  await withTokens({ GH_TOKEN: "env-token" }, async () => {
+    await withFetch(() => Response.json({}), async (calls) => {
+      await github("enterprises/acme/settings/billing/usage", undefined, {
+        apiVersion: "2026-03-10",
+      });
+      const headers = new Headers(calls[0].init.headers);
+      assertEquals(headers.get("x-github-api-version"), "2026-03-10");
+    });
+  });
+});
+
 Deno.test("github: an explicit token wins over the env; GITHUB_TOKEN backs up GH_TOKEN", async () => {
   await withFetch(() => Response.json({}), async (calls) => {
     await withTokens({ GH_TOKEN: "gh", GITHUB_TOKEN: "github" }, async () => {

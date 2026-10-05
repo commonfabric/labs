@@ -1004,4 +1004,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "the picker's defaultProfile argument is home's slot holding the default's link under `profile`, rather than the link",
     record: "docs/history/home-default-profile-slot-break.md",
   },
+  {
+    // A manager's room link gained `messages.count` and `messages.newestAt`.
+    // The recorded link left every field but `about` open, so a stored
+    // request outcome's room link admitted any `messages`; the candidate
+    // types it. A link is always to a room output, whose `messages.count` is
+    // a number, so no stored outcome reads differently.
+    pattern: "fabrichat/manager.tsx",
+    baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
+    paths: ["argument.requests.*"],
+    reason:
+      "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits",
+    record: "docs/history/fabrichat-room-link-messages-break.md",
+  },
 ];
