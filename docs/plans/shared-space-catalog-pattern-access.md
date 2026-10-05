@@ -83,18 +83,20 @@ current membership observation.
    rehearse recovery across fresh devices, reconnect, and sidecar restart.
 
 Each slice must be reviewable against its immediate dependency. The Home
-implementation remains a draft until its storage lifecycle is safe. Consumer
-integration must provide evidence of recovery and failure handling before the
-catalog becomes the native collection authority.
+foundation can land with guarded root creation, state-preserving source updates,
+and handler settlement evidence. Consumer integration must provide evidence of
+recovery and failure handling before the catalog becomes the native collection
+authority; landing Home does not switch that authority.
 
 ## Required evidence
 
 - Real Home creation and source upgrades expose the same catalog and handlers
   without resetting membership. Home's owned backing cell is the authority;
   there is no independent SDK writer or second catalog to reconcile.
-- Root recreation either preserves the catalog reference or requires an explicit
-  recovery that preserves its data; it must not silently create an empty
-  membership authority.
+- Root recreation refuses an existing identity Home before stopping or
+  unlinking it, including a Home installed by another initializer during
+  compilation. First creation and in-place source updates retain their normal
+  behavior.
 - Authored and host callers register, archive, and restore through the same
   handlers, with server execution enabled and disabled.
 - Duplicate offers, stale actions, unknown states, malformed optional fields,
@@ -105,6 +107,13 @@ catalog becomes the native collection authority.
 - Ordinary subscriptions follow peer writes, replacement, and rollback. Loading,
   denied access, and transport failure remain distinguishable from a
   successfully read empty collection.
+- A successfully loaded, accessible Home missing `sharedSpaceCatalog`,
+  `registerSharedSpace`, or `changeSharedSpaceMembership` produces the distinct
+  `home-update-required` consumer state. The consumer retains its last confirmed
+  projection and waits for a compatible Home update instead of blindly retrying.
+  Pending or denied loading, including pending serving output after a completed
+  read, must not be classified as an old Home. Interface absence requires a
+  settled Home or verified source-interface evidence.
 - The authenticated actor reaches their configured Home. Serving execution does
   not substitute the service identity or a pattern-compilation origin for the
   owner or Home route.
@@ -113,21 +122,30 @@ Controlled held-commit and rejected-predecessor tests remain required in
 addition to the concurrent registration and membership races. Those ordinary
 races do not establish behavior under every optimistic rollback ordering.
 
+The Home integration suite covers withheld peer writes, a rejected optimistic
+predecessor, and a held serving commit. Its cold and denied reader cases exercise
+ordinary `Cell.sink`, `Cell.pull`, and storage access-error signals. A sink value
+alone does not prove loading completed: consumers must await synchronization and
+check access errors before treating a valid empty catalog as authoritative. A
+completed pull can still precede the serving producer's first output; keep the
+read unavailable until the subscription delivers a valid catalog. The consumer
+still needs its own end-to-end tests for last-projection retention, transport
+failure, and `home-update-required` handling.
+
 ## Home replacement
 
 Ordinary source updates and automatic roll-forward repair retain the Home root
 identity. Explicit recreation, including the debugger action and CLI
-`space recreate-root` and `space set-home`, creates a different root. Recreation
-also unlinks the current root before compiling its replacement, so a failure
-can leave Home detached.
+`space recreate-root` and `space set-home`, refuses an existing identity Home.
+The guard runs before stopping, unlinking, fetching, or compiling, and a second
+transactional check protects a Home installed during first-creation compilation.
+An unavailable root target is still an existing root to preserve.
 
-The next lifecycle slice should guard existing Home state before stopping or
-unlinking it, and use the existing in-place source-update mechanism for changing
-the Home application. Preserving account data by default avoids a catalog-only
-transfer that silently discards profiles, favorites, or other Home data. A true
-account-data reset, if needed, requires an explicitly destructive contract.
-Tests must cover compilation failure and concurrent root changes as well as
-successful source updates.
+Changing the Home application uses an in-place source update. Preserving account
+data by default covers profiles, favorites, navigation, and the catalog
+together. A true account-data reset, if needed, requires a separately designed
+destructive contract. Low-level unlink and direct space-cell writes are not
+account recovery operations.
 
 For every proposed shim, record the required behavior, the ordinary platform
 operation attempted, the failing example, and whether a small general platform
@@ -140,5 +158,6 @@ API is not a prerequisite for that consumer.
 
 Coordination with FabriChat is recorded in the
 [consumer Topic](https://estuary.saga-castor.ts.net/topics-dev-476ea34f/of:fid1:LWFAKJVz0hlcUUz6hlo9gGwYXajuXpUyblkS_MFOwlg).
-The interim inbox posture is accepted for this cohort; delivery hardening is
-separate from catalog ownership and does not weaken intake validation.
+Berni approved the interim inbox posture for this cohort, confirmed by Gideon
+on October 5, 2026. Delivery hardening is separate from catalog ownership and
+does not weaken intake validation.

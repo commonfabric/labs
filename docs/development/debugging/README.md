@@ -46,7 +46,7 @@ Quick error reference and debugging workflows. For detailed explanations, see li
 | "secure mode %SharedMath%.random() throws" (or `Date.now` in computed) | SES gates ambient `Math.random()`/`Date.now()` in the pattern sandbox — allowed in a handler, forbidden in a lift/computed or pattern body | Call `Math.random()` / `Date.now()` directly from a handler; for reactive time in a computed, read the `#now` wish ([gotchas/scoped-cell-pitfalls](gotchas/scoped-cell-pitfalls.md), section 7) |
 | "Cannot read properties of null/undefined" exactly when a conditional section renders the fallback | Ternary branches are evaluated eagerly — the lowered `ifElse()` builds both branch expressions even when the condition is falsy | Defer the property-accessing branch in `computed()` ([gotchas/eager-ternary-branch-evaluation](gotchas/eager-ternary-branch-evaluation.md)) |
 | Handler silently never runs; runner logs "action argument is undefined (potential schema mismatch) -- not running" | Handler state holds a cross-space value typed as the plain value; argument validation resolves it before it has loaded | Type the state field `Cell<T>` and read inside the handler ([gotchas/cross-space-handler-state-link](gotchas/cross-space-handler-state-link.md)) |
-| "Source cannot contain reserved helper symbol '__cfHelpers'" loading a deployed piece | The piece's stored source closure holds transformer-processed source instead of authored source; a compile-cache rotation forces a recompile that the transformer rejects | `cf space recreate-root` ([gotchas/stale-source-closure-cfhelpers](gotchas/stale-source-closure-cfhelpers.md)) |
+| "Source cannot contain reserved helper symbol '__cfHelpers'" loading a deployed piece | The piece's stored source closure holds transformer-processed source instead of authored source; a compile-cache rotation forces a recompile that the transformer rejects | Update the source in place ([gotchas/stale-source-closure-cfhelpers](gotchas/stale-source-closure-cfhelpers.md)) |
 
 ---
 
@@ -81,7 +81,7 @@ typed `any` unwraps Writables; performance quick tips.
 - [Browser UI Stale After a Handler Write](gotchas/browser-stale-ui.md) - Inspect actual cell state before assuming the write failed
 - [A Field Typed `unknown` Reads Back as a Reference](gotchas/unknown-typed-field-reads-a-reference.md) - The reading operand's schema decides what materializes; naming the field is what makes the read follow the link
 - [Cross-Space Handler State Must Be a Cell Link](gotchas/cross-space-handler-state-link.md) - A cross-space value in handler state silently blocks the handler; pass the link, not the value
-- [Stale Source Closure: Reserved Helper Symbol on Load](gotchas/stale-source-closure-cfhelpers.md) - A deployed piece whose stored source is not pristine authored TypeScript; repair with `cf space recreate-root`
+- [Stale Source Closure: Reserved Helper Symbol on Load](gotchas/stale-source-closure-cfhelpers.md) - A deployed piece whose stored source is not pristine authored TypeScript; repair with an in-place source update
 
 ### Error Categories
 

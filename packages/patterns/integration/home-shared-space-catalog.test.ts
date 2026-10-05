@@ -1,7 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
-import { Identity } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   streamEntriesDocId,
@@ -9,6 +10,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { PiecesController } from "@commonfabric/piece/ops";
 import {
   ACLManager,
   type Cell,
@@ -18,11 +20,17 @@ import {
   Runtime,
   sendEvent,
 } from "@commonfabric/runner";
-import { ExecutorHost } from "@commonfabric/runner/executor/host";
+import {
+  ExecutorHost,
+  type ExecutorHostOptions,
+} from "@commonfabric/runner/executor/host";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { defer } from "@commonfabric/utils/defer";
 
+import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import {
+  ArrivalLog,
   awaitAdmitted,
   awaitEdges,
 } from "../../runner/test/support/serving-waits.ts";
@@ -47,6 +55,8 @@ interface HomeSurface {
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: SharedSpaceRegistration;
   changeSharedSpaceMembership: SharedSpaceMembershipChange;
+  addSpace: { did: string; name: string };
+  spaces: { did: string; name: string }[];
 }
 
 /** Compiles Home and its production imports as authored source. */
@@ -121,9 +131,13 @@ async function invoke<T>(
   stream: Cell<T>,
   event: unknown,
   id: string,
+  onCommit?: () => void,
 ) {
   const tx = await new Promise<IExtendedStorageTransaction>((resolve) => {
-    sendEvent(stream, event as T, resolve, {
+    sendEvent(stream, event as T, (tx) => {
+      onCommit?.();
+      resolve(tx);
+    }, {
       eventId: id,
       session: "catalog-test",
     });
@@ -174,6 +188,36 @@ async function rejectInvocation<T>(
   expect(entries()[index].error).toContain(message);
 }
 
+/** Records tentative handler receipts and commit verdicts without extra writes. */
+function watchHandlingCommits(runtime: Runtime) {
+  const outcomes = new ArrivalLog<{ eventId: string; value: unknown }>();
+  const verdicts = new ArrivalLog<
+    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>>
+  >();
+  const edit = runtime.edit.bind(runtime);
+  const wrapped = stub(runtime, "edit", (...args) => {
+    const tx = interceptTransaction(edit(...args), (method, _args, proceed) => {
+      if (
+        method !== "commit" || !tx.dispatchedEventId || !tx.handlingReceiptLink
+      ) {
+        return proceed();
+      }
+      outcomes.record({
+        eventId: tx.dispatchedEventId,
+        value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
+          .getRaw(),
+      });
+      return (proceed() as ReturnType<IExtendedStorageTransaction["commit"]>)
+        .then((result) => {
+          verdicts.record(result);
+          return result;
+        });
+    });
+    return tx;
+  });
+  return { outcomes, verdicts, [Symbol.dispose]: () => wrapped.restore() };
+}
+
 /** Independent replicas against an ACL-enforcing memory server. */
 async function withHome(
   serverExecution: boolean,
@@ -183,6 +227,7 @@ async function withHome(
     peer: () => Promise<{ runtime: Runtime; home: Cell<HomeSurface> }>,
     server: Server,
   ) => Promise<void>,
+  decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
 ) {
   const server = new Server({
     acl: { mode: "enforce", delegatingDids: [service.did()] },
@@ -220,6 +265,7 @@ async function withHome(
     if (serverExecution) {
       executor = new ExecutorHost({
         server,
+        decorateWaveCommitSink,
         serviceIdentity: service.did(),
         createRuntime: (space) => {
           const storage = EmulatedStorageManager.connectTo(server, {
@@ -266,7 +312,358 @@ async function withHome(
 }
 
 describe("Home shared-space catalog", () => {
+  for (
+    const scenario of ["existing", "rejected-predecessor", "first-registration"]
+  ) {
+    it(`settles ${scenario} against withheld peer writes with client execution`, async () => {
+      await withHome(false, async (runtime, home, fresh, server) => {
+        if (scenario !== "first-registration") {
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "seed",
+          );
+        }
+        const catalog = await backingCatalog(runtime, home);
+        const before = await home.key("sharedSpaceCatalog").pull();
+        const originalRevision = before.entries[registration.space]?.revision;
+        const peer = await fresh();
+        const peerCatalog = await backingCatalog(peer.runtime, peer.home);
+        server.options.subscriptionRefreshDelayMs = "manual";
+        const tx = peer.runtime.edit();
+        const target = peerCatalog.withTx(tx);
+        if (scenario === "first-registration") {
+          target.key("entries", "did:key:peer-room").set({
+            space: "did:key:peer-room",
+            host: registration.host,
+            kind: "fabrichat-room",
+            state: "saved",
+            revision: "peer-revision",
+          });
+          target.key("offers", JSON.stringify([owner.did(), "peer-offer"])).set(
+            {
+              from: owner.did(),
+              id: "peer-offer",
+              space: "did:key:peer-room",
+              host: registration.host,
+              kind: "fabrichat-room",
+            },
+          );
+        } else {
+          const state = scenario === "existing" ? "archived" : "saved";
+          target.key("entries", registration.space, "state").set(state);
+          target.key("entries", registration.space, "revision").set(
+            "peer-revision",
+          );
+          target.key("entries", registration.space, "lastAction").set({
+            id: "peer-choice",
+            expectedRevision: originalRevision,
+            state,
+          });
+        }
+        expect((await tx.commit({ resolveAt: "verdict" })).error)
+          .toBeUndefined();
+        expect(catalog.getRaw()).toEqual(before);
+        using watch = watchHandlingCommits(runtime);
+        const completed = new ArrivalLog<unknown>();
+        const invokeAndRecord = (id: string) => {
+          const pending = scenario === "rejected-predecessor"
+            ? invoke(runtime, home.key("changeSharedSpaceMembership"), {
+              space: registration.space,
+              id: "my-archive",
+              state: "archived",
+              expectedRevision: originalRevision,
+            }, id)
+            : invoke(
+              runtime,
+              home.key("registerSharedSpace"),
+              registration,
+              id,
+            );
+          return pending.then((result) => {
+            completed.record(result);
+            return result;
+          });
+        };
+        const first = invokeAndRecord("first-attempt");
+        const second = scenario === "rejected-predecessor"
+          ? invokeAndRecord("second-attempt")
+          : undefined;
+        try {
+          await watch.outcomes.reached(second ? 2 : 1);
+          if (second) {
+            expect(
+              watch.outcomes.entries.slice(0, 2).map((entry) => entry.value),
+            )
+              .toEqual([
+                {
+                  status: "applied",
+                  space: registration.space,
+                  id: "my-archive",
+                },
+                {
+                  status: "confirmed",
+                  space: registration.space,
+                  id: "my-archive",
+                },
+              ]);
+          }
+          await watch.verdicts.matching((verdict) =>
+            verdict.error !== undefined
+          );
+          expect(completed.entries).toHaveLength(0);
+          server.options.subscriptionRefreshDelayMs = 0;
+          await server.flushSessions();
+          if (second) {
+            expect(await Promise.all([first, second])).toEqual([
+              { status: "conflict", reason: "revision" },
+              { status: "conflict", reason: "revision" },
+            ]);
+          } else {
+            expect(await first).toEqual({
+              status: scenario === "existing" ? "existing" : "registered",
+              space: registration.space,
+            });
+          }
+          const final = await home.key("sharedSpaceCatalog").pull();
+          if (scenario === "first-registration") {
+            expect(Object.keys(final.entries).sort()).toEqual(
+              [registration.space, "did:key:peer-room"].sort(),
+            );
+            expect(Object.keys(final.offers)).toHaveLength(2);
+          } else {
+            expect(final.entries[registration.space]).toMatchObject({
+              state: scenario === "existing" ? "archived" : "saved",
+              revision: "peer-revision",
+            });
+            expect(
+              catalog.key("entries", registration.space, "lastAction").getRaw(),
+            ).toEqual({
+              id: "peer-choice",
+              expectedRevision: originalRevision,
+              state: scenario === "existing" ? "archived" : "saved",
+            });
+          }
+        } finally {
+          server.options.subscriptionRefreshDelayMs = 0;
+          await server.flushSessions();
+          await Promise.allSettled([first, second]);
+        }
+      });
+    });
+  }
+
+  it("confirms a held serving registration only after its wave commits", async () => {
+    const held = new ArrivalLog<void>();
+    const release = defer<void>();
+    let armed = false;
+    await withHome(true, async (runtime, home, fresh) => {
+      const peer = await fresh();
+      const catalog = await backingCatalog(peer.runtime, peer.home);
+      const completed = new ArrivalLog<unknown>();
+      const committed = new ArrivalLog<void>();
+      armed = true;
+      const pending = invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "held",
+        () => committed.record(),
+      )
+        .then((result) => {
+          completed.record(result);
+          return result;
+        });
+      try {
+        await held.reached(1);
+        expect(committed.entries).toHaveLength(0);
+        expect(completed.entries).toHaveLength(0);
+        const tx = peer.runtime.edit();
+        catalog.withTx(tx).key("entries", "did:key:peer-room").set({
+          space: "did:key:peer-room",
+          host: registration.host,
+          kind: "fabrichat-room",
+          state: "saved",
+          revision: "peer-revision",
+        });
+        catalog.withTx(tx).key(
+          "offers",
+          JSON.stringify([owner.did(), "peer-offer"]),
+        ).set({
+          from: owner.did(),
+          id: "peer-offer",
+          space: "did:key:peer-room",
+          host: registration.host,
+          kind: "fabrichat-room",
+        });
+        expect((await tx.commit({ resolveAt: "verdict" })).error)
+          .toBeUndefined();
+        expect(committed.entries).toHaveLength(0);
+        expect(completed.entries).toHaveLength(0);
+        release.resolve();
+        expect(await pending).toEqual({
+          status: "registered",
+          space: registration.space,
+        });
+        expect(committed.entries).toHaveLength(1);
+        const final = await home.key("sharedSpaceCatalog").pull();
+        expect(Object.keys(final.entries).sort()).toEqual(
+          [registration.space, "did:key:peer-room"].sort(),
+        );
+        expect(Object.keys(final.offers)).toHaveLength(2);
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    }, (sink) => ({
+      currentHeads: sink.currentHeads.bind(sink),
+      concurrentWritePaths: sink.concurrentWritePaths.bind(sink),
+      ...(sink.intrusionSince
+        ? { intrusionSince: sink.intrusionSince.bind(sink) }
+        : {}),
+      commitWave: async (batch) => {
+        if (armed && batch.consequenceOf.length > 0) {
+          armed = false;
+          held.record();
+          await release.promise;
+        }
+        return await sink.commitWave(batch);
+      },
+    }));
+  });
+
   for (const serving of [false, true]) {
+    it(`distinguishes an unfinished catalog read from a synchronized empty catalog with serving ${serving}`, async () => {
+      await withHome(serving, async (_runtime, home, _fresh, server) => {
+        const storage = EmulatedStorageManager.connectTo(server, { as: owner });
+        const reader = new Runtime({
+          apiUrl: new URL("https://home.example"),
+          storageManager: storage,
+          experimental: { serverExecution: serving },
+        });
+        const entered = defer<void>();
+        const release = defer<void>();
+        const sync = storage.syncCell.bind(storage);
+        using _gate = stub(storage, "syncCell", async (cell, ...args) => {
+          if (cell.getAsNormalizedFullLink().space === owner.did()) {
+            entered.resolve();
+            await release.promise;
+          }
+          return await sync(cell, ...args);
+        });
+        const catalog = reader.getCellFromLink<HomeSurface>(
+          home.getAsNormalizedFullLink(),
+        ).key("sharedSpaceCatalog");
+        const values = new ArrivalLog<unknown>();
+        const settled = new ArrivalLog<unknown>();
+        const cancel = catalog.sink((value) => values.record(value));
+        const pending = catalog.pull().then((value) => {
+          settled.record(value);
+          return value;
+        });
+        try {
+          await entered.promise;
+          await reader.idle();
+          expect(values.entries).toEqual([undefined]);
+          expect(settled.entries).toHaveLength(0);
+          release.resolve();
+          const firstRead = await pending;
+          // A serving producer may publish after this replica finishes loading.
+          if (firstRead !== undefined) {
+            expect(firstRead).toEqual({ entries: {}, offers: {} });
+          }
+          const ready = await values.matching((value) => value !== undefined);
+          expect(ready).toEqual({ entries: {}, offers: {} });
+          expect(storage.authorizationError(owner.did())).toBeUndefined();
+          expect(storage.spaceAccessError(owner.did())).toBeUndefined();
+        } finally {
+          release.resolve();
+          await pending;
+          cancel();
+          await reader.idle();
+          await storage.synced();
+          await reader.dispose();
+          await storage.close();
+        }
+      });
+    });
+
+    it(`reports denied Home access separately from an empty collection with serving ${serving}`, async () => {
+      await withHome(serving, async (_runtime, home, _fresh, server) => {
+        const outsider = await Identity.fromPassphrase(
+          "Home catalog denied reader",
+        );
+        const storage = EmulatedStorageManager.connectTo(server, {
+          as: outsider,
+        });
+        const reader = new Runtime({
+          apiUrl: new URL("https://home.example"),
+          storageManager: storage,
+          experimental: { serverExecution: serving },
+        });
+        const catalog = reader.getCellFromLink<HomeSurface>(
+          home.getAsNormalizedFullLink(),
+        ).key("sharedSpaceCatalog");
+        const values = new ArrivalLog<unknown>();
+        const cancel = catalog.sink((value) => values.record(value));
+        try {
+          expect(await catalog.pull()).toBeUndefined();
+          expect(storage.authorizationError(owner.did())?.name).toBe(
+            "AuthorizationError",
+          );
+          expect(values.entries.length).toBeGreaterThan(0);
+          expect(values.entries.every((value) => value === undefined)).toBe(
+            true,
+          );
+        } finally {
+          cancel();
+          await reader.dispose();
+          await storage.close();
+        }
+      });
+    });
+
+    it(`refuses Home replacement without resetting its catalog or navigation with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home) => {
+        await invoke(runtime, home.key("registerSharedSpace"), {
+          ...registration,
+          initialState: "archived",
+        }, "seed");
+        await invoke(runtime, home.key("addSpace"), {
+          did: registration.space,
+          name: "Retained navigation",
+        }, "navigation");
+        const before = await home.key("sharedSpaceCatalog").pull();
+        const spaces = await home.key("spaces").pull();
+        expect(spaces).toHaveLength(1);
+        const catalog = await backingCatalog(runtime, home);
+        const stored = catalog.getAsNormalizedFullLink();
+        const controller = new PiecesController(
+          createSession({ identity: owner, spaceDid: owner.did() }),
+          runtime,
+        );
+        await expect(controller.recreateDefaultPattern()).rejects.toThrow(
+          "Cannot replace an existing Home root",
+        );
+        expect((await controller.getDefaultPattern(false))?.equals(home)).toBe(
+          true,
+        );
+        expect((await backingCatalog(runtime, home)).getAsNormalizedFullLink())
+          .toEqual(stored);
+        expect(await home.key("sharedSpaceCatalog").pull()).toEqual(before);
+        expect(await home.key("spaces").pull()).toEqual(spaces);
+        expect(
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "still-running",
+          ),
+        )
+          .toEqual({ status: "existing", space: registration.space });
+      });
+    });
     it(`retains constructor state across new Home source and a fresh replica with serving ${serving}`, async () => {
       await withHome(serving, async (runtime, home, fresh) => {
         await invoke(runtime, home.key("registerSharedSpace"), {
@@ -311,6 +708,13 @@ describe("Home shared-space catalog", () => {
         expect(
           await invoke(runtime, home.key("registerSharedSpace"), {
             ...registration,
+            host: "https://other.example",
+            offer: undefined,
+          }, "reroute"),
+        ).toEqual({ status: "conflict", reason: "host" });
+        expect(
+          await invoke(runtime, home.key("registerSharedSpace"), {
+            ...registration,
             space: "did:key:other-room",
           }, "retarget"),
         ).toEqual({ status: "conflict", reason: "offer" });
@@ -318,6 +722,7 @@ describe("Home shared-space catalog", () => {
           await invoke(runtime, home.key("registerSharedSpace"), {
             ...registration,
             kind: "other",
+            offer: undefined,
           }, "retype"),
         ).toEqual({ status: "conflict", reason: "kind" });
         expect(

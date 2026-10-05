@@ -8,9 +8,9 @@ validation, and transitions live in
 `packages/patterns/system/shared-space-catalog.ts`.
 
 The catalog's backing cell has Home's stable `sharedSpaceCatalog` cause. An
-in-place source update retains that identity. Replacing the Home root creates a
-different owner for its internal cells; preserving or explicitly recovering the
-catalog across that operation remains a prerequisite for production integration.
+in-place source update retains that identity. Supported root-recreation commands
+refuse an existing identity Home before stopping or unlinking it. Home source
+changes use in-place updates to retain its account data.
 The [integration plan](../plans/shared-space-catalog-pattern-access.md) lists
 the remaining deployment and consumer requirements.
 
@@ -131,6 +131,18 @@ Native consumers must retain their last confirmed projection and expose load and
 failure status separately. A generic subscription supplies values, not a
 complete load/error or operation-acknowledgment protocol. Consumer integration
 must demonstrate that distinction before replacing a durable local collection.
+
+Even a completed `Cell.pull()` may return `undefined` while a serving Home is
+still producing its first computed output. Keep that state unavailable and
+observe the ordinary subscription for a valid catalog; a completed read alone
+does not establish producer readiness or the absence of an interface.
+
+A successfully loaded, accessible Home may predate this catalog interface or
+follow custom source. If the catalog or either handler is absent, consumers
+report `home-update-required`, retain their last confirmed projection, and wait
+for a compatible Home update rather than blindly retrying operations. An
+unfinished or refused read, or a producer that has not settled, cannot establish
+that the interface is absent.
 
 ## Offer receipts
 
