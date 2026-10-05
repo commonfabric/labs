@@ -1063,10 +1063,8 @@ function resolveHomeSpaceTarget(
           "User identity DID not available for #agent_queue",
         );
       }
-      const homeSpaceCell = getHomeSpaceCell(ctx);
-      requireHomeField(homeSpaceCell, "agentQueue", "agent queue", ctx);
       return [{
-        cell: homeSpaceCell,
+        cell: getHomeSpaceCell(ctx),
         pathPrefix: ["defaultPattern", "agentQueue"],
       }];
     }

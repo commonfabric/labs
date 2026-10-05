@@ -17,6 +17,9 @@ a line for each new document to the index below.
 
 ## Writes, storage, and sync
 
+- [`transaction-commit.md`](transaction-commit.md) — local readiness, commit
+  receipts, verdict and settlement stages, and explicit durability barriers
+
 - [`collection-indexes.md`](collection-indexes.md) — reactive grouping,
   unique-key lookup, membership ownership, and work limits
 - [`collection-aggregates.md`](collection-aggregates.md) — named incremental

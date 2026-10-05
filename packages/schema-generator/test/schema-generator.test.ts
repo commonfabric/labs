@@ -2817,6 +2817,41 @@ type CalculatorRequest = {
         });
       });
 
+      it("keeps the labels of an optional bound value on the property, with no undefined alternative", async () => {
+        // The runtime's policy merge refuses labels on one branch of a union
+        // whose other branches it cannot prove type-disjoint, and a labeled
+        // `$ref` is such a branch. Optionality already admits an absent value.
+        const schema = await generate(
+          {
+            "/main.ts": `
+              type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+              type Confidential<T, X extends readonly unknown[]> =
+                Cfc<T, { confidentiality: X }>;
+              type Sec<T> = Confidential<Node<T>, readonly ["a"]>;
+              export interface Node<T> { value: T; next?: Sec<T> }
+              export interface Input<T> {
+                labeled?: Confidential<T, readonly ["a"]>;
+                recursive?: Sec<T>;
+              }
+            `,
+          },
+          generic("Input", keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        const properties = (schema as {
+          properties: Record<string, Record<string, unknown>>;
+        }).properties;
+        expect(properties.labeled).toEqual({
+          type: "string",
+          ifc: { confidentiality: ["a"] },
+        });
+        expect(properties.recursive).not.toHaveProperty("anyOf");
+        expect(properties.recursive).toMatchObject({
+          ifc: { confidentiality: ["a"] },
+        });
+        expect(schema).not.toHaveProperty("required");
+      });
+
       it("reads every merged declaration under the supplied argument", async () => {
         const schema = await generate(
           {

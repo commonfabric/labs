@@ -2692,18 +2692,18 @@ describe("wish built-in", () => {
         .toBe("direct");
     });
 
-    it("reports a home with no agent queue for #agent_queue, naming the remedy", async () => {
+    it("resolves #agent_queue to nothing, with no error, for a home with no agent queue", async () => {
+      // A caller listing agent runs reads an absent queue as no runs, and the
+      // agent builtin refuses a request on its own, so the wish reports no
+      // error here, unlike `#chatManager`.
+
       const resolved = await resolveHomeTarget(
         "agent-queue-absent",
         "journal",
         [],
         "#agent_queue",
       );
-      expect(resolved?.error).toContain(
-        "The home space holds no agent queue",
-      );
-      expect(resolved?.error).toContain("open the home space once");
-      expect(resolved?.error).toContain("A custom home pattern needs");
+      expect(resolved?.error).toBeUndefined();
       expect(resolved?.result).toBeUndefined();
     });
 
