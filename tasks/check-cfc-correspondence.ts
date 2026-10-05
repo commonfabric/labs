@@ -106,14 +106,7 @@ export interface Exemption {
  * Every `§` citation under `packages/runner/src/cfc/` that names something
  * other than a section of the specification, on purpose.
  */
-export const EXEMPTIONS: readonly Exemption[] = [
-  {
-    file: "packages/runner/src/cfc/prepare.ts",
-    citation: "§3.2.1",
-    reason: "names a section of `docs/specs/cfc-template-population.md`, " +
-      "the labs document the comment cites by name, not the specification",
-  },
-];
+export const EXEMPTIONS: readonly Exemption[] = [];
 
 /** A file this check reads. */
 export interface SourceFile {

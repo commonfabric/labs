@@ -232,7 +232,7 @@ re-stated every time either side moves.
 ### The conformance statement (stage 2)
 
 §18.6.4 says a deployment claiming the reactive-runtime profile MUST document
-nine things: its relevance mechanism, its read exclusions, its reference
+eight things: its relevance mechanism, its read exclusions, its reference
 residuals, its integrity staging level, its matrix position, its persistence
 idempotence, its trigger-read treatment, and its observation-class residuals.
 No labs document answers that list. `docs/specs/cfc-conformance-statement.md`

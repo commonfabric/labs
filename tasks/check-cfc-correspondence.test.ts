@@ -88,7 +88,11 @@ const messages = (findings: ReturnType<typeof collectFindings>): string[] =>
 describe("check-cfc-correspondence", () => {
   describe("collectFindings()", () => {
     it("returns no findings for a manifest, kernel and citations that agree with the snapshot", () => {
-      expect(collectFindings(input({}))).toEqual([]);
+      const citing: SourceFile = {
+        path: "packages/runner/src/cfc/prepare.ts",
+        text: "// §8.12.1 decides this, and §8 frames it.\n",
+      };
+      expect(collectFindings(input({ citationFiles: [citing] }))).toEqual([]);
     });
 
     describe("the manifest against the snapshot", () => {
