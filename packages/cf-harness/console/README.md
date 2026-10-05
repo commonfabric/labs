@@ -811,12 +811,12 @@ survive a restart — says so in the feed when the follow-up is refused.
 
 ### Status route
 
-`GET /api/status` returns the console's absolute `artifactRoot` and a `sessions`
-array. Each session status carries its lifecycle, timestamps, model, workspace,
-capabilities, policy, and, once a run has started, its own `artifactRoot`. A
-`sessionId` query narrows that array to the matching live session. Clients that
-need a run's artifacts use the session's root when it is present and the
-top-level root as the console-wide fallback.
+`GET /api/status` returns the console's absolute `artifactRoot`, its client
+`protocol` (below), and a `sessions` array. Each session status carries its
+lifecycle, timestamps, model, workspace, capabilities, policy, and, once a run
+has started, its own `artifactRoot`. A `sessionId` query narrows that array to
+the matching live session. Clients that need a run's artifacts use the session's
+root when it is present and the top-level root as the console-wide fallback.
 
 Status is read directly, with no preceding request. The top-level fields are
 present even before the console has any sessions, so an unattended client can
@@ -858,6 +858,47 @@ session declines every unsettled action with `result: "canceled"`. The stdio
 request `resolve_client_action` (same params, same error codes) calls the same
 service method, and `start_session` and `start_turn` take `clientActions: true`
 to opt in, off by default.
+
+### Client protocol
+
+A host declares what it needs with `protocol` on `POST /api/task`:
+`{ "protocolVersion": 1, "requires": ["client_actions"] }`. The console checks
+it before reading anything else and before any session or turn starts. Another
+version, or a required feature it does not serve, answers 409 with a body such
+as
+
+```json
+{
+  "error": "this console does not serve typed_commands",
+  "code": "protocol_mismatch",
+  "protocol": { "protocolVersion": 1, "features": ["client_actions"] },
+  "requestedVersion": 1,
+  "missing": ["typed_commands"]
+}
+```
+
+where `protocol` is what the console does serve; a malformed declaration
+answers 400. `requires` names what the console must be able to serve, and turns
+nothing on: a session still opts in to `weaver_action` with
+`clientActions: true`. An accepted task's answer, and `GET /api/status`, carry
+`protocol: { "protocolVersion": 1, "features": [...] }`. A task without a
+declaration requires nothing and is served as before. The stdio `start_session`
+and `start_turn` take the same `protocol` param and refuse with error code
+`protocol_mismatch`, the same fields in `details`; an accepted one carries the
+same `protocol` echo beside the status in its result.
+
+The features are `client_actions`, the actions above, and `typed_commands`, the
+typed command invocation, catalog, and settlement defined in
+[`src/contracts/client-command.ts`](../src/contracts/client-command.ts). This
+console serves `client_actions` only, so a host requiring `typed_commands` is
+refused. In that contract a typed request rides the same
+`client_action_requested` event with action kind `invoke_command` or
+`list_commands`, and is settled on the same route with `settlement` in place of
+`outcome`; its resolved event carries the matching outcome word beside the
+settlement record, so a reader that knows only `done`, `declined`, and `failed`
+still clears it. The wire shapes are pinned by the JSON files under
+[`test/fixtures/client-command-wire/`](../test/fixtures/client-command-wire/),
+which the Weaver's Swift tests read too.
 
 ### Cancel route
 

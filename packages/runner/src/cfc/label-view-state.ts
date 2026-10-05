@@ -52,12 +52,9 @@ const cfcLabelViewEntriesFromMetadata = (
     // resolved here, so view consumers classify without knowing about
     // origins.
     const observes = entryObservationClass(entry);
-    // Label-metadata population templates (template-population Stage B)
-    // are envelope-LOCAL: they describe this envelope's own payload
-    // entries and are re-derived per envelope at persist, so they never
-    // ride label views — a link transports the source's payload labels,
-    // and the target's envelope mints its own templates from whatever
-    // entries land there.
+    // Only a label-metadata template carries this class, and a decoded
+    // envelope keeps templates out of its entries; a view entry cannot
+    // carry the class either.
     if (observes === "labelMetadata") {
       return [];
     }

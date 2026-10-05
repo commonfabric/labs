@@ -65,6 +65,7 @@ export type {
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcPrepareState,
+  CfcRecordAddress,
   CfcSandboxDiagnostic,
   CfcSandboxExitCodeObservation,
   CfcSandboxJsonValue,
@@ -144,6 +145,7 @@ export {
   canonicalizePreparedDigestInput,
   canonicalizeWritePolicyInput,
   cfcDereferenceTracesEqual,
+  cfcRecordPath,
   logicalPathToPointer,
   preparedDigestFor,
 } from "./canonical.ts";
@@ -254,7 +256,6 @@ export {
   CFC_PREFIX_PROVENANCE_MAX_WRITES,
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
-  flowReadExcluded,
   gatedSinkRequestExists,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,

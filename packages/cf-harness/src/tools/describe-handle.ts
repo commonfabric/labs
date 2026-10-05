@@ -100,7 +100,7 @@ export interface DescribeHandleToolOutput {
   referent?: {
     kind: "document" | "research" | "return";
     source: string;
-    labelSource: "row" | "query" | "research" | "child";
+    labelSource: "row" | "query" | "command" | "research" | "child";
   };
 
   /**

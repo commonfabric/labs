@@ -8,7 +8,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { currentPrincipal } from "../../src/builder/current-principal.ts";
 import { pattern, popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { principalOf } from "../../src/builder/principal-of.ts";
+import { principalOf, principalsOf } from "../../src/builder/principal-of.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { UnknownCfcMetadataVersionError } from "../../src/cfc/metadata.ts";
@@ -683,6 +683,75 @@ describe("principalOf()", () => {
     it("throws for a `target` that is not a cell", () => {
       expect(() => callIn(edit(), { name: "Bob" }, "authored-by")).toThrow(
         "takes a cell as its target",
+      );
+    });
+  });
+
+  describe("principalsOf()", () => {
+    /** Calls `principalsOf(target, kind)` in a handler frame over `tx`. */
+    const callAllIn = (
+      tx: IExtendedStorageTransaction,
+      target: unknown,
+      kind: unknown,
+    ) => inFrame(tx, "handler", () => principalsOf(target, kind));
+
+    it("returns no principals for a document whose label attests none", async () => {
+      const unlabeled = await seed("unlabeled", []);
+      expect(callAllIn(edit(), unlabeled, "authored-by")).toEqual([]);
+    });
+
+    it("returns the one principal a claim attests", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+      ]);
+      expect(callAllIn(edit(), record, "authored-by")).toEqual([bob.did()]);
+    });
+
+    it("returns every principal a label attests, in the order they first appear, where `principalOf()` returns `undefined`", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+        claimsAt(["bio"], claim("authored-by", alice.did())),
+        claimsAt([], claim("authored-by", bob.did())),
+      ]);
+      expect(callAllIn(edit(), record, "authored-by")).toEqual([
+        bob.did(),
+        alice.did(),
+      ]);
+      expect(callIn(edit(), record, "authored-by")).toBeUndefined();
+    });
+
+    it("returns only the principals a key's own field attests, leaving out another field's", async () => {
+      await seed("panel", [
+        claimsAt(["addedBy"], claim("authored-by", alice.did())),
+        claimsAt(["titleOverride"], claim("authored-by", bob.did())),
+      ], { addedBy: alice.did(), titleOverride: "Bob's title" });
+      const panel = runtime.getCell<
+        { addedBy: string; titleOverride: string }
+      >(space, "panel");
+      expect(callAllIn(edit(), panel.key("addedBy"), "authored-by")).toEqual([
+        alice.did(),
+      ]);
+      expect(callAllIn(edit(), panel, "authored-by")).toEqual([
+        alice.did(),
+        bob.did(),
+      ]);
+    });
+
+    it("returns `undefined` for a label holding a claim in any form but the one a runtime mints", async () => {
+      const record = await seed("record", [
+        claimsAt([], claim("authored-by", bob.did())),
+        claimsAt(["name"], `authored-by:${bob.did()}`),
+      ]);
+      expect(callAllIn(edit(), record, "authored-by")).toBeUndefined();
+    });
+
+    it("returns `undefined` for a `target` passed as `undefined`", () => {
+      expect(callAllIn(edit(), undefined, "authored-by")).toBeUndefined();
+    });
+
+    it("throws outside a handler or a reactive computation, naming itself", () => {
+      expect(() => principalsOf(undefined, "authored-by")).toThrow(
+        "`principalsOf(target, kind)` can only be called from a handler or a reactive computation",
       );
     });
   });

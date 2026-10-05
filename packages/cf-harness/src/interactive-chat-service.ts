@@ -87,6 +87,13 @@ import {
   type HarnessClientActionOutcomeKind,
   isHarnessClientActionOutcomeKind,
 } from "./contracts/client-action.ts";
+import {
+  checkHarnessClientProtocol,
+  type HarnessClientProtocolDeclaration,
+  type HarnessClientProtocolEcho,
+  harnessClientProtocolEcho,
+  type HarnessCommandResolveBody,
+} from "./contracts/client-command.ts";
 
 export type HarnessInteractivePromptLoop = Pick<
   CfHarnessPromptLoop,
@@ -336,6 +343,40 @@ const activeTurnError = (
       : `session ${session.sessionId} already has active turn ${activeTurnId}`,
     retryable: true,
   });
+
+/**
+ * The refusal a host's protocol declaration earns before any session or turn
+ * starts, or undefined when it requires nothing this console lacks.
+ */
+const protocolMismatchError = (
+  requestId: string,
+  declaration: HarnessClientProtocolDeclaration | undefined,
+): HarnessChatErrorResponse | undefined => {
+  if (declaration === undefined) return undefined;
+  const check = checkHarnessClientProtocol(declaration);
+  if (check.ok) return undefined;
+  const { message, ...details } = check.mismatch;
+  return createHarnessChatErrorResponse(requestId, {
+    code: "protocol_mismatch",
+    message,
+    details: { ...details },
+  });
+};
+
+/**
+ * An accepted stdio `start_session` or `start_turn` answer, carrying the
+ * console's client protocol as `POST /api/task` does, so a host learns what
+ * this console serves from an acceptance and not only from a refusal.
+ */
+const withProtocolEcho = <Result extends object>(
+  response: HarnessChatResponse<Result>,
+): HarnessChatResponse<Result & { protocol: HarnessClientProtocolEcho }> =>
+  response.ok
+    ? {
+      ...response,
+      result: { ...response.result, protocol: harnessClientProtocolEcho() },
+    }
+    : response;
 
 const sessionExistsError = (
   requestId: string,
@@ -1296,9 +1337,13 @@ export class HarnessInteractiveChatService {
     const method = String(request.method);
     switch (request.method) {
       case "start_session":
-        return await this.startSession(request.requestId, request.params);
+        return withProtocolEcho(
+          await this.startSession(request.requestId, request.params),
+        );
       case "start_turn":
-        return await this.startTurn(request.requestId, request.params);
+        return withProtocolEcho(
+          await this.startTurn(request.requestId, request.params),
+        );
       case "cancel_turn":
         return await this.cancelTurn(
           request.requestId,
@@ -1344,6 +1389,8 @@ export class HarnessInteractiveChatService {
     requestId: string,
     params: HarnessChatStartSessionParams,
   ): Promise<HarnessChatResponse<HarnessChatSessionStatus>> {
+    const mismatch = protocolMismatchError(requestId, params.protocol);
+    if (mismatch !== undefined) return mismatch;
     const sessionId = params.sessionId ?? this.#randomUUID();
     if (this.#sessions.has(sessionId)) {
       return sessionExistsError(requestId, sessionId);
@@ -1420,6 +1467,8 @@ export class HarnessInteractiveChatService {
     params: HarnessChatStartTurnParams,
     attached: { browserHost?: HarnessBrowserHost } = {},
   ): Promise<HarnessChatResponse<HarnessChatTurnStatus>> {
+    const mismatch = protocolMismatchError(requestId, params.protocol);
+    if (mismatch !== undefined) return mismatch;
     if (
       params.input.loomId !== undefined &&
       (typeof params.input.loomId !== "string" ||
@@ -1757,9 +1806,12 @@ export class HarnessInteractiveChatService {
    */
   async resolveClientAction(
     requestId: string,
-    params: HarnessChatResolveClientActionParams,
+    params: HarnessChatResolveClientActionParams | HarnessCommandResolveBody,
   ): Promise<HarnessChatResponse<HarnessChatResolveClientActionResult>> {
+    // This console serves `client_actions` only, so a typed settlement is
+    // refused like any other body without a final-action outcome.
     if (
+      !("outcome" in params) || "settlement" in params ||
       typeof params.sessionId !== "string" ||
       typeof params.actionId !== "string" ||
       !isHarnessClientActionOutcomeKind(params.outcome) ||

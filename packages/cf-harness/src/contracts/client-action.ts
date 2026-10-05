@@ -7,7 +7,14 @@
 
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-/** One action the client performs after a completed task. */
+/**
+ * One action the client performs after a completed task.
+ *
+ * As a mid-turn `weaver_action` request, `command` is superseded by the typed
+ * `invoke_command` (`client-command.ts`). `weaver_action` still accepts it
+ * until the typed `weaver_action` body is implemented, which removes it from
+ * that tool's input; `finish_task` keeps it as a final action.
+ */
 export type HarnessClientAction =
   | { kind: "open_loom"; loomId: string }
   | { kind: "command"; line: string }

@@ -78,6 +78,19 @@ export const isLabelMetadataTemplateEntry = (
 ): boolean => entry.origin === LABEL_METADATA_TEMPLATE_ORIGIN;
 
 /**
+ * Whether an entry of the template origin is keyed and classed as the mint
+ * produces one: under the `["cfc", "labels"]` metadata subtree, and observed
+ * by the `labelMetadata` class alone. The origin is what marks an entry as
+ * document-rooted, so one keyed anywhere else, or one a payload read class
+ * consumes, is a payload label spelled as a template.
+ */
+export const isWellFormedLabelMetadataTemplateEntry = (
+  entry: Pick<LabelMapEntry, "path" | "observes">,
+): boolean =>
+  entry.path[0] === "cfc" && entry.path[1] === "labels" &&
+  entry.observes === "labelMetadata";
+
+/**
  * Whether the entry's own effective confidentiality is a sound population
  * label for its source-bearing fields: true exactly for the components
  * produced by the §8.9.2 conservative join — `derived` (the per-tx flow

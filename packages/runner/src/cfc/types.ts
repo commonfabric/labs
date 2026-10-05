@@ -426,13 +426,27 @@ export type StoredCfcMetadata =
  * Label references resolve under the same policy, so a consumer holding a
  * `CfcMetadata` holds every label inline; `version` records which stored
  * spelling it was resolved from.
+ *
+ * The stored label map holds payload entries and document-rooted entries in
+ * one list. A reader decodes them apart (spec §4.6.4): `labelMap.entries`
+ * holds the payload entries alone, so no lookup over it can match a
+ * document-rooted entry, and the persist path writes both back into the one
+ * stored list.
  */
 export type CfcMetadata = {
   version: CfcMetadataVersion;
   schemaHash: string;
   labelMap: {
     version: 1;
+    /** The payload entries, each keyed relative to `value`. */
     entries: Array<LabelMapEntry>;
+
+    /**
+     * The document-rooted entries, each keyed relative to the stored
+     * document: the label-metadata templates of spec §4.6.4.2, which the
+     * introspection surface alone resolves. Absent where there are none.
+     */
+    documentEntries?: Array<LabelMapEntry>;
   };
 };
 
@@ -455,8 +469,22 @@ export type CfcAddress = Immutable<{
   path: string[];
 }>;
 
+/**
+ * The address a prepared-digest record binds, which carries exactly one of
+ * two paths: `path`, a payload path relative to `value`, or `metaPath`, a path
+ * relative to the stored document that names one of the document's own
+ * members, such as `source`. A consumer reaches a member's address only
+ * through `metaPath`, so it cannot take one for the payload field of the same
+ * name (spec §4.6.4).
+ */
+export type CfcRecordAddress =
+  | (CfcAddress & { readonly metaPath?: never })
+  | (Omit<CfcAddress, "path"> & Immutable<{ metaPath: string[] }> & {
+    readonly path?: never;
+  });
+
 export type ConsumedRead =
-  & CfcAddress
+  & CfcRecordAddress
   & Immutable<{
     meta?: Metadata;
     nonRecursive?: boolean;
@@ -736,8 +764,8 @@ export type ConsultedPolicyManifest = {
 
 export type PreparedDigestInput = {
   readonly consumedReads: readonly ConsumedRead[];
-  readonly attemptedWrites: readonly AttemptedWrite[];
-  readonly writes: readonly AttemptedWrite[];
+  readonly attemptedWrites: readonly CfcRecordAddress[];
+  readonly writes: readonly CfcRecordAddress[];
 
   /**
    * The ordered write-attempt log (see `OrderedWriteAttempt`). Mandatory in

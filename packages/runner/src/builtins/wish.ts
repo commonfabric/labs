@@ -60,6 +60,7 @@ import {
 import { scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
+  DocumentLoadError,
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
@@ -288,6 +289,10 @@ export function tagMatchesHashtag(
 type WishContext = {
   runtime: Runtime;
   readiness: ReturnType<typeof createDocumentReadiness>;
+
+  /** Candidate load failures encountered during this resolution. */
+  candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -644,9 +649,28 @@ function formatTarget(parsed: ParsedWishTarget): string {
     (parsed.path.length > 0 ? "/" + parsed.path.join("/") : "");
 }
 
-/**
- * Search favorites in home space for pieces matching a hashtag.
- */
+/** Checks a discovery candidate, retaining load failures for an empty search. */
+function requireDiscoveryCandidate(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (!(error instanceof DocumentLoadError)) throw error;
+    ctx.candidateFailures.set(cell, error);
+    return false;
+  }
+}
+
+/** Reports a candidate load failure when no readable match remains. */
+function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
+  const failure = ctx.candidateFailures.values().next().value;
+  if (failure) throw failure;
+  throw new WishError(message);
+}
+
+/** Searches favorites in home space for pieces matching a hashtag. */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
@@ -692,7 +716,7 @@ function searchFavoritesForHashtag(
     () =>
       matches.flatMap((match) => {
         const cell = match.cell.resolveAsCell();
-        return ctx.readiness.requireDocument(cell, ctx.tx)
+        return requireDiscoveryCandidate(cell, ctx)
           ? [{ cell, pathPrefix }]
           : [];
       }),
@@ -736,6 +760,8 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
+        const resolved = pieceCell.resolveAsCell();
+        if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",
@@ -836,9 +862,13 @@ function searchProfileForHashtag(
     "profile-elements-result-map",
     queryKey,
     () =>
-      matches.flatMap((match) =>
-        match.cell ? [{ cell: match.cell, pathPrefix }] : []
-      ),
+      matches.flatMap((match) => {
+        if (!match.cell) return [];
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -910,7 +940,10 @@ function searchByHashtag(
       parts.push(`${arbitraryDIDs.length} space(s)`);
     }
     const scopeDesc = parts.join(" or ") || "favorites";
-    throw new WishError(`No ${scopeDesc} found matching "${searchTerm}"`);
+    throwNoDiscoveryMatch(
+      ctx,
+      `No ${scopeDesc} found matching "${searchTerm}"`,
+    );
   }
 
   return allMatches;
@@ -950,16 +983,19 @@ function resolveHomeSpaceTarget(
 
       const match = favorites.find((entry) => {
         const userTags = entry.userTags ?? [];
-        for (const t of userTags) {
-          if (t.toLowerCase().includes(searchTerm)) return true;
-        }
-
         // Match the discovery tags snapshotted when favorited.
-        return (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        const tagged = userTags.some((t) =>
+          t.toLowerCase().includes(searchTerm)
+        ) || (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        return tagged &&
+          requireDiscoveryCandidate(entry.cell.resolveAsCell(), ctx);
       });
 
       if (!match) {
-        throw new WishError(`No favorite found matching "${searchTerm}"`);
+        throwNoDiscoveryMatch(
+          ctx,
+          `No favorite found matching "${searchTerm}"`,
+        );
       }
 
       return [{
@@ -1515,7 +1551,7 @@ function resolveBase(
 
     throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
   } finally {
-    ctx.readiness.requireLoadedReads(ctx.tx);
+    ctx.readiness.requireLoadedReads(ctx.tx, ctx.candidateFailures.keys());
   }
 }
 
@@ -1585,6 +1621,7 @@ function createSharedHashtagResolver(
     const sharedContext: WishContext = {
       runtime: ctx.runtime,
       readiness,
+      candidateFailures: new Map(),
       tx,
       parentCell: ctx.parentCell,
       scope: sharedScope,
@@ -3111,6 +3148,7 @@ export function wish(
           const ctx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3422,6 +3460,7 @@ export function wish(
           const suggestionCtx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,

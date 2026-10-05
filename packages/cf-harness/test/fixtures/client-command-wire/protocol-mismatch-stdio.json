@@ -1,0 +1,21 @@
+{
+  "type": "cf-harness.chat.response",
+  "protocolVersion": 1,
+  "requestId": "request-1",
+  "ok": false,
+  "error": {
+    "code": "protocol_mismatch",
+    "message": "this console speaks client protocol 1, not 2",
+    "details": {
+      "code": "protocol_mismatch",
+      "protocol": {
+        "protocolVersion": 1,
+        "features": [
+          "client_actions"
+        ]
+      },
+      "requestedVersion": 2,
+      "missing": []
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "error": "this console does not serve typed_commands",
+  "code": "protocol_mismatch",
+  "protocol": {
+    "protocolVersion": 1,
+    "features": [
+      "client_actions"
+    ]
+  },
+  "requestedVersion": 1,
+  "missing": [
+    "typed_commands"
+  ]
+}
