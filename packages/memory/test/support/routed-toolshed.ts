@@ -94,6 +94,9 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
     requireExplicitAcl: true,
     ownsSpace: (space) =>
       isCanonicalEd25519DID(space) && ownership(space) !== undefined,
+    createsSpace: (space) =>
+      JSON.parse(Deno.readTextFileSync(config.directory)).spaces[space] ===
+        undefined,
     authorizeSessionOpen: verifySessionOpenAuthorization,
     authorizeConnection: verifyConnectionAuthorization,
     sessionOpenAuth: { audience: identity.did() },

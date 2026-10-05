@@ -113,12 +113,20 @@ by itself. Link control is never accepted on a data socket.
 
 `RoutedMemoryHost` requires `acl.mode=enforce`, explicit ACL documents and an
 ownership fence. It rejects router DIDs as principals and forbids router service
-or delegation ACL entries. Principal leases are admitted into the existing
-Server connection authority; each session and protected engine turn rechecks its
-bound connection, lease, ownership and ACL. Checks after asynchronous waits
-retain the originating session object, so resumed sessions cannot authorize an
-old queued write. Data frames are serialized through the protected Memory turn,
-retaining their queue budget until it ends.
+or delegation ACL entries. A space is created by its own key, as
+`StorageManager.createSpace` does, and only on the toolshed the `unlisted` rule
+places it on: a routed open of a DID with no store is refused, before a store is
+created, unless the space's own DID opens it there, so a listed space whose
+store has not arrived is never re-created empty. Until its genesis ACL lands,
+that DID is the space's only principal and may commit only the ACL. A populated
+space without an ACL document is refused to everyone. Routed connections refuse
+`sqlite.register-disk-source`, an operator request, and in Mode A other
+connections accept it only from a service DID. Principal leases are admitted
+into the existing Server connection authority; each session and protected engine
+turn rechecks its bound connection, lease, ownership and ACL. Checks after
+asynchronous waits retain the originating session object, so resumed sessions
+cannot authorize an old queued write. Data frames are serialized through the
+protected Memory turn, retaining their queue budget until it ends.
 
 The durable ledger exclusively locks a separate inode, fsyncs authority changes
 before acknowledging them and fsyncs the parent directory on creation or atomic
@@ -162,7 +170,10 @@ authoritative directory, durable epoch ledger and per-router DID/network-peer
 allowlists. Directory storage, `MEMORY_ACL_MODE=enforce` and
 `EXPERIMENTAL_MODERN_CELL_REP=true` are mandatory. The policy initializes the
 Memory encoder before listening; Runtime startup reads the same required flag.
-Only already-owned, explicit-ACL spaces can open. Directory epoch changes fence
+Only owned spaces open a Memory session: explicit-ACL spaces, and a space with
+no history to its own DID. The toolshed's HTTP routes, such as blobs and
+invitations, open a space without checking ownership, so moving a space blocks
+them first (see the infra router README). Directory epoch changes fence
 protected turns and close affected contexts. Remove a router from its tracked
 allowlist and restart for immediate permanent policy withdrawal; in-process
 `revokeRouter` also persists a key tombstone. Production secrets come from

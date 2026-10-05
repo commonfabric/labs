@@ -1920,6 +1920,20 @@ class Connection {
         }
         return;
       case "sqlite.register-disk-source":
+        // Maps a toolshed path into a space: an operator surface, never
+        // offered to the public router's clients, any of whom can create a
+        // space and own it.
+        if (this.routed) {
+          this.#send({
+            type: "response",
+            requestId: parsed.requestId,
+            error: toError(
+              "AuthorizationError",
+              "Routed memory request denied",
+            ),
+          });
+          return;
+        }
         if (
           !this.#requireSession(
             parsed.requestId,
@@ -2391,8 +2405,18 @@ export class Server {
       store?: URL;
       /** Synchronous authoritative fence, checked in protected engine turns. */
       ownsSpace?: (space: string) => boolean;
-      /** Existing-space stage: refuse missing ACLs and implicit legacy grants. */
+      /**
+       * Mode A: refuse missing ACLs and implicit legacy grants. A space with
+       * no history admits only its own DID, to write its genesis ACL, and an
+       * open by anyone else creates no store for it.
+       */
       requireExplicitAcl?: boolean;
+      /**
+       * Mode A: whether a space with no store may be created here. A space
+       * the directory lists must already have its store, so an open of one
+       * whose store has not arrived is refused rather than re-created empty.
+       */
+      createsSpace?: (space: string) => boolean;
 
       operationCodecs?: OperationCodecRegistry;
 
@@ -2817,11 +2841,15 @@ export class Server {
     ) {
       return toError("AuthorizationError", "Routed memory request denied");
     }
-    if (
-      this.options.requireExplicitAcl === true &&
-      this.#aclState(engine, space).kind !== "valid"
-    ) {
-      return toError("AuthorizationError", "Routed memory request denied");
+    if (this.options.requireExplicitAcl === true) {
+      const kind = this.#aclState(engine, space).kind;
+      // Creation: until its genesis ACL lands, a space with no history
+      // admits its own DID alone, which `#resolveCapability` makes OWNER.
+      const genesis = kind === "missing" && principal === space &&
+        Engine.serverSeq(engine) === 0;
+      if (kind !== "valid" && !genesis) {
+        return toError("AuthorizationError", "Routed memory request denied");
+      }
     }
     if (this.#aclMode() === "off") return null;
     const capability = this.#capabilityFor(engine, space, principal);
@@ -3657,7 +3685,8 @@ export class Server {
    * space's (or a cell-derived) `.sqlite` file and read it cross-tenant.
    * (Confining injected sources to an operator allowlist, and gating the verb to
    * an operator capability rather than any session, awaits CFC labels —
-   * 08-open-questions Q18.)
+   * 08-open-questions Q18. Mode A already admits only service DIDs, since any
+   * client there can create and own a space; see `sqliteRegisterDiskSource`.)
    */
   async registerDiskSource(
     space: string,
@@ -4445,6 +4474,18 @@ export class Server {
         toError("SessionError", "Unknown session for space"),
       );
     }
+    // Mode A: any client can create and own a space, so this operator
+    // surface is open only to service DIDs, on any connection.
+    if (
+      this.options.requireExplicitAcl === true &&
+      (session.principal === undefined ||
+        !this.#isServicePrincipal(session.principal))
+    ) {
+      return respondTypedError<SqliteRegisterDiskSourceResult>(
+        message.requestId,
+        toError("AuthorizationError", "Routed memory request denied"),
+      );
+    }
     const aclEngine = this.#aclMode() === "off"
       ? undefined
       : await this.#openEngine(message.space);
@@ -4598,6 +4639,20 @@ export class Server {
         : await this.options.authorizeSessionOpen(message, authContext);
       if (authContext !== undefined) {
         connection.consumeSessionOpenChallenge(authContext.challenge);
+      }
+      // Mode A: a DID with no store here names a space nobody has created
+      // here. Only its own key may create it, and only where `createsSpace`
+      // allows; anyone else is refused before opening the engine would
+      // create the store. `createsSpace` is asked after the existence check,
+      // so a directory change during that wait is seen. The refusal stays
+      // permanent: a retriable one would show which DIDs the directory lists.
+      if (
+        this.options.requireExplicitAcl === true &&
+        !(await this.#spaceStoreExists(message.space)) &&
+        (principal !== message.space ||
+          this.options.createsSpace?.(message.space) === false)
+      ) {
+        throw authorizationError("Routed memory request denied");
       }
       const engine = await this.#openEngine(message.space);
       if (!connection.allowsRoutedOpen(message.space, named)) {

@@ -2,6 +2,7 @@
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { assert, assertEquals } from "@std/assert";
+import { toFileUrl } from "@std/path";
 // @ts-types="@types/ws"
 import WebSocket from "ws";
 import { Client as MemoryClient, type SessionPrincipal } from "../v2/client.ts";
@@ -11,14 +12,17 @@ import {
   RemoteSessionFactory,
   WebSocketTransport,
 } from "../../runner/src/storage/v2-remote-session.ts";
+import { aclDocId } from "../acl.ts";
 import type { MemorySpace } from "../interface.ts";
-import { getMemoryProtocolFlags } from "../v2.ts";
+import { getMemoryProtocolFlags, toDocumentPath } from "../v2.ts";
+import { BASE58_ALPHABET } from "../v2/routed-directory.ts";
 import { decodeRoutedFrame } from "../v2/routed-parser.ts";
 import {
   readRoutedHex,
   routedBase64,
   routedStatementPayload,
 } from "../v2/routed-wire.ts";
+import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
 
 // Routed toolsheds require the modern cell encoding, and the SDK's hello
 // advertises this process's setting. Toolsheds now run as child processes, so
@@ -1909,6 +1913,146 @@ finally:
   toolsheds[1].signal("SIGCONT");
   await opened("127.0.0.29", 1, 30000);
   pass("a link stalled past its request deadline is replaced and recovers");
+
+  // Creation. An `unlisted` rule places every DID the directory does not
+  // list, here alternately across both toolsheds by last character, and a
+  // space is created as StorageManager.createSpace creates it: a fresh key
+  // opens the space through the SDK and commits its genesis ACL. A router
+  // reads the rule once, so it restarts to take it up, and the rule stays for
+  // the remaining gates, which open only listed spaces.
+  Deno.writeTextFileSync(
+    directory,
+    JSON.stringify({
+      ...JSON.parse(Deno.readTextFileSync(directory)),
+      unlisted: {
+        epoch: 1,
+        last_character: Object.fromEntries(
+          [...BASE58_ALPHABET].map((c, i) => [c, i % 2]),
+        ),
+      },
+    }),
+  );
+  await restartRouter();
+  const stored = (space: string) =>
+    [0, 1].some((i) => {
+      try {
+        Deno.statSync(
+          resolveSpaceStoreUrl(
+            toFileUrl(`${root}/store-${i}/`),
+            space as MemorySpace,
+          ),
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const created: string[] = [];
+  for (
+    const [shared, localAddress] of [
+      [false, "127.0.0.34"],
+      [true, "127.0.0.35"],
+    ] as const
+  ) {
+    const key = await Identity.generate();
+    const space = key.did() as MemorySpace;
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      key,
+      (address) => socketFactory(address, localAddress),
+    );
+    factory.setSharedConnections(shared);
+    try {
+      const { client: connection, session } = await factory.create(
+        space,
+        key,
+        { sessionId: crypto.randomUUID() },
+      );
+      try {
+        await session.transact({
+          localSeq: 1,
+          reads: {
+            confirmed: [{
+              id: aclDocId(space),
+              path: toDocumentPath([]),
+              seq: 0,
+            }],
+            pending: [],
+          },
+          operations: [{
+            op: "set",
+            id: aclDocId(space),
+            value: { value: { [alice.did()]: "OWNER" } },
+          }],
+        });
+      } finally {
+        await connection.close();
+      }
+    } finally {
+      await factory.close();
+    }
+    assert(stored(space));
+    created.push(space);
+  }
+  pass(
+    "the SDK creates a space through the router with its own key, sharing off and on",
+  );
+  const members = await new Client("127.0.0.36").start();
+  clients.push(members);
+  await members.authenticate(alice, 180, true);
+  await members.authenticate(bob, 180);
+  for (const space of created) {
+    const owner = await members.request({
+      type: "session.open",
+      space,
+      principal: alice.did(),
+      session: {},
+    });
+    const other = await members.request({
+      type: "session.open",
+      space,
+      principal: bob.did(),
+      session: {},
+    });
+    assert(
+      owner.ok !== undefined && other.error !== undefined,
+      JSON.stringify({ owner, other }),
+    );
+  }
+  pass("a created space's genesis ACL then governs who opens it");
+  const unclaimed = (await Identity.generate()).did();
+  assert(
+    (await members.request({
+      type: "session.open",
+      space: unclaimed,
+      principal: bob.did(),
+      session: {},
+    })).error !== undefined,
+  );
+  assert(!stored(unclaimed));
+  // A Home space is born on its first open by its own key; until its genesis
+  // ACL lands, nobody else is admitted.
+  const home = await members.request({
+    type: "session.open",
+    space: alice.did(),
+    principal: alice.did(),
+    session: {},
+  });
+  assert(home.ok !== undefined, JSON.stringify(home));
+  assert(stored(alice.did()));
+  assert(
+    (await members.request({
+      type: "session.open",
+      space: alice.did(),
+      principal: bob.did(),
+      session: {},
+    })).error !== undefined,
+  );
+  members.close();
+  await members.closed.promise;
+  pass(
+    "a DID with no store is opened or created only by its own key, and nobody else opens it before genesis",
+  );
 
   await toolsheds[0].stop();
   await opened("127.0.0.30", 1);

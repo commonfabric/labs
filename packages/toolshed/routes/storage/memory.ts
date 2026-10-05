@@ -119,6 +119,7 @@ export const memoryServer = new MemoryServer.Server({
   ...(routerPolicy !== undefined
     ? {
       ownsSpace: (space: string) => routerPolicy.owns(space),
+      createsSpace: (space: string) => routerPolicy.creates(space),
       requireExplicitAcl: true,
     }
     : {}),

@@ -97,7 +97,10 @@ export class RoutedMemoryHost {
   #closed = false;
   #revoked = new Set<string>();
 
-  /** Requires enforced ACLs, explicit ACL documents and an engine-turn fence. */
+  /**
+   * Requires enforced ACLs, explicit ACL documents (a space with no history
+   * admits only its own DID, to write its genesis) and an engine-turn fence.
+   */
   constructor(options: RoutedHostOptions) {
     requireRouted(
       options.server.options.acl?.mode === "enforce" &&

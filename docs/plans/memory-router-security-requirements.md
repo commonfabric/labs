@@ -7,7 +7,8 @@ Proposed requirements for the router phases of the
 The opt-in Mode A implementation is specified in
 [the routed protocol](../specs/memory-v2/routed-mode-a.md); public deployment
 remains subject to the acceptance gates below. Other router phases are proposed.
-They depend on the direct connection-auth protocol described in that design. The first public stage serves existing spaces
+They depend on the direct connection-auth protocol described in that design.
+The first public stage serves the spaces its directory places
 through one client WebSocket that can reach several toolsheds. It uses the
 design's Mode A: one upstream connection per client per toolshed. Mode B needs a
 separate security review before deployment. That review must establish a
@@ -25,9 +26,13 @@ assess the shared multiplexer compromise and crash blast radius, including
 sharding per toolshed. Section 5.3 of the multiplexing design must be reconciled
 with those constraints before Mode B is implemented.
 
-This stage assumes that space creation is restricted, spaces have the intended
-access-control documents, and no legacy spaces are served. Those are deployment
-prerequisites, not properties established by the router. The router protects
+This stage assumes that spaces have the intended access-control documents and no
+legacy spaces are served. Those are deployment prerequisites, not properties
+established by the router. Space creation is open to any authenticated client
+when the directory has an `unlisted` rule (requirement 9); a registry the router
+enforces is planned to restrict it. Because any client can then own a space,
+operator requests such as disk-source registration are refused to the router's
+clients and accepted elsewhere only from service DIDs. The router protects
 Memory WebSockets; public HTTP routes need their own ingress and authorization
 review.
 
@@ -260,9 +265,11 @@ certificate private key, compromise exposes that key too.
 - Disconnecting a client or killing its router eventually removes its backend
   authority within the documented lease; an expired proof cannot reopen it.
 - Without an `unlisted` rule the router denies spaces the directory does not
-  list, and with one a client selects a toolshed only through the rule. The
-  toolshed still refuses a space without an ACL, so a client cannot create a
-  space by choosing a new DID.
+  list. With one, a client creates a space only by holding its key, and only
+  where the rule places it: a routed open of a DID with no store creates nothing
+  unless that DID opens it there, only that DID may write the genesis ACL, and a
+  populated space without an ACL is refused. Disk-source registration is refused
+  to the router's clients and accepted elsewhere only from service DIDs.
 - Incompatible client flags are rejected even when the router's upstream
   advertises compatible flags. A header/body space mismatch, ambiguous JSON, and
   a compressed expansion attack fail before any write or watch is admitted.
