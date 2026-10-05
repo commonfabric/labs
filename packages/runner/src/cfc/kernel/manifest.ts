@@ -131,10 +131,10 @@ const WRITE_AUTHORITY = "08-15-write-authority.md";
 const PREPARE = "cfc/prepare.ts";
 
 /**
- * Every critical function, grouped by the kernel file that will hold it:
- * `store-labels.ts` for §8.12.1, `label.ts` for §3.1, `exchange.ts` for
- * §4.3.4 and §4.4.5, `boundary.ts` for §8.10, `propagation.ts` for §8.9,
- * `label-metadata.ts` for §4.6.4.1, and `write-authority.ts` for §8.15.6.
+ * Every critical function, grouped by the chapter that states it, in the
+ * order the kernel takes them: the store-label comparison, the label
+ * algebra, exchange, the boundary checks, propagation, label-metadata
+ * inspection, and write authority.
  */
 export const MANIFEST: readonly ManifestRow[] = [
   {
