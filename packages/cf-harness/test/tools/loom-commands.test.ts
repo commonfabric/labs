@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
 import { HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES } from "../../src/client-actions/command-result.ts";
@@ -9,6 +10,10 @@ import {
   parentToolIdsForBacking,
   withheldToolIds,
 } from "../../src/contracts/tool-descriptor.ts";
+import {
+  CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+  type PromptSlotBinding,
+} from "../../src/contracts/prompt-slot.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
 import type { HarnessLoomCommandsConfig } from "../../src/loom-commands.ts";
@@ -163,13 +168,19 @@ const sandbox: SandboxRuntime = {
 /** Helper for engine tests, which answers list and run like `contextWith`. */
 const engineWith = (
   answer: string,
-  options: { ceiling?: readonly unknown[] } = {},
+  options: {
+    ceiling?: readonly unknown[];
+    cfcEnforcementMode?: CfcEnforcementMode;
+  } = {},
 ) => {
   const calls: ProcessRunRequest[] = [];
   const engine = new CfHarnessEngine({
     model: "gpt-5.4",
     sandboxRuntime: sandbox,
     loomCommands: freshConfig(),
+    ...(options.cfcEnforcementMode !== undefined
+      ? { cfcEnforcementMode: options.cfcEnforcementMode }
+      : {}),
     ...(options.ceiling !== undefined
       ? {
         fabricSession: {
@@ -724,6 +735,93 @@ describe("loom-commands tools", () => {
   });
 
   describe("prompt loop", () => {
+    /** Has the model run `loom.compose` once under `binding`, then finish. */
+    const composeOnce = (
+      engine: CfHarnessEngine,
+      binding: PromptSlotBinding,
+    ) => {
+      const payloads = [
+        {
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [{
+                id: "run-one",
+                type: "function",
+                function: {
+                  name: "run_command",
+                  arguments: JSON.stringify({
+                    command: "loom.compose",
+                    args: {},
+                  }),
+                },
+              }],
+            },
+          }],
+        },
+        {
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "Done" },
+          }],
+        },
+      ];
+      let index = 0;
+      return new CfHarnessPromptLoop({
+        engine,
+        apiKey: "synthetic-test-key",
+        model: "gpt-5.4",
+        allowedToolIds: ["run_command"],
+        fetchFn: (_url, init) =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify(
+                responsesBodyFromChatFixture(payloads[index++], init?.body),
+              ),
+              { status: 200 },
+            ),
+          ),
+      }).runPrompt({
+        prompt: "Compose the trip loom",
+        promptSlotBinding: binding,
+      });
+    };
+
+    it("runs a command at `enforce-explicit` only for a direct command, refusing one a `context` task asks for", async () => {
+      // A request a pattern submitted binds its task as `context`; a person's
+      // own request binds as a direct command.
+      const context: PromptSlotBinding = {
+        type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+        source: { type: "test.prompt-slot", subject: "pattern-request" },
+        role: "context",
+        kernelName: "cf-harness",
+        surface: "test",
+        subject: "pattern-request",
+        eventId: "event-pattern-request",
+      };
+      for (
+        const [binding, decision, hostCalls] of [
+          [context, "denied", []],
+          [directPromptSlotBindingFor("loom-commands"), "allowed", [
+            "list",
+            "run",
+          ]],
+        ] as const
+      ) {
+        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+          cfcEnforcementMode: "enforce-explicit",
+        });
+        const result = await composeOnce(engine, binding);
+        const record = (result.runState.policyDecisions ?? []).find((entry) =>
+          entry.toolId === "run_command"
+        );
+        expect(record?.decision).toBe(decision);
+        expect(calls.map((call) => call.args[1])).toEqual([...hostCalls]);
+      }
+    });
+
     it("shows the model the answer without its label, and records the label as an observation", async () => {
       const { engine, calls } = engineWith(JSON.stringify({
         ok: true,

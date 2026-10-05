@@ -25,7 +25,7 @@ refused at argument parsing.
   "cliPath": "/opt/loom/src/bin/loom",
   "transport": {
     "kind": "broker",
-    "queuePath": "/private/loom/agent-runner/broker"
+    "queuePath": "/private/loom/run/command-queue"
   }
 }
 ```
@@ -98,7 +98,11 @@ Its answer has three shapes:
   command was sent, and the command may have taken effect.
 
 The tool's effect class is `write` for every call, because the host does not say
-which commands only read.
+which commands only read. Policy treats it as any other write: under
+`enforce-explicit` and `enforce-strict` a call runs only when the run's task is
+bound as a `direct-command` prompt slot, so a task that arrived as `context` — a
+request a pattern submitted, say — can list commands but not run one, a read
+command included.
 
 ## The answer is Loom data
 
