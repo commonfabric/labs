@@ -71,6 +71,12 @@ describe("cfc-spec-snapshot", () => {
     it("strips trailing whitespace per line and joins with `\\n`", () => {
       expect(normalizeBlock(["a  ", "b\t", "", "c"])).toBe("a\nb\n\nc");
     });
+
+    it("strips the indentation every non-blank line shares and keeps the rest", () => {
+      expect(normalizeBlock(["  a", "", "    b", "  c  "])).toBe(
+        "a\n\n  b\nc",
+      );
+    });
   });
 
   describe("functionsOf()", () => {
@@ -95,6 +101,45 @@ describe("cfc-spec-snapshot", () => {
       expect(found[0].sha256).toBe(hash);
       expect(found[1].sha256).toBe(hash);
       expect(found[2].sha256).not.toBe(hash);
+    });
+
+    it("gives a block the same hash at any indentation, as inside a list", async () => {
+      const [flat] = await functionsOf(
+        "x.md",
+        "## 1\n```ts\nfunction f() {\n  return 1;\n}\n```",
+      );
+      const [listed] = await functionsOf(
+        "x.md",
+        "## 1\n- item\n\n  ```ts\n  function f() {\n    return 1;\n  }\n  ```",
+      );
+      expect(listed.sha256).toBe(flat.sha256);
+    });
+
+    it("reads a heading inside a non-pseudocode fence as text, and a fence inside a longer fence as text", async () => {
+      const text = [
+        "## 1 Real",
+        "```text",
+        "### 1.9 Not a heading",
+        "```",
+        "````md",
+        "```ts",
+        "function nested() {}",
+        "```",
+        "````",
+        "~~~typescript",
+        "function tilde() {}",
+        "~~~",
+        "```ts title=example",
+        "function titled() {}",
+        "```",
+      ].join("\n");
+      expect(sectionsOf(text)).toEqual(["1"]);
+      expect(
+        (await functionsOf("x.md", text)).map(({ section, name }) => [
+          section,
+          name,
+        ]),
+      ).toEqual([["1", "tilde"], ["1", "titled"]]);
     });
 
     it("gives a block the same hash whatever its trailing whitespace", async () => {

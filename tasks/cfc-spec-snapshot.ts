@@ -21,11 +21,14 @@
  * `CF_SPECS_DIR` names the `cfc/` directory of a specs checkout, defaulting to
  * `~/src/specs/cfc`; `--rev` names the revision, defaulting to `HEAD`.
  *
- * A pseudocode block is a fenced code block whose opener is three backticks
- * followed by `typescript` or `ts`. Its hash is taken over its lines with
- * trailing whitespace removed, joined by `\n`, with no trailing newline, so a
- * rewrap of the fence's indentation or a line-ending change is not a change
- * to the block and an edit to its code is. Every block defining a function
+ * A pseudocode block is a fenced code block whose info string opens with
+ * `typescript` or `ts`. Every fence is tracked, whatever its language and
+ * whether it is written with backticks or tildes, so a heading or a fence
+ * written inside another block is text rather than structure. A block's hash
+ * is taken over its lines with the indentation they share and their trailing
+ * whitespace removed, joined by `\n`, with no trailing newline, so moving a
+ * fence into or out of a list and a line-ending change are not changes to the
+ * block and an edit to its code is. Every block defining a function
  * contributes one entry per `function NAME(` it defines, each carrying the
  * block's hash; a block defining several functions gives them one hash.
  *
@@ -38,6 +41,7 @@
 
 import { encodeHex } from "@std/encoding/hex";
 import { dirname, fromFileUrl, join } from "@std/path";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -80,6 +84,7 @@ export interface ChapterFile {
   /** The file's name within `cfc/`. */
   readonly name: string;
 
+  /** The file as written. */
   readonly text: string;
 }
 
@@ -95,11 +100,16 @@ const PSEUDOCODE_CHAPTER = /^(?:0[3-8]|10|17|18)-/;
  */
 const NUMBERED_HEADING = /^#{1,6}\s+(\d+(?:\.\d+)*)\.?\s/;
 
-/** The opener of a pseudocode fence. */
-const FENCE_OPEN = /^\s*```(?:typescript|ts)\s*$/;
+/**
+ * A fence opener: three or more backticks or tildes after optional
+ * indentation, then the info string. A closer is the same character run, at
+ * least as long, with nothing but whitespace after it, so a fence of four
+ * backticks can hold one of three.
+ */
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})(.*)$/;
 
-/** The closer of any fence. */
-const FENCE_CLOSE = /^\s*```\s*$/;
+/** An info string naming the pseudocode language. */
+const PSEUDOCODE_INFO = /^(?:typescript|ts)(?:\s|$)/;
 
 /**
  * A function declaration at the start of a line, allowing `export` and
@@ -120,9 +130,20 @@ export function compareSections(a: string, b: string): number {
   return 0;
 }
 
-/** The lines of a block as its hash reads them. */
+/**
+ * The lines of a block as its hash reads them: the indentation every
+ * non-blank line shares removed, trailing whitespace removed, joined by `\n`.
+ */
 export function normalizeBlock(lines: readonly string[]): string {
-  return lines.map((line) => line.replace(/\s+$/, "")).join("\n");
+  const trimmed = lines.map((line) => line.replace(/\s+$/, ""));
+  let shared = Infinity;
+  for (const line of trimmed) {
+    if (line === "") continue;
+    shared = Math.min(shared, /^[ \t]*/.exec(line)![0].length);
+  }
+  const indent = shared === Infinity ? 0 : shared;
+  return trimmed.map((line) => line.slice(Math.min(indent, line.length)))
+    .join("\n");
 }
 
 /** SHA-256 of `text`, as lowercase hex. */
@@ -134,50 +155,86 @@ export async function sha256Hex(text: string): Promise<string> {
   return encodeHex(new Uint8Array(digest));
 }
 
+/** A pseudocode block, under the nearest numbered heading above it. */
+export interface PseudocodeBlock {
+  /** The section number heading the block, or `""` above the first. */
+  readonly section: string;
+
+  /** The block's lines as written, fence lines excluded. */
+  readonly lines: readonly string[];
+}
+
+/** What a chapter's text is made of: its section numbers and its blocks. */
+export interface ChapterStructure {
+  /** Every section number a heading outside a fence carries, in order. */
+  readonly sections: readonly string[];
+
+  /** Every pseudocode block, in order. */
+  readonly blocks: readonly PseudocodeBlock[];
+}
+
+/**
+ * Reads a chapter's headings and pseudocode blocks in one pass, tracking
+ * every fence so that a heading inside a code block, or a fence inside a
+ * longer fence, is text rather than structure.
+ */
+export function chapterStructure(text: string): ChapterStructure {
+  const sections: string[] = [];
+  const blocks: PseudocodeBlock[] = [];
+  let section = "";
+  let fence: { closer: RegExp; lines: string[] | null } | null = null;
+  for (const line of text.split("\n")) {
+    if (fence !== null) {
+      if (fence.closer.test(line)) {
+        if (fence.lines !== null) blocks.push({ section, lines: fence.lines });
+        fence = null;
+      } else {
+        fence.lines?.push(line);
+      }
+      continue;
+    }
+    const heading = NUMBERED_HEADING.exec(line);
+    if (heading) {
+      section = heading[1];
+      sections.push(section);
+      continue;
+    }
+    const opener = FENCE_OPEN.exec(line);
+    if (opener) {
+      const [, marker, info] = opener;
+      fence = {
+        closer: new RegExp(
+          `^\\s*${marker[0] === "`" ? "`" : "~"}{${marker.length},}\\s*$`,
+        ),
+        lines: PSEUDOCODE_INFO.test(info.trim()) ? [] : null,
+      };
+    }
+  }
+  return { sections, blocks };
+}
+
 /** Every section number a chapter's headings carry, in document order. */
 export function sectionsOf(text: string): string[] {
-  const found: string[] = [];
-  for (const line of text.split("\n")) {
-    const match = NUMBERED_HEADING.exec(line);
-    if (match) found.push(match[1]);
-  }
-  return found;
+  return [...chapterStructure(text).sections];
 }
 
 /**
  * Every function a chapter's pseudocode blocks define, in document order,
- * each under the nearest numbered heading above its block. A block above the
- * chapter's first numbered heading is attributed to an empty section.
+ * each under the nearest numbered heading above its block.
  */
 export async function functionsOf(
   file: string,
   text: string,
 ): Promise<SnapshotFunction[]> {
   const found: SnapshotFunction[] = [];
-  let section = "";
-  let block: string[] | null = null;
-  for (const line of text.split("\n")) {
-    if (block === null) {
-      const heading = NUMBERED_HEADING.exec(line);
-      if (heading) {
-        section = heading[1];
-      } else if (FENCE_OPEN.test(line)) {
-        block = [];
+  for (const { section, lines } of chapterStructure(text).blocks) {
+    const sha256 = await sha256Hex(normalizeBlock(lines));
+    for (const line of lines) {
+      const declaration = FUNCTION_DECLARATION.exec(line);
+      if (declaration) {
+        found.push({ file, section, name: declaration[1], sha256 });
       }
-      continue;
     }
-    if (FENCE_CLOSE.test(line)) {
-      const sha256 = await sha256Hex(normalizeBlock(block));
-      for (const blockLine of block) {
-        const declaration = FUNCTION_DECLARATION.exec(blockLine);
-        if (declaration) {
-          found.push({ file, section, name: declaration[1], sha256 });
-        }
-      }
-      block = null;
-      continue;
-    }
-    block.push(line);
   }
   return found;
 }
@@ -189,7 +246,7 @@ export async function buildSnapshot(
 ): Promise<SpecSnapshot> {
   const sorted = [...chapters]
     .filter((chapter) => CHAPTER_FILE.test(chapter.name))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => utf8Compare(a.name, b.name));
   const sections = new Set<string>();
   const functions: SnapshotFunction[] = [];
   for (const chapter of sorted) {
