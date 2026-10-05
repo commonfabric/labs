@@ -293,14 +293,14 @@ const Home = pattern(
       BackwardsCompatibleProfile | undefined
     >(undefined).for("defaultProfile");
     const mru = new Writable<BackwardsCompatibleProfile[]>([]).for("mru");
-    // Untrusted-write regression surface: this stream is exported so tests can
-    // verify that sending it from outside the trusted create surface does NOT
-    // create a profile. The actual create UI lives in the profile picker below.
     // Home's private inbox, which a profile is pointed at when it is created
     // and when the host ensures the inbox.
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
+    // Untrusted-write regression surface: this stream is exported so tests can
+    // verify that sending it from outside the trusted create surface does NOT
+    // create a profile. The actual create UI lives in the profile picker below.
     const createProfileStream = submitProfileCreation({
       profiles: profiles as any,
       seedName: seedProfileName({ profiles: profiles as any, privateInbox }),
