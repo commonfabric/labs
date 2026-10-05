@@ -2,7 +2,8 @@
 
 The shared-space catalog records which shared spaces a person keeps in their
 collection. Its schema and deterministic cause are exported by
-`@commonfabric/runtime-client/shared-space-catalog-contract`. One document lives in the principal's Home under
+`@commonfabric/runtime-client/shared-space-catalog-contract`, which re-exports
+the runner's contract module. One document lives in the principal's Home under
 `sharedSpaceCatalogCause(principal)`. Reading or updating it does not require
 the Home UI pattern to run.
 
@@ -172,8 +173,15 @@ automatic compaction nor a size-based reset.
 ## Pattern access
 
 Authored patterns cannot import this host SDK, and it exposes no pattern-facing
-catalog capability. A raw cell link does not supply the SDK's registration,
-receipt, revision, or confirmation semantics. The
+catalog capability. The runner's portable data module supplies synchronous
+registration and membership transitions shared with the SDK. Its caller must
+validate the complete raw catalog and input, establish principal and route
+authority, and confirm the enclosing transaction. The core emits minimal field
+writes so an adapter need not replace extensions omitted by a typed projection.
+It does not provide a validated reactive read or Home discovery.
+
+A raw cell link does not supply the SDK's registration, receipt, revision, or
+confirmation semantics. The
 [pattern integration plan](../plans/shared-space-catalog-pattern-access.md)
 describes the work needed for Labs-only consumers.
 

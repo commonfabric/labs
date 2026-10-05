@@ -9,19 +9,17 @@ import {
 } from "@commonfabric/runner";
 
 import {
+  changeCatalogMembership,
   isSharedSpaceCatalog,
-  isSharedSpaceMembership,
-  isSharedSpaceMembershipAction,
   normalizeSharedSpaceRegistration,
+  registerCatalogEntry,
   type SharedSpaceCatalog,
   sharedSpaceCatalogCause,
   type SharedSpaceCatalogHome,
   sharedSpaceCatalogHost,
   type SharedSpaceCatalogRead,
-  type SharedSpaceEntry,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
-  sharedSpaceOfferKey,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
   validateSharedSpaceMembershipChange,
@@ -97,38 +95,13 @@ export async function registerSharedSpace(
   const registration = normalizeSharedSpaceRegistration(input);
   const revision = crypto.randomUUID();
   const since = registration.since ?? Date.now();
-  return await editCatalog(runtime, home, admit, (catalog, changed) => {
-    const { space, host, kind, title, offer } = registration;
-    const current = catalog.entries[space];
-    if (current && current.host !== host) {
-      return { status: "conflict", reason: "host" };
-    }
-    if (current && current.kind !== kind) {
-      return { status: "conflict", reason: "kind" };
-    }
-    const key = offer && sharedSpaceOfferKey(offer.from, offer.id);
-    const receipt = key && catalog.offers[key];
-    if (
-      receipt && (receipt.space !== space || receipt.host !== host ||
-        receipt.kind !== kind)
-    ) return { status: "conflict", reason: "offer" };
-    const entry: SharedSpaceEntry = current ?? {
-      space,
-      host,
-      kind,
-      ...(title === undefined ? {} : { title }),
-      ...(offer === undefined ? {} : { from: offer.from }),
-      since,
-      state: registration.initialState ?? "saved",
-      revision,
-    };
-    if (!current || (key && !receipt)) changed();
-    catalog.entries[space] = entry;
-    if (key && offer) {
-      catalog.offers[key] = { ...offer, space, host, kind };
-    }
-    return { status: current ? "existing" : "registered", entry };
-  });
+  return await editCatalog(
+    runtime,
+    home,
+    admit,
+    (catalog, changed) =>
+      registerCatalogEntry(catalog, registration, revision, since, changed),
+  );
 }
 
 /**
@@ -145,42 +118,13 @@ export async function changeSharedSpaceMembership(
   validateSharedSpaceMembershipChange(change);
   change = { ...change };
   const revision = crypto.randomUUID();
-  return await editCatalog(runtime, home, admit, (catalog, changed) => {
-    const current = catalog.entries[change.space];
-    if (!current) return { status: "conflict", reason: "missing" };
-    if (!isSharedSpaceMembership(current.state)) {
-      return { status: "conflict", reason: "unsupported-state" };
-    }
-    const last = current.lastAction;
-    if (
-      last !== undefined &&
-      (!isSharedSpaceMembershipAction(last) || last.state !== current.state)
-    ) {
-      return { status: "conflict", reason: "action" };
-    }
-    if (last?.id === change.id) {
-      return last.expectedRevision === change.expectedRevision &&
-          last.state === change.state
-        ? { status: "confirmed", entry: current }
-        : { status: "conflict", reason: "action" };
-    }
-    if (current.revision !== change.expectedRevision) {
-      return { status: "conflict", reason: "revision" };
-    }
-    const entry: SharedSpaceEntry = {
-      ...current,
-      state: change.state,
-      revision,
-      lastAction: {
-        id: change.id,
-        expectedRevision: change.expectedRevision,
-        state: change.state,
-      },
-    };
-    changed();
-    catalog.entries[change.space] = entry;
-    return { status: "applied", entry };
-  });
+  return await editCatalog(
+    runtime,
+    home,
+    admit,
+    (catalog, changed) =>
+      changeCatalogMembership(catalog, change, revision, changed),
+  );
 }
 
 /**

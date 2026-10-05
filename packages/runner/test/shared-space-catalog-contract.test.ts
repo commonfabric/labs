@@ -2,8 +2,11 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  changeCatalogMembership,
   isSharedSpaceCatalog,
   normalizeSharedSpaceRegistration,
+  registerCatalogEntry,
+  type SharedSpaceCatalog,
   sharedSpaceCatalogCause,
   sharedSpaceCatalogHost,
   sharedSpaceOfferKey,
@@ -22,6 +25,169 @@ const entry = {
 const catalog = { version: 1, entries: { [space]: entry }, offers: {} };
 
 describe("shared-space-catalog-contract", () => {
+  it("retains archive and first admission when another offer registers the same space", () => {
+    const stored: SharedSpaceCatalog = { entries: {}, offers: {} };
+    const registration = { ...entry, initialState: "archived" as const };
+    const writes: unknown[] = [];
+    const write = (path: readonly string[], value: unknown) =>
+      writes.push({ path, value });
+    const first = registerCatalogEntry(
+      stored,
+      registration,
+      "first",
+      123,
+      write,
+    );
+    expect(first).toMatchObject({
+      status: "registered",
+      entry: { state: "archived", since: 123 },
+    });
+    const offered = {
+      ...registration,
+      initialState: "saved" as const,
+      offer: { from, id: "one" },
+    };
+    const replay = registerCatalogEntry(stored, offered, "second", 456, write);
+    expect(replay).toMatchObject({
+      status: "existing",
+      entry: { state: "archived", revision: "first", since: 123 },
+    });
+    expect(stored.offers[sharedSpaceOfferKey(from, "one")]).toMatchObject({
+      space,
+    });
+    const before = writes.length;
+    expect(registerCatalogEntry(stored, offered, "third", 789, write)).toEqual(
+      replay,
+    );
+    expect(writes.length).toBe(before);
+    expect(
+      registerCatalogEntry(
+        stored,
+        { ...offered, host: "https://other.example" },
+        "r",
+        789,
+        write,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "host" });
+    expect(
+      registerCatalogEntry(
+        stored,
+        { ...offered, kind: "room" },
+        "r",
+        789,
+        write,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "kind" });
+    expect(
+      registerCatalogEntry(
+        stored,
+        { ...offered, space: "did:key:other-space" },
+        "r",
+        789,
+        write,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "offer" });
+  });
+
+  it("records first-offer provenance and confirms only the still-current membership action", () => {
+    const stored: SharedSpaceCatalog = { entries: {}, offers: {} };
+    const write = () => {};
+    registerCatalogEntry(
+      stored,
+      { ...entry, offer: { from, id: "one" } },
+      "first",
+      123,
+      write,
+    );
+    expect(stored.entries[space]).toMatchObject({ from, since: 123 });
+    const action = {
+      space,
+      id: "archive",
+      expectedRevision: "first",
+      state: "archived" as const,
+    };
+    const applied = changeCatalogMembership(
+      stored,
+      action,
+      "archived-revision",
+      write,
+    );
+    expect(applied).toMatchObject({
+      status: "applied",
+      entry: { state: "archived", revision: "archived-revision" },
+    });
+    expect(changeCatalogMembership(stored, action, "unused", write))
+      .toMatchObject({ status: "confirmed" });
+    expect(
+      changeCatalogMembership(
+        stored,
+        { ...action, state: "saved" },
+        "unused",
+        write,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "action" });
+    expect(
+      changeCatalogMembership(
+        stored,
+        { ...action, id: "old-restore", state: "saved" },
+        "unused",
+        write,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "revision" });
+    expect(
+      changeCatalogMembership(
+        stored,
+        { ...action, space: "did:key:missing" },
+        "unused",
+        write,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "missing" });
+  });
+
+  it("refuses unsupported membership and opaque or inconsistent action evidence", () => {
+    const action = {
+      space,
+      id: "archive",
+      expectedRevision: "initial",
+      state: "archived" as const,
+    };
+    const refused = () => {
+      throw new Error("A refused action must not write.");
+    };
+    expect(
+      changeCatalogMembership(
+        { entries: { [space]: { ...entry, state: "left" } }, offers: {} },
+        action,
+        "unused",
+        refused,
+      ),
+    )
+      .toEqual({ status: "conflict", reason: "unsupported-state" });
+    for (
+      const lastAction of [null, [], "opaque", { id: "" }, {
+        id: "old",
+        expectedRevision: "old",
+        state: "archived",
+      }, { id: "x".repeat(321), expectedRevision: "old", state: "saved" }]
+    ) {
+      expect(
+        changeCatalogMembership(
+          { entries: { [space]: { ...entry, lastAction } }, offers: {} },
+          action,
+          "unused",
+          refused,
+        ),
+      )
+        .toEqual({ status: "conflict", reason: "action" });
+    }
+  });
+
   it("addresses each Home independently of display names and collection contents", () => {
     expect(sharedSpaceCatalogCause(from)).toEqual({ sharedSpaceCatalog: from });
     expect(sharedSpaceCatalogCause("did:key:other")).not.toEqual(

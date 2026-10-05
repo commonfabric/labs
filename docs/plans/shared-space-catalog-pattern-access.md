@@ -15,13 +15,16 @@ and FabriChat room list must be able to use the same catalog with server
 execution enabled or disabled. This pattern path is required before treating
 the shared storage contract as ready for those consumers.
 
-The host and pattern adapters should share one transition implementation in a
-package the runner can depend on. SDK wrappers provide confirmed asynchronous
+The host and pattern adapters share one portable transition implementation in
+the runner. SDK wrappers provide confirmed asynchronous
 operations. A pattern-facing read must be reactive and validated, with explicit
 readiness and failure; the access-path comparison below decides how it is
 exposed. Handler operations stage registration and membership
 changes in the handler's existing transaction, with the same receipt, revision,
-and server value-pin rules as the SDK. They must not start a nested asynchronous
+and authoritative confirmation guarantees as the SDK. SDK no-op confirmation
+uses a value pin; a stream needs an explicit catalog observation precondition
+or a proven equivalent, since the wave's destination checks do not protect an
+unchanged catalog. They must not start a nested asynchronous
 transaction. A staged handler result is not a committed success; consumers
 observe the event's committed outcome before promising completion.
 
@@ -49,23 +52,20 @@ The pattern implementation must demonstrate, with real compiled patterns:
 - Serving execution selects the authorized person's Home and canonical route,
   not the service identity or compilation origin.
 
-## Work independent of consumer interface decisions
+## Evidence and remaining work
 
-First complete the host contract's compatibility and failure tests. Confirmed
-absence, failed reads, unknown states, duplicate offers, rejected value pins,
-and stale membership actions have the same obligations whichever interface
-patterns use.
+The [compiled-pattern rehearsal](../history/development/2026-10-04-shared-space-catalog-rehearsal.md)
+records interoperability, archive preservation, extension retention, membership
+races, held and retried serving commits, and stable Home link discovery. It also
+exposes a stale no-op observation that still receives a stream acknowledgement. Its
+synthetic bootstrap and emulated storage do not establish production discovery,
+canonical Home routing, or authority to write another person's Home. It also
+demonstrates two validation failures in a schema-only adapter. Passing those
+negative probes means the gap is documented, not that the writer is ready.
 
-Next use an isolated compiled-pattern experiment with an explicitly supplied
-catalog reference in a synthetic owner's Home. Share the transition code with
-the SDK, stage changes in the existing handler transaction, and prove SDK
-archive survives pattern registration and a fresh runtime. Exercise competing
-membership actions and a withheld or rejected commit. Keep the reference
-supply explicit: an injected test reference proves transaction behavior, not
-production discovery, canonical Home routing, or authority to write another
-person's Home.
-
-Compare two access paths before selecting a public surface:
+Existing action streams are a candidate for dispatch and commit notification.
+They require an additional no-op observation check to match the SDK contract.
+Select the public surface after resolving the remaining comparison:
 
 1. Home exposes a catalog reference and action streams through existing pattern
    facilities. Trace first creation, existing Home upgrades, root recreation,
@@ -76,13 +76,16 @@ Compare two access paths before selecting a public surface:
    the trusted Home route source, event actor versus service identity, reactive
    read scope, and commit outcome. Its runtime/API cost needs Berni's review.
 
-Each experiment should identify which claims it proves and which configuration
-it injects. An experiment may be discarded without migrating user data.
-Keep production Home/inbox wiring, public API names, and cross-space authority
-out of these experiments until their contracts are agreed.
+The production adapter must protect no-op observations at commit, with frozen
+result evidence in the concurrent-archive test. It must validate raw stored data before typed projection,
+normalize all commands through the shared contract, preserve unknown fields,
+and expose failed/stale reads separately from an empty collection. Test cached
+ACL revocation, actor/owner mismatch, real Home bootstrap and upgrades, and
+root recreation. Prove the agreed deployment routing with the actual storage
+transport; the current loopback executor refuses remote-host resolution.
 
-A separate low-risk client rehearsal can use synthetic catalog snapshots to
-exercise local projection and reconstruction: absent versus unavailable,
-archive preservation, unreadable targets, identity/host mismatch, and restart
-after a confirmed registration. It must preserve the last confirmed list on
-failure and must not write production Home state.
+Keep production Home/inbox wiring, public API names, and cross-space authority
+provisional until their contracts are agreed. Client reconstruction can be
+rehearsed independently with synthetic snapshots, but deployed web-to-native
+recovery still requires real SDK acquisition, subscriptions, identity changes,
+sidecar restart, and visible freshness in both clients.
