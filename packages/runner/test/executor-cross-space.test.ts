@@ -2364,7 +2364,7 @@ export default pattern<
       const seed = clientRuntime.edit();
       argument.withTx(seed).set({ rooms: [] });
       clientRuntime.run(seed, compiled, argument, result);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await clientManager.synced();
       host = newHost();
 

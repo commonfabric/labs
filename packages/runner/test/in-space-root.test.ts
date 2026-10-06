@@ -143,7 +143,7 @@ describe("in-space root", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
