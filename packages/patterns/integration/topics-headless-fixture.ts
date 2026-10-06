@@ -873,7 +873,7 @@ export async function measureTopicsFixture(
       const started = performance.now();
       const tx = runtime.edit();
       edit(tx);
-      const { error } = await tx.commit();
+      const { error } = await tx.commit().settled;
       if (error !== undefined) {
         throw new Error(`Committing a Topics update failed: ${error.name}`, {
           cause: error,
@@ -1133,7 +1133,7 @@ async function seedTopicsFixture(
   );
   const board = runtime.getCell<unknown[]>(space, BOARD_CAUSE, undefined, tx);
   board.set(fixture.board.map((index) => topics[index]));
-  const { error } = await tx.commit();
+  const { error } = await tx.commit().settled;
   if (error !== undefined) {
     throw new Error(`Writing the Topics fixture failed: ${error.name}`, {
       cause: error,
@@ -1232,7 +1232,7 @@ async function startTopicsLifts(
       outputCellsOf(start(`topics-fixture-variant-${name}-`)),
   }) ?? [];
   runtime.prepareTxForCommit(tx);
-  const { error } = await tx.commit();
+  const { error } = await tx.commit().settled;
   if (error !== undefined) {
     throw new Error(`Starting the Topics lifts failed: ${error.name}`, {
       cause: error,

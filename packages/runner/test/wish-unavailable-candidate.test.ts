@@ -42,7 +42,7 @@ async function makeFixture(
     name: "Present provider",
     [NAME]: "resources",
   });
-  expect((await setup.commit()).error).toBeUndefined();
+  expect((await setup.commit().settled).error).toBeUndefined();
 
   const cells = includePresent ? [unavailable, present] : [unavailable];
   if (includeAbsent) {
@@ -65,7 +65,7 @@ async function makeFixture(
       avatar: "",
       elements: cells.map((cell) => ({ cell, tag: "#resources" })),
     });
-    expect((await profileTx.commit()).error).toBeUndefined();
+    expect((await profileTx.commit().settled).error).toBeUndefined();
     runtime.getHomeSpaceCell(home).key("defaultPattern").set({
       profiles: [profile],
     });
@@ -81,7 +81,7 @@ async function makeFixture(
       favorites: cells.map((cell) => ({ cell, tags: ["resources"] })),
     });
   }
-  expect((await home.commit()).error).toBeUndefined();
+  expect((await home.commit().settled).error).toBeUndefined();
 
   const cancels: (() => void)[] = [];
   return {
@@ -110,7 +110,7 @@ async function makeFixture(
         {},
         runtime.getCell(space, "discovery consumer", undefined, run),
       );
-      expect((await run.commit()).error).toBeUndefined();
+      expect((await run.commit().settled).error).toBeUndefined();
       const found = result.key("found").resolveAsCell();
       cancels.push(found.sink(() => {}));
       const selected = found.key("result").asSchema<{ name: string }>({
@@ -215,7 +215,7 @@ describe("wish-unavailable-candidate", () => {
               name: "Restored provider",
               [NAME]: "resources",
             });
-            expect((await restore.commit()).error).toBeUndefined();
+            expect((await restore.commit().settled).error).toBeUndefined();
             await waitForCellValue<string>(
               fixture.runtime,
               selected.key("name"),

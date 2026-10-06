@@ -43,7 +43,7 @@ describe("wish-freeform", () => {
           headless,
         });
         runtime.prepareTxForCommit(seed);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         let output: Cell<unknown> | undefined;
         const builtin = wish(
           input as Cell<[unknown, unknown]>,
@@ -58,7 +58,7 @@ describe("wish-freeform", () => {
         const tx = runtime.edit();
         builtin.action(tx);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(output).toBeDefined();
         const state = output!.withTx(undefined);

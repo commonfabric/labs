@@ -193,7 +193,7 @@ describe("sx2 serving loop (Phase 2 gates)", () => {
     for (const value of [10, 20, 30]) {
       const tx = runtime.edit();
       resultCell.withTx(tx).key("value").set(value);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(`authored write failed: ${committed.error.message}`);
       }
@@ -294,7 +294,7 @@ describe("sx2 serving loop (Phase 2 gates)", () => {
       const resultCell = cc.getResult(piece.getCell());
       const tx = runtime.edit();
       resultCell.withTx(tx).key("value").set(41);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(`authored write failed: ${committed.error.message}`);
       }

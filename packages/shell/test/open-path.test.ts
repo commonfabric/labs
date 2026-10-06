@@ -64,6 +64,7 @@ function piece(stored: Record<string, unknown>) {
       },
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
+      peersOf: () => [],
     }),
   } as unknown as RuntimeClient;
   return { cell: new CellHandle(runtime, ref), sends };

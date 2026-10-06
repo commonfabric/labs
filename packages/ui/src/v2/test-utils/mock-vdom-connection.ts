@@ -87,6 +87,7 @@ export function createRenderableCellHandle<T>(
     request: () => Promise.resolve({}),
     subscribe: () => Promise.resolve(),
     unsubscribe: () => Promise.resolve(),
+    peersOf: () => [],
     signal: lifetime.signal,
     onDispose: (teardown: () => void) => {
       lifetime.signal.addEventListener("abort", teardown, { once: true });

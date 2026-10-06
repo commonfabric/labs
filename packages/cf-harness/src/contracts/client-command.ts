@@ -39,22 +39,33 @@ export const HARNESS_CLIENT_PROTOCOL_VERSION = 1 as const;
 /**
  * Features a host may require. `client_actions` is the final-action
  * vocabulary offered mid-turn through `weaver_action`; `typed_commands` is the
- * typed invocation, catalog, and settlement defined in this file.
+ * typed invocation, catalog, and settlement defined in this file;
+ * `browser_host` is a task's `browserHost` declaration, which only a console
+ * launched with `--allow-browser-host` accepts; `starts_run` is a catalog
+ * entry's `startsRun`, which a host sends only to a console that serves it,
+ * since a console without it refuses the entry.
  */
 export const HARNESS_CLIENT_FEATURES = [
   "client_actions",
   "typed_commands",
+  "browser_host",
+  "starts_run",
 ] as const;
 
 /** One feature a host may require. */
 export type HarnessClientFeature = typeof HARNESS_CLIENT_FEATURES[number];
 
 /**
- * The features this console serves. A host requiring any other is refused
- * before work starts.
+ * The features every console and stdio session serves. A host requiring any
+ * other is refused before work starts, unless the surface it reached serves
+ * that feature too.
  */
 export const HARNESS_SUPPORTED_CLIENT_FEATURES:
-  readonly HarnessClientFeature[] = ["client_actions", "typed_commands"];
+  readonly HarnessClientFeature[] = [
+    "client_actions",
+    "typed_commands",
+    "starts_run",
+  ];
 
 /**
  * The features a console that answers without a protocol echo is taken to
@@ -95,10 +106,12 @@ export interface HarnessClientProtocolMismatch {
   missing: string[];
 }
 
-/** The console's own protocol echo. */
-export const harnessClientProtocolEcho = (): HarnessClientProtocolEcho => ({
+/** The protocol echo of a surface serving `supported`. */
+export const harnessClientProtocolEcho = (
+  supported: readonly string[],
+): HarnessClientProtocolEcho => ({
   protocolVersion: HARNESS_CLIENT_PROTOCOL_VERSION,
-  features: [...HARNESS_SUPPORTED_CLIENT_FEATURES],
+  features: HARNESS_CLIENT_FEATURES.filter((name) => supported.includes(name)),
 });
 
 /**
@@ -133,22 +146,17 @@ export const readHarnessClientProtocolDeclaration = (
 };
 
 /**
- * Checks a declaration against what this console serves: the version must be
- * this one and every required feature served. Missing features are listed in
+ * Checks a declaration against the features a surface serves: the version must
+ * be this one and every required feature served. Missing features are listed in
  * the order the host named them.
  */
 export const checkHarnessClientProtocol = (
   declaration: HarnessClientProtocolDeclaration,
-  supported: readonly string[] = HARNESS_SUPPORTED_CLIENT_FEATURES,
+  supported: readonly string[],
 ):
   | { ok: true; protocol: HarnessClientProtocolEcho }
   | { ok: false; mismatch: HarnessClientProtocolMismatch } => {
-  const protocol: HarnessClientProtocolEcho = {
-    protocolVersion: HARNESS_CLIENT_PROTOCOL_VERSION,
-    features: HARNESS_CLIENT_FEATURES.filter((name) =>
-      supported.includes(name)
-    ),
-  };
+  const protocol = harnessClientProtocolEcho(supported);
   const missing = declaration.requires.filter((name) =>
     !supported.includes(name)
   );
@@ -341,6 +349,14 @@ export interface HarnessCommandCatalogEntry {
 
   /** The full description, present when the request asked for it. */
   description?: string;
+
+  /**
+   * Present, and true, when the command answers once its work is accepted
+   * and names, in `outputs.run_id`, a run that can still fail afterwards.
+   * The service's `command.run-outcome` reads how that run stands. Only a
+   * mutation the service executes starts a run.
+   */
+  startsRun?: true;
 }
 
 /** The Weaver's answer to a catalog request. */
@@ -626,10 +642,10 @@ const isCommandId = (value: unknown): value is string =>
 const REFERENT_TOKEN = new RegExp(`^${REFERENT_TOKEN_PATTERN.source}$`);
 
 /** A loom identifier as the service mints it. */
-const LOOM_ID = /^loom-[a-f0-9]{16}$/;
+export const HARNESS_LOOM_ID_PATTERN = /^loom-[a-f0-9]{16}$/;
 
 const isLoomId = (value: unknown): value is string =>
-  typeof value === "string" && LOOM_ID.test(value);
+  typeof value === "string" && HARNESS_LOOM_ID_PATTERN.test(value);
 
 /** The executor's actor vocabulary: `user` or `agent:<slug>`. */
 const LOOM_ACTOR = /^(?:user|agent:[a-z0-9][a-z0-9-]{0,63})$/;
@@ -759,6 +775,7 @@ const readCatalogEntry = (
     "approval",
     "inputSchema",
     "description",
+    "startsRun",
   ];
   if (
     !hasOnlyKeys(record, keys) ||
@@ -769,6 +786,7 @@ const readCatalogEntry = (
   const { command, summary, scope, executes, effect, approval, inputSchema } =
     record;
   const description = own(record, "description");
+  const startsRun = own(record, "startsRun");
   if (
     !isCommandId(command) ||
     !isBoundedText(summary, HARNESS_COMMAND_SUMMARY_MAX_LENGTH) ||
@@ -781,7 +799,11 @@ const readCatalogEntry = (
     !isJsonObject(inputSchema) ||
     harnessCommandJsonBytes(inputSchema) > HARNESS_COMMAND_SCHEMA_MAX_BYTES ||
     (description !== undefined &&
-      !isBoundedText(description, HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH))
+      !isBoundedText(description, HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH)) ||
+    // Absent unless declared. A read starts nothing, and the run is the
+    // service's, so a Weaver-local command has none.
+    (startsRun !== undefined &&
+      (startsRun !== true || effect !== "mutation" || executes !== "loom"))
   ) {
     return undefined;
   }
@@ -794,6 +816,7 @@ const readCatalogEntry = (
     approval,
     inputSchema,
     ...(description !== undefined ? { description } : {}),
+    ...(startsRun === true ? { startsRun } : {}),
   };
 };
 

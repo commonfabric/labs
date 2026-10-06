@@ -147,7 +147,7 @@ async function withFixture(
     } as never, install).set({ open: true } as never);
     const terms = runtime.getCell(S, "custody-terms", undefined, install);
     terms.set(TERMS as never);
-    expect((await install.commit()).error).toBeUndefined();
+    expect((await install.commit().settled).error).toBeUndefined();
     const acl = new ACLManager(roomRuntime, S);
     if (withAcl) {
       await acl.set(roomOwner.did(), "OWNER");
@@ -169,7 +169,7 @@ async function withFixture(
       ifc: { confidentiality: [cfcAtom.user(home)] },
     } as never, tx);
     allowed.set(sources);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     await body({
       processor,
@@ -246,7 +246,7 @@ function atEditWithRetry(
 async function rewrite<T>(runtime: Runtime, cell: Cell<T>, value: T) {
   const tx = runtime.edit();
   cell.withTx(tx).set(value);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
 }
 
 describe("custody-seal", () => {
@@ -316,7 +316,7 @@ describe("custody-seal", () => {
       const cells = runtime.getCell(S, "room-cells");
       const setup = runtime.edit();
       cells.withTx(setup).set({} as never);
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       const roomBox = cells.key("box");
       const preview = await processor.handleRequest({
         type: RequestType.CustodySealPrepare,

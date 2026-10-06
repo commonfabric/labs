@@ -146,7 +146,7 @@ export async function resolveWish(
   // re-running it on later source changes and retaining its cells.
   try {
     runtime.prepareTxForCommit(tx);
-    const setup = await tx.commit();
+    const setup = await tx.commit().settled;
     if (setup.error) {
       throw new Error(
         `Cannot set up the headless read of "${spec.query}": ${

@@ -114,7 +114,7 @@ const seedLabeledDoc = async (
       labelMap: { version: 1, entries },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return docId;
 };
 
@@ -160,7 +160,7 @@ describe("CFC cross-space integrity", () => {
       );
       cell.set({ reading: "37.77,-122.41" });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,
@@ -205,7 +205,7 @@ describe("CFC cross-space integrity", () => {
       );
       cell.set({ reading: "37.77,-122.41", confirmed: "37.77,-122.41" });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,
@@ -263,7 +263,7 @@ describe("CFC cross-space integrity", () => {
       );
       sink.set({ ref: src as unknown as string });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const sinkId = parseLink(sink.getAsLink()).id!;
       const doc = readDoc(storageManager, spaceB, sinkId);
@@ -343,7 +343,7 @@ describe("CFC cross-space integrity", () => {
         confirmed: src as unknown as string,
       });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,
@@ -382,7 +382,7 @@ describe("CFC cross-space integrity", () => {
       );
       cell.set({ reading: "37.77,-122.41", confirmed: "tampered" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "exactCopyOf failed",
       );
@@ -429,7 +429,7 @@ describe("CFC cross-space integrity", () => {
       );
       copy.set({ reading: materialized });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,
@@ -480,7 +480,7 @@ describe("CFC cross-space integrity", () => {
       } as unknown as JSONSchema, tx);
       cell.set({ field: "x" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "unsupported trust-sensitive claim passThrough",
       );
@@ -528,7 +528,7 @@ describe("CFC cross-space integrity", () => {
       );
       cell.set({ measurement: { lat: 37.77 }, latitude: 37.77 });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const docId = parseLink(cell.getAsLink()).id!;
@@ -582,7 +582,7 @@ describe("CFC cross-space integrity", () => {
       );
       sink.set({ lat: src.key("lat") as unknown as string });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,
@@ -660,7 +660,7 @@ describe("CFC cross-space integrity", () => {
       );
       sink.set({ data: src as unknown as string });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,
@@ -723,7 +723,7 @@ describe("CFC cross-space integrity", () => {
         baz: src.key("baz") as unknown as string,
       });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const doc = readDoc(
         storageManager,

@@ -105,7 +105,7 @@ const materializeHomeOverLegacyRoot = async (
     provenance: { origin: "dom", trusted: true },
   });
   tx.prepareCfc();
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
 
   const homePattern = await compileHomePattern(runtime, space);
   const home = await runtime.runSynced(
@@ -298,7 +298,7 @@ describe("CFC additive-required default preserves old documents", () => {
           provenance: { origin: "dom", trusted: true },
         });
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
       }
 
       // 2. Re-commit the same root under a schema that ADDS a required field
@@ -330,7 +330,7 @@ describe("CFC additive-required default preserves old documents", () => {
         provenance: { origin: "dom", trusted: true },
       });
       tx.prepareCfc();
-      const res = await tx.commit();
+      const res = await tx.commit().settled;
 
       // Rejected — and the message carries the FRAMED token (not a bare
       // occurrence), exactly what `isCfcMigrationRejection` matches.

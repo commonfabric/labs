@@ -47,6 +47,7 @@ export interface RawResearchResult {
   missing?: unknown;
   leads?: unknown;
   questions?: unknown;
+  refinedTask?: unknown;
 }
 
 /** Host observations against which a proposed kit is admitted. */
@@ -222,11 +223,16 @@ export const researchResultSchema = (
       maxItems: 3,
       items: { type: "string", maxLength: 500 },
     };
+    properties.refinedTask = { type: "string", maxLength: 2_000 };
   }
   return {
     type: "object",
     properties,
-    required: Object.keys(properties).filter((key) => key !== "example"),
+    // An orientation without a refined task is still admitted: losing the kit
+    // over one missing sentence would cost the parent everything else in it.
+    required: Object.keys(properties).filter((key) =>
+      key !== "example" && key !== "refinedTask"
+    ),
     additionalProperties: false,
   };
 };
@@ -604,11 +610,13 @@ export const admitResearchResult = async (
     sources,
     missing: unique(missing),
   };
+  const refinedTask = stringValue(raw.refinedTask, 2_000).trim();
   return purpose === "answer" ? { ...findings, purpose } : {
     ...findings,
     purpose,
     leads,
     availableHandleTokens: [...(state.handleTokens ?? [])],
     questions: stringList(raw.questions, 3, 500),
+    ...(refinedTask.length > 0 ? { refinedTask } : {}),
   };
 };

@@ -121,7 +121,7 @@ describe("wish commit-failure reporting", () => {
     target.set({ name });
     spaceCell.withTx(tx).key("secret").set(target.withTx(tx));
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await rt.idle();
   };
 
@@ -144,7 +144,7 @@ describe("wish commit-failure reporting", () => {
     );
     const result = rt.run(tx, wishPattern, {}, resultCell);
     rt.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull().catch(() => {});
     await rt.idle();
     const readTx = rt.edit();
@@ -247,7 +247,7 @@ describe("wish commit-failure reporting", () => {
           : {}),
       });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
     }
 

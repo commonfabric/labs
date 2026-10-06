@@ -50,7 +50,7 @@ describe("Cell meta subscriptions", () => {
       ref1,
       rawMetaWriteAuthorization,
     );
-    await initialTx.commit();
+    await initialTx.commit().settled;
 
     const seenIdentities: Array<string | undefined> = [];
     const cancel = resultCell.sinkMeta("patternIdentity", (value) => {
@@ -67,7 +67,7 @@ describe("Cell meta subscriptions", () => {
       ref2,
       rawMetaWriteAuthorization,
     );
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
 
     expect(seenIdentities).toEqual([ref1.identity, ref2.identity]);

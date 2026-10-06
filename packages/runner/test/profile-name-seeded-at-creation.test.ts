@@ -117,13 +117,13 @@ describe("a profile's name is seeded at creation", () => {
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, host as any, {}, resultCell);
       rt1.prepareTxForCommit(tx1);
-      expect((await tx1.commit()).error).toBeUndefined();
+      expect((await tx1.commit().settled).error).toBeUndefined();
       await r1.pull();
 
       const tx2 = rt1.edit();
       r1.withTx(tx2).key("createProfile").send(createEvent("Ada"));
       rt1.prepareTxForCommit(tx2);
-      expect((await tx2.commit()).error).toBeUndefined();
+      expect((await tx2.commit().settled).error).toBeUndefined();
       await r1.pull();
       await rt1.idle();
       await r1.pull();
@@ -155,7 +155,7 @@ describe("a profile's name is seeded at creation", () => {
       const tx3 = rt2.edit();
       profile.withTx(tx3).key("setName").send({ name: "Saved name" });
       rt2.prepareTxForCommit(tx3);
-      expect((await tx3.commit()).error).toBeUndefined();
+      expect((await tx3.commit().settled).error).toBeUndefined();
       await rt2.idle();
       await name.pull();
       expect(name.get()).toBe("Saved name");

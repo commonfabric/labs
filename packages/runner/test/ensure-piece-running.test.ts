@@ -32,7 +32,7 @@ describe("ensurePieceRunning", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -46,7 +46,7 @@ describe("ensurePieceRunning", () => {
       tx,
     );
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // ensurePieceRunning should return false - no piece to start
@@ -70,7 +70,7 @@ describe("ensurePieceRunning", () => {
     resultCell.set({ value: 1 });
     resultCell.setMetaRaw("argument", { value: 1 }, rawMetaWriteAuthorization);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // ensurePieceRunning should return false - no pattern in result metadata
@@ -98,7 +98,7 @@ describe("ensurePieceRunning", () => {
     }, rawMetaWriteAuthorization);
     resultCell.setMetaRaw("argument", { value: 1 }, rawMetaWriteAuthorization);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // ensurePieceRunning should return false - pattern cannot be loaded
@@ -184,7 +184,7 @@ describe("ensurePieceRunning", () => {
     setResultCell(doubledCell, resultCell);
     argumentCell.set({ value: 5 });
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // ensurePieceRunning should return true and start the piece
@@ -262,7 +262,7 @@ describe("ensurePieceRunning", () => {
     setResultCell(argumentCell, resultCell);
     setResultCell(doubledCell, resultCell);
     argumentCell.set({ value: 5 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Named through the argument document: the chain resolves to the
@@ -346,7 +346,7 @@ describe("ensurePieceRunning", () => {
     );
     argumentCell.set({});
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // First call should return true (piece started)
@@ -431,7 +431,7 @@ describe("ensurePieceRunning", () => {
     );
     argumentCell.set({});
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // First call should start the piece
@@ -469,7 +469,7 @@ describe("ensurePieceRunning", () => {
       tx,
     );
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Send an event to this cell - should not crash
@@ -502,7 +502,7 @@ describe("queueEvent with auto-start", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -601,7 +601,7 @@ describe("queueEvent with auto-start", () => {
     setResultCell(eventsCell, resultCell);
     argumentCell.set({ value: 5 });
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Verify piece is not running yet
@@ -765,7 +765,7 @@ describe("queueEvent with auto-start", () => {
     argumentCell.set({ value: 5 });
     eventCountCell.setRaw(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Verify piece is not running yet
@@ -916,7 +916,7 @@ describe("queueEvent with auto-start", () => {
 
     setResultCell(intermediateCell, resultCell);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     expect(liftRunCount).toBe(0);

@@ -188,7 +188,7 @@ A transaction the serving runtime stamps `directCommit` (a `bookkeeping` run's,
 `ServerRunInfo` in `packages/runner/src/runtime.ts`) does not seal into the
 wave. The `SpaceServer` commits it to the store on its own, as a derived-class
 commit under the space's lease, serialized with the wave's seals; the
-transaction's `commit()` then resolves with the store's verdict, and the receipt
+transaction's `commit().verdict` then resolves with the store's verdict, and the receipt
 and authority the runner mints from that verdict claim nothing a withdrawal can
 undo. The store validates the transaction's own read set as it does a client
 commit's: every read is held to the seq this replica had for the document, so a
@@ -270,7 +270,7 @@ it moves onto.
   activates a sessionless space and resolves once its write is durable, a failed
   run or a failed confirmation rejects and is counted, queued verbs run in
   order, and an inactive server refuses; and a direct commit is durable when its
-  `commit()` resolves, refuses a document that moved past its stamp, and lets a
+  `commit().settled` resolves, refuses a document that moved past its stamp, and lets a
   piece it stages derive.
 - `packages/runner/test/runner.test.ts` — `runSyncedWithCommit` issues a receipt
   while sealing when asked for a direct commit, and leaves the piece unstarted

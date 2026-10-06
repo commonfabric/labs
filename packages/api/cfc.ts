@@ -9,7 +9,18 @@
 import { deepFreeze } from "@commonfabric/data-model";
 
 export type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: Meta;
+  readonly __ct_cfc__?: CfcStamp<T, Meta>;
+};
+
+/**
+ * What a CFC carrier records: the policy's metadata, and the payload it was
+ * written around. TypeScript merges the carrier into whatever the value is
+ * merged into, by an intersection, a spread or a mapped type, and the payload
+ * it records says which part of the merged value the policy names.
+ */
+export type CfcStamp<T, Meta> = {
+  readonly meta?: Meta;
+  readonly of?: T;
 };
 
 export type CfcJsonValue =

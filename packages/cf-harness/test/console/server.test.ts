@@ -57,7 +57,10 @@ import {
   type HarnessChatTurnStatus,
 } from "../../src/contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
-import { harnessClientProtocolEcho } from "../../src/contracts/client-command.ts";
+import {
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  harnessClientProtocolEcho,
+} from "../../src/contracts/client-command.ts";
 
 /**
  * A loop that answers the task it was given and nothing else. The console
@@ -1502,7 +1505,7 @@ describe("console/server", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         artifactRoot: (await config()).artifactRoot,
-        protocol: harnessClientProtocolEcho(),
+        protocol: harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
         sessions: [],
       });
     });
@@ -2622,7 +2625,7 @@ describe("console/server", () => {
       expect(await response.json()).toEqual({
         error: "this console does not serve browser_host",
         code: "protocol_mismatch",
-        protocol: harnessClientProtocolEcho(),
+        protocol: harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
         requestedVersion: 1,
         missing: ["browser_host"],
       });
@@ -2651,7 +2654,9 @@ describe("console/server", () => {
 
       expect(response.status).toBe(200);
       const started = await response.json();
-      expect(started.protocol).toEqual(harnessClientProtocolEcho());
+      expect(started.protocol).toEqual(
+        harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
+      );
       await server.service.waitForTurn(started.sessionId, started.turnId);
     });
 
@@ -4325,6 +4330,44 @@ describe("console/server", () => {
       });
       expect(noTurn.status).toBe(400);
       expect(await noTurn.json()).toEqual({ error: "turnId is required" });
+    });
+
+    it("serves browser_host only when it allows a browser host, and says so before a task", async () => {
+      const { server: hosted } = await hostedServer();
+      const features = async (console: ConsoleServer) =>
+        (await (await console.handle(getRequest("/api/status"))).json())
+          .protocol.features;
+      const requiring = (console: ConsoleServer) =>
+        console.handle(jsonRequest("/api/task", {
+          text: "use the web",
+          protocol: { protocolVersion: 1, requires: ["browser_host"] },
+        }));
+
+      expect(await features(server)).toEqual([
+        "client_actions",
+        "typed_commands",
+        "starts_run",
+      ]);
+      expect(await features(hosted)).toEqual([
+        "client_actions",
+        "typed_commands",
+        "browser_host",
+        "starts_run",
+      ]);
+
+      const refused = await requiring(server);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({
+        error: "this console does not serve browser_host",
+        missing: ["browser_host"],
+      });
+      expect((await listSessions()).sessions).toEqual([]);
+
+      const accepted = await requiring(hosted);
+      expect(accepted.status).toBe(200);
+      const started = await accepted.json();
+      expect(started.protocol.features).toContain("browser_host");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
     });
 
     it("returns 403 for a host declaration a console that allows none is sent, and gives it no browser children", async () => {

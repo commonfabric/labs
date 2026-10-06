@@ -35,6 +35,7 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./native-ui": "./src/native-ui.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",

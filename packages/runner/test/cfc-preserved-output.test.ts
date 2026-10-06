@@ -44,7 +44,7 @@ describe("protected runtime output preservation", () => {
     result.set(backing);
     output = result.getAsNormalizedFullLink();
     runtime.prepareTxForCommit(setup);
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
   });
 
   afterEach(async () => {
@@ -78,7 +78,9 @@ describe("protected runtime output preservation", () => {
 
   async function expectRefusal(tx: IExtendedStorageTransaction) {
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
     expect(runtime.getCell(owner.did(), "backing").get()).toBe("saved name");
   }
 
@@ -89,7 +91,7 @@ describe("protected runtime output preservation", () => {
     expect(metadata).toBeDefined();
     sendOutput(tx);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const inspect = runtime.edit();
     expect(inspect.readValueOrThrow(output)).toEqual(value);
     expect(readStoredCfcMetadata(inspect, output)).toEqual(metadata);
@@ -162,7 +164,7 @@ describe("protected runtime output preservation", () => {
     tx.setCfcContentAddressedLabels(true);
     sendOutput(tx);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const inspect = runtime.edit();
     expect(readStoredCfcMetadata(inspect, output)).toEqual(stored);
     inspect.abort();

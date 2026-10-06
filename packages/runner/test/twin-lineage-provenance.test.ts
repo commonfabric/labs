@@ -242,7 +242,7 @@ describe("twin-lineage provenance (helper-unlink regression)", () => {
   let tx: IExtendedStorageTransaction | undefined;
 
   afterEach(async () => {
-    await tx?.commit();
+    await tx?.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
     tx = undefined;
@@ -300,7 +300,7 @@ describe("twin-lineage provenance (helper-unlink regression)", () => {
       tx,
     );
     const result = runtime!.run(tx, compiled, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime!.edit();
 
     await result.pull();

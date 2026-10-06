@@ -42,7 +42,7 @@ describe("memory v2 envelope deletion", () => {
 
     const seed = runtime.edit();
     seed.writeValueOrThrow(address, { name: "ToDelete", active: true });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     tx.writeValueOrThrow(address, undefined, { delete: true });
@@ -52,7 +52,7 @@ describe("memory v2 envelope deletion", () => {
     expect(commit?.operations[0].op).toBe("delete");
     expect(commit?.operations[0].id).toBe(address.id);
 
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const after = runtime.edit();
     expect(after.read(address).ok?.value).toBeUndefined();
@@ -69,7 +69,7 @@ describe("memory v2 envelope deletion", () => {
 
     const seed = runtime.edit();
     seed.writeValueOrThrow(address, { name: "ToClear", active: true });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     // A plain write of `undefined` stores `undefined` under the envelope's
@@ -80,7 +80,7 @@ describe("memory v2 envelope deletion", () => {
     expect(commit?.operations.length).toBe(1);
     expect(commit?.operations[0].op).not.toBe("delete");
 
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const replica = storageManager.open(space).replica;
     const document = replica.getDocument(address.id, address.scope);

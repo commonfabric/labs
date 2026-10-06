@@ -143,7 +143,7 @@ async function listLivePiece(
     const rootCell = runtime.getCell(space, id, undefined, tx);
     const root = runtime.run(tx, compiled, {}, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await root.pull();
 
     // The piece surface `listPieceCallables` walks: a result cell read through

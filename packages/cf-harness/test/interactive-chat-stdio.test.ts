@@ -2129,7 +2129,9 @@ Deno.test("interactive NDJSON transport refuses a protocol mismatch before the s
       ),
     ),
   );
-  expected.error.details.protocol = harnessClientProtocolEcho();
+  expected.error.details.protocol = harnessClientProtocolEcho(
+    HARNESS_SUPPORTED_CLIENT_FEATURES,
+  );
   assertEquals(decodeLines(output), [expected]);
 });
 
@@ -2250,17 +2252,25 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
       : []
   );
   assertEquals(echoes, [
-    ["request-1", harnessClientProtocolEcho()],
-    ["request-2", harnessClientProtocolEcho()],
+    ["request-1", harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES)],
+    ["request-2", harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES)],
   ]);
-  assertEquals(harnessClientProtocolEcho().features, [
-    ...HARNESS_SUPPORTED_CLIENT_FEATURES,
-  ]);
-  // This console serves typed commands, and its echo says so.
-  assertEquals(harnessClientProtocolEcho().features, [
-    "client_actions",
-    "typed_commands",
-  ]);
+  assertEquals(
+    harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES).features,
+    [
+      ...HARNESS_SUPPORTED_CLIENT_FEATURES,
+    ],
+  );
+  // This console serves typed commands and reads startsRun, and its echo
+  // says so.
+  assertEquals(
+    harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES).features,
+    [
+      "client_actions",
+      "typed_commands",
+      "starts_run",
+    ],
+  );
 });
 
 Deno.test("interactive NDJSON transport refuses an answer carrying both an outcome and a typed settlement", async () => {
