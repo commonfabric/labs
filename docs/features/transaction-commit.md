@@ -58,10 +58,21 @@ Later branches of a multi-space commit become pending local writes only when
 they start in their replica. Before such a branch starts, initialization can
 return this stored snapshot; the branch can subsequently change the cell.
 
-For an absent or optimistic backing value, or an inconclusive read, initialization
-keeps demand active through the full commit-aware barrier before atomically
-selecting a value or storing the default. That lets a pending commit or conflict
-repair install a producer without initialization replacing the value it supplies.
+In client execution, a readable optimistic backing value first waits for the
+providers of its pending read spaces and repeats readiness and the complete
+stored-value probe. It can return once that probe selects a confirmed value,
+even while unrelated producers remain pending. Each pass checks the read set
+again because repair and readiness can discover new dependencies. Server
+execution and custom sealing retain the full barrier for optimistic values.
+The provider must report pending synchronization work for each wait; unavailable
+progress reporting or a verdict-only write awaiting coverage uses the full
+barrier instead of repeatedly probing an unchanged optimistic layer.
+
+For an absent backing value, a failed confirmation, or an inconclusive read,
+initialization keeps demand active through the full commit-aware barrier before
+atomically selecting a value or storing the default. That lets a pending commit
+or conflict repair install a producer without initialization replacing the value
+it supplies.
 This fallback is runtime-wide: unrelated pending work can delay a first-use
 default, including iframe bootstrap. Read failures defer to this barrier only
 when recorded reads show a pending local write; other failures propagate.

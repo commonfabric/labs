@@ -725,6 +725,12 @@ describe("runtime-processor", () => {
                   return settled();
                 },
               );
+              const provider = storageManager.open(cfcSigner.did());
+              const synced = provider.synced.bind(provider);
+              using _confirmation = stub(provider, "synced", () => {
+                barrier.resolve();
+                return synced();
+              });
               initializing = buildProcessor({ runtime }).handleCellInitialize({
                 type: RequestType.CellInitialize,
                 cell: targetRef,
@@ -823,6 +829,12 @@ describe("runtime-processor", () => {
             return settled();
           },
         );
+        const provider = storageManager.open(other.did());
+        const synced = provider.synced.bind(provider);
+        using _confirmation = stub(provider, "synced", () => {
+          barrier.resolve();
+          return synced();
+        });
         initializing = buildProcessor({ runtime }).handleCellInitialize({
           type: RequestType.CellInitialize,
           cell: createCellRef(target),

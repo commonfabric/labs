@@ -3463,6 +3463,11 @@ class Provider
     return this.#followReplacement((replica) => replica.synced());
   }
 
+  /** Whether the current replica has work included in its synchronization wait. */
+  hasPendingSyncWork(): boolean {
+    return this.replica.hasPendingSyncWork();
+  }
+
   /** See SpaceReplica.inputSynced (stage F's serving-loop barrier). */
   inputSynced(): Promise<void> {
     return this.#followReplacement((replica) => replica.inputSynced());
@@ -4418,6 +4423,11 @@ export class SpaceReplica
 
   async synced(): Promise<void> {
     await Promise.all([...this.#syncPromises, ...this.#commitPromises]);
+  }
+
+  /** Whether synchronization can await a document load or commit settlement. */
+  hasPendingSyncWork(): boolean {
+    return this.#syncPromises.size > 0 || this.#commitPromises.size > 0;
   }
 
   /**

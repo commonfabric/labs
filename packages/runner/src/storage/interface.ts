@@ -735,6 +735,14 @@ export type UnexaminedAbsence = Pick<
 
 export interface IStorageProvider {
   /**
+   * Whether `synced()` currently has work to await. Pending speculative or
+   * verdict-only writes can remain visible without such work. Consumers that
+   * need confirmation progress retain their full barrier when this capability
+   * is absent or false.
+   */
+  hasPendingSyncWork?(): boolean;
+
+  /**
    * Sync a value from storage. Use transactions to retrieve the value.
    *
    * @param uri - uri of the entity to sync.
