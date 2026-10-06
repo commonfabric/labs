@@ -554,8 +554,9 @@ export { le as atomLe };
           ),
         ).toEqual([
           "imports `@commonfabric/utils/deep-equal`, which is outside the " +
-          "kernel and not a shared type module; a kernel function takes no " +
-          "transaction, reads no dial and calls no hook",
+          "kernel; a kernel function takes no transaction, reads no dial " +
+          "and calls no hook, and a value it needs from outside is " +
+          "declared inside the kernel",
         ]);
       });
     });
