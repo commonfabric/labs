@@ -756,7 +756,7 @@ describe("principalOf()", () => {
       const via = runtime.getCell<{ by: unknown }>(space, "via");
       const tx = runtime.edit();
       via.withTx(tx).set(holder as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callAt(via.key("by"), "represents-principal", { followLink: false }),

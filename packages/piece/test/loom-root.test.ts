@@ -710,7 +710,7 @@ describe("loom-root", () => {
         value,
         ...(entries.length === 0 ? {} : { cfc: envelope(entries) }),
       } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell;
     };
     /**
@@ -735,7 +735,7 @@ describe("loom-root", () => {
         value,
         ...(entries.length === 0 ? {} : { cfc: envelope(entries) }),
       } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell;
     };
     const url = (cause: string) => ({
