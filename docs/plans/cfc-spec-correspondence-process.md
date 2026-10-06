@@ -107,18 +107,28 @@ Two committed files and one task make correspondence a thing CI can see.
 `deno task cfc-spec-snapshot` from a specs revision read through git, never
 from the working tree, which may be on another branch. It holds: the specs
 commit; every section number in the numbered chapters `cfc/[0-9]*.md`; and,
-for every pseudocode function those chapters define, its chapter file,
-section, name, and the SHA-256 of its block. Every function is recorded, not
-only the critical ones, because which are critical is the manifest's decision.
+for every pseudocode function the normative chapters 03 through 08-*, 10, 17
+and 18 define, its chapter file, section, name, and the SHA-256 of its block.
+Every function of those chapters is recorded, not only the critical ones,
+because which are critical is the manifest's decision.
 The file holds no spec prose, so it carries no copy of the spec to drift and
 nothing the public repository may not hold.
 
 `packages/runner/src/cfc/kernel/manifest.ts` is hand-maintained in the shape of
-`packages/cf-harness/audit/citations.ts`: one row per critical function with
-the spec section, the kernel symbol, the Lean definition from the coverage
-matrix, and a relation of `exact` (the kernel is the pseudocode) or `adapted`
-with the reason and the specs pull request that ruled the adaptation
-acceptable.
+`packages/cf-harness/audit/citations.ts`. `CRITICAL_SECTIONS` lists the
+sections whose pseudocode a reactive runtime executes, independently of the
+rows, so a section whose last row is removed stays in the inventory. Each row
+names a critical function by chapter file, section and name; its Lean
+counterpart as the coverage matrix gives it, or `lean: "none"` with a note
+saying which Lean module models it outside the matrix; and one of three
+relations: `missing`, with the runtime symbols that make the decision today or
+`unknown`; `exact`, with the kernel file holding a function of the
+pseudocode's name and shape; or `adapted`, with the kernel file, the
+difference from the pseudocode and the specs pull request that ruled it
+acceptable. `COMPANIONS` lists the functions a critical section defines
+beside its rows, helpers for the most part, each with a note saying why it is
+not a row; a companion may be exported from the kernel under its own `@spec`
+header.
 
 `deno task check-cfc-correspondence` fails when:
 

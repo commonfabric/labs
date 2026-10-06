@@ -25,10 +25,15 @@ repository is private and this one is public, so you may not be able to read
 it; the document's section "Without access to the specification" says what to
 do then.
 
-`deno task check-cfc-correspondence` holds the CFC sources to the specification
-snapshot at `packages/runner/src/cfc/kernel/spec-snapshot.json`: every `§`
-citation here names a section it lists, every kernel function's `@spec` header
-hash is the one it records, and `SPEC-PENDING` markers stay under budget.
-`deno task cfc-spec-snapshot` regenerates the snapshot from a specs checkout;
-the manifest beside it, `packages/runner/src/cfc/kernel/manifest.ts`, is the
-row you update when a critical function moves into the kernel.
+`deno task check-cfc-correspondence` reads the specification snapshot at
+`packages/runner/src/cfc/kernel/spec-snapshot.json` and fails on: a `§`
+citation in `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts` naming
+a section it does not list; a function exported under
+`packages/runner/src/cfc/kernel/` without a `@spec` header, with a hash the
+snapshot does not record, or importing past the kernel; a row of
+`packages/runner/src/cfc/kernel/manifest.ts` the snapshot or the kernel
+contradicts; and more than three `SPEC-PENDING` markers across the files this
+rule's `paths` list, or one naming no specs pull request. Citations elsewhere
+on that list are not checked. `deno task cfc-spec-snapshot` regenerates the
+snapshot from a specs checkout, and the manifest row is what you update when a
+critical function moves into the kernel.

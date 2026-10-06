@@ -71,8 +71,9 @@ The vocabulary:
   regenerates the snapshot from a specs checkout (`CF_SPECS_DIR`, or
   `~/src/specs/cfc`) at a revision (`--rev`, default `HEAD`), reading the
   chapters through git so a working tree on another branch cannot leak in.
-  The snapshot holds the commit, every section number, and for every function
-  a pseudocode block defines its chapter file, section, name and the SHA-256
+  The snapshot holds the commit, every section number of the numbered
+  chapters, and for every function a pseudocode block of chapters 03 through
+  08-*, 10, 17 and 18 defines its chapter file, section, name and the SHA-256
   of the block; it holds no spec text.
 - **Ruling.** A specs pull request that settles a question the specification
   did not answer, in the form `cfc/13-11-decisions.md` uses: the question, why
@@ -274,11 +275,13 @@ it. The procedure still applies; what changes is who completes which step.
 on four things, each read against the committed snapshot:
 
 - A manifest row in `packages/runner/src/cfc/kernel/manifest.ts` naming a
-  function the snapshot does not define in the section the row says; a
-  function the snapshot defines in a section some row names that is neither a
-  row nor a recorded companion; a row marked `exact` or `adapted` whose kernel
-  file does not export the function under a `@spec` header agreeing with the
-  row; or a row marked `missing` whose function the kernel does export.
+  function the snapshot does not define in the section the row says, or a
+  section `CRITICAL_SECTIONS` does not list; a function the snapshot defines
+  in a critical section that is neither a row nor a recorded companion; a row
+  marked `exact` or `adapted` whose kernel file does not export the function
+  under a `@spec` header for the row's section; a row marked `missing` whose
+  function the kernel does export; or a kernel export whose header names a
+  block that is neither a row nor a companion.
 - A function exported from a file under `packages/runner/src/cfc/kernel/`
   with no `@spec` header, with a header whose hash is not the snapshot's for
   that function, or in a file whose value imports reach past the kernel and
@@ -295,8 +298,13 @@ on four things, each read against the committed snapshot:
   The check resolves numbers, not meaning: a citation that lands on another
   existing section after a renumbering passes, and the second number of a
   range written without its own `§` is not read.
-- More than three `SPEC-PENDING` markers under `packages/`, or one on a line
-  naming no `https://github.com/commonfabric/specs/pull/<n>`.
+- More than three `SPEC-PENDING` markers across the files the CFC rule
+  governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
+  sources and their tests, the render boundaries `reconciler.ts` and
+  `display-fit.ts` in `packages/html`, and the harness's `cfc-*.ts`,
+  `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`; or one on a line
+  naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker
+  outside those files is not counted, and the rule does not reach there.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
