@@ -53,6 +53,7 @@ import {
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import { Identity } from "@commonfabric/identity";
+import { ensurePrivateInboxOf } from "@commonfabric/piece/ops";
 import {
   commitSnapshotShare,
   prepareSnapshotShare,
@@ -986,6 +987,39 @@ const handlers: Record<
       ok: res.error === undefined,
       value: res.ok?.value,
       error: res.error?.message,
+    };
+  },
+
+  /**
+   * Has the host give the Home stand-in reached from the piece result by
+   * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
+   * the identity's Home its own, and answers what the host found, naming an
+   * adopted or refused inbox by its link.
+   */
+  async ensurePrivateInbox({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const found = await ensurePrivateInboxOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    await idle();
+    const inbox = "inbox" in found
+      ? found.inbox.getAsNormalizedFullLink()
+      : undefined;
+    return {
+      outcome: found.outcome,
+      ...("reason" in found ? { reason: found.reason } : {}),
+      ...(inbox === undefined
+        ? {}
+        : { inbox: { id: inbox.id, space: inbox.space } }),
     };
   },
 

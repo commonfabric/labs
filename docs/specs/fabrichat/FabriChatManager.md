@@ -67,12 +67,15 @@ is what labels it `authored-by` this user.
 
 A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
-(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
-in a space of its own that any writer may post to and only its owner reads. The
-sender offers the room there, and the recipient's manager reads its offers, is
-readmitted to the room's space, and accepts the room. Nothing delivers one end
-to end today: no offer names a room yet, the manager reads none, and an inbox
-exists only where a host outside this repository creates one. A space's access
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
+piece in a space of its own. That is either the private inbox the recipient's
+Home creates ([the private inbox](../../features/private-inbox.md)) or one a
+loom daemon created, and both take the same offer envelope. Any principal may
+write to the inbox's space, and its offers are labeled readable by the owner
+alone, a label that binds only an honest runtime. The sender offers the room
+there, and the recipient's manager reads its offers, is readmitted to the
+room's space, and accepts the room. Nothing delivers one end to end today: no
+offer names a room yet, and the manager reads none. A space's access
 list can admit any writer, but that is the `"*"` grant a room has only when its
 creator makes a group joinable by its link, and then its address, sent some
 other way, is the notice.

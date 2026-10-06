@@ -43,9 +43,7 @@
  * it works when artifacts cannot be read. Without usable data, the dashboard
  * keeps the last completed color and values while a fetch runs, and reads
  * "benchmark data unavailable" after an empty fetch. A failed fetch keeps the
- * last-known processor lines gray and names the reason. A run list whose
- * newest run is older than the newest run already collected is a failed fetch
- * named "run list out of date".
+ * last-known processor lines gray and names the reason.
  *
  * Every collection pages the run list, once a minute, which is the cadence the
  * run state needs. The artifact history behind the tile moves with the runs
@@ -90,10 +88,10 @@ import {
   ciJobHistoryProgressResponse,
   ciJobHistoryResponse,
 } from "../ci-job-history.ts";
+import { RunLists } from "../github-runs.ts";
 import {
   concDot,
   dashboardGitHubCredential,
-  type DatedRun,
   durationTag,
   escapeHtml,
   friendlyError,
@@ -102,13 +100,11 @@ import {
   type GitHubDownload,
   type GitHubJson,
   humanSpan,
-  isStaleRunList,
   jsonFromZip,
   multiSparkline,
   performanceGithub,
   performanceGithubDownload,
   runArtifactId,
-  STALE_RUNS_ERROR,
 } from "../lib.ts";
 import type { GitHubCredential } from "../github-auth.ts";
 import {
@@ -215,13 +211,22 @@ interface BenchmarkSeries {
 }
 
 let snapshot: BenchmarkSeries[] = [];
-// The last benchmarks.yml run list a collection paged and kept. The drill-down
-// reads it to name the run its rerun hand-off points at, and the next list
-// paged is refused when its newest run is older than this list's. Only a fetch
-// that worked and was not refused replaces it, so the hand-off keeps naming
-// the failed run while a later fetch is in flight or has failed. The tile
-// itself reads the list its own collection fetched, never this one.
+// The benchmarks.yml runs, as far down as the window reaches, for each GitHub
+// client that reads them: the tile's, and the drill-down's, which reads on the
+// performance views' rate budget. Each keeps its own, so that neither waits
+// behind the other's reading.
+let benchmarkRuns = new WeakMap<BenchmarkGitHub, RunLists>();
+// The last benchmarks.yml run list a collection paged. The drill-down reads it
+// to name the run its rerun hand-off points at. Only a fetch that worked
+// replaces it, so the hand-off keeps naming the failed run while a later fetch
+// is in flight or has failed. The tile itself reads the list its own
+// collection fetched, never this one.
 let latestBenchmarkRuns: Run[] | undefined;
+// How many run list reads have started, and which of them `latestBenchmarkRuns`
+// came from, so that a read that finishes after a later one does not replace
+// what the later one found.
+let benchmarkReadsStarted = 0;
+let benchmarkReadPublished = 0;
 
 export type BenchmarkFetchPhase =
   | "discovering"
@@ -408,48 +413,35 @@ async function fetchZip(
   return res.body;
 }
 
-// The benchmarks.yml runs on main, newest first, paging back until past the
-// window (or the 12-page ceiling). The workflow runs to a four-hourly schedule
-// and on manual dispatch. Both kinds of run land on main, so the list is read
-// unfiltered and narrowed to main here: GitHub answers a list filtered by
-// branch from an index that is often days behind, and an unfiltered one
-// current.
-//
-// A list can still come back ending days back. A list whose
-// newest run is older than the newest run already collected is refused with
-// `STALE_RUNS_ERROR`, and any other list is kept in `latestBenchmarkRuns`.
-// What was collected is the last list kept, or, before one has been kept since
-// the server started, the runs the history cache records.
+// The benchmarks.yml runs on main, newest first, back to the first run created
+// before `cutoff`. The workflow runs to a four-hourly schedule and on manual
+// dispatch, and both kinds of run land on main.
 async function pageBenchmarkRuns(
   github: BenchmarkGitHub,
   credential: GitHubCredential,
   cutoff: number,
 ): Promise<Run[]> {
-  const runs: Run[] = [];
-  for (let page = 1; page <= 12; page++) {
-    const response = await github.json<
-      { workflow_runs?: (Run & { head_branch: string | null })[] }
-    >(
-      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=100&page=${page}`,
-      credential,
-    );
-    const batch = response.workflow_runs ?? [];
-    if (!batch.length) break;
-    for (const run of batch) if (run.head_branch === "main") runs.push(run);
-    if (
-      batch.length < 100 ||
-      Date.parse(batch[batch.length - 1].created_at) < cutoff
-    ) break;
+  const read = ++benchmarkReadsStarted;
+  let lists = benchmarkRuns.get(github);
+  if (!lists) {
+    lists = new RunLists();
+    benchmarkRuns.set(github, lists);
   }
-  const held: readonly DatedRun[] = latestBenchmarkRuns ??
-    benchmarkStore.list().map((run) => ({
-      id: run.runId,
-      created_at: new Date(run.at).toISOString(),
-    }));
-  if (isStaleRunList(`${REPO} ${WORKFLOW} main`, runs, held)) {
-    throw new Error(STALE_RUNS_ERROR);
+  const runs = await lists.runs(
+    (path, options) => github.json(path, credential, options),
+    REPO,
+    WORKFLOW,
+    {
+      reader: "benchmarks",
+      wants: (run) => run.head_branch === "main",
+      recheck: [{ branch: "main" }],
+      until: (run) => Date.parse(run.created_at) < cutoff,
+    },
+  );
+  if (read > benchmarkReadPublished) {
+    latestBenchmarkRuns = runs;
+    benchmarkReadPublished = read;
   }
-  latestBenchmarkRuns = runs;
   return runs;
 }
 
@@ -1413,10 +1405,11 @@ function benchmarkLastRequestError(): string | null {
 }
 
 /**
- * Makes the tiles hold an empty run list, so that the next list paged is
- * compared against nothing an earlier test listed or cached.
+ * Makes the tiles hold no runs, so that the next list paged is read afresh
+ * rather than joined to the runs an earlier test listed.
  */
 export function forgetBenchmarkRunsForTest(): void {
+  benchmarkRuns = new WeakMap();
   latestBenchmarkRuns = [];
 }
 
@@ -1473,6 +1466,7 @@ function makeBenchmarkTile(
 ): Tile {
   return {
     label,
+    repo: REPO,
     intervalMs: 60_000,
     showOnlyCompletedViews: true,
     async collect(ctx): Promise<TileView> {

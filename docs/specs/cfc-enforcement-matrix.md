@@ -762,8 +762,8 @@ The strict-only delta is:
     reachable, and is §8.12.1 rather than a defect of the route: a pattern
     that later adds an `ifc` at a path the route already declared has to
     name what the store already promises, or the monotonicity gate rejects
-    the write for dropping a stored clause. The gate ships `off`, so this is
-    latent until it is turned on.
+    the write for dropping a stored clause. The gate ships at `observe`, so
+    this is diagnosed rather than refused until it is raised to `enforce`.
   - **No poisoned measurement.** The ungrantable read-failed marker is
     outside every ceiling, so it is outside what the route may declare: a
     measurement the runtime could not take proves nothing about the

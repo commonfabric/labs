@@ -46,7 +46,7 @@ function job(over: Partial<Job> = {}): Job {
 function collection(over: Partial<CiJobs> = {}): CiJobs {
   return {
     jobs: [job()],
-    repoCount: 1,
+    repos: ["labs"],
     unreadableRepos: [],
     collectedAt: NOW - 2 * MINUTE,
       ...over,
@@ -94,7 +94,7 @@ Deno.test("ci jobs page: the summary counts each state of a job", () => {
         job({ repo: "raia", status: "warn", result: "rate limit hit" }),
         job({ repo: "pond", status: "unknown", result: "no completed run" }),
       ],
-      repoCount: 5,
+      repos: ["labs", "loom", "amp", "raia", "gvisor"],
       unreadableRepos: ["commonfabric/gvisor"],
     }),
     NOW,
@@ -131,7 +131,7 @@ Deno.test("ci jobs page: a job with a run in progress has a running dot after it
           runningHref: "https://github.com/commonfabric/pond/actions/runs/8",
         }),
       ],
-      repoCount: 3,
+      repos: ["labs", "loom", "pond"],
     }),
     NOW,
   );
@@ -160,7 +160,7 @@ Deno.test("ci jobs page: jobs are ordered worst first, then by name", () => {
         job({ repo: "bay", status: "warn", result: "auth failed" }),
         job({ repo: "amp", status: "bad", result: "timed_out" }),
       ],
-      repoCount: 6,
+      repos: ["zed", "pond", "loom", "arc", "bay", "amp"],
     }),
     NOW,
   );

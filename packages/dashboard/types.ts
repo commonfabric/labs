@@ -51,6 +51,11 @@ export interface Tile {
   // latest-view state on the server and its markup in the browser.
   label: string;
 
+  // The repository the tile reports on, as "owner/name", when it reports on
+  // one alone. That repository's page shows the tile's view among its
+  // measures (repo-page.ts).
+  repo?: string;
+
   intervalMs: number; // how often collect() runs, per source when runSources is set
   wide?: boolean; // render full-width below the grid, including before collection
   // Keep the last completed status and values while ignoring intermediate views.

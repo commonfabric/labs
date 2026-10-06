@@ -393,6 +393,20 @@ Each of these gates fails CI on its own, and none of them run as part of
   string and the reason, so nothing a scanned file says can exempt itself. It
   fails the other way round too, on an entry whose file no longer writes its
   string. `tasks/check-address-examples.ts` states what counts as an example
+- `deno task check-cfc-correspondence` — the runtime's claim about which
+  Contextual Flow Control specification it implements, held to the snapshot
+  committed at `packages/runner/src/cfc/kernel/spec-snapshot.json`: a kernel
+  function whose `@spec` header hash the snapshot no longer carries or that
+  imports past the kernel, a manifest row in
+  `packages/runner/src/cfc/kernel/manifest.ts` naming a function the snapshot
+  lacks or a kernel symbol that does not exist, a `§` citation under
+  `packages/runner/src/cfc/` naming a section the specification has not, or more
+  than three `SPEC-PENDING` markers under `packages/`, or one naming no specs
+  pull request. The specification is private and the snapshot is what crosses:
+  `deno task cfc-spec-snapshot` regenerates it from a specs checkout, and labs
+  CI never reads the specification itself. A citation written on purpose to
+  something else is recorded in `EXEMPTIONS` in the task, and an entry whose
+  file stopped writing its citation fails the same way
 - `deno task check-verb-session-sync` — a `cf` command or act reference in
   `docs/common/verbs/the-verb-session.md` or
   `docs/common/verbs/session-walkthrough.md` that its demo script does not back;

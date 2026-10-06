@@ -18,7 +18,10 @@ import ProfileCreate, {
   TRUSTED_PROFILE_SET_DEFAULT_ACTION,
   TRUSTED_PROFILE_SET_MRU_ACTION,
 } from "./profile-create.tsx";
-import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
+import type {
+  BackwardsCompatibleProfile,
+  ProfileInbox,
+} from "./profile-home.tsx";
 
 // The profile picker rendered as the `[UI]` of a #profile wish when the user
 // has 2+ profiles and no valid default. It renders each profile natively
@@ -49,6 +52,9 @@ type ProfilePickerInput = {
   legacyDefaultProfile?: Writable<BackwardsCompatibleProfile | undefined>;
   offersSetDefault: Default<boolean, true>;
   mru: Writable<BackwardsCompatibleProfile[]>;
+  // Home's private inbox, which a profile created here is pointed at; see
+  // `ProfileCreateInput.privateInbox`.
+  privateInbox?: ProfileInbox;
 };
 
 // Whether two profile cells name the SAME profile — compared by the profile's
@@ -121,7 +127,14 @@ export default pattern<
   ProfilePickerInput,
   { [UI]: VNode }
 >((
-  { profiles, defaultProfile, legacyDefaultProfile, offersSetDefault, mru },
+  {
+    profiles,
+    defaultProfile,
+    legacyDefaultProfile,
+    offersSetDefault,
+    mru,
+    privateInbox,
+  },
 ) => {
   // Home space of the `profiles`/`defaultProfile`/`mru` container links — used
   // to reject entries that resolve into the home space (see sameProfileCell).
@@ -130,6 +143,7 @@ export default pattern<
   const profileCreate = ProfileCreate({
     profiles: profiles as any,
     inputId: "wish-profile-picker-name-input",
+    privateInbox,
   });
 
   // Named, so the rows' documents are keyed by `profileRows` rather than by

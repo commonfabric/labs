@@ -453,8 +453,8 @@ const uiContractsFromSchemaInternal = (
     for (const entry of branchEntries) entries.push(entry);
   }
 
-  // `items` keeps its `*` entry even beside prefixItems, mirroring
-  // walkIfcSchema (PR #4969 review): the `*` over-enforces the rest
+  // `items` keeps its `*` entry even beside prefixItems, as
+  // `cfcSchemaEntries` does: the `*` over-enforces the rest
   // contract on tuple slots, but minting nothing would silently drop the
   // tail elements' declared contract — fail-open, strictly worse. A
   // precise "past the slots" representation needs a path grammar beyond

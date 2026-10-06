@@ -55,10 +55,16 @@ export interface Job {
   runningHref?: string;
 }
 
+/** A repository's own name, without the owner, as a `Job` names it. */
+export function shortName(repo: string): string {
+  return repo.slice(repo.indexOf("/") + 1);
+}
+
 /** What one collection of the ci tile saw. */
 export interface CiJobs {
   jobs: readonly Job[];
-  repoCount: number;
+  // Every repository the collection read, by its own name without the owner.
+  repos: readonly string[];
   // Repositories whose workflow listing could not be read at all, so nothing
   // is known about the jobs behind them.
   unreadableRepos: readonly string[];
@@ -101,7 +107,7 @@ const STYLES = `
   @media(max-width:760px){.at{display:none}}`;
 
 /** An ISO 8601 time cut to the minute, which is the precision a reader wants. */
-function minutePrecision(at: number): string {
+export function minutePrecision(at: number): string {
   return `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
@@ -364,7 +370,7 @@ function summary(collected: CiJobs): string {
   const facts: Array<[string, string]> = [
     // The same count the tile's header carries: the jobs it speaks for.
     ["jobs", String(collected.jobs.length - count("unknown"))],
-    ["repositories", String(collected.repoCount)],
+    ["repositories", String(collected.repos.length)],
     ["passing", String(count("good"))],
     ["failing", String(failing)],
     ["unreadable", String(unreadable)],

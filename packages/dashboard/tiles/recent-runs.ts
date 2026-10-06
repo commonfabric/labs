@@ -40,12 +40,35 @@ const utcFallback = (iso: string): string => {
 
 const repoOf = (run: Run): string => run.repo ?? REPO;
 
+/**
+ * The dot a run is marked with and the words its result is given: running
+ * until it completes, green when it passed, saying which attempt passed when
+ * it took more than one, and otherwise its conclusion.
+ */
+export function runOutcome(run: Run): { dot: string; text: string } {
+  if (run.status !== "completed") {
+    return {
+      dot: "run",
+      text: `running${run.run_attempt > 1 ? ` · attempt ${run.run_attempt}` : ""}`,
+    };
+  }
+  return {
+    dot: concDot(run.conclusion, run.run_attempt),
+    text: run.conclusion === "success"
+      ? (run.run_attempt > 1 ? `green on retry #${run.run_attempt}` : "green")
+      : (run.conclusion ?? "done"),
+  };
+}
+
 function runDuration(run: Run): string | null {
   const ran = runDurationMs(run);
   return ran === undefined ? null : humanDuration(ran);
 }
 
-export function commitGanttHref(run: Run, candidates: Run[]): string | null {
+export function commitGanttHref(
+  run: Run,
+  candidates: readonly Run[],
+): string | null {
   if (
     !run.head_sha || run.status !== "completed" ||
     run.conclusion !== "success" || run.event !== "push"
@@ -115,12 +138,7 @@ export const recentRuns: Tile = {
     const shortRepo = (r: Run) => repoOf(r).split("/")[1] ?? repoOf(r);
     const rows = runs.map((r) => {
       const running = r.status !== "completed";
-      const dot = running ? "run" : concDot(r.conclusion, r.run_attempt);
-      const label = running
-        ? `running${r.run_attempt > 1 ? ` · attempt ${r.run_attempt}` : ""}`
-        : r.conclusion === "success"
-        ? (r.run_attempt > 1 ? `green on retry #${r.run_attempt}` : "green")
-        : (r.conclusion ?? "done");
+      const { dot, text: label } = runOutcome(r);
       const title =
         (r.head_commit?.message ?? r.display_title).split("\n", 1)[0];
       const href = landingHref(title, r.head_sha, repoOf(r));
