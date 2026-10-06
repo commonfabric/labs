@@ -1826,8 +1826,12 @@ export async function newPiece(
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
-        `If this space's root pattern predates a runtime format change, ` +
-        `repair it with: ${cliCommand(["space", "recreate-root"])}`,
+        `If a non-Home space's root pattern predates a runtime format change, ` +
+        `repair it with: ${cliCommand(["space", "recreate-root"])}. ` +
+        `Update an existing Home in place with ${
+          cliCommand(["piece", "setsrc"])
+        } ` +
+        `to preserve its account data.`,
       { cause: error },
     );
   }
@@ -6084,7 +6088,7 @@ export async function createSpace(
 }
 
 /**
- * Reset the home pattern to the system default.
+ * Initializes an absent Home with the system default; refuses existing Home.
  */
 export async function resetHomePattern(
   config: Omit<SpaceConfig, "space">,
