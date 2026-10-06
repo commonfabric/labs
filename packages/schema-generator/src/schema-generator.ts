@@ -33,7 +33,11 @@ import {
   pairUnionMemberNodes,
   UnionFormatter,
 } from "./formatters/union-formatter.ts";
-import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
+import {
+  IntersectionFormatter,
+  sharedPropertySchema,
+  withoutDocumentation,
+} from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   denotesSameType,
@@ -915,8 +919,9 @@ function contradictory(
  * primitives are narrowed or found disjoint wherever they sit
  * (`reducePrimitiveParts`); and `null` or `undefined` beside an object
  * leaves nothing. What remains is one schema, returned as it is, or object
- * schemas whose properties are unioned (the first definition kept on a
- * clash) and whose `required` lists are unioned. A part that merge refuses —
+ * schemas whose properties are unioned, a property several of them declare
+ * taking the intersection of its declarations (`sharedPropertyOf`), and
+ * whose `required` lists are unioned. A part that merge refuses —
  * a non-object, or one with an index signature, which an array is — yields
  * the same unsupported-pattern fallback the type-based path emits.
  */
@@ -965,7 +970,7 @@ function mergeParts(
     });
     return schema;
   };
-  const properties: Record<string, MutableJSONSchema> = {};
+  const declarations = new Map<string, PartProperty[]>();
   const required = new Set<string>();
   for (const part of reduced) {
     if (isArraySchema(part)) {
@@ -980,7 +985,13 @@ function mergeParts(
         (part.properties ?? {}) as Record<string, MutableJSONSchema>,
       )
     ) {
-      if (!(key in properties)) properties[key] = value;
+      const declaration = {
+        schema: value,
+        required: Array.isArray(part.required) && part.required.includes(key),
+      };
+      const declared = declarations.get(key);
+      if (declared) declared.push(declaration);
+      else declarations.set(key, [declaration]);
     }
     if (Array.isArray(part.required)) {
       for (const key of part.required) {
@@ -988,9 +999,64 @@ function mergeParts(
       }
     }
   }
+  const properties: Record<string, MutableJSONSchema> = {};
+  for (const [key, declared] of declarations) {
+    properties[key] = declared.length === 1
+      ? declared[0]!.schema
+      : sharedPropertyOf(key, declared, context);
+  }
   const merged: MutableJSONSchemaObj = { type: "object", properties };
   if (required.size > 0) merged.required = [...required];
   return merged;
+}
+
+/**
+ * A merged part's declaration of a property: the schema it gives the
+ * property, and whether it requires the property.
+ */
+type PartProperty = {
+  readonly schema: MutableJSONSchema;
+  readonly required: boolean;
+};
+
+/**
+ * The schema of `key`, a property several merged parts declare (`declared`,
+ * in part order): the intersection of the declared types, settled from their
+ * schemas as `intersectionOf()` settles an intersection, and documented as
+ * `sharedPropertySchema()` says. The schemas are settled with their JSDoc
+ * keywords set aside, since those describe a declaration rather than its
+ * type, and a schema set aside that way keeps the origin recorded for it.
+ * Where some declaration requires the property, an optional one admits
+ * `undefined` as well, as its `?` does. A result that is one declaration's
+ * schema with its keywords set aside stands as that declaration's schema.
+ */
+function sharedPropertyOf(
+  key: string,
+  declared: readonly PartProperty[],
+  context: GenerationContext,
+): MutableJSONSchema {
+  const schemas = declared.map(({ schema }) => schema);
+  const bare = schemas.map((schema) => {
+    const value = withoutDocumentation(schema);
+    const origin = isObjectOrArray(schema)
+      ? context.schemaOrigins?.get(schema)
+      : undefined;
+    if (origin && isObjectOrArray(value) && value !== schema) {
+      context.schemaOrigins?.set(value, origin);
+    }
+    return value;
+  });
+  const requiredAnywhere = declared.some(({ required }) => required);
+  const value = intersectionOf(
+    bare.map((schema, index) =>
+      requiredAnywhere && !declared[index]!.required
+        ? unionOfSchemas([schema, { type: "undefined" }], context)
+        : schema
+    ),
+    context,
+  );
+  const at = bare.indexOf(value);
+  return sharedPropertySchema(key, at === -1 ? value : schemas[at]!, schemas);
 }
 
 /**

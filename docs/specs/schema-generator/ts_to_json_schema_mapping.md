@@ -166,7 +166,16 @@ with it, as `T & {}` does; primitives are narrowed or found disjoint wherever
 they sit, `"a" & string` being `"a"` and `string & number` nothing; `null` or
 `undefined` beside an object leaves nothing; and a constituent that merge
 refuses — a non-object, or one with an index signature, which an array is —
-yields the same unsupported-pattern fallback the type path emits. Where a
+yields the same unsupported-pattern fallback the type path emits. Object
+parts merge into one object, and a property several of them declare is
+settled the same way from the schemas its declarations give it, documented
+as the type path documents it (§9). The keywords JSDoc writes are set aside
+while those schemas are settled, and an optional declaration admits
+`undefined` beside one that requires the property. What this settles
+differently from the checker it settles differently for a property too: it
+reads no assignability, so `unknown[]` beside `string[]` is the
+unsupported-pattern fallback, and the merged object keeps only the members
+and `required` of its parts, so a `scope` on one of them is not kept. Where a
 schema alone no longer says what its type was, the generation context
 records where it came from (`schemaOrigins`): `void` lowers to the opaque
 marker `OpaqueCell<any>` also lowers to, and reduces as `undefined` does
@@ -947,10 +956,28 @@ Default paths of §7:
   signature, or a checker error — produce a **permissive fallback, not a
   throw**: `{ type: "object", additionalProperties: true, $comment:
   "Unsupported intersection pattern: <reason>" }`.
-- Property merge is **first-wins** (no schema merging); conflicting property
-  descriptions keep the first + `$comment` + logger warning;
-  `required` is unioned; `$ref` constituents resolve
-  through `context.definitions`.
+- A property several constituents declare takes the schema of its type in
+  the intersection, which the checker gives as the intersection of the
+  declared types: `{ a: unknown } & { a: string }` and
+  `{ a: string | number } & { a: string }`, in either order, give `a` the
+  schema of `string`, and `{ a: string } & { a: number }` gives it `false`.
+  Where one declaration's type is that type, or is assignable to every other
+  declaration's type and so admits just the values the intersection admits,
+  the property takes that declaration's schema, read through the node it is
+  written with: `{ a: unknown[] } & { a: string[] }` keeps `string[]`'s.
+  Declarations whose types are assignable to each other, such as
+  `PerUser<X>` beside `X`, keep the first one written. Any other type is
+  formatted as the property's, so `{ a: { x: string } } & { a: { y: number } }`
+  merges the two objects, and a callable keeps its wrapper marker.
+- The property's description, the tags drawn from it, and its deprecation
+  mark are the first declaration's where it has them, and otherwise those of
+  the schema it takes. A later declaration's differing description is noted
+  in a `$comment` ("Conflicting docs across intersection constituents; using
+  first") and a logger warning. `required` is unioned, as a property any
+  constituent requires is required; `$ref` constituents resolve through
+  `context.definitions`. Tested: intersection-formatter.test.ts,
+  intersection-provenance.test.ts, the descriptions-intersection-conflict
+  fixture.
 - Constituent-level JSDoc joins with `\n\n` plus provenance `$comment`s ("Docs
   inherited from intersection constituents." / "Sources: …" / "Missing docs
   for: …") (descriptions-intersection-* fixtures ×7).
