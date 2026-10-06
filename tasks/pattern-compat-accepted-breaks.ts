@@ -1035,4 +1035,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits",
     record: "docs/history/fabrichat-room-link-messages-break.md",
   },
+  {
+    // A room's `about` record names `commitStart` and a reviewed `ChatStart`
+    // on `ChatStartSurface` as its only writer, where it named `commitManager`
+    // with no gesture. The record is written once, as the room is created, so
+    // a room that exists keeps the one it has.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261002T164437Z-1xU0r9QuhxWHgK6y",
+      "20261003T224731Z-o9skqwp4KfLbCDBT",
+      "20261005T182129Z-3RSVlUS0NdLuz2VP",
+      "20261005T224806Z-OeD1Mc2I_LQ_d8L_",
+    ],
+    paths: ["argument.about"],
+    reason:
+      "a room's `about` record now requires a reviewed start to write it, a write policy the recorded label, naming a writer with no gesture, differs from",
+    record: "docs/history/fabrichat-start-reviewed-break.md",
+  },
 ];

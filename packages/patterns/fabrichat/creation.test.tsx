@@ -28,15 +28,20 @@ import {
   textContent,
 } from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
-import type {
-  ChatIndexEntry,
-  ChatManagerNotice,
-  ChatProfile,
-  ChatRequestOutcome,
-  ChatRoomLink,
+import {
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
+  type ChatIndexEntry,
+  type ChatManagerNotice,
+  type ChatProfile,
+  type ChatRequestOutcome,
+  type ChatRoomLink,
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+
+/** The gesture a start takes, as a client's start control makes it. */
+const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
 // Stand-ins for principals, each a base58btc key as a principal's is.
 const BOB = "did:key:z6MkBob";
@@ -140,13 +145,9 @@ export default pattern(() => {
     requests: groupRequests,
     outgoingNotices: groupNotices,
   } as ManagerArg);
-  const action_create_group = action(() =>
-    group.createGroup.send({
-      requestId: "g-1",
-      title: "Team",
-      members: [CAROL, CAROL, currentPrincipal() ?? ""],
-    })
-  );
+  // This user's own principal, which the group's members name as well.
+  const self = Writable.of<string>("");
+  const action_note_self = action(() => self.set(currentPrincipal() ?? ""));
   const action_open_direct_with_self = action(() =>
     group.openDirect.send({
       requestId: "d-self",
@@ -237,6 +238,7 @@ export default pattern(() => {
       {
         action: direct.openDirect,
         event: { requestId: "d-1", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { action: action_hold_direct },
       {
@@ -273,6 +275,7 @@ export default pattern(() => {
       {
         action: direct.openDirect,
         event: { requestId: "d-2", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => directRooms.get().length === 1) },
       // Forgetting it keeps it in `direct`; finding it again puts it back.
@@ -281,6 +284,7 @@ export default pattern(() => {
       {
         action: direct.openDirect,
         event: { requestId: "d-3", counterpart: BOB },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -290,7 +294,16 @@ export default pattern(() => {
       },
 
       // A group room.
-      { action: action_create_group },
+      { action: action_note_self },
+      {
+        action: group.createGroup,
+        event: {
+          requestId: "g-1",
+          title: "Team",
+          members: [CAROL, CAROL, self],
+        },
+        trustedUi: startGesture,
+      },
       {
         assertion: assert(() =>
           groupRooms.get().length === 1 &&
@@ -311,6 +324,7 @@ export default pattern(() => {
       {
         action: group.createGroup,
         event: { requestId: "g-1", title: "Team", members: [] },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => groupRooms.get().length === 1) },
       // The start controls are enabled, and a start the manager can't act on
@@ -334,10 +348,12 @@ export default pattern(() => {
       {
         action: group.openDirect,
         event: { requestId: "d-junk", counterpart: "not a principal" },
+        trustedUi: startGesture,
       },
       {
         action: group.createGroup,
         event: { requestId: "g-blank", title: "  ", members: [CAROL] },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -371,6 +387,7 @@ export default pattern(() => {
       {
         action: group.openDirect,
         event: { requestId: "d-period", counterpart: `${BOB}.` },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -386,6 +403,7 @@ export default pattern(() => {
       {
         action: group.createGroup,
         event: { requestId: "g-junk", title: "Team", members: [CAROL, "junk"] },
+        trustedUi: startGesture,
       },
       {
         assertion: assert(() =>
@@ -406,6 +424,7 @@ export default pattern(() => {
       {
         action: group.openDirect,
         event: { requestId: "d-carol", counterpart: CAROL },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
 
@@ -413,6 +432,7 @@ export default pattern(() => {
       {
         action: accepting.createGroup,
         event: { requestId: "g-1", title: "Team", members: [] },
+        trustedUi: startGesture,
       },
       { action: action_hold_accepted },
       { action: action_forget_accepted_group },
@@ -434,6 +454,7 @@ export default pattern(() => {
       {
         action: accepting.openDirect,
         event: { requestId: "d-1", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { action: action_hold_accepted },
       { action: action_forget_accepted_direct },
@@ -453,6 +474,7 @@ export default pattern(() => {
       {
         action: delivering.openDirect,
         event: { requestId: "d-1", counterpart: BOB },
+        trustedUi: startGesture,
       },
       { assertion: assert(() => deliveredNotices.get().length === 1) },
       { action: action_report_delivered },

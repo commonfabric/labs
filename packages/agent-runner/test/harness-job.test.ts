@@ -10,6 +10,7 @@ import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/
 import { renderCellReference } from "@commonfabric/runner/shared";
 
 import { type HarnessJobSpec, runHarnessJob } from "../src/harness-job.ts";
+import { LocalJobBrowserHost } from "../src/local-jobs/browser-host.ts";
 
 /** The space a fabric job names. */
 const SPACE = "did:key:z6MkgUiiZvP3qYQqr1NWyS2uCpny8dejAvyuBZh2PAVACs97";
@@ -89,6 +90,7 @@ describe("runHarnessJob()", () => {
       signal?: AbortSignal;
       onEvent?: (event: HarnessTranscriptEvent) => void;
       report?: (message: string) => void;
+      browserHost?: LocalJobBrowserHost;
     } = {},
   ) => {
     const seen: Seen = {};
@@ -97,6 +99,9 @@ describe("runHarnessJob()", () => {
       signal: options.signal ?? new AbortController().signal,
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.report !== undefined ? { report: options.report } : {}),
+      ...(options.browserHost !== undefined
+        ? { browserHost: options.browserHost }
+        : {}),
       harnessDeps: {
         env: {
           CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
@@ -167,6 +172,32 @@ describe("runHarnessJob()", () => {
       jobIdEnvVar: "HOST_JOB_ID",
       jobId: "job-own-id",
     });
+  });
+
+  it("hands a browser host to the run's engine, with the subagent profiles the spec allows", async () => {
+    const host = new LocalJobBrowserHost();
+    const { result, seen } = await runScripted(
+      plainSpec({
+        tools: ["web_fetch", "delegate_task"],
+        subagentProfiles: ["browser"],
+      }),
+      answering("Titan"),
+      { browserHost: host },
+    );
+    expect(result.outcome).toBe("completed");
+    expect(seen.loopOptions?.engine?.browserHost).toBe(host);
+    expect(seen.loopOptions?.allowedSubagentProfiles).toEqual(["browser"]);
+    expect(seen.loopOptions?.allowedToolIds).toEqual([
+      "web_fetch",
+      "delegate_task",
+      "submit_result",
+    ]);
+  });
+
+  it("allows no subagent profile and hands no host when the spec names none", async () => {
+    const { seen } = await runScripted(plainSpec(), answering("Titan"));
+    expect(seen.loopOptions?.engine?.browserHost).toBeUndefined();
+    expect(seen.loopOptions?.allowedSubagentProfiles).toEqual([]);
   });
 
   describe("with plain inputs and no fabric", () => {

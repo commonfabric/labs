@@ -47,6 +47,15 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("reads a browser host grant, and leaves a withheld one out", async () => {
+      const profiles = await read({
+        ask: { ...ASK, browserHost: true },
+        read: { ...ASK, browserHost: false },
+      });
+      expect(profiles.get("ask")?.browserHost).toBe(true);
+      expect(profiles.get("read")).toEqual(ASK);
+    });
+
     it("accepts the CLI research alias", async () => {
       expect(
         (await read({ ask: { ...ASK, tools: ["query_docs"] } })).get("ask")!
@@ -95,6 +104,11 @@ describe("local-jobs/profiles", () => {
         "`loomCommandsConfig`",
       ],
       ["a model that is not a string", { ...ASK, model: 7 }, "`model`"],
+      [
+        "a browser host grant that is not true or false",
+        { ...ASK, browserHost: "yes" },
+        "`browserHost`",
+      ],
     ];
     for (const [what, profile, field] of broken) {
       it(`throws naming the profile and field for ${what}`, async () => {
@@ -127,6 +141,20 @@ describe("local-jobs/profiles", () => {
       expect(
         narrowLocalJobProfile(profile, { tools: ["loom_search", "bash"] }),
       ).toEqual({ refusal: "The profile does not allow `bash`." });
+    });
+
+    it("admits a browser host only for a request that declared one", () => {
+      const browsing = { ...profile, browserHost: true };
+      expect(narrowLocalJobProfile(browsing, {})).toEqual({ profile });
+      expect(narrowLocalJobProfile(browsing, { browserHost: {} })).toEqual({
+        profile: browsing,
+      });
+    });
+
+    it("refuses a browser host the profile does not admit", () => {
+      expect(narrowLocalJobProfile(profile, { browserHost: {} })).toEqual({
+        refusal: "The profile does not admit a browser host.",
+      });
     });
 
     it("refuses more turns than the profile's cap", () => {

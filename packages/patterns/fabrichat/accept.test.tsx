@@ -29,6 +29,8 @@ import {
 import { FabriChatManagerCore } from "./manager.tsx";
 import { AddToChats } from "./room.tsx";
 import {
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatProfile,
@@ -38,6 +40,9 @@ import {
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 type AddArg = Parameters<typeof AddToChats>[0];
+
+/** The gesture a start takes, as a client's start control makes it. */
+const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
 const CAROL = "did:key:z6MkiT3dKXX5dqUcbnpf1Ejp8hFVuMM9MN9eftydT9T4uurE";
 
@@ -102,12 +107,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
-  const action_open_direct = action(() =>
-    manager.openDirect.send({
-      requestId: "d-1",
-      counterpart: setup.bobDid.get(),
-    })
-  );
   const action_hand_over = action(() =>
     setup.held.key("room").set(rooms.key(0).key("room").resolveAsCell())
   );
@@ -116,7 +115,11 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     [TESTS]: [
       { action: introduce({ me: setup.aliceDid }), event: {} },
       { await: "bob-introduced" },
-      { action: action_open_direct },
+      {
+        action: manager.openDirect,
+        event: { requestId: "d-1", counterpart: setup.bobDid },
+        trustedUi: startGesture,
+      },
       { action: action_hand_over },
       { assertion: assert(() => rooms.get()[0]?.counterpart !== undefined) },
       { label: "alice-created" },
