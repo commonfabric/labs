@@ -4428,6 +4428,47 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
 
+    it("keeps the integrity besides the current principal's when a view leaves an owner policy's principal claims out", async () => {
+      // Only the claims the runtime enforces beside a writer go with it.
+      const { schema, diagnostics } = await generate(
+        `{
+          owned: Erased<Cfc<WriteAuthorizedBy<string, typeof save>, {
+            ownerPrincipal: "owner";
+            integrity: [
+              { kind: "represents-principal"; subject: { __ctCurrentPrincipal: true } },
+              "audited",
+            ];
+          }>>;
+        }`,
+        false,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(schema).toMatchObject({
+        properties: {
+          owned: {
+            properties: {
+              value: { type: "string", ifc: { integrity: ["audited"] } },
+            },
+          },
+        },
+      });
+    });
+
+    it("reads no labels from a `Cfc` whose metadata is not an object", async () => {
+      const { schema, diagnostics } = await generate(
+        '{ list: Cfc<string, ["a"]>; text: Cfc<string, "a"> }',
+        false,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(schema).toEqual({
+        type: "object",
+        properties: { list: { type: "string" }, text: { type: "string" } },
+        required: ["list", "text"],
+      });
+    });
+
     it("keeps a principal claim whose type holds no writer, and an owner policy whose writers it reads, in a view", async () => {
       const { schema, diagnostics } = await generate(
         `{

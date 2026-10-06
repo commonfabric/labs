@@ -479,6 +479,21 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
           "schemas.input",
         ],
         [
+          "a constant's property an array destructuring assignment past a hole writes",
+          `const schemas = { input: toSchema<{ value: string }>() };\n[, schemas.input] = [0, toSchema<${UNREAD}>()];`,
+          "schemas.input",
+        ],
+        [
+          "a property of a constant aliased past the bound on reading it",
+          `${
+            Array.from({ length: 34 }, (_, i) =>
+              i === 0
+                ? `const s0 = { input: toSchema<${UNREAD}>() };`
+                : `const s${i} = s${i - 1};`).join("\n")
+          }`,
+          "s33.input",
+        ],
+        [
           "a constant's property a destructuring default writes",
           `const schemas = { input: toSchema<{ value: string }>() };\n({ input: schemas.input = toSchema<${UNREAD}>() } = {} as { input?: Schema });`,
           "schemas.input",

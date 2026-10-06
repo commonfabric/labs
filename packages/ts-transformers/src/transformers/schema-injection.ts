@@ -1325,15 +1325,15 @@ function isWrittenBinding(
   checker: ts.TypeChecker,
 ): boolean {
   const symbol = bindingSymbol(identifier, checker);
-  if (!symbol) return false;
   const modules = new Set<ts.SourceFile | undefined>([
     identifier.getSourceFile(),
-    ...(symbol.declarations ?? []).map((declaration) =>
+    ...(symbol?.declarations ?? []).map((declaration) =>
       declaration.getSourceFile()
     ),
   ]);
   return [...modules].some((module) =>
-    module !== undefined && writtenBindingsOf(module, checker).has(symbol)
+    module !== undefined && symbol !== undefined &&
+    writtenBindingsOf(module, checker).has(symbol)
   );
 }
 
