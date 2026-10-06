@@ -49,6 +49,48 @@ import {
 } from "../src/schema-registry.ts";
 
 describe("ContextualFlowControl.schemaAtPath", () => {
+  describe("an input join on the way down", () => {
+    // `ifc.inputConfidentiality` names the clauses only a producer's input
+    // join put in a schema. Walking into a child carries the clauses down,
+    // and names them there as an input join's only where no level of the
+    // path declares them itself.
+    const schemaWith = (rootIfc: JSONSchemaObj["ifc"]): JSONSchema => ({
+      type: "object",
+      ifc: rootIfc,
+      properties: {
+        a: { type: "string" },
+        b: { type: "string", ifc: { confidentiality: ["x"] } },
+      },
+    });
+
+    it("names a clause only an ancestor's input join holds as the child's", () => {
+      const child = ContextualFlowControl.schemaAtPath(
+        schemaWith({ confidentiality: ["x"], inputConfidentiality: ["x"] }),
+        ["a"],
+      ) as JSONSchemaObj;
+      expect(child.ifc?.confidentiality).toEqual(["x"]);
+      expect(child.ifc?.inputConfidentiality).toEqual(["x"]);
+    });
+
+    it("names no input join for a clause an ancestor declares", () => {
+      const child = ContextualFlowControl.schemaAtPath(
+        schemaWith({ confidentiality: ["x"] }),
+        ["a"],
+      ) as JSONSchemaObj;
+      expect(child.ifc?.confidentiality).toEqual(["x"]);
+      expect(child.ifc?.inputConfidentiality).toBeUndefined();
+    });
+
+    it("names no input join for a clause the child declares beside an ancestor's input join", () => {
+      const child = ContextualFlowControl.schemaAtPath(
+        schemaWith({ confidentiality: ["x"], inputConfidentiality: ["x"] }),
+        ["b"],
+      ) as JSONSchemaObj;
+      expect(child.ifc?.confidentiality).toEqual(["x"]);
+      expect(child.ifc?.inputConfidentiality).toBeUndefined();
+    });
+  });
+
   it("rejects leading-zero array index like '01'", () => {
     const schema: JSONSchema = {
       type: "array",

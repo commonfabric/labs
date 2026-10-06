@@ -12,6 +12,7 @@ import { toJSONMethod } from "./json-member.ts";
 import {
   applyArgumentIfcToResult,
   connectInputAndOutputs,
+  measuresOutputs,
 } from "./node-utils.ts";
 import {
   brandTrustedBuilderArtifact,
@@ -67,6 +68,7 @@ export function createNodeFactory<T = any, R = any>(
   module.resultSchema = applyArgumentIfcToResult(
     module.argumentSchema,
     module.resultSchema,
+    measuresOutputs(module),
   );
   const factory = Object.assign(
     (inputs: FactoryInput<T>): Reactive<R> => {
@@ -220,7 +222,7 @@ function handlerInternal<E, T>(
   // module with no result schema rather than acquiring the join's `true`.
   const resultSchema = options?.resultSchema === undefined
     ? undefined
-    : applyArgumentIfcToResult(schema, options.resultSchema);
+    : applyArgumentIfcToResult(schema, options.resultSchema, true);
 
   const module: Handler<E, T> & toEncodableForm & toJSON & {
     bind: (inputs: FactoryInput<StripCell<T>>) => Stream<E>;

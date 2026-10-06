@@ -64,6 +64,66 @@ describe("mergeCfcSchemaEnvelopes", () => {
     });
   });
 
+  describe("an input join through a merge", () => {
+    // `ifc.inputConfidentiality` names the clauses only a producer's input
+    // join put in a schema. A clause either side declares is declared in the
+    // merge, so a stored schema that declared it keeps it declared.
+    const ifcOf = (schema: JSONSchema) => (schema as JSONSchemaObj).ifc;
+
+    it("keeps declared a clause one side declares and the other holds as an input join", () => {
+      for (
+        const [existing, candidate] of [
+          [{ confidentiality: ["x"] }, {
+            confidentiality: ["x"],
+            inputConfidentiality: ["x"],
+          }],
+          [{ confidentiality: ["x"], inputConfidentiality: ["x"] }, {
+            confidentiality: ["x"],
+          }],
+        ] as const
+      ) {
+        const merged = mergeCfcSchemaEnvelopes(
+          { type: "string", ifc: existing },
+          { type: "string", ifc: candidate },
+        );
+        expect(ifcOf(merged)?.confidentiality).toEqual(["x"]);
+        expect(ifcOf(merged)?.inputConfidentiality).toBeUndefined();
+      }
+    });
+
+    it("keeps as an input join a clause both sides hold as one", () => {
+      const merged = mergeCfcSchemaEnvelopes(
+        {
+          type: "string",
+          ifc: { confidentiality: ["x"], inputConfidentiality: ["x"] },
+        },
+        {
+          type: "string",
+          ifc: {
+            confidentiality: ["x", "y"],
+            inputConfidentiality: ["x", "y"],
+          },
+        },
+      );
+      expect(ifcOf(merged)?.inputConfidentiality).toEqual(["x", "y"]);
+    });
+
+    it("keeps as an input join a clause the stored side does not hold", () => {
+      const merged = mergeCfcSchemaEnvelopes(
+        { type: "string", ifc: { confidentiality: ["y"] } },
+        {
+          type: "string",
+          ifc: { confidentiality: ["x", "y"], inputConfidentiality: ["x"] },
+        },
+      );
+      expect([...(ifcOf(merged)?.confidentiality ?? [])].sort()).toEqual([
+        "x",
+        "y",
+      ]);
+      expect(ifcOf(merged)?.inputConfidentiality).toEqual(["x"]);
+    });
+  });
+
   describe("definitions through a merge", () => {
     // The merged envelope is one document: both sides' `$defs` land on its
     // root, and a name the two define differently is renamed apart on the

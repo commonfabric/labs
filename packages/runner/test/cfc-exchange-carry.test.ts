@@ -7,6 +7,8 @@ import { Identity } from "@commonfabric/identity";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import type { NormalizedFullLink } from "../src/link-types.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -164,7 +166,14 @@ type Run = {
   send: (stream: string, event?: unknown) => Promise<void>;
   read: () => Promise<Piece>;
   entriesAt: (...keys: string[]) => readonly LabelMapEntry[];
+  entriesAlong: (...keys: string[]) => readonly LabelMapEntry[];
 };
+
+const overlaps = (left: readonly string[], right: readonly string[]) =>
+  left.every((segment, index) =>
+    index >= right.length || segment === right[index] || segment === "*" ||
+    right[index] === "*"
+  );
 
 const runPiece = async (
   source: RuntimeProgram,
@@ -220,7 +229,37 @@ const runPiece = async (
         readTx.abort();
       }
     };
-    await body({ send, read, entriesAt });
+    // Every entry a reader of the location meets on its way to the value:
+    // those overlapping it in the piece's own document, and in each
+    // document a reference at it leads to in turn.
+    const entriesAlong = (...keys: string[]) => {
+      const readTx = runtime.edit();
+      try {
+        const found: LabelMapEntry[] = [];
+        const visited = new Set<string>();
+        let at: NormalizedFullLink | undefined = result.withTx(readTx)
+          .getAsNormalizedFullLink();
+        at = { ...at, path: [...at.path, ...keys] };
+        while (at !== undefined && !visited.has(at.id)) {
+          visited.add(at.id);
+          const path = at.path;
+          for (
+            const entry of readStoredCfcMetadata(readTx, at)?.labelMap
+              .entries ?? []
+          ) {
+            if (overlaps(entry.path, path)) found.push(entry);
+          }
+          at = parseLink(
+            runtime.getCellFromLink(at, undefined, readTx).getRaw(),
+            at,
+          ) as NormalizedFullLink | undefined;
+        }
+        return found;
+      } finally {
+        readTx.abort();
+      }
+    };
+    await body({ send, read, entriesAt, entriesAlong });
   } finally {
     await runtime.dispose();
     await storageManager.close();
@@ -291,7 +330,7 @@ describe("value-intrinsic exchange carry", () => {
       RELEASED,
       "mapped",
       {},
-      async ({ send, read, entriesAt }) => {
+      async ({ send, read, entriesAt, entriesAlong }) => {
         await send("seed", { a: "alpha", b: "beta" });
         expect((await read()).mapped).toEqual([
           { shown: "R0:alpha" },
@@ -299,6 +338,7 @@ describe("value-intrinsic exchange carry", () => {
         ]);
         expect(policyClausesOf(entriesAt("mapped"))).toEqual([]);
         expect(policyClausesOf(entriesAt("mapped", "0"))).toEqual([]);
+        expect(policyClausesOf(entriesAlong("mapped"))).toEqual([]);
       },
     );
   });

@@ -195,7 +195,10 @@ import {
 } from "./observation.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
-import { cfcSchemaEntries } from "./schema-label-view.ts";
+import {
+  cfcSchemaEntries,
+  persistedSchemaEntryLabel,
+} from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
 import {
   type CfcSchemaMergeIssue,
@@ -11215,10 +11218,16 @@ export function* prepareBoundaryCommitSteps(
 
     const schemaAndHash = internSchema(mergedSchema, true);
     const mergedSchemaEntries = cfcSchemaEntries(schemaAndHash.schema);
+    // With flow labels persisting, what a module's measured writes read is
+    // labeled by the derived component, so the clauses its input join put in
+    // the schema are not minted as store policy.
+    const persistedEntryLabel = (
+      entry: (typeof mergedSchemaEntries)[number],
+    ) => persistedSchemaEntryLabel(entry, mergedSchemaEntries, flowPersist);
     const mergedSchemaEntryLabels = new Map<string, IFCLabel>(
       mergedSchemaEntries.map((entry) => [
         pathKey(entry.path),
-        entry.label,
+        persistedEntryLabel(entry),
       ]),
     );
     const mergedSchemaEntrySchemas = new Map<string, JSONSchema>(
@@ -11310,7 +11319,7 @@ export function* prepareBoundaryCommitSteps(
             derivePersistedLabel(
               tx,
               entry.schema,
-              entry.label,
+              persistedEntryLabel(entry),
               mergedSchemaEntryLabels,
               target.space,
               { ...mint, mintValueStamps: false },

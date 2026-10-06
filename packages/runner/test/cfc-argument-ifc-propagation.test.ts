@@ -67,6 +67,11 @@ const RESULT_SCHEMA = {
 const confidentialityOf = (schema: JSONSchema | undefined) =>
   (schema as JSONSchemaObj | undefined)?.ifc?.confidentiality;
 
+// The clauses a schema holds only as its producer's input join, which a
+// runtime persisting flow labels leaves to its measurement.
+const inputConfidentialityOf = (schema: JSONSchema | undefined) =>
+  (schema as JSONSchemaObj | undefined)?.ifc?.inputConfidentiality;
+
 describe("cfc-argument-ifc-propagation", () => {
   describe("pattern()", () => {
     let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -162,6 +167,8 @@ describe("cfc-argument-ifc-propagation", () => {
         expect(confidentialityOf(aliasSchema(bindings().content))).toEqual([
           HEALTH_ATOM,
         ]);
+        expect(inputConfidentialityOf(aliasSchema(bindings().content)))
+          .toBeUndefined();
       });
 
       it("binds a public sibling to a schema carrying no label", () => {
@@ -173,6 +180,11 @@ describe("cfc-argument-ifc-propagation", () => {
         expect(confidentialityOf(aliasSchema(bindings().derived))).toEqual([
           HEALTH_ATOM,
         ]);
+      });
+
+      it("names a lift's join as its input join, which the runtime measures", () => {
+        expect(inputConfidentialityOf(aliasSchema(bindings().derived)))
+          .toEqual([HEALTH_ATOM]);
       });
 
       it("binds a lift over a public field to a schema carrying no label", () => {
@@ -189,6 +201,8 @@ describe("cfc-argument-ifc-propagation", () => {
 
         expect(total?.type).toBe("number");
         expect(confidentialityOf(total)).toEqual([HEALTH_ATOM]);
+        // The aggregate is a replayable built-in, whose writes are measured.
+        expect(inputConfidentialityOf(total)).toEqual([HEALTH_ATOM]);
       });
     });
 
@@ -237,6 +251,49 @@ describe("cfc-argument-ifc-propagation", () => {
       });
 
       expect(confidentialityOf(factory.resultSchema)).toEqual([HEALTH_ATOM]);
+    });
+
+    it("names the argument's label as the input join of a JavaScript module", () => {
+      const factory = createNodeFactory({
+        type: "javascript",
+        implementation: (input: { content: string }) => input.content.length,
+        argumentSchema: ARGUMENT_SCHEMA,
+        resultSchema: { type: "number" },
+      });
+
+      expect(inputConfidentialityOf(factory.resultSchema)).toEqual([
+        HEALTH_ATOM,
+      ]);
+    });
+
+    it("names no input join for a built-in that writes after a fetch", () => {
+      // What the fetch returns is written in a later transaction than the one
+      // that read the argument, so nothing measures it against the argument
+      // and the join stays the result's declared floor.
+      const factory = createNodeFactory({
+        type: "ref",
+        implementation: "fetchJson",
+        argumentSchema: ARGUMENT_SCHEMA,
+        resultSchema: { type: "object" },
+      });
+
+      expect(confidentialityOf(factory.resultSchema)).toEqual([HEALTH_ATOM]);
+      expect(inputConfidentialityOf(factory.resultSchema)).toBeUndefined();
+    });
+
+    it("names no input join for a clause the result schema declares itself", () => {
+      const factory = createNodeFactory({
+        type: "javascript",
+        implementation: (input: { content: string }) => input.content.length,
+        argumentSchema: ARGUMENT_SCHEMA,
+        resultSchema: {
+          type: "number",
+          ifc: { confidentiality: [HEALTH_ATOM] },
+        },
+      });
+
+      expect(confidentialityOf(factory.resultSchema)).toEqual([HEALTH_ATOM]);
+      expect(inputConfidentialityOf(factory.resultSchema)).toBeUndefined();
     });
   });
 });

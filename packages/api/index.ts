@@ -1927,6 +1927,12 @@ export type JSONSchemaObj = {
   // temporarily used to assign labels like "confidential"
   readonly ifc?: {
     readonly confidentiality?: readonly JSONValue[];
+    // The clauses of `confidentiality` the runtime joined in from the inputs
+    // of the module that produces this value, rather than any schema
+    // declaring them. They stand in for the label the runtime measures on
+    // the module's writes, so a runtime that persists that measurement does
+    // not persist them as declared policy.
+    readonly inputConfidentiality?: readonly JSONValue[];
     readonly integrity?: readonly JSONValue[];
     readonly addIntegrity?: readonly JSONValue[];
     readonly requiredIntegrity?: readonly JSONValue[];

@@ -10,6 +10,7 @@ import {
   isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
@@ -356,6 +357,57 @@ export class ContextualFlowControl {
   }
 
   /**
+   * Notes where the confidentiality an `ifc` holds came from: the clauses its
+   * `inputConfidentiality` names into `fromInputs`, as its producer's input
+   * join, and the rest of its `confidentiality` into `declared`.
+   */
+  static noteInputConfidentiality(
+    fromInputs: Set<unknown>,
+    declared: Set<unknown>,
+    ifc: JSONSchemaObj["ifc"] | undefined,
+  ): void {
+    const inputs = Array.isArray(ifc?.inputConfidentiality)
+      ? ifc.inputConfidentiality
+      : [];
+    for (const atom of inputs) fromInputs.add(atom);
+    for (const atom of ifc?.confidentiality ?? []) {
+      if (!inputs.some((input) => deepEqual(input, atom))) declared.add(atom);
+    }
+  }
+
+  /**
+   * The clauses of `fromInputs` no part of `declared` also holds: those a
+   * label takes only from its producer's input join, which a schema's
+   * `ifc.inputConfidentiality` names.
+   */
+  static inputConfidentialityOnly(
+    fromInputs: Iterable<unknown>,
+    declared: Iterable<unknown>,
+  ): IFCAtom[] {
+    const kept = ContextualFlowControl.uniqueAtoms(declared);
+    return ContextualFlowControl.uniqueAtoms(fromInputs).filter((atom) =>
+      !kept.some((other) => deepEqual(other, atom))
+    );
+  }
+
+  /**
+   * `ifc` with `confidentiality` and, where non-empty, `inputConfidentiality`
+   * replaced by the given clauses.
+   */
+  static withConfidentiality(
+    ifc: JSONSchemaObj["ifc"] | undefined,
+    confidentiality: readonly IFCAtom[],
+    inputConfidentiality: readonly IFCAtom[],
+  ): NonNullable<JSONSchemaObj["ifc"]> {
+    const { inputConfidentiality: _previous, ...rest } = ifc ?? {};
+    return {
+      ...rest,
+      confidentiality,
+      ...(inputConfidentiality.length > 0 ? { inputConfidentiality } : {}),
+    };
+  }
+
+  /**
    * Collect any required confidentiality atoms required by the schema.
    * This could be made more conservative by combining the schema with the object
    * If our object lacks any of the fields that would add confidentiality,
@@ -454,14 +506,31 @@ export class ContextualFlowControl {
     return ContextualFlowControl.uniqueAtoms(joined);
   }
 
-  /** Returns a copy of the schema with joined confidentiality atoms. */
+  /**
+   * Returns a copy of the schema with joined confidentiality atoms. With
+   * `fromInputs`, the atoms are the input join of the module that produces
+   * the value, and those the schema does not declare itself are also named
+   * in `ifc.inputConfidentiality`.
+   */
   static schemaWithLub(
     schema: JSONSchema,
     confidentiality: readonly CfcConfClause[],
+    options: { fromInputs?: boolean } = {},
   ): JSONSchema {
     const joined = new Set<unknown>(confidentiality);
+    const fromInputs = new Set<unknown>(
+      options.fromInputs === true ? confidentiality : [],
+    );
+    const declared = new Set<unknown>(
+      options.fromInputs === true ? [] : confidentiality,
+    );
     if (isObjectOrArray(schema) && schema.ifc !== undefined) {
       ContextualFlowControl.addIfcAtoms(joined, schema.ifc.confidentiality);
+      ContextualFlowControl.noteInputConfidentiality(
+        fromInputs,
+        declared,
+        schema.ifc,
+      );
     }
     // If we have no confidentiality, we can leave the schema
     if (joined.size === 0) {
@@ -470,14 +539,14 @@ export class ContextualFlowControl {
     // We don't really support "not" schemas, but it's the only good way we
     // have to attach ifc to a `false` schema.
     const schemaObj = ContextualFlowControl.toSchemaObj(schema);
-    const restrictedSchema = {
+    return {
       ...schemaObj,
-      ifc: {
-        ...schemaObj.ifc,
-        confidentiality: ContextualFlowControl.lub(joined),
-      },
+      ifc: ContextualFlowControl.withConfidentiality(
+        schemaObj.ifc,
+        ContextualFlowControl.lub(joined),
+        ContextualFlowControl.inputConfidentialityOnly(fromInputs, declared),
+      ),
     };
-    return restrictedSchema;
   }
 
   /**
@@ -689,6 +758,19 @@ export class ContextualFlowControl {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
+    // Which of those clauses only a producer's input join put there
+    // (`ifc.inputConfidentiality`), as opposed to a declaration at some level
+    // of the path. The caller's extra clauses count as declared.
+    const fromInputs = new Set<unknown>();
+    const declared = new Set<unknown>(extraConfidentiality ?? []);
+    const joinIfc = (ifc: JSONSchemaObj["ifc"] | undefined) => {
+      ContextualFlowControl.addIfcAtoms(joined, ifc?.confidentiality);
+      ContextualFlowControl.noteInputConfidentiality(
+        fromInputs,
+        declared,
+        ifc,
+      );
+    };
     let cursor = schema;
     // Whether the path descended through a wildcard: a true schema is what
     // every child below it narrows to, markers and all, but its `default`
@@ -790,10 +872,7 @@ export class ContextualFlowControl {
         break;
       } else if (cursor.type === "object") {
         if (cursor.ifc !== undefined) {
-          ContextualFlowControl.addIfcAtoms(
-            joined,
-            cursor.ifc.confidentiality,
-          );
+          joinIfc(cursor.ifc);
         }
         if (cursor.properties && Object.hasOwn(cursor.properties, part)) {
           const cursorObj = cursor.properties as Record<string, JSONSchema>;
@@ -802,10 +881,7 @@ export class ContextualFlowControl {
             break;
           } else {
             if (cursor.ifc !== undefined) {
-              ContextualFlowControl.addIfcAtoms(
-                joined,
-                cursor.ifc.confidentiality,
-              );
+              joinIfc(cursor.ifc);
             }
           }
         } else if (cursor.additionalProperties !== undefined) {
@@ -842,7 +918,7 @@ export class ContextualFlowControl {
       }
     }
     if (isObjectOrArray(cursor) && cursor.ifc !== undefined) {
-      ContextualFlowControl.addIfcAtoms(joined, cursor.ifc.confidentiality);
+      joinIfc(cursor.ifc);
     }
     if (typeof cursor === "boolean") {
       if (!cursor) {
@@ -855,7 +931,11 @@ export class ContextualFlowControl {
     // If we've encountered any confidentiality atoms while walking down the
     // schema, we need to add them to the returned object.
     const ifc = (joined.size !== 0)
-      ? { ...cursor.ifc, confidentiality: ContextualFlowControl.lub(joined) }
+      ? ContextualFlowControl.withConfidentiality(
+        cursor.ifc,
+        ContextualFlowControl.lub(joined),
+        ContextualFlowControl.inputConfidentialityOnly(fromInputs, declared),
+      )
       : cursor.ifc;
     const selectedDefs = selectReferencedCfcSchemaDefs(cursor, defs);
     const result = { ...cursor, ...(ifc && { ifc }) } as Record<

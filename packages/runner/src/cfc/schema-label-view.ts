@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   forEachSubschema,
@@ -16,6 +17,13 @@ import type { IFCLabel, LabelObservationClass } from "./types.ts";
 export interface CfcSchemaEntry {
   readonly path: readonly string[];
   readonly label: IFCLabel;
+
+  /**
+   * The clauses of `label` only the producing module's input join put there
+   * (`ifc.inputConfidentiality`); see {@link persistedSchemaEntryLabel}.
+   */
+  readonly inputConfidentiality?: readonly unknown[];
+
   readonly schema: JSONSchema;
 
   /** The schema document that resolves local references inside `.schema`. */
@@ -77,6 +85,12 @@ export const cfcSchemaEntries = (
     )
     : schemaRoot;
   if (isObjectOrArray(resolved.ifc)) {
+    const inputConfidentiality = ContextualFlowControl.inputConfidentialityOnly(
+      Array.isArray(resolved.ifc.inputConfidentiality)
+        ? resolved.ifc.inputConfidentiality
+        : [],
+      [],
+    );
     entries.push({
       path,
       label: {
@@ -87,6 +101,7 @@ export const cfcSchemaEntries = (
           ? [...resolved.ifc.confidentiality]
           : undefined,
       },
+      ...(inputConfidentiality.length > 0 ? { inputConfidentiality } : {}),
       schema: resolved,
       root: childRoot,
       ...(conditional ? { conditional: true as const } : {}),
@@ -158,6 +173,55 @@ const declaredObservationClass = (
       observes === "enumerate" || observes === "followRef"
     ? observes
     : undefined;
+};
+
+/** Whether a declaration at `above` covers one at `path`. */
+const coversDeclaration = (
+  above: readonly string[],
+  path: readonly string[],
+): boolean =>
+  above.length <= path.length &&
+  above.every((segment, index) =>
+    segment === path[index] || segment === "*" || path[index] === "*"
+  );
+
+/** The clauses of `entry` its schema declares, not an input join. */
+const declaredConfidentiality = (entry: CfcSchemaEntry): readonly unknown[] => {
+  const inputs = entry.inputConfidentiality ?? [];
+  return (entry.label.confidentiality ?? []).filter((atom) =>
+    !inputs.some((input) => deepEqual(input, atom))
+  );
+};
+
+/**
+ * The label `entry`, one of a schema's `entries`, persists as declared store
+ * policy. Where the runtime persists the measured label of what a module
+ * writes (`measured`), the clauses only that module's input join put in the
+ * schema stand in for the measurement and are left out: the derived
+ * component labels the value instead, with whatever exchange rules released
+ * at the module's observations (spec §5.3). A clause the schema declares at
+ * the entry's path or above it stays, since within the declared component a
+ * more specific entry replaces its ancestors at every read beneath it.
+ * Elsewhere the label is the schema's whole.
+ */
+export const persistedSchemaEntryLabel = (
+  entry: CfcSchemaEntry,
+  entries: readonly CfcSchemaEntry[],
+  measured: boolean,
+): IFCLabel => {
+  const inputs = entry.inputConfidentiality;
+  if (!measured || inputs === undefined || inputs.length === 0) {
+    return entry.label;
+  }
+  const declaredAbove = entries
+    .filter((other) => coversDeclaration(other.path, entry.path))
+    .flatMap(declaredConfidentiality);
+  const kept = (entry.label.confidentiality ?? []).filter((atom) =>
+    !inputs.some((input) => deepEqual(input, atom)) ||
+    declaredAbove.some((declared) => deepEqual(declared, atom))
+  );
+  const { confidentiality: _all, ...rest } = entry.label;
+  return kept.length > 0 ? { ...rest, confidentiality: kept } : rest;
 };
 
 /** Return the label view declared by a schema. */
