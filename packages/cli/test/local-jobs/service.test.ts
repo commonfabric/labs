@@ -283,6 +283,25 @@ describe("startLocalJobs()", () => {
     await next.stop();
   });
 
+  for (const kind of ["directory", "dangling symlink"] as const) {
+    it(`preserves a pre-existing token ${kind} when token writing fails`, async () => {
+      const tokenPath = join(dir, "jobs.sock.token");
+      const target = join(dir, "missing", "token");
+      if (kind === "directory") await Deno.mkdir(tokenPath);
+      else await Deno.symlink(target, tokenPath);
+      await expect(start().service).rejects.toThrow();
+      const stat = await Deno.lstat(tokenPath);
+      if (kind === "directory") expect(stat.isDirectory).toBe(true);
+      else {
+        expect(stat.isSymlink).toBe(true);
+        expect(await Deno.readLink(tokenPath)).toBe(target);
+      }
+      await Deno.remove(tokenPath);
+      const next = await start().service;
+      await next.stop();
+    });
+  }
+
   it("throws when something other than a socket file stands at the socket path", async () => {
     await Deno.mkdir(join(dir, "jobs.sock", "inside"), { recursive: true });
 

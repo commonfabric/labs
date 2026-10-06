@@ -1316,9 +1316,11 @@ local jobs served. With `--local-only` there is no Fabric lane.
 The service exclusively locks both its socket and store for its lifetime. An
 active listener is refused; a socket whose listener is gone is reclaimed.
 Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
-the kernel releases ownership on shutdown or crash. Startup failure cancels and
-settles jobs, closes the store and listener, and removes its token. Requests
-receive 503 until initialization completes.
+the kernel releases ownership on shutdown or crash. Startup cleanup aborts
+active runs and waits for them to settle, closes the store and listener, and
+removes its token. Active job rows remain `running`; the next start recovers
+them as `interrupted` with `RUNNER_RESTARTED`. Requests receive 503 until
+initialization completes.
 
 The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
