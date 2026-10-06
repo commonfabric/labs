@@ -4,8 +4,31 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { maxOf, minOf } from "@commonfabric/utils/math";
-import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
+import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, pullRequestLinks, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
+
+Deno.test("pullRequestLinks: each (#N) links to its PR, the rest to the given href", () => {
+  const link = (attributes: string, href: string, text: string) =>
+    `<a${attributes} href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  assertEquals(
+    pullRequestLinks('Revert "a (#12)" (#34)', "o/r", "https://run"),
+    link("", "https://run", "Revert &quot;a ") + link(' class="pr"', "https://github.com/o/r/pull/12", "(#12)") +
+      link("", "https://run", "&quot; ") + link(' class="pr"', "https://github.com/o/r/pull/34", "(#34)"),
+  );
+  assertEquals(
+    pullRequestLinks("a (#12) b", "o/r", "https://run", "t"),
+    link(' data-focus-key="t-0"', "https://run", "a ") +
+      link(' class="pr" data-focus-key="t-1"', "https://github.com/o/r/pull/12", "(#12)") +
+      link(' data-focus-key="t-2"', "https://run", " b"),
+  );
+});
+
+Deno.test("pullRequestLinks: a #N without parentheses stays part of the text", () => {
+  assertEquals(
+    pullRequestLinks("fix: follow-ups from #4401 <review>", "o/r", "https://run"),
+    `<a href="https://run" target="_blank" rel="noopener">fix: follow-ups from #4401 &lt;review&gt;</a>`,
+  );
+});
 
 Deno.test("landingHref: squash-merge trailing (#N) -> the PR", () => {
   assertEquals(

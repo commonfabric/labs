@@ -60,7 +60,9 @@ import { livePageResponse } from "../live-page.ts";
 import {
   type CiJobs,
   CI_JOBS_PATH,
+  ciJobRows,
   ciJobsPage,
+  ciJobsStatus,
   type Job,
   shortName,
 } from "../ci-jobs-page.ts";
@@ -73,7 +75,6 @@ import {
   memo,
   runDurationMs,
   STATUS_RANK,
-  worstStatus,
 } from "../lib.ts";
 import type { GitHubCredential } from "../github-auth.ts";
 import { type GitHubRun, RunLists } from "../github-runs.ts";
@@ -479,23 +480,9 @@ function jobDetail(job: Job, now: number): string {
 }
 
 function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
-  const { jobs, repos, unreadableRepos } = collected;
+  const { jobs, repos } = collected;
   const repoCount = repos.length;
-  // A repository whose workflows could not be listed stands in the body as a
-  // row of its own, since the jobs behind it are the ones nobody can see.
-  const rows: Job[] = [
-    ...jobs,
-    ...unreadableRepos.map((repo): Job => ({
-      repo: shortName(repo),
-      workflow: "workflows",
-      path: "",
-      pinned: false,
-      status: "warn",
-      failing: false,
-      result: "unreadable",
-      href: `https://github.com/${repo}/actions`,
-    })),
-  ];
+  const rows = ciJobRows(collected);
   // A job that is failing is counted as failing however old the failure is;
   // its age decides the color, not whether it is named.
   const failing = rows.filter((row) => row.failing);
@@ -503,13 +490,7 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
   // A job the tile has no verdict for is not one it can call passing, so the
   // count says how many jobs the headline actually speaks for.
   const measured = jobs.filter((job) => job.status !== "unknown").length;
-  // A job with no verdict says nothing about the tile's color, so the color
-  // comes from the rows that carry one. Nothing carrying one at all is not the
-  // same as nothing being wrong, and reads gray.
-  const judged = rows.filter((row) => row.status !== "unknown");
-  const status: Status = judged.length === 0
-    ? "unknown"
-    : worstStatus(judged.map((row) => row.status));
+  const status = ciJobsStatus(collected);
 
   const headline = failing.length === 1
     ? `${failing[0].repo} failing`

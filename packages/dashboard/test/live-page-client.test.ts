@@ -1,9 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  type IconHolder,
   LIVE_PAGE_UPDATE,
   type Part,
   reconcileMain,
+  updateIcon,
   updateMain,
 } from "../live-page-client.ts";
 
@@ -149,5 +151,59 @@ describe("updateMain()", () => {
     onPage(main);
     expect(updateMain(main, part("main", part("b", "same")))).toBe(false);
     expect(main.announced.length).toBe(1);
+  });
+});
+
+// A document holding one favicon link with `href`, or none.
+// `live-page-client.browser.test.ts` runs `updateIcon()` against a real DOM.
+function iconHolder(href?: string) {
+  const attributes = new Map<string, string>();
+  if (href !== undefined) attributes.set("href", href);
+  const link = {
+    getAttribute: (name: string) => attributes.get(name) ?? null,
+    setAttribute: (name: string, value: string) => {
+      attributes.set(name, value);
+    },
+  };
+  const holder: IconHolder & { selectors: string[] } = {
+    selectors: [],
+    querySelector(selector) {
+      holder.selectors.push(selector);
+      return href === undefined ? null : link;
+    },
+  };
+  return { holder, link };
+}
+
+describe("updateIcon()", () => {
+  it("gives the page's favicon the image of the rendering's", () => {
+    const page = iconHolder("data:,");
+    for (const href of ["/good.png", "/bad.png", "data:,"]) {
+      updateIcon(page.holder, iconHolder(href).holder);
+      expect(page.link.getAttribute("href")).toBe(href);
+    }
+    expect(new Set(page.holder.selectors)).toEqual(
+      new Set(['link[rel="icon"]']),
+    );
+  });
+
+  it("leaves the page's favicon alone when the rendering has none, or the same", () => {
+    const page = iconHolder("/good.png");
+    let writes = 0;
+    const set = page.link.setAttribute;
+    page.link.setAttribute = (name, value) => {
+      writes++;
+      set(name, value);
+    };
+    updateIcon(page.holder, iconHolder().holder);
+    updateIcon(page.holder, iconHolder("/good.png").holder);
+    expect(writes).toBe(0);
+    expect(page.link.getAttribute("href")).toBe("/good.png");
+  });
+
+  it("does nothing on a page with no favicon", () => {
+    const fresh = iconHolder("/bad.png");
+    expect(() => updateIcon(iconHolder().holder, fresh.holder)).not.toThrow();
+    expect(fresh.link.getAttribute("href")).toBe("/bad.png");
   });
 });

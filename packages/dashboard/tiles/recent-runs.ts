@@ -1,8 +1,10 @@
 /**
  * Lists every run on main in the window, newest first and including the ones
  * still in progress, with the labs and loom repositories interleaved
- * chronologically. Each row is tagged with its repository and links to the
- * pull request that landed the commit. The tile is full-width. Its aggregate
+ * chronologically. Each row is tagged with its repository. Its text links to
+ * its run, except that a pull request number in it links to that pull
+ * request. Its arrow links to the pull request that landed the commit, or to
+ * the commit when its title names none. The tile is full-width. Its aggregate
  * status is bad when the latest completed run failed, a warning when a failure
  * sits within the recent window but the tip has recovered, and good otherwise.
  */
@@ -19,6 +21,7 @@ import {
   escapeHtml,
   humanDuration,
   landingHref,
+  pullRequestLinks,
   runDurationMs,
 } from "../lib.ts";
 import {
@@ -155,11 +158,14 @@ export const recentRuns: Tile = {
         : `<span class="evdur">${
           escapeHtml(duration ?? (running ? "running" : "—"))
         }</span>`;
-      return `<div class="ev"><time class="t" datetime="${startedAt}" data-viewer-time>${fallback}</time><span class="dot ${dot}"></span><a class="evtxt" data-focus-key="pr-title-${r.id}" href="${
-        escapeHtml(href)
-      }" target="_blank" rel="noopener">${
-        escapeHtml(`${shortRepo(r)} · ${label} · ${title}`)
-      }</a>${durationHtml}<a class="evarrow" data-focus-key="pr-arrow-${r.id}" href="${
+      return `<div class="ev"><time class="t" datetime="${startedAt}" data-viewer-time>${fallback}</time><span class="dot ${dot}"></span><span class="evtxt">${
+        pullRequestLinks(
+          `${shortRepo(r)} · ${label} · ${title}`,
+          repoOf(r),
+          r.html_url,
+          `title-${r.id}`,
+        )
+      }</span>${durationHtml}<a class="evarrow" data-focus-key="pr-arrow-${r.id}" href="${
         escapeHtml(href)
       }" target="_blank" rel="noopener" aria-label="Open landed change on GitHub">↗</a></div>`;
     }).join("") ||

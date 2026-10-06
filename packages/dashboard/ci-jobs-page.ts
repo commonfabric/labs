@@ -23,6 +23,7 @@ import {
   humanDuration,
   STATUS_DOT,
   STATUS_RANK,
+  worstStatus,
 } from "./tile-render-values.ts";
 import { statusDotRules } from "./status-dot.ts";
 import type { Status } from "./types.ts";
@@ -69,6 +70,38 @@ export interface CiJobs {
   // is known about the jobs behind them.
   unreadableRepos: readonly string[];
   collectedAt: number;
+}
+
+/**
+ * Every job in `collected`, and an orange row for each repository whose
+ * workflows could not be listed, which stands for the jobs behind it that
+ * nobody can see.
+ */
+export function ciJobRows({ jobs, unreadableRepos }: CiJobs): Job[] {
+  return [
+    ...jobs,
+    ...unreadableRepos.map((repo): Job => ({
+      repo: shortName(repo),
+      workflow: "workflows",
+      path: "",
+      pinned: false,
+      status: "warn",
+      failing: false,
+      result: "unreadable",
+      href: `https://github.com/${repo}/actions`,
+    })),
+  ];
+}
+
+/**
+ * The color of the ci tile and of its page: the worst among the rows with a
+ * verdict, or gray when no row has one.
+ */
+export function ciJobsStatus(collected: CiJobs): Status {
+  const judged = ciJobRows(collected).filter((row) => row.status !== "unknown");
+  return judged.length === 0
+    ? "unknown"
+    : worstStatus(judged.map((row) => row.status));
 }
 
 const STYLES = `
@@ -389,13 +422,18 @@ function summary(collected: CiJobs): string {
   }</dl>`;
 }
 
-function content(head: string, body: string): LivePageContent {
+function content(
+  head: string,
+  body: string,
+  status?: Status,
+): LivePageContent {
   return {
     title: "CI jobs",
     styles: STYLES,
     head,
     body,
     script: CI_JOBS_SCRIPT,
+    status,
   };
 }
 
@@ -454,5 +492,6 @@ export function ciJobsPage(
   <div class="scroll"><table data-sortable>${jobHead()}<tbody>${rows}</tbody></table></div>
   ${unjudged}
   ${unreadable}`,
+    ciJobsStatus(collected),
   );
 }

@@ -206,7 +206,8 @@ regaining the network as well as on its own tick.
 
 A drill-down page can be kept current the same way. A route that declares
 `live: true` serves a page built by `livePage` in `live-page.ts`, which carries
-the client script and keeps everything that changes inside its `<main>` element.
+the client script and keeps everything that changes inside its `<main>` element,
+apart from the tab's favicon.
 The page opens `/events?page=<its path and query>`. On every serving tick the
 server sends a heartbeat down that stream and renders the page again by calling
 the route's handler, and it sends the new markup when that differs from what it
@@ -242,6 +243,15 @@ of the triangle instead of near its apex. The red favicon starts sad and
 becomes a crying face after the dashboard stays red for one continuous hour. The
 server retains the elapsed time across reloads. Returning below red resets it
 once every collector due in the same pass has finished.
+
+A repository's page and the CI jobs page show a status in their favicons the
+same way. A repository's page shows the repository's standing. The CI jobs page
+shows the color of the ci tile's latest collection. A live page takes its
+favicon from each rendering the server sends, so the favicon changes when the
+status does. While the status is gray, and on a live page with no status, the
+favicon is empty. These pages use the green, orange, and red faces. The crying
+face, which measures how long the whole dashboard has stayed red, appears only
+on the dashboard.
 
 After changing `favicon-artwork.ts`, regenerate the embedded PNGs and their
 content-based cache version from the dashboard package directory:
@@ -501,10 +511,11 @@ window the same parts follow one another down the page.
   the bars, since the workflow's name in the heading links every run of it on
   GitHub. Under the chart, the three newest runs are listed: what each was for,
   what it concluded, how long it ran (linked to the commit's CI Gantt for labs
-  and loom), and when it started. A run on main is named by its commit and
-  links to the pull request that landed it, or to the commit when its message
-  names none; a pull request's run is named by its title and links to the run. A snapshot that has
-  not been read yet, or could not be brought up to date, says so.
+  and loom), and when it started. A run on main is named by its commit, and a
+  pull request's run by its title; either name links to the run, except that a
+  pull request number in it, such as "(#1234)", links to that pull request. A
+  snapshot that has not been read yet, or could not be brought up to date, says
+  so.
 - On the right, what needs attention: every job and tile that is not green,
   gray ones included, worst first, one to a line, each linked where its job or
   tile links, or a line saying nothing needs attention. Under it, its workflows
@@ -565,7 +576,7 @@ installation with the same permissions; see [Credentials](#credentials).
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml`) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | weaver ci trust, weaver ci duration | the same two tiles for `commonfabric/commonfabric-weaver` (`ci.yml`). The duration tile is not a link, because the history views cover only labs and loom | `GH_TOKEN` (read access to weaver); optional `DASHBOARD_WEAVER_REPO` |
-| recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo | `GH_TOKEN` |
+| recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo and links to its run, except that a pull request number in its title, such as "(#1234)", links to that pull request, and its arrow links to the pull request that landed the commit, or to the commit when its title names none | `GH_TOKEN` |
 | commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent main runs | `GH_TOKEN` |
 | CI duration history → `/bench?view=ci` | labs and loom job, shard-group, and end-to-end workflow duration trends. The labs and loom duration tiles open their repository's view, which charts runs on main rather than the pull request runs the tiles measure | `GH_TOKEN` |
 | CI run Gantt → `/bench?view=gantt` | detailed labs or loom job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |

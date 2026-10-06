@@ -1171,6 +1171,23 @@ export function strip(
   return `<div class="${className}">${html}</div>`;
 }
 
+/**
+ * A title as links: each "(#N)" in it links to pull request N of `repo`, with
+ * the class "pr", and the text around them links to `href`. With a
+ * `focusKey`, each link carries that key followed by its position.
+ */
+export function pullRequestLinks(title: string, repo: string, href: string, focusKey?: string): string {
+  const link = (to: string, text: string, index: number, className = "") =>
+    `<a${className}${
+      focusKey === undefined ? "" : ` data-focus-key="${escapeHtml(`${focusKey}-${index}`)}"`
+    } href="${escapeHtml(to)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
+  return title.split(/(\(#\d+\))/).map((part, index) =>
+    index % 2 === 1
+      ? link(`https://github.com/${repo}/pull/${part.slice(2, -1)}`, part, index, ' class="pr"')
+      : part && link(href, part, index)
+  ).join("");
+}
+
 // The PR that landed a commit: squash titles end "(#123)", merge commits start
 // "Merge pull request #123". Parses the full message first line; falls back to
 // the commit page so a mid-message "#456" never mislinks.

@@ -30,7 +30,7 @@ import {
   shortName,
 } from "./ci-jobs-page.ts";
 import { LOOM_REPO, RECENT_DISPLAY, REPO, REPOS_PATH } from "./config.ts";
-import { landingHref, median, runDurationMs } from "./lib.ts";
+import { median, pullRequestLinks, runDurationMs } from "./lib.ts";
 import { type LivePageContent, livePageResponse } from "./live-page.ts";
 import { STATUS_EDGE, STATUS_WASH } from "./palette.ts";
 import { textureRules } from "./render.ts";
@@ -299,7 +299,7 @@ const STYLES = `
   .switch select:hover{border-color:var(--border-hover);color:var(--text-strong)}
   /* A box that is a link reads as the box it is; a link in prose reads as
      a link. */
-  .owner a,.concern,.bar,.latest .what,.latest .result,.card,.wf a,.repo-card,.names a{color:inherit;text-decoration:none}
+  .owner a,.concern,.bar,.latest .what a,.latest .result,.card,.wf a,.repo-card,.names a{color:inherit;text-decoration:none}
   .latest .took a,.lede a,h2 .meta a{color:var(--accent);text-decoration:none}
   h2{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font:600 13px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;letter-spacing:0;color:var(--text);margin:18px 0 8px}
   h2 .meta{font-size:11px;font-weight:400;color:var(--text-muted)}
@@ -354,8 +354,10 @@ const STYLES = `
   .key.green{background:var(--status-good)}.key.red{background:var(--status-bad)}.key.run{background:var(--running)}
   .latest{list-style:none;margin:8px 0 0;padding:0}
   .latest li{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;align-items:baseline;gap:10px;padding:4px 0;border-top:1px solid var(--divider);font-size:12px}
-  .latest .what{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .latest .what:hover,.latest .took a:hover{color:var(--accent)}
+  .latest .what{color:var(--text);overflow:clip;overflow-clip-margin:3px;text-overflow:ellipsis;white-space:nowrap}
+  .latest .what:has(:focus-visible){white-space:normal}
+  .latest .what .pr{color:var(--accent)}.latest .what .pr:hover{text-decoration:underline}
+  .latest .what a:hover,.latest .took a:hover{color:var(--accent)}
   .latest .result{color:var(--text-muted)}
   .latest .took,.latest time{color:var(--text-muted);font-variant-numeric:tabular-nums;text-align:right}
   .latest time{min-width:40px}
@@ -650,11 +652,6 @@ function latestRow(
 ): string {
   const { dot, text } = runOutcome(run);
   const title = runTitle(run, source);
-  // A run on main links to the change that landed it; a pull request's run
-  // links to the run.
-  const change = source.scope === "main"
-    ? landingHref(title, run.head_sha, source.repo)
-    : run.html_url;
   const took = tookMs(run, now);
   // The commit Gantt charts the labs and loom runs alone.
   const gantt = source.repo === REPO || source.repo === LOOM_REPO
@@ -668,11 +665,9 @@ function latestRow(
       escapeHtml(run.head_sha.slice(0, 7))
     }">${humanDuration(took)}</a>`;
   const started = Date.parse(run.run_started_at);
-  return `<li><span class="dot ${dot}"></span><a class="what" href="${
-    escapeHtml(change)
-  }" target="_blank" rel="noopener">${
-    escapeHtml(title)
-  }</a><a class="result" href="${
+  return `<li><span class="dot ${dot}"></span><span class="what">${
+    pullRequestLinks(title, source.repo, run.html_url)
+  }</span><a class="result" href="${
     escapeHtml(run.html_url)
   }" target="_blank" rel="noopener">${
     escapeHtml(text)
@@ -919,15 +914,16 @@ export function repoPageResponse(
   const name = url.searchParams.get("name");
   const content = (
     title: string,
-    current: string | undefined,
+    current: Repository | undefined,
     body: string,
   ): LivePageContent => ({
     title: escapeHtml(title),
     heading: `<a href="${REPOS_PATH}">Repositories</a>`,
     styles: STYLES,
-    head: switcher(repos, current),
+    head: switcher(repos, current?.name),
     body,
     script: SCRIPT,
+    status: current && standing(current),
   });
   if (name === null) {
     return livePageResponse(
@@ -950,7 +946,7 @@ export function repoPageResponse(
     );
   }
   return livePageResponse(
-    content(repo.name, repo.name, repositoryBody(repo, jobs, now)),
+    content(repo.name, repo, repositoryBody(repo, jobs, now)),
   );
 }
 

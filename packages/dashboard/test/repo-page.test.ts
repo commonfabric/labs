@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CiJobs, Job } from "../ci-jobs-page.ts";
 import { RECENT_DISPLAY, REPOS_PATH } from "../config.ts";
+import { faviconHref } from "../favicon.ts";
 import { type Board, repoPageResponse, repoPagesRoute } from "../repo-page.ts";
 import {
   type Run,
@@ -374,10 +375,11 @@ describe("repo-page", () => {
       expect(html).toContain("The newest finished run on main passed 30 min ago.");
       // A bar for each run, linked to it.
       expect(html).toContain(`href="https://github.com/commonfabric/labs/actions/runs/11" target="_blank" rel="noopener" tabindex="-1" title="fix(runner): keep labels (#8248) — green · 30m 00s · 1h ago"`);
-      // A run on main is listed by the pull request that landed it.
-      expect(html).toContain(`href="https://github.com/commonfabric/labs/pull/8248" target="_blank" rel="noopener">fix(runner): keep labels (#8248)</a>`);
+      // A run on main is listed by its commit, linked to the run, with its
+      // pull request number linked to the pull request.
+      expect(html).toContain(`<span class="what"><a href="https://github.com/commonfabric/labs/actions/runs/11" target="_blank" rel="noopener">fix(runner): keep labels </a><a class="pr" href="https://github.com/commonfabric/labs/pull/8248" target="_blank" rel="noopener">(#8248)</a></span>`);
       // A pull request's run is listed by its title, and counts as running now.
-      expect(html).toContain(`href="https://github.com/commonfabric/labs/actions/runs/12" target="_blank" rel="noopener">feat: a new page</a>`);
+      expect(html).toContain(`<span class="what"><a href="https://github.com/commonfabric/labs/actions/runs/12" target="_blank" rel="noopener">feat: a new page</a></span>`);
       expect(html).toContain(`<a class="bar run"`);
       expect(html).toContain("<dt>running now</dt><dd>1</dd>");
     });
@@ -451,7 +453,7 @@ describe("repo-page", () => {
         collection(),
         "?name=labs",
       );
-      expect(occurrences(html, `<a class="what"`)).toBe(3);
+      expect(occurrences(html, `<span class="what">`)).toBe(3);
       expect(html).toContain(">change 2</a>");
       expect(html).not.toContain(">change 3</a>");
     });
@@ -577,6 +579,26 @@ describe("repo-page", () => {
       expect(html).toContain(`<header class="hero warn">`);
       expect(html).toContain("</span>Unreadable</p>");
       expect(html).toContain("The workflows of this repository could not be listed.");
+    });
+
+    it("wears its standing as the tab's favicon, and an empty one when it has no verdict", async () => {
+      const iconOf = async (jobs: CiJobs, query = "?name=labs") =>
+        (await page(board([]), jobs, query)).html.match(
+          /<link rel="icon"[^>]*href="([^"]*)"/,
+        )?.[1];
+      expect(await iconOf(collection())).toBe(faviconHref("good"));
+      expect(await iconOf(collection({ jobs: [job({ status: "warn" })] })))
+        .toBe(faviconHref("warn"));
+      expect(
+        await iconOf(collection({
+          jobs: [job(), job({ workflow: "Lint", status: "bad", failing: true })],
+        })),
+      ).toBe(faviconHref("bad"));
+      expect(await iconOf(collection({ jobs: [job({ status: "unknown" })] })))
+        .toBe("data:,");
+      // The index and an unknown name have no standing to show.
+      expect(await iconOf(collection(), "")).toBe("data:,");
+      expect(await iconOf(collection(), "?name=nowhere")).toBe("data:,");
     });
 
     it("escapes what GitHub names", async () => {
