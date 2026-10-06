@@ -1,9 +1,9 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateObject,
   hasError,
-  hasSchemaMismatch,
   ifElse,
   isPending,
   isSyncing,
@@ -22,7 +22,7 @@ type ChecklistInput = {
   context?: Record<string, any> | Default<Record<string, never>>;
 };
 
-type ChecklistItem = {
+export type ChecklistItem = {
   label: string;
   done: boolean | Default<false>;
 };
@@ -36,6 +36,55 @@ export type ChecklistOutput = {
 };
 
 // ===== Pattern =====
+
+/** Presents generated checklist items and their waiting state. */
+export const ChecklistPresentation = pattern<
+  { topic: string; responseRequest: AsyncResult<{ items: ChecklistItem[] }> },
+  ChecklistOutput
+>(({ topic, responseRequest }) => {
+  const observedResponse = observeAvailability(responseRequest);
+  const responseState = computed(() => {
+    if (isPending(observedResponse) || isSyncing(observedResponse)) {
+      return { response: { items: [] }, pending: true };
+    }
+    if (hasError(observedResponse)) {
+      return { response: { items: [] }, pending: false };
+    }
+    return { response: resultOf(observedResponse), pending: false };
+  });
+  const items = computed(() => responseState.response.items || []);
+
+  return {
+    [NAME]: computed(() => (topic ? `Checklist: ${topic}` : "Checklist")),
+    [UI]: (
+      <cf-screen>
+        <cf-vstack slot="header" gap="1">
+          <cf-heading level={4}>
+            {computed(() => topic || "Checklist")}
+          </cf-heading>
+        </cf-vstack>
+        <cf-vstack gap="2" style="padding: 1.5rem;">
+          {ifElse(
+            responseState.pending,
+            <div style="color: var(--cf-theme-color-text-secondary);">
+              <cf-loader show-elapsed /> Generating checklist...
+            </div>,
+            <div>
+              {items.map((item) => (
+                <cf-hstack gap="2" align="center">
+                  <cf-checkbox $checked={item.done}>{item.label}</cf-checkbox>
+                </cf-hstack>
+              ))}
+            </div>,
+          )}
+        </cf-vstack>
+      </cf-screen>
+    ),
+    topic,
+    items,
+    pending: responseState.pending,
+  };
+});
 
 /**
  * Generates a checklist of actionable steps from a topic and context using an LLM.
@@ -76,56 +125,7 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
       },
       model: "anthropic:claude-haiku-4-5",
     });
-    const observedResponse = observeAvailability(responseRequest);
-    const responseState = computed(() => {
-      if (isPending(observedResponse)) {
-        return { response: { items: [] }, pending: true };
-      }
-      if (
-        hasError(observedResponse) || isSyncing(observedResponse) ||
-        hasSchemaMismatch(observedResponse)
-      ) {
-        return { response: { items: [] }, pending: false };
-      }
-      return { response: resultOf(observedResponse), pending: false };
-    });
-
-    // Seed items from LLM result when it arrives
-    const items = computed(() => {
-      return responseState.response.items || [];
-    });
-
-    return {
-      [NAME]: computed(() => (topic ? `Checklist: ${topic}` : "Checklist")),
-      [UI]: (
-        <cf-screen>
-          <cf-vstack slot="header" gap="1">
-            <cf-heading level={4}>
-              {computed(() => topic || "Checklist")}
-            </cf-heading>
-          </cf-vstack>
-
-          <cf-vstack gap="2" style="padding: 1.5rem;">
-            {ifElse(
-              responseState.pending,
-              <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating checklist...
-              </div>,
-              <div>
-                {items.map((item) => (
-                  <cf-hstack gap="2" align="center">
-                    <cf-checkbox $checked={item.done}>{item.label}</cf-checkbox>
-                  </cf-hstack>
-                ))}
-              </div>,
-            )}
-          </cf-vstack>
-        </cf-screen>
-      ),
-      topic,
-      items,
-      pending: responseState.pending,
-    };
+    return ChecklistPresentation({ topic, responseRequest });
   },
 );
 

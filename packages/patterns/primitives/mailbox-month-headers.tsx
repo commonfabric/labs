@@ -14,6 +14,7 @@
  * email, newest messages, no bodies, SqliteDb handle
  */
 import {
+  type AsyncResult,
   computed,
   Default,
   hasError,
@@ -26,6 +27,7 @@ import {
   pattern,
   resultOf,
   type SqliteDb,
+  type SqliteQueryResult,
   UI,
   type VNode,
 } from "commonfabric";
@@ -62,6 +64,8 @@ export interface MailboxMonthHeadersOutput {
 
   headers: MailboxHeader[];
   headerCount: number;
+
+  /** Whether the headers are pending or awaiting replica synchronization. */
   pending: boolean;
 
   /** Why the read failed, empty while it has not. */
@@ -117,45 +121,39 @@ const headersSql = (): string =>
     `LIMIT max(1, min(COALESCE(?, ${DEFAULT_LIMIT}), ${MAX_LIMIT}))`,
   ].join("\n");
 
-export const MailboxMonthHeaders = pattern<
-  MailboxMonthHeadersInput,
-  MailboxMonthHeadersOutput
->(({ mail, month, limit }) => {
-  // Each param is a value READ out of its input, not the input itself. A
-  // query binds the reference it is handed and resolves it without the
-  // declared default, so an input a caller forwarded and nobody supplied
-  // reaches the query as `undefined`, and an undefined param fails the whole
-  // read rather than resolving to what the SQL above answers an empty month
-  // and an absent limit with.
-  const monthParam = computed(() => month);
-  const limitParam = computed(() => limit);
+/** Query results displayed by the mail header list. */
+export interface MailboxMonthHeadersPresentationInput {
+  monthRead: AsyncResult<SqliteQueryResult<{ month: string }>>;
+  headersRead: AsyncResult<SqliteQueryResult<MailboxHeader>>;
+}
 
-  const monthRead = mail.query<{ month: string }>(monthSql(), {
-    params: [monthParam],
-    scope: "session",
-  });
-  const headersRead = mail.query<MailboxHeader>(headersSql(), {
-    params: [monthParam, limitParam],
-    scope: "session",
-  });
+/** Presents mail headers, reserving the empty state for a completed read. */
+export const MailboxMonthHeadersPresentation = pattern<
+  MailboxMonthHeadersPresentationInput,
+  MailboxMonthHeadersOutput
+>(({ monthRead, headersRead }) => {
   const observedMonthRead = observeAvailability(monthRead);
   const observedHeadersRead = observeAvailability(headersRead);
+  const monthValue = resultOf(observedMonthRead);
+  const headersValue = resultOf(observedHeadersRead);
 
   const resolvedMonth = computed(() =>
     isPending(observedMonthRead) || hasError(observedMonthRead) ||
       isSyncing(observedMonthRead) || hasSchemaMismatch(observedMonthRead)
       ? ""
-      : resultOf(observedMonthRead).rows[0]?.month ?? ""
+      : monthValue.rows[0]?.month ?? ""
   );
   const headers = computed(() =>
     isPending(observedHeadersRead) || hasError(observedHeadersRead) ||
       isSyncing(observedHeadersRead) ||
       hasSchemaMismatch(observedHeadersRead)
       ? []
-      : resultOf(observedHeadersRead).rows
+      : headersValue.rows
   );
   const headerCount = computed(() => headers.length);
-  const pending = computed(() => isPending(observedHeadersRead));
+  const pending = computed(() =>
+    isPending(observedHeadersRead) || isSyncing(observedHeadersRead)
+  );
   const errorMessage = computed(() =>
     hasError(observedHeadersRead) ? observedHeadersRead.errorMessage : ""
   );
@@ -208,6 +206,30 @@ export const MailboxMonthHeaders = pattern<
     pending,
     errorMessage,
   };
+});
+
+export const MailboxMonthHeaders = pattern<
+  MailboxMonthHeadersInput,
+  MailboxMonthHeadersOutput
+>(({ mail, month, limit }) => {
+  // Each param is a value READ out of its input, not the input itself. A
+  // query binds the reference it is handed and resolves it without the
+  // declared default, so an input a caller forwarded and nobody supplied
+  // reaches the query as `undefined`, and an undefined param fails the whole
+  // read rather than resolving to what the SQL above answers an empty month
+  // and an absent limit with.
+  const monthParam = computed(() => month);
+  const limitParam = computed(() => limit);
+
+  const monthRead = mail.query<{ month: string }>(monthSql(), {
+    params: [monthParam],
+    scope: "session",
+  });
+  const headersRead = mail.query<MailboxHeader>(headersSql(), {
+    params: [monthParam, limitParam],
+    scope: "session",
+  });
+  return MailboxMonthHeadersPresentation({ monthRead, headersRead });
 });
 
 export default MailboxMonthHeaders;

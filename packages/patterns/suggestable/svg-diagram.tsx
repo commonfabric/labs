@@ -1,9 +1,9 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateText,
   hasError,
-  hasSchemaMismatch,
   ifElse,
   isPending,
   isSyncing,
@@ -11,6 +11,7 @@ import {
   pattern,
   resultOf,
   UI,
+  type UnavailableErrorKind,
   type VNode,
 } from "commonfabric";
 
@@ -29,32 +30,19 @@ export type SvgDiagramOutput = {
   pending: boolean;
   availability: string;
   error: string;
+  errorKind: UnavailableErrorKind | undefined;
 };
 
 // ===== Pattern =====
 
 /**
- * Generates an SVG diagram illustrating relationships, flows, or structures.
- * Designed as "suggestion fuel" - a lightweight utility pattern for visual
- * representation of concepts using scalable vector graphics.
+ * Presents generated SVG content with explicit waiting and error states.
  */
-const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
-  ({ topic, context }) => {
-    // An empty prompt holds the request back: `generateText` clears its
-    // state and makes no call until one arrives. A diagram with no topic has
-    // nothing to draw, so the model is asked only once a caller names the
-    // subject.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Create a clear SVG diagram illustrating: ${topic}`;
-    });
-
-    const responseRequest = generateText({
-      system:
-        "You create clear, well-structured SVG diagrams. Output a single <svg> element with an appropriate viewBox. Use shapes (rect, circle, ellipse), paths, lines, text, and arrows to illustrate concepts. Use readable fonts and clear colors. Output ONLY the SVG element with no surrounding explanation or markdown.",
-      prompt,
-      context,
-    });
+export const SvgDiagramPresentation = pattern<
+  { topic: string; responseRequest: AsyncResult<string> },
+  SvgDiagramOutput
+>(
+  ({ topic, responseRequest }) => {
     const responseState = computed(() => {
       if (!topic) {
         return {
@@ -62,6 +50,7 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
           pending: false,
           availability: "ready",
           error: "",
+          errorKind: undefined,
         };
       }
       if (isPending(responseRequest)) {
@@ -70,14 +59,7 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
           pending: true,
           availability: "pending",
           error: "",
-        };
-      }
-      if (hasSchemaMismatch(responseRequest)) {
-        return {
-          response: "",
-          pending: false,
-          availability: "schemaMismatch",
-          error: "The generated diagram did not match the expected format.",
+          errorKind: undefined,
         };
       }
       if (hasError(responseRequest)) {
@@ -86,14 +68,16 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
           pending: false,
           availability: "error",
           error: responseRequest.errorMessage,
+          errorKind: responseRequest.errorKind,
         };
       }
       if (isSyncing(responseRequest)) {
         return {
           response: "",
-          pending: false,
+          pending: true,
           availability: "syncing",
-          error: "Waiting for synchronized data.",
+          error: "",
+          errorKind: undefined,
         };
       }
       return {
@@ -101,6 +85,7 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
         pending: false,
         availability: "ready",
         error: "",
+        errorKind: undefined,
       };
     });
 
@@ -116,16 +101,20 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
 
           <cf-vstack gap="3" style="padding: 1.5rem;">
             {ifElse(
-              responseState.pending,
-              <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating diagram...
-              </div>,
+              responseState.availability === "syncing",
+              <div role="status">Waiting for synchronized data.</div>,
               ifElse(
-                responseState.error,
-                <div role="alert" style="color: var(--cf-theme-color-error);">
-                  {responseState.error}
+                responseState.pending,
+                <div style="color: var(--cf-theme-color-text-secondary);">
+                  <cf-loader show-elapsed /> Generating diagram...
                 </div>,
-                <cf-svg content={responseState.response} />,
+                ifElse(
+                  responseState.error,
+                  <div role="alert" style="color: var(--cf-theme-color-error);">
+                    {responseState.error}
+                  </div>,
+                  <cf-svg content={responseState.response} />,
+                ),
               ),
             )}
           </cf-vstack>
@@ -136,7 +125,27 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
       pending: responseState.pending,
       availability: responseState.availability,
       error: responseState.error,
+      errorKind: responseState.errorKind,
     };
+  },
+);
+
+/** Generates the request displayed by the SVG diagram presentation. */
+const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
+  ({ topic, context }) => {
+    // An empty prompt holds the request back: no provider call starts until
+    // the caller names a subject.
+    const prompt = computed(() => {
+      if (!topic) return "";
+      return `Create a clear SVG diagram illustrating: ${topic}`;
+    });
+    const responseRequest = generateText({
+      system:
+        "You create clear, well-structured SVG diagrams. Output a single <svg> element with an appropriate viewBox. Use shapes (rect, circle, ellipse), paths, lines, text, and arrows to illustrate concepts. Use readable fonts and clear colors. Output ONLY the SVG element with no surrounding explanation or markdown.",
+      prompt,
+      context,
+    });
+    return SvgDiagramPresentation({ topic, responseRequest });
   },
 );
 

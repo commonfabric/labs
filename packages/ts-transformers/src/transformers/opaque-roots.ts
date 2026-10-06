@@ -190,6 +190,20 @@ export function isOpaqueSourceExpression(
   }
 
   if (ts.isCallExpression(current)) {
+    // A result projection preserves its operand's representation. Plain-value
+    // callback captures are already materialized; locally created reactive
+    // values remain opaque and require navigation through their Cell interface.
+    if (
+      detectCallKind(current, context.checker)?.kind === "availability-result"
+    ) {
+      const operand = current.arguments[0];
+      return operand !== undefined && isOpaqueSourceExpression(
+        operand,
+        opaqueRoots,
+        opaqueRootSymbols,
+        context,
+      );
+    }
     if (isOpaqueOriginCall(current, context)) {
       return true;
     }
@@ -246,7 +260,7 @@ export function isOpaqueSourceExpression(
     }
     if (
       (ts.isCallExpression(inner) || ts.isNewExpression(inner)) &&
-      isOpaqueOriginCall(inner, context)
+      isOpaqueSourceExpression(inner, opaqueRoots, opaqueRootSymbols, context)
     ) {
       return true;
     }

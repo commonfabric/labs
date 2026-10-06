@@ -1281,6 +1281,10 @@ type Output = {
 Upload images and get AI-powered analysis and descriptions. Supports multiple
 images with customizable prompts.
 
+`pending` stays true while the analysis request is pending or syncing. A
+terminal error clears the response and ends the waiting indicator; a usable
+response, including an empty string, also ends it.
+
 **Keywords:** vision, image, generateText, cf-image-input
 
 ### Input Schema
@@ -1330,9 +1334,14 @@ capability-gate, timing, delivery-shaping, token-bucket, input
 
 ## `examples/profile-aware-writer.tsx`
 
-Example pattern demonstrating how to use the `#profile` wish to personalize LLM
-output. Fetches the user's profile summary and injects it into the system prompt
-for personalized text generation.
+Example pattern demonstrating how to use the `#learnedSummary` wish to
+personalize LLM output. Fetches the user's profile summary and injects it into
+the system prompt for personalized text generation.
+
+The result exposes `availability`, `error`, and `errorKind`. A terminal failure
+has availability `"error"`, including schema mismatch, with its canonical error
+kind and message. Synchronization displays a waiting status rather than an
+alert.
 
 **Keywords:** profile, wish, generateText, llm, personalization
 
@@ -1349,7 +1358,10 @@ type Input = {
 ```ts
 type Output = {
   topic: Writable<string>;
-  response: string | undefined;
+  response: string;
+  availability: string;
+  error: string;
+  errorKind: UnavailableErrorKind | undefined;
 };
 ```
 
@@ -1511,6 +1523,9 @@ type SummaryOutput = {
 Generates a checklist of actionable steps from a topic and context. The topic is
 what asks for the steps: with none given the pattern holds the request back, so
 `pending` stays `false` and `items` stays empty until a caller names a subject.
+An active request keeps `pending` true while pending or syncing. A terminal
+error clears the items and ends the waiting indicator, as does a usable
+checklist, including one with no steps.
 
 **Keywords:** checklist, generateObject, suggestion-fuel
 
@@ -1604,6 +1619,10 @@ what asks for the diagram: with none given the pattern holds the request back,
 so `pending` stays `false` and `diagram` stays empty until a caller names a
 subject.
 
+With a topic, `pending` covers both generation and synchronization.
+Synchronization is displayed as a non-error status; terminal failures expose
+availability `"error"` with the producer's canonical `errorKind` and message.
+
 **Keywords:** diagram, SVG, generateText, suggestion-fuel, cf-svg
 
 ### Input Schema
@@ -1622,6 +1641,9 @@ type SvgDiagramOutput = {
   topic: string;
   diagram: string;
   pending: boolean;
+  availability: string;
+  error: string;
+  errorKind: UnavailableErrorKind | undefined;
 };
 ```
 

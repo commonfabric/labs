@@ -1,5 +1,6 @@
 import {
   FabricUnavailable,
+  isUnavailable,
   UNAVAILABLE_PENDING,
   UNAVAILABLE_SYNCING,
   unavailableError,
@@ -14,10 +15,16 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { Module, Pattern } from "../src/builder/types.ts";
 import { type Cell, createCell, sendEvent } from "../src/cell.ts";
-import { getDerivedInternalCell, parseLink } from "../src/link-utils.ts";
+import {
+  getDerivedInternalCell,
+  parseLink,
+  toMemorySpaceAddress,
+} from "../src/link-utils.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IReadActivity } from "../src/storage/interface.ts";
+import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
+import { readAvailabilityValue } from "../src/storage/read-availability.ts";
 import {
   isInternalVerifierRead,
   isLinkResolutionProbe,
@@ -25,6 +32,11 @@ import {
   isReadIgnoredForScheduling,
 } from "../src/storage/reactivity-log.ts";
 import { trustExecutable, trustModule } from "./support/trusted-builder.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("data unavailability test");
 const space = signer.did();
@@ -1667,6 +1679,287 @@ export default pattern<{ channel: AsyncResult<Stream<number>> }, { send: Stream<
       expect(await rejected.promise).toBe("error");
       await runtime.idle();
       expect(received).toEqual([5]);
+    } finally {
+      cancel();
+    }
+  });
+
+  for (
+    const [name, body] of [
+      [
+        "callback-local projection of a plain capture",
+        `return { value: computed(() => { const request = resultOf(input.request); return request.field; }) };`,
+      ],
+      [
+        "external projection capture",
+        `const request = resultOf(input.request); return { value: computed(() => request.field) };`,
+      ],
+      [
+        "same-callback reactive producer",
+        `return { value: computed(() => { const request = resultOf(computed(() => input.request)); return request.field; }) };`,
+      ],
+      [
+        "nested compute capture of a reactive producer",
+        `return { value: computed(() => { const request = resultOf(computed(() => input.request)); return computed(() => request.field); }) };`,
+      ],
+      [
+        "nested lift capture of a reactive producer",
+        `return { value: computed(() => { const request = resultOf(computed(() => input.request)); return lift(() => request.field)({}); }) };`,
+      ],
+    ]
+  ) {
+    it(`updates a selected field through a ${name}`, async () => {
+      const setup = runtime.edit();
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import { type AsyncResult, computed, lift, pattern, resultOf } from "commonfabric";
+export default pattern((input: { request: AsyncResult<{ field: string }> }) => {
+  ${body}
+});`,
+        }],
+      }, { space, tx: setup });
+      const result = runtime.getCell<any>(space, `projection-value-${name}`);
+      runtime.run(setup, compiled, { request: { field: "initial" } }, result);
+      runtime.prepareTxForCommit(setup);
+      expect((await setup.commit().settled).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      try {
+        await result.pull();
+        expect(result.key("value").get()).toBe("initial");
+        const update = runtime.edit();
+        result.getArgumentCell()!.withTx(update).key("request").key("field")
+          .set("updated");
+        expect((await update.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(result.key("value").get()).toBe("updated");
+      } finally {
+        cancel();
+      }
+    });
+  }
+
+  for (const parentPath of [[], ["bundle"]]) {
+    it(`propagates unavailable ancestors of a linked rows input at ${JSON.stringify(parentPath)}`, async () => {
+      const setup = runtime.edit();
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import { computed, pattern } from "commonfabric";
+export default pattern((input: { rows: { id: string }[] }) => ({
+  count: computed(() => input.rows.length),
+}));`,
+        }],
+      }, { space, tx: setup });
+      const source = runtime.getCell<any>(
+        space,
+        `ancestor-rows-${parentPath.length}`,
+      );
+      const parent = parentPath.length === 0 ? source : source.key("bundle");
+      parent.withTx(setup).set({ rows: [{ id: "one" }] });
+      const result = runtime.getCell<any>(
+        space,
+        `ancestor-count-${parentPath.length}`,
+      );
+      runtime.run(setup, compiled, { rows: parent.key("rows") }, result);
+      runtime.prepareTxForCommit(setup);
+      expect((await setup.commit().settled).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      try {
+        await result.pull();
+        expect(result.key("count").get()).toBe(1);
+        for (
+          const marker of [
+            UNAVAILABLE_PENDING,
+            UNAVAILABLE_SYNCING,
+            unavailableError("query failed"),
+          ]
+        ) {
+          const update = runtime.edit();
+          parent.withTx(update).set(marker);
+          expect((await update.commit().settled).error).toBeUndefined();
+          await result.pull();
+          await runtime.idle();
+          const observed = expectUnavailable(
+            result.key("count").get(),
+            marker.reason,
+          );
+          expect(observed.errorKind).toBe(marker.errorKind);
+          expect(observed.errorMessage).toBe(marker.errorMessage);
+          const read = runtime.edit();
+          expect(parent.key("rows").withTx(read).getRaw()).toEqual(marker);
+          const reads = [...getTransactionReadActivities(read)].filter((
+            entry,
+          ) => entry.id === source.getAsNormalizedFullLink().id);
+          expect(
+            reads.some((entry) =>
+              entry.path.length === parentPath.length + 1 &&
+              !entry.nonRecursive &&
+              !isLinkResolutionProbe(entry.meta) &&
+              !isReadIgnoredForCommit(entry.meta) &&
+              !isReadIgnoredForScheduling(entry.meta) &&
+              !isInternalVerifierRead(entry.meta)
+            ),
+          ).toBe(true);
+          read.abort();
+        }
+        const mismatch = runtime.edit();
+        parent.withTx(mismatch).set(17);
+        expect((await mismatch.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expectUnavailable(result.key("count").get(), "schemaMismatch");
+        const recovery = runtime.edit();
+        parent.withTx(recovery).set({ rows: [{ id: "one" }, { id: "two" }] });
+        expect((await recovery.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(result.key("count").get()).toBe(2);
+      } finally {
+        cancel();
+      }
+    });
+  }
+
+  it("consumes an unavailable ancestor's payload without widening the read ceiling", async () => {
+    const childLabel = {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "A",
+    };
+    const parentLabel = {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "B",
+    };
+    const marker = unavailableError("secret marker message");
+    const setup = runtime.edit();
+    const source = runtime.getCell(
+      space,
+      "marker-value-label",
+      undefined,
+      setup,
+    );
+    const root = toMemorySpaceAddress(source.getAsNormalizedFullLink());
+    writeSeedEnvelopeDoc(setup, space);
+    seedStoredEnvelope(setup, { ...root, path: [] }, {
+      value: marker,
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [
+            {
+              path: [],
+              label: { confidentiality: [parentLabel] },
+              origin: "declared",
+              observes: "value",
+            },
+            {
+              path: ["rows"],
+              label: { confidentiality: [childLabel] },
+              origin: "declared",
+              observes: "value",
+            },
+          ],
+        },
+      },
+    });
+    expect((await setup.commit().settled).error).toBeUndefined();
+    const logical = { ...root, path: ["value", "rows"] };
+    const read = runtime.edit();
+    try {
+      const result = readAvailabilityValue(read, logical, {
+        nonRecursive: true,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.ok?.address).toEqual(logical);
+      const value = result.ok?.value;
+      expect(isUnavailable(value)).toBe(true);
+      if (!isUnavailable(value)) throw new Error("Expected native marker");
+      expect(value.reason).toBe("error");
+      expect(value.errorKind).toBe("general");
+      expect(value.errorMessage).toBe("secret marker message");
+      expect(
+        [...getTransactionReadActivities(read)].some((entry) =>
+          entry.id === root.id && entry.path.length === 1 &&
+          entry.path[0] === "value" && !entry.nonRecursive &&
+          !isLinkResolutionProbe(entry.meta) &&
+          !isInternalVerifierRead(entry.meta) &&
+          !isReadIgnoredForCommit(entry.meta) &&
+          !isReadIgnoredForScheduling(entry.meta)
+        ),
+      ).toBe(true);
+    } finally {
+      read.abort();
+    }
+    const denied = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+      cfcReadMaxConfidentiality: [childLabel],
+    });
+    try {
+      const read = denied.edit();
+      try {
+        expect(() =>
+          readAvailabilityValue(read, logical, { nonRecursive: true })
+        )
+          .toThrow(/runtime read ceiling withholds this value/);
+      } finally {
+        read.abort();
+      }
+    } finally {
+      await denied.dispose();
+    }
+  });
+
+  it("preserves optional resultOf sources through a mapped capture", async () => {
+    const setup = runtime.edit();
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { type AsyncResult, pattern, resultOf } from "commonfabric";
+export default pattern((input: {
+  holder?: { request: AsyncResult<{ field: string }> };
+  items: number[];
+}) => {
+  const usable = resultOf(input.holder?.request);
+  return { values: input.items.map(() => usable?.field ?? "absent") };
+});`,
+      }],
+    }, { space, tx: setup });
+    const result = runtime.getCell<any>(space, "optional-projection-capture");
+    runtime.run(setup, compiled, { items: [1], holder: undefined }, result);
+    runtime.prepareTxForCommit(setup);
+    expect((await setup.commit().settled).error).toBeUndefined();
+    const cancel = result.sink(() => {});
+    try {
+      await result.pull();
+      expect(result.key("values").get()).toEqual(["absent"]);
+      for (
+        const holder of [
+          { request: { field: "initial" } },
+          undefined,
+          { request: { field: "recovered" } },
+        ]
+      ) {
+        const update = runtime.edit();
+        result.getArgumentCell()!.withTx(update).key("holder").set(holder);
+        expect((await update.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(result.key("values").get()).toEqual([
+          holder?.request.field ?? "absent",
+        ]);
+      }
     } finally {
       cancel();
     }

@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import {
@@ -596,6 +597,54 @@ Deno.test("resultOf canonicalization rewrites stable property and element paths"
       );
     },
   );
+});
+
+Deno.test("resultOf capture rewrites preserve nullish source short-circuits", () => {
+  for (
+    const source of [
+      "input.holder?.request",
+      'input.holder?.["request"]',
+      "input.holders?.[0].request",
+    ]
+  ) {
+    withContext(
+      `
+        import { AsyncResult, resultOf } from "commonfabric";
+        type Repo = { field: string };
+        declare const input: {
+          holder: { request: AsyncResult<Repo> } | null;
+          holders: { request: AsyncResult<Repo> }[] | null;
+        };
+        const usable = resultOf(${source});
+        const view = () => usable?.field ?? "absent";
+      `,
+      ({ context, sourceFile, transformation }) => {
+        const view = initializer(sourceFile, "view") as ts.ArrowFunction;
+        const canonical = canonicalizeResultOfCaptures(
+          [identifierIn(view.body, "usable")],
+          context,
+        );
+        expect(canonical.aliases.size).toBe(1);
+        const rewritten = rewriteResultOfAliasReferences(
+          view.body,
+          canonical.aliases,
+          context,
+          transformation,
+        );
+        const expression = ts.createPrinter().printNode(
+          ts.EmitHint.Expression,
+          rewritten,
+          sourceFile,
+        );
+        const evaluate = new Function("input", `return ${expression};`);
+        expect(evaluate({ holder: null, holders: null })).toBe("absent");
+        const request = { field: "ready" };
+        expect(evaluate({ holder: { request }, holders: [{ request }] })).toBe(
+          "ready",
+        );
+      },
+    );
+  }
 });
 
 Deno.test("availability capture utilities cover composite and callback paths", () => {

@@ -482,16 +482,27 @@ function cloneSourceExpression(
     return clone;
   }
   if (ts.isPropertyAccessExpression(target)) {
-    return factory.createPropertyAccessExpression(
-      cloneSourceExpression(target.expression, factory),
-      target.name,
-    );
+    const receiver = cloneSourceExpression(target.expression, factory);
+    return ts.isPropertyAccessChain(target)
+      ? factory.createPropertyAccessChain(
+        receiver,
+        target.questionDotToken,
+        target.name,
+      )
+      : factory.createPropertyAccessExpression(receiver, target.name);
   }
   if (ts.isElementAccessExpression(target)) {
-    return factory.createElementAccessExpression(
-      cloneSourceExpression(target.expression, factory),
-      target.argumentExpression,
-    );
+    const receiver = cloneSourceExpression(target.expression, factory);
+    return ts.isElementAccessChain(target)
+      ? factory.createElementAccessChain(
+        receiver,
+        target.questionDotToken,
+        target.argumentExpression,
+      )
+      : factory.createElementAccessExpression(
+        receiver,
+        target.argumentExpression,
+      );
   }
   // Complex direct producer calls are already captured by dataflow analysis;
   // resultOf alias canonicalization is intentionally limited to stable capture

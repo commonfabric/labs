@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import {
   type Cell,
@@ -217,6 +223,44 @@ describe("cf wish headless read (resolveWish)", () => {
     expect(link.id).toBe(target.getAsNormalizedFullLink().id);
     expect(link.space).toBe(remoteSpace);
   });
+
+  for (
+    const [name, marker, message] of [
+      ["pending", UNAVAILABLE_PENDING, "Wish result is pending"],
+      ["syncing", UNAVAILABLE_SYNCING, "Wish result is syncing"],
+      [
+        "failed",
+        unavailableError("Queue unavailable", "network"),
+        "Queue unavailable",
+      ],
+    ] as const
+  ) {
+    it(`reports an unavailable ${name} queue and reads its recovery`, async () => {
+      const home = userIdentity.did();
+      const homePattern = runtime.getCell(home, "unavailable-queue-home");
+      await runtime.editWithRetry((tx) => {
+        homePattern.withTx(tx).set({ agentQueue: marker });
+        runtime.getHomeSpaceCell(tx).key("defaultPattern").set(homePattern);
+      });
+
+      const unavailable = await resolveWish(runtime, home, {
+        query: "#agent_queue",
+      });
+      expect(unavailable.result).toBeNull();
+      expect(unavailable.error).toBe(message);
+      expect(runtime.runner.cancels.size).toBe(0);
+
+      await runtime.editWithRetry((tx) => {
+        homePattern.withTx(tx).key("agentQueue").set({ entries: [] });
+      });
+      const recovered = await resolveWish(runtime, home, {
+        query: "#agent_queue",
+      });
+      expect(recovered.result).toEqual({ entries: [] });
+      expect(recovered.error).toBeUndefined();
+      expect(runtime.runner.cancels.size).toBe(0);
+    });
+  }
 
   it("projectWishValue strips stream handles but keeps profile data (CT-1844)", () => {
     // Build a profile-shaped result carrying a REAL stream handle alongside its

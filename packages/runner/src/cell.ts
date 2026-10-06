@@ -194,6 +194,7 @@ import type {
   Metadata,
 } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import {
   allowMutableTransactionRead,
   excludeReadFromConflict,
@@ -3804,16 +3805,19 @@ export class CellImpl<T extends FabricValue>
     const { frozen = true, lastNode = "top", ...readOptions } = options ?? {};
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
     const tx = this.#runtime.readTx(this.#tx);
-    // Resolve all links ON THE WAY to the target, but don't resolve the final
-    // link.
-    const value = tx.readValueOrThrow(
-      // A raw read still resolves links on the way to the target, and those
-      // crossings are content reads: the seam marks labeled hops.
-      resolveLink(this.#runtime, tx, this.#link, lastNode, {
-        markIfcCrossings: true,
-      }),
+    // Resolve links on the way to the target, keeping the final link raw.
+    // These crossings are content reads: the seam marks labeled hops.
+    const resolved = resolveLink(this.#runtime, tx, this.#link, lastNode, {
+      markIfcCrossings: true,
+    });
+    const read = readAvailabilityValue(
+      tx,
+      toMemorySpaceAddress(resolved),
       readOptions,
     );
+    const value = read.ok !== undefined
+      ? read.ok.value
+      : tx.readValueOrThrow(resolved, readOptions);
     // Deep-copy with desired frozenness, without unwrapping to JS form --
     // getRaw() and getRawUntyped() return fabric-layer values, not
     // convertible JS ("wild west") values.

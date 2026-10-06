@@ -685,6 +685,18 @@ Diagnostics emitted in all modes:
     `wish(...)`, or reactive collection aliases and their property accesses
   - message instructs the author to move the use into a nested
     `computed(() => ...)` or module-scope `lift()`
+  - Wish placement distinguishes creating a factory from reading a stored
+    Wish through a local single-return pass-through getter or callable alias.
+    Proven pass-throughs are allowed; direct and wrapped factories remain rejected,
+    including factory calls in evaluated arguments and conditional returns.
+    Opaque, cyclic, or uninspectable helpers returning canonical `WishState`
+    retain the factory-placement diagnostic
+  - a proven pass-through accepts only binding reads or literals as arguments,
+    plain identifier parameters without defaults or rest, and a single return
+    of a binding or another proven pass-through invocation. Callable aliases
+    must be constant, and authored writes to the resolved callable invalidate
+    the proof. Property reads, spreads, destructuring, and defaults are
+    uninspectable because evaluating them can invoke factories
 - **Error** `pattern-context:self-access`
   - enforces the target-language matrix row "`x[SELF]` inside an explicit
     computation callback, inside a reactive collection callback, or on anything
@@ -1766,6 +1778,12 @@ Primary behaviors:
   nested blocks) also receive `.key(...)` lowering
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
+- `resultOf(...)` preserves its operand's representation: a projection of an
+  already materialized callback capture remains plain, while a projection of
+  a local reactive producer remains opaque and receives `.key(...)` lowering
+- capture canonicalization preserves optional property and element chains on
+  a `resultOf(...)` source, including continuation segments after a nullish
+  short-circuit point
 - reads `input[SELF]` in place, as the destructured `[SELF]: self` binding is
   read: the data-flow analyzer counts a `SELF` element key as static on any
   receiver (`isSelfElementAccess` in `src/ast/dataflow.ts`), so the access is

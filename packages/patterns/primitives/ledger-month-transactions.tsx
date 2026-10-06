@@ -21,6 +21,7 @@
  * SqliteDb handle
  */
 import {
+  type AsyncResult,
   computed,
   Default,
   hasError,
@@ -33,6 +34,7 @@ import {
   pattern,
   resultOf,
   type SqliteDb,
+  type SqliteQueryResult,
   UI,
   type VNode,
 } from "commonfabric";
@@ -74,6 +76,8 @@ export interface LedgerMonthTransactionsOutput {
 
   rows: LedgerTransaction[];
   rowCount: number;
+
+  /** Whether the rows are pending or awaiting replica synchronization. */
   pending: boolean;
 
   /** Why the read failed, empty while it has not. */
@@ -115,42 +119,38 @@ const rowsSql = (): string =>
 const money = (amount: number, code: string): string =>
   `${(amount || 0).toFixed(2)} ${code || "USD"}`;
 
-export const LedgerMonthTransactions = pattern<
-  LedgerMonthTransactionsInput,
-  LedgerMonthTransactionsOutput
->(({ bank, month }) => {
-  // The param is a value READ out of `month`, not `month` itself. A query
-  // binds the reference it is handed and resolves it without the declared
-  // default, so a month a caller forwarded and nobody supplied reaches the
-  // query as `undefined`, and an undefined param fails the whole read rather
-  // than resolving to the month the SQL above answers an empty string with.
-  const monthParam = computed(() => month);
+/** Query results displayed by the transaction list. */
+export interface LedgerMonthTransactionsPresentationInput {
+  monthRead: AsyncResult<SqliteQueryResult<{ month: string }>>;
+  rowsRead: AsyncResult<SqliteQueryResult<LedgerTransaction>>;
+}
 
-  const monthRead = bank.query<{ month: string }>(monthSql(), {
-    params: [monthParam],
-    scope: "session",
-  });
-  const rowsRead = bank.query<LedgerTransaction>(rowsSql(), {
-    params: [monthParam],
-    scope: "session",
-  });
+/** Presents transactions, reserving the empty state for a completed read. */
+export const LedgerMonthTransactionsPresentation = pattern<
+  LedgerMonthTransactionsPresentationInput,
+  LedgerMonthTransactionsOutput
+>(({ monthRead, rowsRead }) => {
   const observedMonthRead = observeAvailability(monthRead);
   const observedRowsRead = observeAvailability(rowsRead);
+  const monthValue = resultOf(observedMonthRead);
+  const rowsValue = resultOf(observedRowsRead);
 
   const resolvedMonth = computed(() =>
     isPending(observedMonthRead) || hasError(observedMonthRead) ||
       isSyncing(observedMonthRead) || hasSchemaMismatch(observedMonthRead)
       ? ""
-      : resultOf(observedMonthRead).rows[0]?.month ?? ""
+      : monthValue.rows[0]?.month ?? ""
   );
   const rows = computed(() =>
     isPending(observedRowsRead) || hasError(observedRowsRead) ||
       isSyncing(observedRowsRead) || hasSchemaMismatch(observedRowsRead)
       ? []
-      : resultOf(observedRowsRead).rows
+      : rowsValue.rows
   );
   const rowCount = computed(() => rows.length);
-  const pending = computed(() => isPending(observedRowsRead));
+  const pending = computed(() =>
+    isPending(observedRowsRead) || isSyncing(observedRowsRead)
+  );
   const errorMessage = computed(() =>
     hasError(observedRowsRead) ? observedRowsRead.errorMessage : ""
   );
@@ -207,6 +207,28 @@ export const LedgerMonthTransactions = pattern<
     pending,
     errorMessage,
   };
+});
+
+export const LedgerMonthTransactions = pattern<
+  LedgerMonthTransactionsInput,
+  LedgerMonthTransactionsOutput
+>(({ bank, month }) => {
+  // The param is a value READ out of `month`, not `month` itself. A query
+  // binds the reference it is handed and resolves it without the declared
+  // default, so a month a caller forwarded and nobody supplied reaches the
+  // query as `undefined`, and an undefined param fails the whole read rather
+  // than resolving to the month the SQL above answers an empty string with.
+  const monthParam = computed(() => month);
+
+  const monthRead = bank.query<{ month: string }>(monthSql(), {
+    params: [monthParam],
+    scope: "session",
+  });
+  const rowsRead = bank.query<LedgerTransaction>(rowsSql(), {
+    params: [monthParam],
+    scope: "session",
+  });
+  return LedgerMonthTransactionsPresentation({ monthRead, rowsRead });
 });
 
 export default LedgerMonthTransactions;

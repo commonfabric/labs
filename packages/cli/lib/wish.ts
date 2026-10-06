@@ -56,10 +56,10 @@ export interface WishReadConfig extends SpaceConfig {
 }
 
 export interface WishReadResult {
-  /** The resolved value (dereferenced), or null when the wish produced none. */
+  /** The resolved value, or null when unmatched or unavailable; inspect error. */
   result: unknown;
 
-  /** The error message a failed wish surfaced, if any (e.g. no profile yet). */
+  /** A failure or transient-unavailability message, if any. */
   error?: string;
 }
 
@@ -185,7 +185,7 @@ export async function resolveWish(
           ? error
           : hasError(directValue)
           ? directValue.errorMessage
-          : undefined,
+          : `Wish result is ${directValue.reason}`,
       };
     }
     // Whether the wish matched is read where the wish WROTE it, not inferred

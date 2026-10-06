@@ -151,7 +151,7 @@ function isWishStateType(
 }
 
 /**
- * Follow local helper returns and callable aliases to determine whether calling
+ * Follows local helper returns and callable aliases to determine whether calling
  * an expression creates a Wish factory node. Stored Wish values are not
  * followed: invoking a method on an existing Wish must not be mistaken for
  * creating another factory. The return-type check preserves fail-closed
@@ -163,8 +163,121 @@ export function isWishFactoryExpression(
   seenSymbols = new Set<ts.Symbol>(),
 ): boolean {
   if (detectCallKind(expression, checker)?.kind === "wish") return true;
-  if (isWishStateType(checker.getTypeAtLocation(expression))) return true;
+  if (isWishStateType(checker.getTypeAtLocation(expression))) {
+    return !isProvenWishPassThrough(expression, checker, seenSymbols);
+  }
   return wishFactoryHelperCallee(expression.expression, checker, seenSymbols);
+}
+
+/**
+ * Proves that an invocation only returns a stored binding or delegates to
+ * another pass-through. Arguments are binding reads or literals; property
+ * reads, spreads, defaults, and destructuring have unproven evaluated effects.
+ */
+function isProvenWishPassThrough(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  seenSymbols: Set<ts.Symbol>,
+): boolean {
+  if (
+    !call.arguments.every((argument) => {
+      const value = unwrapExpression(argument);
+      return ts.isIdentifier(value) || ts.isLiteralExpression(value) ||
+        value.kind === ts.SyntaxKind.TrueKeyword ||
+        value.kind === ts.SyntaxKind.FalseKeyword ||
+        value.kind === ts.SyntaxKind.NullKeyword;
+    })
+  ) return false;
+
+  const callee = unwrapExpression(call.expression);
+  if (!ts.isIdentifier(callee)) return false;
+  const symbol = checker.getSymbolAtLocation(callee);
+  if (!symbol) return false;
+  const resolved = getAliasedSymbol(symbol, checker);
+  if (seenSymbols.has(resolved)) return false;
+  const nextSeen = new Set(seenSymbols);
+  nextSeen.add(resolved);
+
+  const declarations = resolved.getDeclarations() ?? [];
+  const implemented = declarations.filter((declaration) =>
+    ts.isVariableDeclaration(declaration) ||
+    ts.isFunctionDeclaration(declaration) && declaration.body !== undefined
+  );
+  if (implemented.length !== 1) return false;
+  const declaration = implemented[0]!;
+  if (hasCallableWrite(resolved, declaration.getSourceFile(), checker)) {
+    return false;
+  }
+  let callable: ts.Node = declaration;
+  if (ts.isVariableDeclaration(declaration)) {
+    if (
+      !ts.isVariableDeclarationList(declaration.parent) ||
+      !(declaration.parent.flags & ts.NodeFlags.Const) ||
+      !declaration.initializer
+    ) return false;
+    const initializer = unwrapExpression(declaration.initializer);
+    if (ts.isIdentifier(initializer)) {
+      return isProvenWishPassThrough(
+        ts.factory.updateCallExpression(
+          call,
+          initializer,
+          call.typeArguments,
+          call.arguments,
+        ),
+        checker,
+        nextSeen,
+      );
+    }
+    callable = initializer;
+  }
+  if (
+    !(ts.isFunctionDeclaration(callable) || ts.isFunctionExpression(callable) ||
+      ts.isArrowFunction(callable)) ||
+    !callable.body ||
+    callable.parameters.some((parameter) =>
+      !ts.isIdentifier(parameter.name) || parameter.initializer !== undefined ||
+      parameter.dotDotDotToken !== undefined
+    )
+  ) return false;
+  const returned = getReturnedExpression(callable);
+  if (!returned) return false;
+  const value = unwrapExpression(returned);
+  return ts.isIdentifier(value) ||
+    ts.isCallExpression(value) &&
+      isProvenWishPassThrough(value, checker, nextSeen);
+}
+
+/** Detects authored writes that invalidate a callable declaration's identity. */
+function hasCallableWrite(
+  symbol: ts.Symbol,
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+): boolean {
+  const containsSymbol = (node: ts.Node): boolean =>
+    ts.isIdentifier(node) && checker.getSymbolAtLocation(node) === symbol ||
+    ts.isShorthandPropertyAssignment(node) &&
+      checker.getShorthandAssignmentValueSymbol(node) === symbol ||
+    ts.forEachChild(node, containsSymbol) === true;
+  const visit = (node: ts.Node): boolean => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+      containsSymbol(node.left)
+    ) return true;
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      containsSymbol(node.operand)
+    ) return true;
+    if (
+      (ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
+      containsSymbol(node.initializer)
+    ) return true;
+    return ts.forEachChild(node, visit) === true;
+  };
+  return visit(source);
 }
 
 function wishFactoryHelperCallee(

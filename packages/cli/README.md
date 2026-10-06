@@ -1203,6 +1203,10 @@ naming neither gets both, minted for that one call.
 `queued`, `claimed`, `running`, `completed`, `failed`, `refused`, or
 `cancelled`.
 
+A pending or syncing queue is unavailable, not an empty list. Inspection reports
+that state as an error instead of claiming there are no requests. Once the queue
+becomes available, a new inspection reads its current entries.
+
 `cf agent show <run> [--json]` shows one record's state, timestamps, usage, and
 result address. `<run>` is an exact record id, request hash, or canonical
 address from the list; ambiguous matches are refused. Provider-reported

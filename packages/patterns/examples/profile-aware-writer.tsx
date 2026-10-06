@@ -1,4 +1,5 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateText,
@@ -11,6 +12,8 @@ import {
   pattern,
   resultOf,
   UI,
+  type UnavailableErrorKind,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -27,6 +30,93 @@ const handleSend = handler<
   if (userTopic) {
     topic.set(userTopic);
   }
+});
+
+/** The generated text and its current producer status. */
+export interface ProfileWriterResultOutput {
+  [UI]: VNode;
+  response: string;
+  availability: string;
+  error: string;
+  errorKind: UnavailableErrorKind | undefined;
+}
+
+/** Presents generated text without treating synchronization as an error. */
+export const ProfileWriterResultPresentation = pattern<
+  { topic: string; resultRequest: AsyncResult<string> },
+  ProfileWriterResultOutput
+>(({ topic, resultRequest }) => {
+  const resultState = computed(() => {
+    if (!topic) {
+      return {
+        response: "",
+        availability: "ready",
+        error: "",
+        errorKind: undefined,
+      };
+    }
+    if (isPending(resultRequest)) {
+      return {
+        response: "",
+        availability: "pending",
+        error: "",
+        errorKind: undefined,
+      };
+    }
+    if (hasError(resultRequest)) {
+      return {
+        response: "",
+        availability: "error",
+        error: resultRequest.errorMessage,
+        errorKind: resultRequest.errorKind,
+      };
+    }
+    if (isSyncing(resultRequest)) {
+      return {
+        response: "",
+        availability: "syncing",
+        error: "",
+        errorKind: undefined,
+      };
+    }
+    return {
+      response: resultOf(resultRequest),
+      availability: "ready",
+      error: "",
+      errorKind: undefined,
+    };
+  });
+
+  const resultUI = !topic
+    ? null
+    : resultState.availability === "pending"
+    ? (
+      <div style="margin-top: 16px;">
+        <cf-loader show-elapsed /> Generating personalized content...
+      </div>
+    )
+    : resultState.availability === "syncing"
+    ? <div role="status">Waiting for synchronized data.</div>
+    : resultState.error
+    ? <div role="alert">{resultState.error}</div>
+    : resultState.response
+    ? (
+      <div style="margin-top: 16px;">
+        <h3>Generated Text:</h3>
+        <div style="white-space: pre-wrap; padding: 12px; background: #f9f9f9; border-radius: 4px; line-height: 1.6;">
+          {resultState.response}
+        </div>
+      </div>
+    )
+    : null;
+
+  return {
+    [UI]: <div>{resultUI}</div>,
+    response: resultState.response,
+    availability: resultState.availability,
+    error: resultState.error,
+    errorKind: resultState.errorKind,
+  };
 });
 
 export default pattern<Input>(({ title }) => {
@@ -57,61 +147,9 @@ Write content personalized to the user when appropriate.`;
     system: systemPrompt,
     prompt: topic,
   });
-  const resultState = computed(() => {
-    if (!topic) {
-      return { response: "", availability: "ready", error: "" };
-    }
-    if (isPending(resultRequest)) {
-      return { response: "", availability: "pending", error: "" };
-    }
-    if (hasSchemaMismatch(resultRequest)) {
-      return {
-        response: "",
-        availability: "schemaMismatch",
-        error: "The generated text has an unexpected format.",
-      };
-    }
-    if (hasError(resultRequest)) {
-      return {
-        response: "",
-        availability: "error",
-        error: resultRequest.errorMessage,
-      };
-    }
-    if (isSyncing(resultRequest)) {
-      return { response: "", availability: "syncing", error: "" };
-    }
-    return {
-      response: resultOf(resultRequest),
-      availability: "ready",
-      error: "",
-    };
-  });
-  const resultUI = computed(() => {
-    if (!topic) return null;
-    if (resultState.availability === "pending") {
-      return (
-        <div style="margin-top: 16px;">
-          <cf-loader show-elapsed /> Generating personalized content...
-        </div>
-      );
-    }
-    if (resultState.availability === "syncing") {
-      return <div role="status">Waiting for synchronized data.</div>;
-    }
-    if (resultState.error) {
-      return <div role="alert">{resultState.error}</div>;
-    }
-    return resultState.response
-      ? (
-        <div style="margin-top: 16px;">
-          <h3>Generated Text:</h3>
-          <div style="white-space: pre-wrap; padding: 12px; background: #f9f9f9; border-radius: 4px; line-height: 1.6;">
-            {resultState.response}
-          </div>
-        </div>
-      )
-      : null;
+  const resultPresentation = ProfileWriterResultPresentation({
+    topic,
+    resultRequest,
   });
 
   return {
@@ -145,12 +183,13 @@ Write content personalized to the user when appropriate.`;
           )
           : null}
 
-        {resultUI}
+        {resultPresentation[UI]}
       </div>
     ),
     topic,
-    response: resultState.response,
-    availability: resultState.availability,
-    error: resultState.error,
+    response: resultPresentation.response,
+    availability: resultPresentation.availability,
+    error: resultPresentation.error,
+    errorKind: resultPresentation.errorKind,
   };
 });

@@ -589,6 +589,13 @@ Schema traversal validates the surrounding usable shape without eagerly cloning
 containers or reading branches the implementation never accesses. Local read
 coverage and CFC refusal checks precede marker preservation.
 
+A child value read whose ancestor holds a native `FabricUnavailable` preserves
+that marker rather than reporting a schema mismatch for the child. The ancestor
+is a normal value read, with the transaction's read ceiling and metadata, and
+the returned value retains the requested child's logical address. This does not
+turn a reference-only link probe into an observation of the ancestor's content.
+Ordinary primitive ancestors still produce the usual path mismatch.
+
 The result write caused by propagation must perform the same scope and CFC
 bookkeeping as a normal computation result. In particular, an error message is
 data derived from the input and must not bypass input label propagation merely

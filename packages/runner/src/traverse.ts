@@ -116,6 +116,7 @@ import {
   linkResolutionProbe,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import {
   recordTraverseInvocation,
   wrapTxForTraverseCapture,
@@ -2561,6 +2562,16 @@ export function getAtPath(
   let remaining = [...path];
 
   while (true) {
+    if (!context.referenceOnly && isUnavailable(curDoc.value)) {
+      tx.read(curDoc.address, READ_FOR_SCHEDULING);
+      return [{
+        ...curDoc,
+        address: {
+          ...curDoc.address,
+          path: ["value", ...curDoc.address.path.slice(1), ...remaining],
+        },
+      }, selector];
+    }
     if (isSigilLink(curDoc.value)) {
       // We've only done a nonRecursive read on curDoc, so promote that
       tx.read(curDoc.address, READ_FOR_SCHEDULING);
@@ -2937,15 +2948,12 @@ function followPointer(
   // for scheduling. We'll have to tag it later.
   // We use a nonRecursive read, since we may not need everything at the target.
   if (readStatsActive) recordLinkResolution(tx);
-  const { ok: valueEntry, error } = tx.read(
-    target,
-    context.referenceOnly
-      ? {
-        ...READ_NON_RECURSIVE,
-        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
-      }
-      : READ_NON_RECURSIVE,
-  );
+  const { ok: valueEntry, error } = context.referenceOnly
+    ? tx.read(target, {
+      ...READ_NON_RECURSIVE,
+      meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+    })
+    : readAvailabilityValue(tx, target, READ_NON_RECURSIVE);
 
   if (error !== undefined) {
     // If we had an unexpected error, or didn't find the doc at all, return.

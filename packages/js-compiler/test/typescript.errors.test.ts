@@ -195,15 +195,39 @@ describe("Checker", () => {
     // Identical TS4025 shape, but the private name matches a
     // KNOWN_EXPORTED_SYMBOLS entry — a known TypeScript false positive for the
     // commonfabric brand symbols, filtered rather than surfaced.
-    for (const brand of ["CELL_BRAND", "CELL_RESULT_TYPE"]) {
-      const checker = new Checker(programFor({
-        "/brand.ts":
-          `function f() { const ${brand}: unique symbol = Symbol(); return { [${brand}]: 1 }; }\n` +
-          "export const v = f();",
-      }));
-      checker.declarationCheck();
-    }
+    const checker = new Checker(programFor({
+      "/brand.ts":
+        "function f() { const CELL_BRAND: unique symbol = Symbol(); return { [CELL_BRAND]: 1 }; }\n" +
+        "export const v = f();",
+    }));
+    checker.declarationCheck();
   });
+
+  for (
+    const [exportKind, statement, code] of [
+      ["named", "export const v = f();", 4025],
+      ["default", "export default f();", 4082],
+    ] as const
+  ) {
+    it(`reports a private result symbol in a ${exportKind} export`, () => {
+      const checker = new Checker(programFor({
+        "/result-brand.ts":
+          "function f() { const CELL_RESULT_TYPE: unique symbol = Symbol(); return { [CELL_RESULT_TYPE]: 1 }; }\n" +
+          statement,
+      }));
+      checker.typeCheck();
+      expect(
+        checker.checkableSources().flatMap((source) =>
+          checker.collectDeclarationErrors(source).map(({ diagnostic }) =>
+            diagnostic.code
+          )
+        ),
+      ).toEqual([code]);
+      expect(() => checker.declarationCheck()).toThrow(
+        "private name 'CELL_RESULT_TYPE'",
+      );
+    });
+  }
 
   it("check() tolerates empty diagnostics and throws a CompilerError otherwise", () => {
     const checker = new Checker(

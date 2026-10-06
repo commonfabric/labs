@@ -219,6 +219,7 @@ import {
   TransactionWrapper,
 } from "./storage/extended-storage-transaction.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import {
   type CommitError,
   type IExtendedStorageTransaction,
@@ -700,7 +701,7 @@ function scanUnavailableInputs(
       if (activeLinks.has(linkKey)) return;
 
       if (!observeReadiness) {
-        const resolved = tx.read(toMemorySpaceAddress(link));
+        const resolved = readAvailabilityValue(tx, toMemorySpaceAddress(link));
         if (resolved.ok === undefined) {
           // A later observing pass or ordinary schema materialization
           // distinguishes syncing from a locally complete mismatch.
