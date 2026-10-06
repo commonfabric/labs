@@ -275,9 +275,15 @@ function make(
   descriptor: ValueDescriptor,
   building: FabricValue[],
 ): FabricValue {
-  if (
+  if (typeof descriptor === "number") {
+    // The special numbers have descriptors of their own, `-0` among them.
+    if (!Number.isFinite(descriptor) || Object.is(descriptor, -0)) {
+      throw new Error(`Not a number descriptor: ${descriptor}`);
+    }
+    return descriptor;
+  } else if (
     descriptor === null || typeof descriptor === "boolean" ||
-    typeof descriptor === "number" || typeof descriptor === "string"
+    typeof descriptor === "string"
   ) {
     return descriptor;
   }
@@ -298,7 +304,7 @@ function make(
       return stringOf(descriptor);
     }
     case "bigint": {
-      return BigInt(stringOf(payload));
+      return bigintOf(payload);
     }
     case "symbol": {
       return Symbol.for(stringOf(payload));
@@ -421,25 +427,25 @@ const CLASS_NOTATIONS:
       FabricDurationDay,
       "DurationDay",
       (value) => value.value.toString(),
-      (payload) => new FabricDurationDay(BigInt(stringOf(payload))),
+      (payload) => new FabricDurationDay(bigintOf(payload)),
     ),
     FabricDurationNsec: notate(
       FabricDurationNsec,
       "DurationNsec",
       (value) => value.value.toString(),
-      (payload) => new FabricDurationNsec(BigInt(stringOf(payload))),
+      (payload) => new FabricDurationNsec(bigintOf(payload)),
     ),
     FabricEpochDay: notate(
       FabricEpochDay,
       "EpochDay",
       (value) => value.value.toString(),
-      (payload) => new FabricEpochDay(BigInt(stringOf(payload))),
+      (payload) => new FabricEpochDay(bigintOf(payload)),
     ),
     FabricEpochNsec: notate(
       FabricEpochNsec,
       "EpochNsec",
       (value) => value.value.toString(),
-      (payload) => new FabricEpochNsec(BigInt(stringOf(payload))),
+      (payload) => new FabricEpochNsec(bigintOf(payload)),
     ),
     FabricHash: notate(
       FabricHash,
@@ -778,11 +784,28 @@ function stringOf(descriptor: ValueDescriptor): string {
     throw new Error(`Not a string descriptor: ${JSON.stringify(descriptor)}`);
   }
   return listOf(units).map((unit) => {
-    if (typeof unit !== "number") {
+    if (
+      !(typeof unit === "number" && Number.isInteger(unit) && unit >= 0 &&
+        unit <= 0xffff)
+    ) {
       throw new Error(`Not a code unit: ${JSON.stringify(unit)}`);
     }
     return String.fromCharCode(unit);
   }).join("");
+}
+
+/**
+ * Returns the bigint a decimal string descriptor describes.
+ *
+ * @throws If the descriptor is not a decimal integer as `bigint.toString()`
+ *   writes one: no sign but a leading `-`, no leading zeros, nothing else.
+ */
+function bigintOf(descriptor: ValueDescriptor): bigint {
+  const decimal = stringOf(descriptor);
+  if (!/^(?:0|-?[1-9][0-9]*)$/.test(decimal)) {
+    throw new Error(`Not a decimal integer: ${decimal}`);
+  }
+  return BigInt(decimal);
 }
 
 /** Returns the bytes a lowercase hexadecimal string descriptor describes. */

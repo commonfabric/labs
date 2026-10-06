@@ -14,7 +14,10 @@ import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { UnknownValue } from "@/codec-common";
 import { valueEqual } from "@/comparison";
 import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
-import { fabricPrimitiveClassesByName } from "@/fabric-primitives";
+import {
+  FabricKeyPair,
+  fabricPrimitiveClassesByName,
+} from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   fabricValueOfDescriptorForTestingOnly,
@@ -25,6 +28,7 @@ import {
   hashOutcomeOfForTestingOnly,
   type ValueDescriptor,
 } from "@/for-testing-only.ts";
+import { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash";
 
 import { hex } from "./value-hash/hex.ts";
 
@@ -123,6 +127,59 @@ describe("hash-conformance", () => {
     expect(equalPairs).toBeGreaterThan(0);
   });
 
+  it("records for each case the hash `hashOf()` and the string functions return for its value", () => {
+    // Hashed afresh, or served from a cache where a case's value was hashed
+    // before, as the deep-frozen record's is.
+
+    const byName = new Map(entries.map((e) => [e.name, e]));
+    for (const { name, make } of HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY) {
+      const { hash, divergence } = byName.get(name)!;
+      const recorded = divergence?.hash ?? hash;
+      if ("refused" in recorded) continue;
+      const value = make();
+      expect({
+        name,
+        digest: hex(hashOf(value).bytes),
+        tagged: taggedHashStringOf(value),
+        string: `fid1:${hashStringOf(value)}`,
+      }).toEqual({
+        name,
+        digest: recorded.digest,
+        tagged: recorded.string,
+        string: recorded.string,
+      });
+    }
+  });
+
+  it("holds the cases' values to equal hashes exactly when `valueEqual()` returns `true` for them", () => {
+    // Made by each case rather than read back from the file, so that the
+    // values differing only in what the notation does not record, such as
+    // sharing and freezing, are compared as made.
+
+    const hashed = HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap(
+      ({ name, make }) => {
+        const value = make();
+        const outcome = hashOutcomeOfForTestingOnly(value);
+        return ("digest" in outcome)
+          ? [{ name, value, digest: outcome.digest }]
+          : [];
+      },
+    );
+    let equalPairs = 0;
+    for (let j = 0; j < hashed.length; j++) {
+      for (let i = 0; i < j; i++) {
+        const [a, b] = [hashed[i]!, hashed[j]!];
+        const equal = valueEqual(a.value, b.value);
+        expect({ a: a.name, b: b.name, equal })
+          .toEqual({ a: a.name, b: b.name, equal: a.digest === b.digest });
+        if (equal) equalPairs++;
+      }
+    }
+
+    // The loop above would pass over cases of distinct values alone.
+    expect(equalPairs).toBeGreaterThan(0);
+  });
+
   it("names under `equals` only an earlier case of the same hash", () => {
     const earlier = new Map<string, HashOutcome>();
     for (const { name, hash, equals } of entries) {
@@ -146,7 +203,7 @@ describe("hash-conformance", () => {
     }
   });
 
-  it("returns a refusal for an example of each class with a stub codec", () => {
+  it("throws given an example of each class with a stub codec", () => {
     // The spec gives these classes a byte form this package does not yet
     // produce. Once hashing one succeeds, its examples belong among the cases.
 
@@ -154,8 +211,9 @@ describe("hash-conformance", () => {
       for (
         const make of FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY[name]
       ) {
-        expect({ name, outcome: hashOutcomeOfForTestingOnly(make()) })
-          .toEqual({ name, outcome: { refused: "unhashable" } });
+        expect(() => hashOutcomeOfForTestingOnly(make())).toThrow(
+          "not yet implemented",
+        );
       }
     }
   });
@@ -287,6 +345,15 @@ describe("hash-conformance", () => {
       expect(hashOutcomeOfForTestingOnly(Symbol("local"))).toEqual({
         refused: "unhashable",
       });
+    });
+
+    it("throws a failure to hash other than the refusal section 8 requires", async () => {
+      const pair = await crypto.subtle.generateKey("Ed25519", false, [
+        "sign",
+        "verify",
+      ]);
+      expect(() => hashOutcomeOfForTestingOnly(new FabricKeyPair(pair)))
+        .toThrow("Cannot hash a `FabricKeyPair` that holds opaque handles.");
     });
 
     it("throws a fault in the hasher rather than returning a refusal", () => {

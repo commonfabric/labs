@@ -298,7 +298,8 @@ export const fabricValueOfDescriptorForTestingOnly: (
 
 /**
  * The conformance cases for the `fvj1:` JSON encoding, those in
- * `fvj1-conformance.ts` and one for each example the tables above make.
+ * `fvj1-conformance.ts` and one for each example the tables above make of a
+ * class those cases do not leave out.
  */
 export const FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY:
   readonly Fvj1ConformanceCase[] = fvj1ConformanceCases(
@@ -337,7 +338,8 @@ export const fvj1DecodeOutcomeOfForTestingOnly: (
 
 /**
  * The conformance cases for the content hash, those in `hash-conformance.ts`
- * and one for each example the tables above make.
+ * and one for each example the tables above make of a class those cases do not
+ * leave out.
  */
 export const HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY:
   readonly HashConformanceCase[] = hashConformanceCases(

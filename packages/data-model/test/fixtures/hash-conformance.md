@@ -49,13 +49,18 @@ that does not hold fails generation, so that a fix here retires the mark rather
 than leaving it to mislead.
 
 Every two hashed cases hold to the spec's rule on equality: their hashes are the
-same exactly when their values are `valueEqual()`, and generating fails
-otherwise. A pair may describe one value made in two ways the notation does not
-record — keys made in another order, a container shared rather than copied, a
-deep-frozen value whose hash was cached — and then has one descriptor. A pair
-whose descriptors differ, as a link and an unknown value preserving a link's tag
-and state do, has to be named under `equals`, so that an equal hash for two
+same exactly when their values are `valueEqual()`, and
+`test/hash-conformance.test.ts` fails otherwise. A pair may describe one value
+made in two ways the notation does not record — keys made in another order, a
+container shared rather than copied, a deep-frozen value whose hash was cached —
+and then has one descriptor. A pair whose descriptors differ, as a link and an
+unknown value preserving a link's tag and state do, has to be named under
+`equals`, and generating fails otherwise, so that an equal hash for two
 different descriptors is always one the cases expected.
+
+The digest recorded is the one this package's hasher makes of the stream, and
+the test holds `hashOf()`, `hashStringOf()` and `taggedHashStringOf()` to it,
+for each case's value as the case makes it.
 
 ## What is not among the cases
 
