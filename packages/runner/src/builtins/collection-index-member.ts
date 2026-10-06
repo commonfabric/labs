@@ -5,6 +5,10 @@ import type { Cell } from "../cell.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import {
+  ignoreReadForScheduling,
+  machineryRead,
+} from "../storage/reactivity-log.ts";
 import { resolveCollectionKey } from "./collection-index-key.ts";
 import {
   type CollectionIndexMembership,
@@ -57,14 +61,28 @@ export function collectionIndexMember(
       ? extracted.key("value").asSchema({ asCell: ["cell"] }).get()
       : extracted.key("value").get();
     // Maintenance reads concrete slots behind the opaque setup references.
+    // Resolving those references is runtime plumbing, not an observation:
+    // every member writes into the one index document, and each write
+    // stamps that document's CFC label map. A member that resolved the
+    // shared documents as ordinary dependencies would wake on every other
+    // member's stamp, so one added source element re-ran every member the
+    // index already had.
+    const [state, index] = tx.runWithAmbientReadMeta(
+      { ...ignoreReadForScheduling, ...machineryRead },
+      () =>
+        [
+          args.key("state").resolveAsCell().asSchema<CollectionIndexMembership>(
+            undefined,
+          ),
+          args.key("index").resolveAsCell().asSchema<MaintainedCollectionIndex>(
+            undefined,
+          ),
+        ] as const,
+    );
     maintainCollectionIndexMembership(
       tx,
-      args.key("state").resolveAsCell().asSchema<CollectionIndexMembership>(
-        undefined,
-      ),
-      args.key("index").resolveAsCell().asSchema<MaintainedCollectionIndex>(
-        undefined,
-      ),
+      state,
+      index,
       args.key("mode").get(),
       args.key("occurrence").get(),
       resolveCollectionKey(runtime, tx, value),
