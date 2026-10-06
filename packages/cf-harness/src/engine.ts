@@ -229,6 +229,7 @@ import {
   RunscSandboxRuntime,
 } from "./sandbox/runsc.ts";
 import {
+  CFC_VM_HOME_ENV,
   recordedSandboxRuntime,
   sandboxRuntimeOfOptions,
   sandboxRuntimeResumeRefusal,
@@ -1061,7 +1062,10 @@ export class CfHarnessEngine {
         networkMode: options.sandboxRunscNetworkMode,
         additionalMounts: options.additionalMounts,
         runId,
+        // The macOS `runsc` runs with this process's environment, and finds
+        // its store by these two.
         homeDir: Deno.env.get("HOME"),
+        cfcVmHome: Deno.env.get(CFC_VM_HOME_ENV),
         unnamedRuntimeNote: unnamedRuntimeMountNote(
           options.sandboxRuntimeChoice,
         ),

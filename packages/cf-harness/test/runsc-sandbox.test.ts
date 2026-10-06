@@ -10,7 +10,8 @@ import { join } from "@std/path";
 import {
   assertRunscCfcPolicyForMode,
   canonicalHostPath,
-  defaultDarwinRootfs,
+  darwinCfcVmRootfs,
+  defaultDarwinCfcVmStore,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
@@ -223,7 +224,10 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", asy
     else Deno.env.set("PATH", path);
     await Deno.remove(bin, { recursive: true });
   }
-  assertEquals(c.rootfs, defaultDarwinRootfs("/Users/someone"));
+  assertEquals(
+    c.rootfs,
+    darwinCfcVmRootfs(defaultDarwinCfcVmStore("/Users/someone")),
+  );
   // The docker runtime defaults to `bridge`; the runsc runtime's default is
   // the runsc spelling of the same posture, so a run that names no network
   // mode gets the same reach on either runtime. `none` here would leave a

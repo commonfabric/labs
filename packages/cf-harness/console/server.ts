@@ -1370,11 +1370,14 @@ export const consoleHealthRows = (
 
 /**
  * The direct driver's configuration for this console's turns, resolved from
- * the options every turn is built with, as the engine resolves them. Throws
- * where a turn would be refused.
+ * the options every turn is built with, as the engine resolves them, in the
+ * environment `env`: on macOS an unnamed rootfs is the kitchen-sink image of
+ * the store `CFC_VM_HOME` there names, else of the one under its `HOME`.
+ * Throws where a turn would be refused.
  */
 const resolveConsoleRunscConfig = (
   config: ConsoleConfig,
+  env: Record<string, string | undefined>,
 ): RunscSandboxConfig => {
   const options = harnessSessionEngineOptions(config);
   return resolveRunscSandboxConfig({
@@ -1384,7 +1387,8 @@ const resolveConsoleRunscConfig = (
     cfcPolicyPath: options.sandboxCfcPolicy,
     networkMode: options.sandboxRunscNetworkMode,
     additionalMounts: options.additionalMounts,
-    homeDir: Deno.env.get("HOME"),
+    homeDir: env.HOME,
+    cfcVmHome: env.CFC_VM_HOME,
     unnamedRuntimeNote: unnamedRuntimeMountNote(config.sandboxRuntimeChoice),
   });
 };
@@ -1428,7 +1432,7 @@ export const consoleVmHealthProbes = (
   if (config.sandboxRuntimeKind !== "runsc") return [];
   let rootfs: string;
   try {
-    rootfs = resolveConsoleRunscConfig(config).rootfs;
+    rootfs = resolveConsoleRunscConfig(config, env).rootfs;
   } catch {
     return [];
   }
@@ -1450,9 +1454,10 @@ const consoleSandboxSelected = (config: ConsoleConfig): string | undefined =>
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
- * its turns resolve from the options each is built with. On macOS it also
- * asks the VM that driver runs in, from the store `env` names. `env` is the
- * process's environment unless given, since that is the one runsc runs with.
+ * its turns resolve from the options each is built with, in `env`. On macOS
+ * it also asks the VM that driver runs in, from the store `env` names. `env`
+ * is the process's environment unless given, since that is the one runsc
+ * runs with.
  * `readDockerRuntimes` replaces the Docker driver's `docker info` reading,
  * and `host.platform` replaces `Deno.build.os`.
  */
@@ -1468,7 +1473,7 @@ export const createConsoleHealth = (
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
     config.sandboxRuntimeKind === "runsc"
       ? consoleRunscHealthProbe(
-        () => resolveConsoleRunscConfig(config),
+        () => resolveConsoleRunscConfig(config, env),
         consoleTurnEnforcementMode(config),
         undefined,
         undefined,

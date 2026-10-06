@@ -143,12 +143,6 @@ export const darwinCfcVmRootfs = (
   imageKey = DARWIN_CFC_VM_IMAGE_KEY,
 ): string => joinHostPath(store, "images", imageKey);
 
-/** Like `darwinCfcVmRootfs()`, except in the store under `home`. */
-export const defaultDarwinRootfs = (
-  home: string,
-  imageKey = DARWIN_CFC_VM_IMAGE_KEY,
-): string => darwinCfcVmRootfs(defaultDarwinCfcVmStore(home), imageKey);
-
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 
 export interface RunscSandboxConfig {
@@ -211,7 +205,16 @@ export interface ResolveRunscSandboxConfigOptions {
   scratchDir?: string;
   runId?: string;
   containerUser?: string;
+
+  /**
+   * The home, and the value of `CFC_VM_HOME`, that the macOS `runsc` this
+   * runs finds its store by. On macOS an unnamed rootfs is the kitchen-sink
+   * image of that store, as `darwinCfcVmStore()` names it from these two, so
+   * that it is in the store the shim runs from.
+   */
   homeDir?: string;
+  cfcVmHome?: string;
+
   platform?: SandboxPlatform;
   sessionStartTimeoutMs?: number;
 
@@ -533,10 +536,11 @@ export const resolveRunscSandboxConfig = (
   options: ResolveRunscSandboxConfigOptions,
 ): RunscSandboxConfig => {
   const platform = options.platform ?? Deno.build.os;
+  const store = platform === "darwin"
+    ? darwinCfcVmStore(options.cfcVmHome, options.homeDir)
+    : undefined;
   const rootfs = options.rootfs ??
-    (platform === "darwin" && options.homeDir !== undefined
-      ? defaultDarwinRootfs(options.homeDir)
-      : undefined);
+    (store !== undefined ? darwinCfcVmRootfs(store) : undefined);
   if (rootfs === undefined) {
     throw new Error(
       `runsc sandbox needs a rootfs: pass --sandbox-rootfs or set ${RUNSC_ROOTFS_ENV} (on macOS the default is the cfc-vm kitchensink image)`,

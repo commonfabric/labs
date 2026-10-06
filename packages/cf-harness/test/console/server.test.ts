@@ -30,7 +30,10 @@ import {
   bashToolDescriptorForRuntime,
 } from "../../src/tools/bash.ts";
 import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
-import { defaultDarwinRootfs } from "../../src/sandbox/runsc.ts";
+import {
+  darwinCfcVmRootfs,
+  defaultDarwinCfcVmStore,
+} from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
@@ -858,8 +861,11 @@ describe("console/server", () => {
     });
 
     it("observes the driver's own default rootfs for a runsc console that names none", async () => {
-      // On macOS the driver finds the rootfs under the process's `HOME`; on
-      // any other platform a rootfs must be named, and the turn is refused.
+      // On macOS the driver finds the rootfs in the store under the `HOME` of
+      // the environment the console runs in, where no `CFC_VM_HOME` names
+      // another; on any other platform a rootfs must be named, and the turn
+      // is refused. `/Users/console` has no link on the way, as macOS's
+      // `/home` does, so its spelling is the path the driver resolves.
       const [, runtime, rootfs] = await (async () => {
         const health = createConsoleHealth(
           await resolveConsoleConfig(ARGS, {
@@ -869,7 +875,7 @@ describe("console/server", () => {
           }, "/console"),
           undefined,
           undefined,
-          {},
+          { HOME: "/Users/console" },
           undefined,
           () => Promise.reject(new Error("Docker is not asked")),
         );
@@ -880,7 +886,9 @@ describe("console/server", () => {
       })();
 
       if (Deno.build.os === "darwin") {
-        const expected = defaultDarwinRootfs(Deno.env.get("HOME")!);
+        const expected = darwinCfcVmRootfs(
+          defaultDarwinCfcVmStore("/Users/console"),
+        );
         expect(rootfs.detail).toBe(expected);
         expect(runtime.detail).toContain(`rootfs ${expected}`);
       } else {

@@ -1087,7 +1087,9 @@ taken exactly as named on every platform. `docker` never uses the store. A named
 `runsc` takes the settings named with it and the defaults the
 [current-state reference](docs/CURRENT_STATE.md#sandbox-runtimes) lists for
 them: its binary is `CF_HARNESS_RUNSC_BINARY` or a `runsc` on `PATH` rather than
-the store's shim, and it never takes the store's own policy.
+the store's shim, and it never takes the store's own policy. On macOS a named
+`runsc` given no rootfs runs the kitchen-sink image of the same store the
+default would, the one `CFC_VM_HOME` names, else the one under the home.
 
 The batch CLI's operator summary has a `sandbox` line saying which runtime the
 run used and whether it was named or defaulted, such as

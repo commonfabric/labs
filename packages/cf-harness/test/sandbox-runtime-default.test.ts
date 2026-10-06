@@ -3110,6 +3110,130 @@ describe("sandbox-runtime-default", () => {
     });
   });
 
+  describe("a named `runsc` with no rootfs named, on macOS", () => {
+    // Its rootfs is the kitchen-sink image of the store the macOS `runsc`
+    // runs from: the one `CFC_VM_HOME` names, else the one under the home.
+    // The store `CFC_VM_HOME` names is A, and the home holds another, B.
+    let storeA: string;
+    let storeB: string;
+    let workspace: string;
+
+    beforeEach(async () => {
+      storeA = join(root, "vm");
+      storeB = defaultStore(home);
+      await installStore(storeA);
+      await installStore(storeB);
+      workspace = join(root, "workspace");
+      await Deno.mkdir(workspace);
+    });
+
+    /** Runs `body` with the process's environment holding `values`. */
+    const withProcessEnv = <T>(
+      values: Record<string, string | undefined>,
+      body: () => T,
+    ): T => {
+      const before = Object.keys(values).map((name) =>
+        [name, Deno.env.get(name)] as const
+      );
+      const put = (name: string, value: string | undefined) =>
+        value === undefined ? Deno.env.delete(name) : Deno.env.set(name, value);
+      // `body` runs to its end before the values are restored, with nothing
+      // awaited, so nothing else in the process sees them.
+      for (const [name, value] of Object.entries(values)) put(name, value);
+      try {
+        return body();
+      } finally {
+        for (const [name, value] of before) put(name, value);
+      }
+    };
+
+    it("is the image of the store `CFC_VM_HOME` names, for the direct driver's configuration", () => {
+      const config = resolveRunscSandboxConfig({
+        workspaceHostPath: workspace,
+        runscBinary: join(storeA, SHIM),
+        platform: "darwin",
+        homeDir: home,
+        cfcVmHome: storeA,
+      });
+
+      expect(config.rootfs).toBe(join(storeA, ROOTFS));
+    });
+
+    it("is the image of the store under the home where `CFC_VM_HOME` is unset or empty", () => {
+      for (const cfcVmHome of [undefined, ""]) {
+        const config = resolveRunscSandboxConfig({
+          workspaceHostPath: workspace,
+          runscBinary: join(storeB, SHIM),
+          platform: "darwin",
+          homeDir: home,
+          ...(cfcVmHome !== undefined ? { cfcVmHome } : {}),
+        });
+
+        expect(config.rootfs).toBe(join(storeB, ROOTFS));
+      }
+    });
+
+    it("is the image of the store `CFC_VM_HOME` names, for an engine built in that environment", () => {
+      const engine = withProcessEnv(
+        { HOME: home, CFC_VM_HOME: storeA },
+        () =>
+          new CfHarnessEngine({
+            model: "gpt-5.4",
+            workspaceHostPath: workspace,
+            sandboxRuntimeKind: "runsc",
+            sandboxRunscBinary: join(storeA, SHIM),
+            cfcEnforcementMode: "observe",
+            processRunner: {
+              run: () =>
+                Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
+            },
+          }),
+      );
+
+      expect(engine.sandbox.describe().cfc?.image).toBe(join(storeA, ROOTFS));
+    });
+
+    it("is the image of the store `CFC_VM_HOME` names, in the console's runtime row", async () => {
+      const env = {
+        HOME: home,
+        CFC_VM_HOME: storeA,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_RUNSC_BINARY: join(storeA, SHIM),
+        CF_HARNESS_RUNSC_CFC_POLICY: join(storeA, POLICY),
+      };
+      const health = createConsoleHealth(
+        await resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "key.pkcs8",
+            "--fabric-space",
+            "console-test",
+            "--session-db",
+            "none",
+            "--workspace",
+            workspace,
+          ],
+          env,
+          root,
+          { platform: "darwin" },
+        ),
+        undefined,
+        undefined,
+        env,
+        undefined,
+        () => Promise.reject(new Error("Docker is not asked")),
+        { platform: "darwin" },
+      );
+
+      await health.refresh();
+
+      expect(
+        health.snapshot().rows.find((row) => row.id === "sandbox.runtime")
+          ?.detail,
+      ).toContain(`rootfs ${join(storeA, ROOTFS)};`);
+    });
+  });
+
   describe("a native store that a writable mount of the run holds", () => {
     /** The record of a native runtime macOS defaulted to, from `store`. */
     const defaulted = (store: string): SandboxRuntimeChoice => ({
