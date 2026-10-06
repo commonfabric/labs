@@ -61,7 +61,8 @@ a line for each new document to the index below.
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
-  default-pattern reservation with the initial ACL.
+  default-pattern reservation with the initial ACL, or one leaving the root to
+  the space's creator, as `inSpace(..., { root: true })` does.
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read

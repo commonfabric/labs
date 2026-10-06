@@ -7,7 +7,7 @@ import type {
   FabricExecValue,
   FactoryInput,
   HFunction,
-  InSpaceGrants,
+  InSpaceOptions,
   JSONSchema,
   JSONValue,
   Module,
@@ -248,6 +248,12 @@ declare module "@commonfabric/api" {
 
     /** Run this module's result in a specific space. */
     targetSpace?: MemorySpace;
+
+    /**
+     * Run this module's result as the root of `targetSpace`: at the address
+     * the space's genesis reservation names, and linked as its root.
+     */
+    targetSpaceRoot?: true;
   }
 }
 
@@ -376,11 +382,11 @@ export type Frame = {
   /**
    * Named/anonymous `PatternFactory.inSpace(...)` targets encountered during
    * this frame that the calling space has not resolved yet, each with the
-   * grants of the first call naming it, which a space created for it
-   * carries. The runner resolves these after the run and re-runs (see
-   * RetryImmediately).
+   * grants and root reservation of the first call naming it, which a space
+   * created for it carries. The runner resolves these after the run and
+   * re-runs (see RetryImmediately).
    */
-  pendingSpaceNames?: Map<string, InSpaceGrants | undefined>;
+  pendingSpaceNames?: Map<string, InSpaceOptions | undefined>;
 
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;

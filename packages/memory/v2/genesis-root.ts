@@ -31,10 +31,14 @@ export function isGenesisRoot(value: unknown): value is GenesisRoot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const root = value as Record<string, unknown>;
   if (
-    typeof root.source !== "string" || !root.source.startsWith("system:") ||
     typeof root.cause !== "string" || root.cause.length === 0 ||
     root.cause.length > 512
   ) return false;
+  if (root.source === undefined) {
+    // A creator-placed root: nothing to create it from, so nothing to
+    // create it with either.
+    return root.sourceRoots === undefined && root.argument === undefined;
+  }
   const validSource = (source: unknown) => {
     if (
       typeof source !== "string" ||

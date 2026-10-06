@@ -207,6 +207,57 @@ describe("space-root ensure core", () => {
       .toBe(true);
   });
 
+  it("creates nothing under a reservation naming no source, then resolves the root its creator placed at the reserved address", async () => {
+    createRuntime();
+    const genesisRoot = { cause: "creator-placed-root" };
+    const waiting = await ensureSpaceRootPattern(runtime, space, {
+      isHomeSpace: false,
+      genesisRoot,
+    });
+    expect(waiting.outcome).toBe("awaiting-creator");
+    await runtime.idle();
+    expect(await resolveSpaceRootPattern(runtime, space)).toBeUndefined();
+
+    const { error } = await runtime.editWithRetry((tx) => {
+      const placed = runtime.getCell<{ placed: boolean }>(
+        space,
+        genesisRoot.cause,
+        undefined,
+        tx,
+      );
+      placed.set({ placed: true });
+      runtime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(placed);
+    });
+    expect(error).toBeUndefined();
+    const placed = await ensureSpaceRootPattern(runtime, space, {
+      isHomeSpace: false,
+      genesisRoot,
+    });
+    expect(placed.outcome).toBe("resolved-existing");
+    expect(
+      (await resolveSpaceRootPattern(runtime, space))?.equals(
+        runtime.getCell(space, genesisRoot.cause),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a root another creator made in place of the one a reservation naming no source leaves to its creator", async () => {
+    createRuntime();
+    await createSpaceRootIfAbsent(
+      runtime,
+      space,
+      spaceRootPatternConfig(false),
+      { fetch: fetchStub },
+    );
+    await runtime.idle();
+    await expect(ensureSpaceRootPattern(runtime, space, {
+      isHomeSpace: false,
+      genesisRoot: { cause: "creator-placed-root" },
+    })).rejects.toThrow(
+      "Default pattern conflicts with the genesis root reservation",
+    );
+  });
+
   it("non-home ensure uses the system default-app source (the unruled custom-URL fork's interim)", async () => {
     createRuntime();
     const result = await ensureSpaceRootPattern(runtime, space, {
