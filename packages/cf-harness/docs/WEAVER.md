@@ -84,16 +84,19 @@ Either way the flag calls one resolver, and that resolver is reachable directly
 when a console is wanted against a fabric that is already running:
 
 ```sh
-deno task --cwd packages/cf-harness console:launch --instance <instance>
+CF_HARNESS_SANDBOX_RUNTIME=docker \
+  deno task --cwd packages/cf-harness console:launch --instance <instance>
 ```
 
-It resolves the identity, the space and the toolshed URL from the instance's
-`pieces.json`, the store from `loom toolshed-store-dir`, and, on the Docker
-driver, the two sidecar directories from the `runsc-cfc` registration
-`docker info` reports. It prints every value beside the record that decided it,
-and serves on 8135 — the port Weaver's harness console setting and loom's proxy
-both address. Read the printout before opening Weaver: a value that is wrong
-names where to fix it, and those are three different places.
+The variable names the driver the instance runs on, `docker` or `runsc`, which a
+launch for an instance has to be told. It resolves the identity, the space and
+the toolshed URL from the instance's `pieces.json`, the store from
+`loom toolshed-store-dir`, and, on the Docker driver, the two sidecar
+directories from the `runsc-cfc` registration `docker info` reports. It prints
+every value beside the record that decided it, and serves on 8135 — the port
+Weaver's harness console setting and loom's proxy both address. Read the
+printout before opening Weaver: a value that is wrong names where to fix it, and
+those are three different places.
 
 Which sandbox driver the console runs on comes from its environment, and the
 printout's `sandbox` row says which and why:
@@ -134,7 +137,8 @@ console untouched, so every other flag it takes —
 this one path:
 
 ```sh
-deno task --cwd packages/cf-harness console:launch --instance <instance> \
+CF_HARNESS_SANDBOX_RUNTIME=docker \
+  deno task --cwd packages/cf-harness console:launch --instance <instance> \
   -- --host-mount name=corpus,source=/absolute/corpus,target=/corpus
 ```
 

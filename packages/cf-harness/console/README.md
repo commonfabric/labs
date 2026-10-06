@@ -97,11 +97,16 @@ The flag calls `console:launch`, which is also how to put a console on a fabric
 that is already running:
 
 ```sh
-deno task --cwd packages/cf-harness console:launch --instance <loom-instance>
+CF_HARNESS_SANDBOX_RUNTIME=docker \
+  deno task --cwd packages/cf-harness console:launch --instance <loom-instance>
 deno task --cwd packages/cf-harness console:launch \
   --fabric-api-url http://localhost:8000 --store packages/toolshed/cache/memory \
   --fabric-identity "$HOME/.cf/my-key.pkcs8" --fabric-space my-space
 ```
+
+The first names the sandbox runtime, here the one an instance on Docker runs on:
+a launch with `--instance` takes no default, as
+[Sandbox runtime](#sandbox-runtime) says.
 
 That task reads the identity, the space and the toolshed URL off a loom
 instance's `pieces.json` when `--instance` names one, the store off
