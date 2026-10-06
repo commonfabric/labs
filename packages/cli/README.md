@@ -1338,10 +1338,11 @@ ends after the job's terminal state. `GET /health` says which lanes run.
 A profile, named in the host's file, is the authority a job runs with: its
 tools, its host Loom files, its model-turn cap, the prompt-slot role its task
 binds as, and whether a job may bring a browser host (`browserHost: true`). A
-request may name fewer tools and fewer turns, decline the browser, and nothing
-else. A job runs through the same `cf-harness` path as an agent run, with no
-fabric session, and reports a `step` event for each tool its loop calls and a
-`command` event for each command the host ran for it.
+request may name fewer tools and fewer turns, and, under a profile that admits
+one, declare a browser host (below); leaving it out declines the browser. It may
+set nothing else. A job runs through the same `cf-harness` path as an agent run,
+with no fabric session, and reports a `step` event for each tool its loop calls
+and a `command` event for each command the host ran for it.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

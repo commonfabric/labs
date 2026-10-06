@@ -527,6 +527,30 @@ describe("local-jobs/lane", () => {
         expect(lane.browserHost("job-unknown")).toBeUndefined();
       });
 
+      it("closes the host even when reporting a failed run throws", async () => {
+        // The throw escapes the run; the lane leaves it unhandled.
+        const swallow = (event: PromiseRejectionEvent) =>
+          event.preventDefault();
+        globalThis.addEventListener("unhandledrejection", swallow);
+        try {
+          const { lane, nextRun, enqueue } = laneWith({
+            profiles: BROWSING,
+            report: () => {
+              throw new Error("the operator's log is gone");
+            },
+          });
+          lane.start();
+          const id = enqueue("a", DECLARED);
+          const run = await nextRun(0);
+          const host = lane.browserHost(id)!;
+          run.fail(new Error("the harness could not start"));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          expect(host.view().state).toBe("closed");
+        } finally {
+          globalThis.removeEventListener("unhandledrejection", swallow);
+        }
+      });
+
       it("closes the host of a queued job that is cancelled", () => {
         const { lane, enqueue } = laneWith({
           profiles: BROWSING,

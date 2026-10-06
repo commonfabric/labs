@@ -51,6 +51,7 @@ import {
   type HarnessBrowserHost,
   isBrowserHostResult,
 } from "@commonfabric/cf-harness/contracts/browser-host";
+import { sseFrame } from "@commonfabric/cf-harness/console/sse";
 
 /** The event an operation for the host arrives under. */
 export const LOCAL_BROWSER_HOST_REQUEST_EVENT = "request";
@@ -84,9 +85,12 @@ export interface LocalBrowserHostView {
 
 const encoder = new TextEncoder();
 
-/** Helper for the stream, which writes one server-sent event. */
+/**
+ * Helper for the stream, which writes one server-sent event, framed as the
+ * console's browser host frames it.
+ */
 const frame = (event: string, data: unknown): Uint8Array =>
-  encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  encoder.encode(sseFrame(event, JSON.stringify(data)));
 
 /** One operation delivered to the host and not yet answered. */
 interface Outstanding {

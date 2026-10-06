@@ -327,35 +327,39 @@ export class LocalJobLane {
       ? this.browserHost(job.id)
       : undefined;
     let result: HarnessJobResult;
+    // The host closes however the run ends, a report that throws included.
     try {
-      result = await (this.#options.runJob ?? runHarnessJob)(
-        localJobSpecOf(job, narrowed.profile, this.#options),
-        {
-          runRoot: join(this.#options.workRoot, job.id),
-          signal,
-          ...(browserHost !== undefined ? { browserHost } : {}),
-          onEvent: (event) => {
-            for (const { kind, body } of localJobEventsOf(event)) {
-              store.report(job.id, kind, body);
-            }
+      try {
+        result = await (this.#options.runJob ?? runHarnessJob)(
+          localJobSpecOf(job, narrowed.profile, this.#options),
+          {
+            runRoot: join(this.#options.workRoot, job.id),
+            signal,
+            ...(browserHost !== undefined ? { browserHost } : {}),
+            onEvent: (event) => {
+              for (const { kind, body } of localJobEventsOf(event)) {
+                store.report(job.id, kind, body);
+              }
+            },
+            ...(this.#options.harnessDeps !== undefined
+              ? { harnessDeps: this.#options.harnessDeps }
+              : {}),
+            ...(this.#options.report !== undefined
+              ? { report: this.#options.report }
+              : {}),
           },
-          ...(this.#options.harnessDeps !== undefined
-            ? { harnessDeps: this.#options.harnessDeps }
-            : {}),
-          ...(this.#options.report !== undefined
-            ? { report: this.#options.report }
-            : {}),
-        },
-      );
-    } catch (error) {
-      this.#options.report?.(
-        `agent runner: local job ${job.id} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
+        );
+      } catch (error) {
+        this.#options.report?.(
+          `agent runner: local job ${job.id} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
+      }
+    } finally {
+      this.#closeHost(job.id);
     }
-    this.#closeHost(job.id);
     // A run the lane's own stop aborted stays `running`, to be ended
     // `interrupted` when the runner next starts.
     if (this.#stopping && signal.aborted) return;
