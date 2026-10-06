@@ -170,6 +170,7 @@ import {
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
   sandboxRuntimeChoiceReason,
+  unnamedRuntimeMountNote,
 } from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
@@ -1364,7 +1365,7 @@ const resolveConsoleRunscConfig = (
     networkMode: options.sandboxRunscNetworkMode,
     additionalMounts: options.additionalMounts,
     homeDir: Deno.env.get("HOME"),
-    selection: config.sandboxRuntimeChoice,
+    unnamedRuntimeNote: unnamedRuntimeMountNote(config.sandboxRuntimeChoice),
   });
 };
 

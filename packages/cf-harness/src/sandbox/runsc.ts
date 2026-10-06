@@ -34,13 +34,11 @@ import {
 import {
   type DockerRunscAdditionalMount,
   type DockerRunscAdditionalMountConfig,
-  SANDBOX_RUNTIME_ENV,
   SANDBOX_SESSION_NAME_PATTERN,
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxPlatform,
   type SandboxRuntime,
-  type SandboxRuntimeChoice,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
   sandboxSessionsAllowedUnder,
@@ -218,10 +216,11 @@ export interface ResolveRunscSandboxConfigOptions {
   sessionStartTimeoutMs?: number;
 
   /**
-   * How the entrypoint selected this runtime, where it derived a selection.
-   * A refusal of a runtime nobody named says so, and how Docker is selected.
+   * A sentence added to the refusal of a binary, rootfs or policy that a
+   * writable mount holds. An entrypoint that selected this runtime for a
+   * caller who named none says so here, and how another is selected.
    */
-  selection?: SandboxRuntimeChoice;
+  unnamedRuntimeNote?: string;
 }
 
 const normalizeSandboxRoot = (path: string): string => {
@@ -665,18 +664,11 @@ export const resolveRunscSandboxConfig = (
   // sandbox's reach as well: a policy inside a writable mount was rewritten
   // from inside one container and the next read a labelled file as public
   // (review, verified live). The rootfs and the runsc binary likewise.
-  // Whoever ran into this on the native runtime macOS defaulted to named no
-  // runtime and may know of no store, so that refusal says where the file
-  // came from and how the other driver is selected. It names the variable,
-  // which every entrypoint reads.
-  const selection = options.selection;
-  const unnamed = selection?.source === "default" &&
-      selection.runtime === "runsc"
-    ? ". No sandbox runtime is named, so this is the native `runsc` runtime " +
-      `that macOS defaults to, from the store at \`${selection.nativeStore}\`: ` +
-      "run with a workspace and mounts that hold none of it, or select " +
-      `Docker with \`${SANDBOX_RUNTIME_ENV}=docker\`.`
-    : "";
+  // Whoever ran into this on a runtime they did not name may know of no
+  // store, so the entrypoint that selected it has its say after the reason.
+  const unnamed = options.unnamedRuntimeNote === undefined
+    ? ""
+    : `. ${options.unnamedRuntimeNote}`;
   const trusted = (
     label: string,
     given: string,

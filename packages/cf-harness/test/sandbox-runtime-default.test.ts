@@ -49,9 +49,11 @@ import {
   describeSandboxRuntimeChoice,
   processSandboxSelectionEnv,
   resolveSandboxRuntimeSelection,
+  SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
   type SandboxRuntimeChoice,
   type SandboxRuntimeSelection,
+  unnamedRuntimeMountNote,
 } from "../src/sandbox/runtime-selection.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
@@ -1459,6 +1461,32 @@ describe("sandbox-runtime-default", () => {
       : {}),
   });
 
+  describe("the names of the variables the selection reads", () => {
+    it("are declared in `src/sandbox/runtime-selection.ts`, each as a literal of its own", async () => {
+      // Loom checks its vendored copy of that one file for lines of exactly
+      // this shape, and takes a name it does not find there for one the
+      // harness does not read. A name declared in another module, and
+      // exported from this one, is a name that check does not find.
+      const source = await Deno.readTextFile(
+        new URL("../src/sandbox/runtime-selection.ts", import.meta.url),
+      );
+      const declared = Object.fromEntries(
+        [...source.matchAll(
+          /^export\s+const\s+(\w+_ENV)\s*=\s*["']([A-Z0-9_]+)["']/gm,
+        )].map(([, name, value]) => [name, value]),
+      );
+
+      expect(declared).toMatchObject({
+        SANDBOX_RUNTIME_ENV: "CF_HARNESS_SANDBOX_RUNTIME",
+        SANDBOX_ROOTFS_ENV: "CF_HARNESS_SANDBOX_ROOTFS",
+        RUNSC_CFC_POLICY_ENV: "CF_HARNESS_RUNSC_CFC_POLICY",
+        RUNSC_BINARY_ENV: "CF_HARNESS_RUNSC_BINARY",
+        SANDBOX_NETWORK_MODE_ENV: "CF_HARNESS_DOCKER_NETWORK_MODE",
+      });
+      expect(SANDBOX_RUNTIME_ENV).toBe("CF_HARNESS_SANDBOX_RUNTIME");
+    });
+  });
+
   describe("processSandboxSelectionEnv()", () => {
     it("returns the home and every setting of either sandbox driver as the process's environment has them", () => {
       // Each variable the batch CLI takes for its sandbox from the process
@@ -2654,7 +2682,7 @@ describe("sandbox-runtime-default", () => {
         rootfs: join(store, ROOTFS),
         cfcPolicyPath: join(store, "policy", POLICY),
         platform: "linux",
-        ...(selection !== undefined ? { selection } : {}),
+        unnamedRuntimeNote: unnamedRuntimeMountNote(selection),
       });
 
     /** Makes a store under the case's root with its policy where `resolved` names it. */

@@ -250,9 +250,6 @@ export class SandboxSessionUnavailableError extends Error {
 /** The sandbox runtimes an entrypoint selects between. */
 export type SandboxRuntimeKind = "docker" | "runsc";
 
-/** The variable that names the sandbox runtime, for every entrypoint. */
-export const SANDBOX_RUNTIME_ENV = "CF_HARNESS_SANDBOX_RUNTIME";
-
 /**
  * A platform whose default sandbox runtime can apply, as `Deno.build.os`
  * writes it. A name outside this set is a type error rather than a platform

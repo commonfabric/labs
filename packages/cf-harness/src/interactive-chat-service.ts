@@ -19,11 +19,11 @@ import {
   type RunHarnessTranscriptOptions,
 } from "./prompt-loop.ts";
 import { establishHarnessSessionContext } from "./session-assembly.ts";
-import { sandboxRuntimeOfOptions } from "./sandbox/runtime-selection.ts";
 import {
   SANDBOX_RUNTIME_ENV,
-  type SandboxRuntimeKind,
-} from "./sandbox/types.ts";
+  sandboxRuntimeOfOptions,
+} from "./sandbox/runtime-selection.ts";
+import type { SandboxRuntimeKind } from "./sandbox/types.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import type { HarnessBrowserHost } from "./contracts/browser-host.ts";

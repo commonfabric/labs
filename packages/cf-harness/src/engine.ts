@@ -232,6 +232,7 @@ import {
   sandboxRuntimeOfKind,
   sandboxRuntimeOfOptions,
   sandboxRuntimeResumeRefusal,
+  unnamedRuntimeMountNote,
 } from "./sandbox/runtime-selection.ts";
 import {
   DenoProcessRunner,
@@ -1061,7 +1062,9 @@ export class CfHarnessEngine {
         additionalMounts: options.additionalMounts,
         runId,
         homeDir: Deno.env.get("HOME"),
-        selection: options.sandboxRuntimeChoice,
+        unnamedRuntimeNote: unnamedRuntimeMountNote(
+          options.sandboxRuntimeChoice,
+        ),
       })
       : undefined;
     this.#ownedNativeConfig = runscConfig;

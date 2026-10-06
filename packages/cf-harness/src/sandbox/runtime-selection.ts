@@ -36,16 +36,14 @@ import {
   darwinCfcVmStore,
   type RunscNetworkMode,
 } from "./runsc.ts";
-import {
-  SANDBOX_RUNTIME_ENV,
-  type SandboxPlatform,
-  type SandboxRuntime,
-  type SandboxRuntimeChoice,
-  type SandboxRuntimeDescription,
-  type SandboxRuntimeKind,
+import type {
+  SandboxPlatform,
+  SandboxRuntime,
+  SandboxRuntimeChoice,
+  SandboxRuntimeDescription,
+  SandboxRuntimeKind,
 } from "./types.ts";
 
-export { SANDBOX_RUNTIME_ENV };
 export type { SandboxPlatform, SandboxRuntimeChoice, SandboxRuntimeKind };
 
 /** Engine options naming which runtime executes a run, and how. */
@@ -80,6 +78,13 @@ export interface ExplicitSandboxRuntimeSelection {
   dockerDriverFlags?: readonly DockerDriverFlag[];
 }
 
+// Each variable below is declared in this file, as a literal on a line of
+// this shape. Loom reads its vendored copy of the file for exactly such lines
+// and compares the names with the ones it hands the harness, so a name
+// declared in another module and exported from here is one it does not find.
+
+/** Names the sandbox runtime, `docker` or `runsc`, for every entrypoint. */
+export const SANDBOX_RUNTIME_ENV = "CF_HARNESS_SANDBOX_RUNTIME";
 export const SANDBOX_ROOTFS_ENV = "CF_HARNESS_SANDBOX_ROOTFS";
 export const RUNSC_CFC_POLICY_ENV = "CF_HARNESS_RUNSC_CFC_POLICY";
 export const RUNSC_BINARY_ENV = "CF_HARNESS_RUNSC_BINARY";
@@ -632,6 +637,24 @@ export const sandboxRuntimeChoiceReason = (
 export const describeSandboxRuntimeChoice = (
   choice: SandboxRuntimeChoice,
 ): string => `${choice.runtime} (${sandboxRuntimeChoiceReason(choice)})`;
+
+/**
+ * Returns what the direct driver adds to its refusal of a file that a
+ * writable mount holds, for a runtime `choice` says nobody named: that the
+ * native runtime was the default, where its store is, and how Docker is
+ * selected. `undefined` for a runtime that was named, and for no record of
+ * the choice. It names the variable alone, which every entrypoint reads,
+ * since the driver's refusal reaches the operators of all of them.
+ */
+export const unnamedRuntimeMountNote = (
+  choice: SandboxRuntimeChoice | undefined,
+): string | undefined =>
+  choice?.source === "default" && choice.runtime === "runsc"
+    ? "No sandbox runtime is named, so this is the native `runsc` runtime " +
+      `that macOS defaults to, from the store at \`${choice.nativeStore}\`: ` +
+      "run with a workspace and mounts that hold none of it, or select " +
+      `Docker with \`${SANDBOX_RUNTIME_ENV}=docker\`.`
+    : undefined;
 
 /**
  * Returns the runtime, as an entrypoint names it, that describes itself as
