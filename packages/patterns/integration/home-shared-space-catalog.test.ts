@@ -850,6 +850,10 @@ describe("Home shared-space catalog", () => {
           ...registration,
           initialState: "archived",
         }, "seed");
+        // Source-update setup reads the catalog, so its snapshot must be
+        // authoritative rather than a speculative registration result.
+        await runtime.speculationOverlay?.waitForSpaceQuiescence(owner.did());
+        await runtime.idle();
         const original = await backingCatalog(runtime, home);
         const originalId = original.getAsNormalizedFullLink().id;
         const before = original.getRaw();
