@@ -376,14 +376,6 @@ describe("executor-space-access-change", () => {
             level: "OWNER",
           }),
         );
-        await awaitAdmitted(
-          server,
-          () =>
-            allEntriesIn(inboxEngine).some((delivered) =>
-              (delivered.payload as { principal?: string } | undefined)
-                ?.principal === carolSigner.did()
-            ),
-        );
 
         expect(entry.error).toBeUndefined();
         expect(Engine.read(engine, { id: aclId })?.value).toEqual({
@@ -406,6 +398,15 @@ describe("executor-space-access-change", () => {
         expect(notesIn(engine, result)).toEqual([
           `granted ${carolSigner.did()}`,
         ]);
+        // The notice reaches the inbox's stream from that outbox row.
+        await awaitAdmitted(
+          server,
+          () =>
+            allEntriesIn(inboxEngine).some((delivered) =>
+              (delivered.payload as { principal?: string } | undefined)
+                ?.principal === carolSigner.did()
+            ),
+        );
       });
 
       it("commits a gesture's revoke of an entry", async () => {
