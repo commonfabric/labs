@@ -1395,11 +1395,6 @@ function writtenBindingsOf(
         if (ts.isOmittedExpression(element)) continue;
         writeTo(ts.isSpreadElement(element) ? element.expression : element);
       }
-    } else if (
-      ts.isBinaryExpression(value) &&
-      value.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    ) {
-      writeTo(value.left);
     } else {
       for (const symbol of bindingsWrittenBy(value, checker)) {
         written.add(symbol);
@@ -1465,13 +1460,11 @@ function bindingsWrittenBy(
     root = unwrapExpression(root.expression);
   }
   if (!ts.isIdentifier(root) || depth >= 32) return [];
-  const symbol = bindingSymbol(root, checker);
-  if (!symbol) return [];
   const initializer = constInitializer(root, checker);
   return [
-    symbol,
+    bindingSymbol(root, checker),
     ...(initializer ? bindingsWrittenBy(initializer, checker, depth + 1) : []),
-  ];
+  ].filter((symbol): symbol is ts.Symbol => symbol !== undefined);
 }
 
 /**

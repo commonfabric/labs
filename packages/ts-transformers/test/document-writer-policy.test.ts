@@ -464,6 +464,41 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
           "make({})",
         ],
         [
+          "a parameter a destructuring assignment reassigns",
+          `function make(schema: Schema) {\n  ({ schema } = { schema: toSchema<${UNREAD}>() });\n  return schema;\n}`,
+          'make({ type: "object" })',
+        ],
+        [
+          "a constant's property an array destructuring assignment writes",
+          `const schemas = { input: toSchema<{ value: string }>() };\n[schemas.input] = [toSchema<${UNREAD}>()];`,
+          "schemas.input",
+        ],
+        [
+          "a constant's property a destructuring default writes",
+          `const schemas = { input: toSchema<{ value: string }>() };\n({ input: schemas.input = toSchema<${UNREAD}>() } = {} as { input?: Schema });`,
+          "schemas.input",
+        ],
+        [
+          "a constant's property a rest assignment writes",
+          `const holder: { rest?: object } = {};\nconst source = { input: toSchema<${UNREAD}>() };\n({ ...holder.rest } = source);`,
+          "(holder.rest as { input: Schema }).input",
+        ],
+        [
+          "a constant's property the program deletes",
+          `const schemas: { input?: Schema } = { input: toSchema<${UNREAD}>() };\ndelete schemas.input;`,
+          "schemas.input!",
+        ],
+        [
+          "a constant's object an increment writes into",
+          `const schemas = { input: toSchema<${UNREAD}>(), version: 0 };\nschemas.version++;`,
+          "schemas.input",
+        ],
+        [
+          "a constant's property a `for…of` loop writes",
+          `const schemas: { input?: Schema } = {};\nfor (schemas.input of [toSchema<${UNREAD}>()]) {\n  break;\n}`,
+          "schemas.input!",
+        ],
+        [
           "a constant's property the program reassigns",
           `const schemas = { input: toSchema<{ value: string }>() };\nschemas.input = toSchema<${UNREAD}>();`,
           "schemas.input",
