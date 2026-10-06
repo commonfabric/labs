@@ -5,7 +5,7 @@ other principals deliver offers to the identity, such as a chat room to join.
 Its offers are labeled readable by the owner alone. Anyone can append to it,
 through its `receive` stream, which keeps an offer only when the offer names
 the principal sending it as its sender. This document says where the inbox
-lives, who creates it and when, what access its space grants, what `receive`
+lives, how Home comes to hold it, what access its space grants, what `receive`
 accepts, and the limits on what it keeps private.
 
 The pattern is `packages/patterns/system/private-inbox.tsx`.
@@ -14,9 +14,11 @@ The pattern is `packages/patterns/system/private-inbox.tsx`.
 
 - **The inbox piece** runs `private-inbox.tsx`, in a space created for it. The
   space is named `private-inbox` in the owner's Home space, so it is one space
-  per identity, whichever device creates it and however many times.
+  per identity, whichever device creates it and however many times. Home may
+  instead hold an inbox it adopted, such as one a loom daemon created, which
+  lives wherever its creator put it.
 - **Home** holds a link to the piece in its `privateInbox` field, under the key
-  `piece`. The field is empty until the inbox exists.
+  `piece`. The field is empty until Home first ensures the inbox.
 - **Each of the owner's profiles** points at an inbox through its `inbox`
   field, which `profile-home.tsx` describes. A profile space is readable by
   anyone, so the pointer is how a sender finds the inbox.
@@ -24,12 +26,35 @@ The pattern is `packages/patterns/system/private-inbox.tsx`.
 A profile may point at an inbox other than Home's, set by something else. That
 pointer is left as it is.
 
-## Creating it
+## Creating or adopting it
 
-Home's `ensurePrivateInbox` stream creates the inbox when Home holds none, and
-then has every profile in Home's `profiles` list that points at no inbox point
-at Home's, through the profile's own `setInbox`. Sending it again creates
-nothing and re-points nothing.
+An identity has one inbox, whichever side creates it: Home, or a loom daemon,
+which creates a share inbox of its own and points a profile at it. Whichever
+side arrives second adopts the inbox the first one advertises.
+
+Home's `ensurePrivateInbox` stream gives Home its inbox:
+
+- When Home holds an inbox already, Home keeps it.
+- Otherwise, when a profile in Home's `profiles` list points at an inbox, Home
+  adopts that inbox. With several profiles pointing at different inboxes, Home
+  adopts the one the first of them in list order points at.
+- Otherwise, when no profile points at an inbox, Home creates one, as "Where it
+  lives" says.
+
+It then has every profile in the list that points at no inbox point at Home's,
+through the profile's own `setInbox`. A profile pointing at another inbox keeps
+its pointer, so after adopting one of several inboxes, the profiles pointing at
+the others still advertise them. Sending the stream again creates nothing and
+re-points nothing. Creation is tested by
+`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with
+server execution on and off; keeping and adopting are tested there and by
+`packages/patterns/system/private-inbox.test.tsx`.
+
+Adoption works in one direction only until a loom daemon does its half. A loom
+daemon that arrives second is to adopt the inbox a profile advertises, and never
+to replace a pointer that names a different inbox. Until it does, a daemon's
+setup replaces a profile's pointer to Home's inbox with one to its own, and
+Home goes on holding the inbox that profile no longer advertises.
 
 The host sends it once per runtime worker, when it first brings up the user's
 Home pattern: `PiecesController.ensurePrivateInbox()` in `packages/piece`,
@@ -57,19 +82,22 @@ A profile is pointed in one of two ways:
   leaves the profile to the next ensure.
 
 So a profile created before Home holds an inbox is pointed by the next ensure
-after the inbox exists. Both ways go through `pointAtInboxIfUnset()` in
+after the inbox exists, and a profile created after Home adopted an inbox is
+pointed at the adopted one. Both ways go through `pointAtInboxIfUnset()` in
 `profile-home.tsx`, which reads the pointer as a typed link, as the next
 paragraphs require.
 
-The pointing runs as a second event, queued behind the one that creates the
-inbox, because the inbox piece exists only once that event's transaction has
-committed. It reads the profile list as a value, so the runner holds the event
-until every profile has loaded, and an unloaded profile is never taken for one
-without an inbox. A profile of any vintage with a `setInbox` is pointed this
+The ensure reads the profile list as a value, as `advertisedInbox()` in
+`private-inbox.tsx` requires, so the runner holds the event until every profile
+has loaded, and an unloaded profile is never taken for one that advertises no
+inbox. The pointing runs as a second event, queued behind the one that gives
+Home its inbox, because a created inbox piece exists only once that event's
+transaction has committed. It reads the list as a value too, for the same
+reason. A profile of any vintage with a `setInbox` is pointed this
 way; one predating `setInbox` drops the event, and the runtime logs a warning
 that no handler took it.
 
-Pointing reads each profile's pointer as a typed link,
+Adopting and pointing read each profile's pointer as a typed link,
 `Cell<ShareInboxPiece>`. The link carries the label of what it reaches, and
 the inbox labels its offers confidential to its owner. Read as an untyped link,
 `Cell<unknown>`, the pointer joins that label, from another space, into the
@@ -78,9 +106,9 @@ delivered it. When the event drain, rather than the wave that queued it,
 delivered the run, it also refuses the run's record that it handled the event,
 and the event is lost. Read as the typed link, the pointer joins no
 confidentiality. `private-inbox.pointer-type.test.ts` fails to compile if any
-reader's pointer type, the pointing step's, the seed step's or the profile's
-own, becomes unconstrained, or names a member of the inbox's result other than
-its name.
+reader's pointer type, the ensure's and the pointing step's, the seed step's or
+the profile's own, becomes unconstrained, or names a member of the inbox's
+result other than its name.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them
@@ -89,7 +117,16 @@ is replaced by Home's inbox.
 The link a profile receives names the inbox's own result document rather than
 the cell Home's link reaches it through: a link written into a profile's
 labeled `inbox` takes its label from the document it names, and the result
-document is the one with a schema to take it from.
+document is the one with a schema to take it from. Home's own link to an
+adopted inbox names that document too, rather than the profile's pointer, so
+a later change to that pointer does not move Home's inbox.
+
+The inbox lives in a field of Home's root, as the shared-space catalog does,
+so replacing Home's root would replace it: a new root holds no inbox, and its
+first ensure gives it one by the rules above, from whatever profile list the
+new root holds. The supported commands refuse to replace an existing Home
+root, as `PiecesController.recreateDefaultPattern()` in `packages/piece`
+does, and update its source in place, which keeps both.
 
 ## The access its space grants
 

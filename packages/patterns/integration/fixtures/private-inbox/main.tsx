@@ -1,7 +1,9 @@
 /**
  * Stands in for Home around the system private inbox: it holds the inbox and
  * the owner's profiles, and gives a sender and a stranger handlers of their
- * own that reach the inbox through a profile. Fixture for
+ * own that reach the inbox through a profile. A second stand-in, holding
+ * `adoptingInbox` over `adoptingProfiles`, is a Home whose profiles already
+ * point at inboxes when it first ensures its own. Fixture for
  * `private-inbox-multi-runtime.test.ts`.
  */
 
@@ -128,22 +130,39 @@ const createOtherInbox = handler<
   });
 });
 
-/** Which of the owner's profiles to point at the other inbox. */
+/**
+ * Creates an inbox in a space of its own that grants every principal `WRITE`,
+ * as a loom daemon creates its share inbox, and keeps it in `foreignInbox`.
+ */
+const createForeignInbox = handler<
+  void,
+  { foreignInbox: Writable<PrivateInboxHolder> }
+>((_event, { foreignInbox }) => {
+  foreignInbox.set({
+    piece: inboxLinkOf(
+      PrivateInbox.inSpace(undefined, { grants: { "*": "WRITE" } })({
+        offers: [],
+      }),
+    ),
+  });
+});
+
+/** Which of the owner's profiles to point at an inbox. */
 export interface PointElsewhereRequest {
-  /** The profile's position in the owner's list. */
+  /** The profile's position in its list. */
   index: number;
 }
 
-/** Points one of the owner's profiles at the other inbox. */
-const pointProfileElsewhere = handler<
+/** Points one of the profiles in `profiles` at the inbox `inbox` holds. */
+const pointProfileAt = handler<
   PointElsewhereRequest,
   {
     profiles: Writable<ProfileHomeOutput[]>;
-    otherInbox: Writable<PrivateInboxHolder>;
+    inbox: Writable<PrivateInboxHolder>;
   }
->((event, { profiles, otherInbox }) => {
+>((event, { profiles, inbox }) => {
   profiles.key(event.index).resolveAsCell().key("setInbox").send({
-    inbox: otherInbox.get().piece?.resolveAsCell(),
+    inbox: inbox.get().piece?.resolveAsCell(),
   });
 });
 
@@ -216,9 +235,15 @@ export interface MainOutput {
   privateInbox: PrivateInboxHolder;
   profiles: ProfileHomeOutput[];
   otherInbox: PrivateInboxHolder;
+  foreignInbox: PrivateInboxHolder;
+  adoptingInbox: PrivateInboxHolder;
+  adoptingProfiles: ProfileHomeOutput[];
   copiedOffers: CopiedOffer[];
 
-  /** Creates the private inbox if there is none, and points profiles at it. */
+  /**
+   * Gives the stand-in Home a private inbox if it holds none, and points
+   * profiles at it.
+   */
   ensurePrivateInbox: Stream<void>;
 
   /** Creates one of the owner's profiles. */
@@ -232,6 +257,31 @@ export interface MainOutput {
 
   /** Points one of the owner's profiles at the other inbox. */
   pointProfileElsewhere: Stream<PointElsewhereRequest>;
+
+  /**
+   * Creates an inbox in a space of its own that grants every principal
+   * `WRITE`, kept in `foreignInbox`; sent by another principal, the inbox is
+   * theirs.
+   */
+  createForeignInbox: Stream<void>;
+
+  /** Creates one of the second stand-in Home's profiles. */
+  createAdoptingProfile: Stream<void>;
+
+  /** Creates a profile of an earlier vintage in the second stand-in Home. */
+  createAdoptingEarlierProfile: Stream<void>;
+
+  /** Points one of the second stand-in Home's profiles at the foreign inbox. */
+  pointAdoptingProfileAtForeign: Stream<PointElsewhereRequest>;
+
+  /** Points one of the second stand-in Home's profiles at the other inbox. */
+  pointAdoptingProfileAtOther: Stream<PointElsewhereRequest>;
+
+  /**
+   * Gives the second stand-in Home a private inbox if it holds none, and
+   * points its profiles at it.
+   */
+  ensureAdoptingInbox: Stream<void>;
 
   /** Sends an offer through the owner's first profile. */
   offer: Stream<OfferRequest>;
@@ -254,32 +304,73 @@ export interface MainOutput {
 
 export default pattern<MainInput, MainOutput>((
   { privateInbox, profiles, otherInbox, copiedOffers },
-) => ({
-  [NAME]: "Private inbox fixture",
-  [UI]: <div>private inbox fixture</div>,
-  privateInbox,
-  profiles,
-  otherInbox,
-  copiedOffers,
-  ensurePrivateInbox: ensurePrivateInbox({
+) => {
+  // The second stand-in Home's state is its own rather than inputs: two
+  // profile-list inputs the piece is created without read as one list.
+  const foreignInbox = new Writable<PrivateInboxHolder>({}).for(
+    "foreignInbox",
+  );
+  const adoptingInbox = new Writable<PrivateInboxHolder>({}).for(
+    "adoptingInbox",
+  );
+  const adoptingProfiles = new Writable<ProfileHomeOutput[]>([]).for(
+    "adoptingProfiles",
+  );
+  return {
+    [NAME]: "Private inbox fixture",
+    [UI]: <div>private inbox fixture</div>,
     privateInbox,
-    pointProfiles: pointProfilesAtPrivateInbox({
+    profiles,
+    otherInbox,
+    foreignInbox,
+    adoptingInbox,
+    adoptingProfiles,
+    copiedOffers,
+    ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
+      pointProfiles: pointProfilesAtPrivateInbox({
+        privateInbox,
+        // deno-lint-ignore no-explicit-any
+        profiles: profiles as any,
+      }),
     }),
-  }),
-  createProfile: createProfile({ profiles }),
-  createEarlierProfile: createEarlierProfile({ profiles }),
-  createOtherInbox: createOtherInbox({ otherInbox }),
-  pointProfileElsewhere: pointProfileElsewhere({ profiles, otherInbox }),
-  offer: offer({ profiles }),
-  queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
-  copyOffers: copyOffers({ privateInbox, copiedOffers }),
-  createProfileThroughSurface: ProfileCreate({
-    // deno-lint-ignore no-explicit-any
-    profiles: profiles as any,
-    // deno-lint-ignore no-explicit-any
-    privateInbox: privateInbox as any,
-  }).createProfile,
-}));
+    createProfile: createProfile({ profiles }),
+    createEarlierProfile: createEarlierProfile({ profiles }),
+    createOtherInbox: createOtherInbox({ otherInbox }),
+    pointProfileElsewhere: pointProfileAt({ profiles, inbox: otherInbox }),
+    createForeignInbox: createForeignInbox({ foreignInbox }),
+    createAdoptingProfile: createProfile({ profiles: adoptingProfiles }),
+    createAdoptingEarlierProfile: createEarlierProfile({
+      profiles: adoptingProfiles,
+    }),
+    pointAdoptingProfileAtForeign: pointProfileAt({
+      profiles: adoptingProfiles,
+      inbox: foreignInbox,
+    }),
+    pointAdoptingProfileAtOther: pointProfileAt({
+      profiles: adoptingProfiles,
+      inbox: otherInbox,
+    }),
+    ensureAdoptingInbox: ensurePrivateInbox({
+      privateInbox: adoptingInbox,
+      // deno-lint-ignore no-explicit-any
+      profiles: adoptingProfiles as any,
+      pointProfiles: pointProfilesAtPrivateInbox({
+        privateInbox: adoptingInbox,
+        // deno-lint-ignore no-explicit-any
+        profiles: adoptingProfiles as any,
+      }),
+    }),
+    offer: offer({ profiles }),
+    queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
+    copyOffers: copyOffers({ privateInbox, copiedOffers }),
+    createProfileThroughSurface: ProfileCreate({
+      // deno-lint-ignore no-explicit-any
+      profiles: profiles as any,
+      // deno-lint-ignore no-explicit-any
+      privateInbox: privateInbox as any,
+    }).createProfile,
+  };
+});

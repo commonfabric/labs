@@ -2,7 +2,9 @@
  * The multi-runtime harness driving the system private inbox: its owner
  * creates it and has their profiles point at it, current and earlier vintages
  * alike, a sender's own handler delivers offers to the inbox the owner's
- * profile points at, and a stranger tries to read them.
+ * profile points at, and a stranger tries to read them. A second Home, whose
+ * profiles already point at inboxes, adopts the first of them, another
+ * principal's, rather than creating one.
  *
  * The inbox's space grants every principal `WRITE` in both server-execution
  * postures: the serving loop makes a sender's write where server execution is
@@ -61,10 +63,29 @@ describe("private inbox across runtimes", () => {
   let sender: MultiRuntimeSession;
   let stranger: MultiRuntimeSession;
   let inbox: PieceAddress;
+  let adopted: PieceAddress;
 
   /** The link a profile of the owner's holds to its inbox, if any. */
   const profileInbox = async (index: number) =>
     await owner.link(["profiles", index, "inbox", "piece"]);
+
+  /** The link a profile of the second Home's holds to its inbox, if any. */
+  const adoptingProfileInbox = async (index: number) =>
+    await owner.link(["adoptingProfiles", index, "inbox", "piece"]);
+
+  /** The ACL of the space `piece` is in, as stored. */
+  const aclOf = async (piece: PieceAddress): Promise<unknown> => {
+    const address = {
+      id: aclDocId(piece.space as `did:${string}:${string}`),
+      space: piece.space,
+    };
+    // Reading the document through a cell is what loads it into the owner's
+    // replica; the raw read then returns it as stored.
+    await owner.client().call("readAddress", {
+      link: { ...address, path: [], type: "application/json" },
+    });
+    return ((await owner.rawRead(address)).value as { value?: unknown }).value;
+  };
 
   beforeAll(async () => {
     harness = await MultiRuntimeHarness.create({
@@ -79,27 +100,46 @@ describe("private inbox across runtimes", () => {
     });
     [owner, sender, stranger] = harness.sessions;
 
-    // Two current profiles and two of an earlier vintage. The second of each
-    // already points at an inbox of its own.
+    // A current profile and one of an earlier vintage, neither pointing at an
+    // inbox, so that Home creates one.
     await owner.send("createProfile");
-    await owner.send("createProfile");
-    await owner.send("createEarlierProfile");
     await owner.send("createEarlierProfile");
     await owner.send("createOtherInbox");
+    await stranger.send("createForeignInbox");
     await harness.settle();
-    await owner.send("pointProfileElsewhere", { index: 1 });
-    await owner.send("pointProfileElsewhere", { index: 3 });
-    await harness.settleUntil(async () =>
-      (await owner.read(["profiles", 1, "inbox", "piece"])) !== undefined &&
-      (await owner.read(["profiles", 3, "inbox", "piece"])) !== undefined
-    );
 
     await owner.send("ensurePrivateInbox");
     await harness.settleUntil(async () =>
       (await owner.read(["profiles", 0, "inbox", "piece"])) !== undefined &&
-      (await owner.read(["profiles", 2, "inbox", "piece"])) !== undefined
+      (await owner.read(["profiles", 1, "inbox", "piece"])) !== undefined
     );
     inbox = await owner.link(["privateInbox", "piece"]);
+
+    // The second Home: two current profiles and two of an earlier vintage.
+    // The second points at the stranger's inbox, standing in for one a loom
+    // daemon created, and the third at the owner's other inbox.
+    await owner.send("createAdoptingProfile");
+    await owner.send("createAdoptingProfile");
+    await owner.send("createAdoptingEarlierProfile");
+    await owner.send("createAdoptingEarlierProfile");
+    await harness.settle();
+    await owner.send("pointAdoptingProfileAtForeign", { index: 1 });
+    await owner.send("pointAdoptingProfileAtOther", { index: 2 });
+    await harness.settleUntil(async () =>
+      (await owner.read(["adoptingProfiles", 1, "inbox", "piece"])) !==
+        undefined &&
+      (await owner.read(["adoptingProfiles", 2, "inbox", "piece"])) !==
+        undefined
+    );
+
+    await owner.send("ensureAdoptingInbox");
+    await harness.settleUntil(async () =>
+      (await owner.read(["adoptingProfiles", 0, "inbox", "piece"])) !==
+        undefined &&
+      (await owner.read(["adoptingProfiles", 3, "inbox", "piece"])) !==
+        undefined
+    );
+    adopted = await owner.link(["adoptingInbox", "piece"]);
   });
 
   afterAll(async () => {
@@ -145,45 +185,65 @@ describe("private inbox across runtimes", () => {
 
   it("creates the inbox in a space of its own that grants every principal WRITE", async () => {
     expect(inbox.space).not.toBe(harness.spaceDid);
-    const address = {
-      id: aclDocId(inbox.space as `did:${string}:${string}`),
-      space: inbox.space,
-    };
-    // Reading the document through a cell is what loads it into the owner's
-    // replica; the raw read then returns it as stored.
-    await owner.client().call("readAddress", {
-      link: { ...address, path: [], type: "application/json" },
-    });
-    const acl = (await owner.rawRead(address)).value as { value?: unknown };
-
-    expect(acl.value).toEqual({
+    expect(await aclOf(inbox)).toEqual({
       [owner.identity.did()]: "OWNER",
       "*": "WRITE",
     });
   });
 
-  it("points the profile with no inbox at it, and leaves the other as it was", async () => {
-    const other = await owner.link(["otherInbox", "piece"]);
-
+  it("points each profile with no inbox at it, current and earlier vintage", async () => {
     expect((await profileInbox(0)).id).toBe(inbox.id);
-    expect((await profileInbox(1)).id).toBe(other.id);
-    expect(other.id).not.toBe(inbox.id);
+    expect((await profileInbox(1)).id).toBe(inbox.id);
   });
 
-  it("points an earlier-vintage profile with no inbox at it, and leaves a pointed one as it was", async () => {
+  it("creates and re-points nothing when ensured again, and leaves a profile pointing at another inbox as it was", async () => {
     const other = await owner.link(["otherInbox", "piece"]);
+    const count = ((await owner.readRaw(["profiles"])) as unknown[]).length;
+    await owner.send("createProfile");
+    await owner.send("createEarlierProfile");
+    await harness.settle();
+    await owner.send("pointProfileElsewhere", { index: count });
+    await owner.send("pointProfileElsewhere", { index: count + 1 });
+    await harness.settleUntil(async () =>
+      (await owner.read(["profiles", count, "inbox", "piece"])) !==
+        undefined &&
+      (await owner.read(["profiles", count + 1, "inbox", "piece"])) !==
+        undefined
+    );
 
-    expect((await profileInbox(2)).id).toBe(inbox.id);
-    expect((await profileInbox(3)).id).toBe(other.id);
-  });
-
-  it("creates and re-points nothing when ensured again", async () => {
     await owner.send("ensurePrivateInbox");
     await harness.settle();
 
     expect(await owner.link(["privateInbox", "piece"])).toEqual(inbox);
     expect((await profileInbox(0)).id).toBe(inbox.id);
-    expect((await profileInbox(2)).id).toBe(inbox.id);
+    expect((await profileInbox(1)).id).toBe(inbox.id);
+    expect((await profileInbox(count)).id).toBe(other.id);
+    expect((await profileInbox(count + 1)).id).toBe(other.id);
+    expect(other.id).not.toBe(inbox.id);
+  });
+
+  it("adopts the inbox the first profile that points at one points at, another principal's, and creates none", async () => {
+    const foreign = await owner.link(["foreignInbox", "piece"]);
+
+    expect(await aclOf(foreign)).toEqual({
+      [stranger.identity.did()]: "OWNER",
+      "*": "WRITE",
+    });
+    expect(adopted.id).toBe(foreign.id);
+    expect(adopted.space).toBe(foreign.space);
+  });
+
+  it("points the adopting Home's profiles with no inbox at the adopted inbox, current and earlier vintage", async () => {
+    expect((await adoptingProfileInbox(0)).id).toBe(adopted.id);
+    expect((await adoptingProfileInbox(1)).id).toBe(adopted.id);
+    expect((await adoptingProfileInbox(3)).id).toBe(adopted.id);
+  });
+
+  it("leaves the adopting Home's profile pointing at a different inbox as it was", async () => {
+    const other = await owner.link(["otherInbox", "piece"]);
+
+    expect((await adoptingProfileInbox(2)).id).toBe(other.id);
+    expect(other.id).not.toBe(adopted.id);
   });
 
   it("points a profile created through the profile-create surface after the inbox exists", async () => {

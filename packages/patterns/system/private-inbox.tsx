@@ -325,28 +325,53 @@ function inboxLinkOf(inbox: unknown): unknown {
 }
 
 /**
- * Creates Home's private inbox if Home holds none, then has each profile in
- * Home's list that points at no inbox point at Home's. Running it again
- * creates nothing and re-points nothing.
+ * The inbox the first profile in `profiles` that points at one points at, or
+ * `undefined` when none does. Call it from a handler, with `profiles` bound as
+ * a value of type {@link PointTarget}, so that each pointer is read as a typed
+ * link.
+ */
+export function advertisedInbox(
+  profiles: readonly (PointTarget | undefined)[] | undefined,
+): Cell<PrivateInboxPiece> | undefined {
+  for (const profile of profiles ?? []) {
+    const piece = profile?.inbox?.piece;
+    if (piece !== undefined) return piece.resolveAsCell();
+  }
+  return undefined;
+}
+
+/**
+ * Gives Home a private inbox if it holds none, then has each profile in Home's
+ * list that points at no inbox point at Home's. An inbox Home holds is kept.
+ * Otherwise Home adopts the inbox a profile already advertises, the first in
+ * list order that points at one, whether Home created it or a loom daemon did,
+ * and creates an inbox only when no profile points at one. A profile pointing
+ * at another inbox keeps its pointer. Running it again creates nothing and
+ * re-points nothing.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
  * The space grants every principal `WRITE`, so a sender's write is admitted
  * whether the sender's own runtime makes it or the space's server does.
  *
+ * The list is bound as a value: the runner resolves it before the body runs,
+ * and withdraws the dispatch until every profile it names has loaded, so an
+ * unloaded profile is never taken for one that advertises no inbox.
+ *
  * The pointing is a second step, queued behind this one. A profile is given
- * the inbox's own result document, which this handler's run creates, so the
+ * the inbox's own result document, which this handler's run may create, so the
  * profiles are pointed in an event of its own, once this run has committed.
  */
 export const ensurePrivateInbox = handler<
   void,
   {
     privateInbox: Writable<PrivateInboxHolder>;
+    profiles: PointTarget[];
     pointProfiles: Stream<void>;
   }
->((_event, { privateInbox, pointProfiles }) => {
+>((_event, { privateInbox, profiles, pointProfiles }) => {
   if (privateInbox.get()?.piece === undefined) {
-    const piece = inboxLinkOf(
+    const piece = advertisedInbox(profiles) ?? inboxLinkOf(
       PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
         grants: { "*": "WRITE" },
       })({ offers: [] }),
