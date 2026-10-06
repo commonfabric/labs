@@ -189,11 +189,11 @@ async function rejectInvocation<T>(
   expect(entries()[index].error).toContain(message);
 }
 
-/** Records tentative handler receipts and commit settlements without extra writes. */
+/** Records tentative handler receipts and commit verdicts without extra writes. */
 function watchHandlingCommits(runtime: Runtime) {
   const outcomes = new ArrivalLog<{ eventId: string; value: unknown }>();
-  const settlements = new ArrivalLog<
-    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>["settled"]>
+  const verdicts = new ArrivalLog<
+    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>["verdict"]>
   >();
   const edit = runtime.edit.bind(runtime);
   const wrapped = stub(runtime, "edit", (...args) => {
@@ -212,17 +212,17 @@ function watchHandlingCommits(runtime: Runtime) {
         IExtendedStorageTransaction["commit"]
       >;
       return createTransactionCommitReceipt(
-        receipt.settled.then((result) => {
-          settlements.record(result);
+        receipt.settled,
+        receipt.verdict.then((result) => {
+          verdicts.record(result);
           return result;
         }),
-        receipt.verdict,
         receipt,
       );
     });
     return tx;
   });
-  return { outcomes, settlements, [Symbol.dispose]: () => wrapped.restore() };
+  return { outcomes, verdicts, [Symbol.dispose]: () => wrapped.restore() };
 }
 
 /** Independent replicas against an ACL-enforcing memory server. */
@@ -471,9 +471,7 @@ describe("Home catalog speculative revisions", () => {
             { status: "applied", space: registration.space, id: "my-archive" },
             { status: "applied", space: registration.space, id: "my-restore" },
           ]);
-        await watch.settlements.matching((verdict) =>
-          verdict.error !== undefined
-        );
+        await watch.verdicts.matching((verdict) => verdict.error !== undefined);
         server.options.subscriptionRefreshDelayMs = 0;
         await server.flushSessions();
         const results = await Promise.all([first, second]);
@@ -591,7 +589,7 @@ describe("Home shared-space catalog", () => {
                 },
               ]);
           }
-          await watch.settlements.matching((verdict) =>
+          await watch.verdicts.matching((verdict) =>
             verdict.error !== undefined
           );
           expect(completed.entries).toHaveLength(0);
