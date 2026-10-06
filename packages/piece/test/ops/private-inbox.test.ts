@@ -11,6 +11,7 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import * as ops from "../../src/ops/mod.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import {
   ensurePrivateInboxOf,
@@ -218,6 +219,20 @@ describe("ensurePrivateInboxOf()", () => {
     ).toEqual(addressOf(inbox));
   });
 
+  it("passes over an entry in Home's list that is not a profile", async () => {
+    const inbox = await usableInbox();
+    await listProfiles([
+      null as unknown as Cell<unknown>,
+      await profilePointingAt(inbox),
+    ]);
+
+    const result = await ensure();
+
+    expect(
+      result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+    ).toEqual(addressOf(inbox));
+  });
+
   it("names no inbox when no profile advertises one", async () => {
     await listProfiles([await profilePointingAt(undefined)]);
 
@@ -239,6 +254,10 @@ describe("ensurePrivateInboxOf()", () => {
 
     expect(result).toEqual({ outcome: "held" });
     expect(await adopted()).toBeUndefined();
+  });
+
+  it("is the function the package's ops entry point exports", () => {
+    expect(ops.ensurePrivateInboxOf).toBe(ensurePrivateInboxOf);
   });
 
   it("leaves a Home with no `ensurePrivateInbox` as it is", async () => {
@@ -363,6 +382,24 @@ describe("ensurePrivateInboxOf()", () => {
       expect(await adopted()).toBeUndefined();
       expect(await home.key("ensured" as never).pull()).toBe(1);
       expect(refusalsLogged()).toBe(before + 1);
+    });
+
+    it("refuses an inbox in a space this identity is refused access to, when its reads return", async () => {
+      // A refused read can complete without data rather than fail, leaving the
+      // refusal with the storage manager alone.
+      const inbox = await usableInbox();
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (space) =>
+          space === inbox.space ? new Error("access refused") : undefined,
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-access-refused",
+      );
     });
 
     it("refuses an inbox whose stored access list is malformed", async () => {
