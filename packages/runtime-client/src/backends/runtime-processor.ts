@@ -1540,6 +1540,27 @@ export class RuntimeProcessor {
     });
   }
 
+  /**
+   * Classifies whether recorded reads depend on pending local writes.
+   * Missing read observations retain the full initialization barrier.
+   */
+  #initializationReadState(
+    tx: IExtendedStorageTransaction,
+  ): "confirmed" | "pending" | "unknown" {
+    const reads = tx.tx.getReadActivities?.();
+    if (reads === undefined) return "unknown";
+    for (const read of reads) {
+      if (
+        this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
+          read.id,
+          read.scope,
+          tx.tx.scopeKeyIdentity,
+        )
+      ) return "pending";
+    }
+    return "confirmed";
+  }
+
   /** Atomically stores a default only while the target has no backing value. */
   async handleCellInitialize(
     request: CellInitializeRequest,
@@ -1548,9 +1569,42 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
-    // A pending commit can install the producer of an apparently absent
-    // value. Keep it demanded through settlement before choosing a default.
-    await getCell(this.#runtime, request.cell).pull({ awaitDurability: true });
+    const target = getCell(this.#runtime, request.cell);
+    const readinessFailure = await target.pull().then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+    // Projection can discover reads beyond the initial pull. editWithRetry
+    // reconciles documents read as absent and re-runs this probe when those
+    // documents turn out to exist.
+    const existing = await this.#runtime.editWithRetry((tx) => {
+      const cell = target.withTx(tx);
+      try {
+        const value = (
+            cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+            cell.get() === undefined
+          )
+          ? undefined
+          : this.#hostReadGate.read(cell);
+        const state = this.#initializationReadState(tx);
+        if (readinessFailure !== undefined && state !== "pending") {
+          throw readinessFailure.error;
+        }
+        return state === "confirmed" ? value : undefined;
+      } catch (error) {
+        // Only a recorded pending write justifies retrying a failed read
+        // after repair. Other readiness and projection failures propagate.
+        if (this.#initializationReadState(tx) !== "pending") throw error;
+        return undefined;
+      }
+    });
+    if (existing.error) throw new Error(existing.error.message);
+    if (existing.ok !== undefined) return existing.ok;
+
+    // A pending commit or its retry can install a producer for an absent
+    // value. Keep demand active through the full barrier before storing a
+    // default, including after an optimistic backing value is withdrawn.
+    await target.pull({ awaitDurability: true });
     let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);

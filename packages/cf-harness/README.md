@@ -230,9 +230,15 @@ What works today:
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
-  local/private target blocking, extracted text/links, and raw bounded response
-  retention in tool-output artifacts; `web_fetch` is intentionally not part of
-  the default parent tool surface
+  extracted text/links, and raw bounded response retention in tool-output
+  artifacts; `web_fetch` is intentionally not part of the default parent tool
+  surface. It fetches only from addresses on the open internet, whether the URL
+  names the address or a host name resolves to it. It refuses local, private and
+  reserved addresses, and any address on a network one of this device's
+  interfaces is on, such as a home network's public IPv6 prefix; an IPv6
+  interface's network counts as at least the /64 that holds its address. The
+  process running it needs `--allow-sys=networkInterfaces` to read those
+  networks
 - provider-neutral bounded prompt/tool loop with OpenAI-compatible gateway and
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and

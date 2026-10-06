@@ -1,7 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import {
+  interfaceNetworks,
+  isOpenInternetAddress,
   isPublicAddress,
   normalizeHostname,
   parseIpAddress,
@@ -99,6 +102,108 @@ describe("network-address", () => {
       ) {
         expect(isPublicAddress(parsed(text))).toBe(false);
       }
+    });
+  });
+
+  describe("isOpenInternetAddress()", () => {
+    const networks = [
+      { address: parsed("2a02:8071:1234:5600::1"), prefixLength: 64 },
+      { address: parsed("2a02:8071:1234:5700::5"), prefixLength: 128 },
+      { address: parsed("81.2.69.142"), prefixLength: 24 },
+      { address: parsed("81.2.70.5"), prefixLength: 0 },
+    ];
+
+    it("returns false for a public address on one of the networks", () => {
+      for (
+        const text of [
+          "2a02:8071:1234:5600::99",
+          "2a02:8071:1234:5700::7",
+          "81.2.69.160",
+          "::ffff:81.2.69.160",
+          "64:ff9b::5102:45a0",
+          "81.2.70.5",
+        ]
+      ) {
+        expect(isOpenInternetAddress(parsed(text), networks)).toBe(false);
+      }
+    });
+
+    it("returns true for a public address on none of the networks", () => {
+      for (
+        const text of [
+          "2a02:8071:1234:5601::99",
+          "2a02:8071:1234:5701::7",
+          "81.2.70.160",
+          "::ffff:81.2.70.160",
+          "81.2.70.6",
+        ]
+      ) {
+        expect(isOpenInternetAddress(parsed(text), networks)).toBe(true);
+      }
+    });
+
+    it("returns false for an address that is not public", () => {
+      expect(isOpenInternetAddress(parsed("10.0.0.7"), [])).toBe(false);
+      expect(isOpenInternetAddress(parsed("::ffff:127.0.0.1"), [])).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("interfaceNetworks()", () => {
+    it("returns networks that keep this device's addresses, but not a distant one, off the open internet", () => {
+      const networks = interfaceNetworks();
+      expect(networks.length).toBeGreaterThan(0);
+      for (const network of networks) {
+        expect(Number.isInteger(network.prefixLength)).toBe(true);
+        expect(isOpenInternetAddress(network.address, networks)).toBe(false);
+      }
+      expect(isOpenInternetAddress(parsed("8.8.8.8"), networks)).toBe(true);
+      expect(isOpenInternetAddress(parsed("2001:4860:4860::8888"), networks))
+        .toBe(true);
+    });
+
+    /** What Deno reports for an interface with `address` and `cidr`. */
+    const interfaceInfo = (
+      address: string,
+      cidr: string,
+    ): Deno.NetworkInterfaceInfo => ({
+      family: address.includes(":") ? "IPv6" : "IPv4",
+      name: "en0",
+      address,
+      netmask: "",
+      scopeid: null,
+      cidr,
+      mac: "00:00:00:00:00:00",
+    });
+
+    it("throws for an interface whose prefix length is missing or does not fit its address", () => {
+      for (
+        const info of [
+          interfaceInfo("81.2.69.142", "81.2.69.142"),
+          interfaceInfo("81.2.69.142", "81.2.69.142/x"),
+          interfaceInfo("81.2.69.142", "81.2.69.142/33"),
+          interfaceInfo(
+            "2a02:8071:1234:5600::1",
+            "2a02:8071:1234:5600::1/129",
+          ),
+          interfaceInfo("en0", "en0/24"),
+        ]
+      ) {
+        using _ = stub(Deno, "networkInterfaces", () => [info]);
+        expect(() => interfaceNetworks()).toThrow("Not an interface network");
+      }
+    });
+
+    it("reads a prefix length of 0 as one", () => {
+      using _ = stub(
+        Deno,
+        "networkInterfaces",
+        () => [interfaceInfo("81.2.70.5", "81.2.70.5/0")],
+      );
+      expect(interfaceNetworks()).toEqual([
+        { address: parsed("81.2.70.5"), prefixLength: 0 },
+      ]);
     });
   });
 });
