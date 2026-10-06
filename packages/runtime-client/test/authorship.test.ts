@@ -1011,6 +1011,162 @@ describe("authorship", () => {
       expect(observation.states()).toEqual([]);
     });
 
+    it("reports `unknown` for a value whose label read the worker refuses", async () => {
+      const observation = observe({
+        getCfcLabel: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+      }, "alice");
+      await settle();
+
+      expect(observation.states()).toEqual(["unknown"]);
+      expect(observation.reports.at(-1)?.cfcLabel).toBeUndefined();
+    });
+
+    it("reports the latest read of the value's label, not an earlier one that finishes after it", async () => {
+      const pendingReads: ((label: unknown) => void)[] = [];
+      let notify: (() => void) | undefined;
+      const observation = observe({
+        getCfcLabel: () => new Promise((resolve) => pendingReads.push(resolve)),
+        subscribe(callback: () => void) {
+          notify = callback;
+          callback();
+          return () => {};
+        },
+      }, "alice");
+
+      try {
+        notify?.();
+        expect(pendingReads.length).toBe(2);
+
+        pendingReads[1](authoredByLabel("mallory"));
+        await settle();
+        pendingReads[0](authoredByLabel("alice"));
+        await settle();
+
+        expect(observation.states()).toEqual(["unverified"]);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reports a label entry that the value's label and its resolved cell's label share once", async () => {
+      const nested = {
+        path: ["body"],
+        label: { integrity: [{ kind: "authored-by", subject: "alice" }] },
+      };
+      const root = {
+        path: [],
+        label: { integrity: [{ kind: "authored-by", subject: "alice" }] },
+      };
+      const observation = observe({
+        getCfcLabel: () => Promise.resolve({ version: 1, entries: [nested] }),
+        resolveAsCell: () =>
+          Promise.resolve({
+            getCfcLabel: () =>
+              Promise.resolve({ version: 1, entries: [nested, root] }),
+          }),
+      }, "alice");
+      await settle();
+
+      expect(observation.state).toBe("verified");
+      expect(observation.reports.at(-1)?.cfcLabel).toEqual({
+        version: 1,
+        entries: [nested, root],
+      });
+    });
+
+    it("verifies an author cell whose read returns the author's id as a plain value", async () => {
+      const observation = observe(
+        { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
+        { get: () => undefined, sync: () => Promise.resolve("alice") },
+      );
+      await settle();
+
+      expect(observation.state).toBe("verified");
+      expect(observation.authorClaim).toBe("alice");
+    });
+
+    it("takes no claim from an author cell whose read returns an array, whatever fields it carries", async () => {
+      const observation = observe(
+        { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
+        {
+          get: () => undefined,
+          sync: () =>
+            Promise.resolve(Object.assign(["alice"], { id: "alice" })),
+        },
+      );
+      await settle();
+
+      expect(observation.states()).toEqual(["unknown"]);
+      expect(observation.authorClaim).toBeUndefined();
+    });
+
+    it("reports `unknown`, with no claim, once the worker refuses the author", async () => {
+      const author = { id: "alice" };
+      let refuse: (() => void) | undefined;
+      const observation = observe(
+        { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
+        {
+          get: () => author,
+          sync: () => Promise.resolve(author),
+          subscribe(
+            callback: (value: unknown) => void,
+            options: { onRefused: (refusal: unknown) => void },
+          ) {
+            refuse = () => options.onRefused({ refusedBy: "display-ceiling" });
+            callback(author);
+            return () => {};
+          },
+        },
+      );
+
+      try {
+        await settle();
+        expect(observation.state).toBe("verified");
+
+        refuse?.();
+
+        expect(observation.state).toBe("unknown");
+        expect(observation.authorClaim).toBeUndefined();
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("ends the subscription on a resolved cell the worker refuses while it subscribes, and reports `unknown`", async () => {
+      let subscriptions = 0;
+      let unsubscriptions = 0;
+      const resolved = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        subscribe(
+          _callback: () => void,
+          options: { onRefused: (refusal: unknown) => void },
+        ) {
+          subscriptions++;
+          options.onRefused({ refusedBy: "display-ceiling" });
+          return () => {
+            unsubscriptions++;
+          };
+        },
+      };
+      const observation = observe({
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+      }, "alice");
+
+      try {
+        await settle();
+
+        expect(observation.state).toBe("unknown");
+        expect(subscriptions).toBe(1);
+        expect(unsubscriptions).toBe(1);
+      } finally {
+        observation.cancel();
+      }
+    });
+
     it("reports the value's label as it was read", async () => {
       const label = {
         version: 1 as const,
@@ -1037,6 +1193,11 @@ describe("authorship", () => {
       expect(authorClaimLabel({ subject: "did:example:alice" })).toBe(
         "did:example:alice",
       );
+    });
+
+    it("returns a number or boolean claim as its string", () => {
+      expect(authorClaimLabel(42)).toBe("42");
+      expect(authorClaimLabel(true)).toBe("true");
     });
 
     it("returns `undefined` for a claim with neither", () => {
@@ -1184,6 +1345,25 @@ describe("authorship", () => {
         "bob",
         "authored-by",
       )).toBe("unverified");
+    });
+
+    it("reads past a root entry that carries no integrity", () => {
+      expect(authorshipStateForLabel(
+        {
+          version: 1,
+          entries: [
+            { path: [], label: { confidentiality: ["secret"] } },
+            {
+              path: [],
+              label: {
+                integrity: [{ kind: "authored-by", subject: "alice" }],
+              },
+            },
+          ],
+        },
+        "alice",
+        "authored-by",
+      )).toBe("verified");
     });
 
     it("keeps non-authorship integrity unknown instead of unverified", () => {

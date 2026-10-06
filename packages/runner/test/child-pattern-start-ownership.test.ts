@@ -139,7 +139,7 @@ describe("a computation-produced child", () => {
       setupTx,
     );
     const root = runtime.run(setupTx, rootPattern, {}, rootCell);
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await runtime.idle();
     const stopReading = root.key("child").sink(() => {});
 
@@ -157,7 +157,7 @@ describe("a computation-produced child", () => {
       try {
         const bumpTx = runtime.edit();
         root.key("source").withTx(bumpTx).set(2);
-        await bumpTx.commit();
+        await bumpTx.commit().settled;
         await supersededRun.held;
 
         // The third write only has to reach the local replica for the
@@ -165,7 +165,7 @@ describe("a computation-produced child", () => {
         // awaiting it here would deadlock.
         const thirdTx = runtime.edit();
         root.key("source").withTx(thirdTx).set(3);
-        const thirdCommit = thirdTx.commit();
+        const thirdCommit = thirdTx.commit().settled;
         await runtime.idle();
 
         supersededRun.reject();

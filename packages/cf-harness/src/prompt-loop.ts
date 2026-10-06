@@ -226,6 +226,7 @@ import { projectHarnessResearchKitForModel } from "./research/model-projection.t
 import { isBrowserScreenshotOutput } from "./tools/browser.ts";
 import { isEditFileToolSuccessOutput } from "./tools/edit-file.ts";
 import { isStructuredFileToolErrorOutput } from "./tools/file-errors.ts";
+import { loomCommandModelContextObservation } from "./tools/loom-commands.ts";
 import { loomRetrievalModelContextObservation } from "./tools/loom-retrieval.ts";
 import { isReadFileToolSuccessOutput } from "./tools/read-file.ts";
 import {
@@ -3243,6 +3244,7 @@ export class CfHarnessPromptLoop {
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
       loomAuthoringAvailable: this.engine.config.loomAuthoring !== undefined,
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
+      loomCommandsAvailable: this.engine.config.loomCommands !== undefined,
       structuredResultAvailable: this.engine.structuredResultAvailable,
       clientActionsAvailable: this.engine.clientActionsAvailable,
     };
@@ -5592,6 +5594,35 @@ export class CfHarnessPromptLoop {
             "model-context-truncation",
             resultRef,
             output.truncated === true ? ["/entries"] : [],
+          ),
+        ),
+      };
+    }
+    if (toolId === "run_command" && isObjectNotArray(output)) {
+      // A command's answer is measured like a retrieval row: the model sees
+      // the entry, and the answer's label stays on the artifact as the
+      // observation the run's model context accumulates.
+      const { cfc: _cfc, ...publicOutput } = output;
+      const observation = loomCommandModelContextObservation(
+        output,
+        resultRef,
+        toolCallId,
+      );
+      return {
+        output: stripInternalToolFields(publicOutput),
+        ...(observation !== undefined
+          ? { cfcModelContextObservations: [observation] }
+          : {}),
+        omissionRules: omissionRules(
+          createHarnessTranscriptOmissionRuleRecord(
+            "artifact-only",
+            resultRef,
+            presentFieldPointers(output, ["cfc"]),
+          ),
+          createHarnessTranscriptOmissionRuleRecord(
+            "model-context-truncation",
+            resultRef,
+            output.truncated === true ? ["/entry"] : [],
           ),
         ),
       };

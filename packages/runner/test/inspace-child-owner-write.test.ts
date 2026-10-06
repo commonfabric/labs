@@ -177,7 +177,7 @@ describe("inSpace child owner-protected write (profile elements)", () => {
       // A manual test tx must prepare (the runtime's own commit paths do) or a
       // CFC-relevant tx is rejected wholesale at commit.
       rt1.prepareTxForCommit(tx1);
-      const commit1 = await tx1.commit();
+      const commit1 = await tx1.commit().settled;
       expect(commit1.error).toBeUndefined();
       await r1.pull();
 
@@ -185,7 +185,7 @@ describe("inSpace child owner-protected write (profile elements)", () => {
       // read CFC metadata through the cell's tx, and tx1 is already done.
       const tx2 = rt1.edit();
       r1.withTx(tx2).key("create").send({ seed: "first" });
-      const commit2 = await tx2.commit();
+      const commit2 = await tx2.commit().settled;
       expect(commit2.error).toBeUndefined();
       await r1.pull();
       await rt1.idle();
@@ -220,7 +220,7 @@ describe("inSpace child owner-protected write (profile elements)", () => {
       // an enforcing rung refuses a relevant transaction that arrives
       // unprepared.
       rt2.prepareTxForCommit(writeTx);
-      const writeCommit = await writeTx.commit();
+      const writeCommit = await writeTx.commit().settled;
       expect(writeCommit.error).toBeUndefined();
       await childCell.pull();
       await rt2.idle();

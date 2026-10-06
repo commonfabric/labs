@@ -143,7 +143,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
 
     const digest = tx.prepareCfc();
     expect(digest).not.toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   });
 
@@ -168,7 +168,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
 
     const digest = tx.prepareCfc();
     expect(digest).not.toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   });
 
@@ -196,7 +196,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
 
     const digest = tx.prepareCfc();
     expect(digest).toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(isCfcEnforcementRejection(result.error)).toBe(true);
   });
 
@@ -225,7 +225,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
 
     const digest = tx.prepareCfc();
     expect(digest).toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(isCfcEnforcementRejection(result.error)).toBe(true);
   });
 
@@ -251,7 +251,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
 
     const digest = tx.prepareCfc();
     expect(digest).toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(isCfcEnforcementRejection(result.error)).toBe(true);
   });
 });
@@ -477,7 +477,7 @@ describe("the labs#4772 heal end-to-end: exact mint + tolerant adoption + identi
 
     const digest = tx.prepareCfc();
     expect(digest).not.toBe("");
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   });
 });

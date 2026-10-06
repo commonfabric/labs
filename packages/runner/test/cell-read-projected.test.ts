@@ -47,7 +47,7 @@ async function holder() {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
   };
   await writeSecret("first secret");
@@ -61,7 +61,7 @@ async function holder() {
       }),
     },
   } as never);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   await runtime.idle();
   return {
     runtime,

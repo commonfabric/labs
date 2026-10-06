@@ -70,7 +70,7 @@ describe("profile-home edit form", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const home = runtime.edit();
     const defaultPattern = runtime.getCell(
@@ -85,7 +85,7 @@ describe("profile-home edit form", () => {
       .asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
       .key("defaultPattern").set(defaultPattern);
     runtime.prepareTxForCommit(home);
-    expect((await home.commit()).error).toBeUndefined();
+    expect((await home.commit().settled).error).toBeUndefined();
     return profile;
   }
 
@@ -98,7 +98,7 @@ describe("profile-home edit form", () => {
     const tx = runtime.edit();
     profile.withTx(tx).key(stream).send(event);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await manager.synced();
   }

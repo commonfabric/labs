@@ -165,7 +165,7 @@ describe("condition-builtin-reads", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return doc.withTx(undefined);
   };
 
@@ -180,7 +180,7 @@ describe("condition-builtin-reads", () => {
     const tx = runtime.edit();
     const doc = runtime.getCell(patternSpace.did(), cause, undefined, tx);
     if (value !== undefined) doc.set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return doc.withTx(undefined);
   };
 
@@ -213,7 +213,7 @@ describe("condition-builtin-reads", () => {
       argument,
       resultCell,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await runtime.idle();
     return result.withTx(undefined);
@@ -342,7 +342,7 @@ describe("condition-builtin-reads", () => {
           title: "pinned",
         }],
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const homeTx = runtime.edit();
       const homeDefault = runtime.getCell(
         owner.did(),
@@ -352,7 +352,7 @@ describe("condition-builtin-reads", () => {
       );
       homeDefault.key("profiles").set([profile]);
       runtime.getHomeSpaceCell(homeTx).key("defaultPattern").set(homeDefault);
-      expect((await homeTx.commit()).error).toBeUndefined();
+      expect((await homeTx.commit().settled).error).toBeUndefined();
     };
 
     /**
@@ -369,7 +369,7 @@ describe("condition-builtin-reads", () => {
         title: "Sheet",
         [UI]: vnode("cf-cfc-render-boundary", [vnode("div", [sealed])]),
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await pin(piece.withTx(undefined));
       return sealed;
     };
@@ -1350,7 +1350,7 @@ describe("condition-builtin-reads", () => {
     const write = async (doc: Cell<unknown>, value: FabricValue) => {
       const tx = runtime.edit();
       doc.withTx(tx).set(value);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     it("takes the branch the condition's truthiness picks as the condition changes", async () => {

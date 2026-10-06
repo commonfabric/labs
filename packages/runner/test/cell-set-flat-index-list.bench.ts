@@ -233,7 +233,7 @@ async function writeOneDoc(
     b?.start();
     cell.set(list);
     account?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
     b?.end();
   } finally {
     await cleanup(runtime, storageManager, tx);
@@ -271,7 +271,7 @@ async function writePerItem(
     );
     parent.set(cells);
     account?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
     b?.end();
   } finally {
     popFrame(frame);
@@ -328,7 +328,7 @@ for (const N of SIZES) {
         tx,
       );
       cell.set(makeList(N));
-      await tx.commit();
+      await tx.commit().settled;
       const readTx = runtime.edit();
       const reader = cell.withTx(readTx);
       try {
@@ -353,7 +353,7 @@ for (const N of SIZES) {
         tx,
       );
       cell.set(makeList(N));
-      await tx.commit();
+      await tx.commit().settled;
       const readTx = runtime.edit();
       const reader = cell.withTx(readTx);
       try {
@@ -380,7 +380,7 @@ for (const N of SIZES) {
         tx,
       );
       cell.set(makeList(N));
-      await tx.commit();
+      await tx.commit().settled;
       const readTx = runtime.edit();
       const reader = cell.withTx(readTx);
       try {
@@ -406,7 +406,7 @@ for (const N of SIZES) {
         tx,
       );
       cell.set(makeList(N));
-      await tx.commit();
+      await tx.commit().settled;
       const readTx = runtime.edit();
       const reader = cell.withTx(readTx);
       try {
@@ -447,7 +447,7 @@ async function updateRegenerate(
     setupTx,
   );
   cell0.set(makeList(N));
-  await setupTx.commit();
+  await setupTx.commit().settled;
 
   b?.start();
   for (let t = 0; t < UPDATE_TXS; t++) {
@@ -462,7 +462,7 @@ async function updateRegenerate(
     list[t % N] = makeItem(t % N, `-mut${t}`);
     cell.set(list);
     account?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
   }
   b?.end();
   await cleanup(runtime, storageManager);
@@ -481,7 +481,7 @@ async function updateReadModifyWrite(
     setupTx,
   );
   cell0.set(makeList(N));
-  await setupTx.commit();
+  await setupTx.commit().settled;
 
   b?.start();
   for (let t = 0; t < UPDATE_TXS; t++) {
@@ -499,7 +499,7 @@ async function updateReadModifyWrite(
     list[t % N] = makeItem(t % N, `-mut${t}`);
     cell.set(list);
     account?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
   }
   b?.end();
   await cleanup(runtime, storageManager);
@@ -518,7 +518,7 @@ async function updateTargeted(
     setupTx,
   );
   cell0.set(makeList(N));
-  await setupTx.commit();
+  await setupTx.commit().settled;
 
   b?.start();
   for (let t = 0; t < UPDATE_TXS; t++) {
@@ -531,7 +531,7 @@ async function updateTargeted(
     );
     cell.key(t % N).set(makeItem(t % N, `-mut${t}`));
     account?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
   }
   b?.end();
   await cleanup(runtime, storageManager);

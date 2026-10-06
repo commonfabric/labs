@@ -4346,11 +4346,13 @@ describe("console/server", () => {
       expect(await features(server)).toEqual([
         "client_actions",
         "typed_commands",
+        "starts_run",
       ]);
       expect(await features(hosted)).toEqual([
         "client_actions",
         "typed_commands",
         "browser_host",
+        "starts_run",
       ]);
 
       const refused = await requiring(server);

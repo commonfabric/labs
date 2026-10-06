@@ -28,6 +28,7 @@ import {
   reportServedEventFailure,
 } from "../src/scheduler/events.ts";
 import { TransactionAborted } from "../src/storage/transaction-errors.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 async function waitForSchedulerCondition(
   runtime: Runtime,
@@ -286,7 +287,7 @@ describe("event handling", () => {
     );
     eventCell.set(0);
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let firstCount = 0;
@@ -404,7 +405,7 @@ describe("event handling", () => {
       tx,
     );
     listCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
 
     let eventCount = 0;
     let commitWasStarted = false;
@@ -428,10 +429,15 @@ describe("event handling", () => {
       handlerTx.commit = () => {
         commitWasStarted = true;
         resolveCommitStarted();
-        return originalCommit().then(async (result) => {
-          await commitRelease;
-          return result;
-        }).finally(resolveCommitFinished);
+        const original = originalCommit();
+        return createTransactionCommitReceipt(
+          original.settled.then(async (result) => {
+            await commitRelease;
+            return result;
+          }).finally(resolveCommitFinished),
+          original.verdict,
+          original,
+        );
       };
     };
 
@@ -490,7 +496,7 @@ describe("event handling", () => {
       cell.set(0);
       return cell;
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     const commitMarkers: RuntimeTelemetryMarker[] = [];
     const listener = (event: Event) => {
@@ -555,7 +561,7 @@ describe("event handling", () => {
       tx,
     );
     secondList.set([]);
-    await tx.commit();
+    await tx.commit().settled;
 
     let eventCount = 0;
     const eventHandler: EventHandler = (handlerTx, event) => {
@@ -604,7 +610,7 @@ describe("event handling", () => {
       tx,
     );
     countCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     const countRuns: number[] = [];
     const countItems = (actionTx: IExtendedStorageTransaction) => {
@@ -669,7 +675,7 @@ describe("event handling", () => {
       tx,
     );
     countCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     let blockAtSix = false;
     let releaseSix: (() => void) | undefined;
@@ -709,7 +715,7 @@ describe("event handling", () => {
       blockAtSix = true;
       const appendSixTx = runtime.edit();
       listCell.withTx(appendSixTx).push(6);
-      await appendSixTx.commit();
+      await appendSixTx.commit().settled;
 
       demandedPull = countCell.pull();
       await waitForSignal(
@@ -719,7 +725,7 @@ describe("event handling", () => {
 
       const appendSevenTx = runtime.edit();
       listCell.withTx(appendSevenTx).push(7);
-      await appendSevenTx.commit();
+      await appendSevenTx.commit().settled;
 
       releaseSix?.();
       await demandedPull;
@@ -751,7 +757,7 @@ describe("event handling", () => {
       tx,
     );
     resultCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     let attempts = 0;
     let errors = 0;
@@ -796,7 +802,7 @@ describe("event handling", () => {
       tx,
     );
     eventCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     // No handler is registered for this cell, and the cell has no result /
     // pattern metadata, so the piece-start fallback cannot register one
@@ -831,7 +837,7 @@ describe("event handling", () => {
       tx,
     );
     eventCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     let errors = 0;
     runtime.scheduler.onError(() => {
@@ -878,7 +884,7 @@ describe("event handling", () => {
       tx,
     );
     eventCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     runtime.scheduler.onError(() => undefined);
     runtime.scheduler.addEventHandler(
@@ -917,7 +923,7 @@ describe("event handling", () => {
       tx,
     );
     eventCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     let errors = 0;
     runtime.scheduler.onError(() => {
@@ -970,7 +976,7 @@ describe("event handling", () => {
       tx,
     );
     eventCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     // This is the second-pass situation: after a piece start, events are
     // re-queued with doNotLoadPieceIfNotRunning=true; if the piece still
@@ -1007,7 +1013,7 @@ describe("event handling", () => {
       tx,
     );
     eventCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     // A misbehaving commit callback must not break the caller or the queue:
     // the drop-settle path catches it, and a subsequent event on the same
@@ -1121,7 +1127,7 @@ describe("event handling", () => {
         tx,
       );
       eventCell.set(0);
-      await tx.commit();
+      await tx.commit().settled;
 
       let attempts = 0;
       const handler: EventHandler = (handlerTx, _event) => {
@@ -1164,7 +1170,7 @@ describe("event handling", () => {
         tx,
       );
       eventCell.set(0);
-      await tx.commit();
+      await tx.commit().settled;
 
       let attempts = 0;
       let onCommitStatus: string | undefined;
@@ -1210,7 +1216,7 @@ describe("event handling", () => {
         tx,
       );
       eventCell.set(0);
-      await tx.commit();
+      await tx.commit().settled;
 
       let attempts = 0;
       let commits = 0;

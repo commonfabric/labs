@@ -112,7 +112,7 @@ async function main() {
           }>(identity.did(), "result", compiled.resultSchema, tx),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         cleanup.defer(result.sink(() => {}));
         await runtime.idle();
         const measurements: {
@@ -193,7 +193,7 @@ async function main() {
             selectedKey = "key-1";
             selected.withTx(edit).set(selectedKey);
           }
-          expect((await edit.commit()).error).toBeUndefined();
+          expect((await edit.commit().settled).error).toBeUndefined();
           await runtime.idle();
           record(phase);
           if (phase === "unrelated payload") expect(counts.runs).toBe(0);

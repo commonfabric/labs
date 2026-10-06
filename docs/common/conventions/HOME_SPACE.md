@@ -241,18 +241,23 @@ remedies, rather than resolving to nothing.
 ## Custom Home Pattern
 
 The home space's default pattern is the home experience itself — by default,
-`/api/patterns/system/home.tsx`. You can replace it with a custom pattern using
-the CF CLI:
+`/api/patterns/system/home.tsx`. An existing Home owns account data, including
+profiles, favorites, navigation, and shared-space membership. Update its source
+in place to retain that data. Root recreation refuses an existing Home before
+stopping or unlinking it, even if its target cannot currently be loaded.
+
+For an identity that has no Home root yet, initialize custom or system source
+using the CF CLI:
 
 ```bash
 # Run its automated pattern test
 cf test ./my-home.test.tsx
 
-# Deploy a custom home pattern with the test attached
+# Initialize a custom Home with its test attached
 cf space set-home -i ./my.key -a http://localhost:8000 \
   --test ./my-home.test.tsx ./my-home.tsx
 
-# Reset to the system default
+# Alternatively, initialize the system Home
 cf space set-home -i ./my.key -a http://localhost:8000 --reset
 ```
 
@@ -260,10 +265,11 @@ Write automated tests for new or changed home-pattern behavior. Repeat
 `--test` for every authored test entry. Deployment packages and type-checks
 the tests but does not run them, so run each entry with `cf test` first.
 
-Under the hood, `set-home` calls `PiecesController.recreateDefaultPattern()`
-with the compiled program. This tears down the existing default pattern, creates
-a new piece from the custom source, and links it as the space's
-`defaultPattern`.
+`set-home`, including `--reset`, initializes only an absent Home. It rechecks
+the root in the creation transaction so two initializers cannot replace each
+other's Home. To change an existing Home, use `cf piece setsrc` on that root
+with the complete authored source and test entries. Compatible source changes
+retain its owned cells; incompatible changes require an explicit migration.
 
 ### Identity Matching
 
@@ -299,8 +305,8 @@ To share identity between browser and CLI:
 #    history and the process list:
 deno run -A packages/cli/mod.ts id from-mnemonic -- phrase.txt > ./browser.key
 
-# 3. Use that key with cf, retaining the tested source package
-cf space set-home -i ./browser.key -a http://localhost:8000 \
+# 3. Update the existing Home in place, retaining the tested source package
+cf piece setsrc -i ./browser.key -a http://localhost:8000 --cell <home-root> \
   --test ./my-home.test.tsx ./my-home.tsx
 ```
 
@@ -335,10 +341,11 @@ Both the home pattern and the default app pattern follow the same mechanism:
      `/api/patterns/system/default-app.tsx`
 3. The pattern is compiled, run, linked as `spaceCell.defaultPattern`, and its
    source URL is stamped as `patternSource` for future updates
-4. `recreateDefaultPattern()` can replace it — either with a URL-based pattern,
-   which also stamps `patternSource`, or a custom `RuntimeProgram` (used by
-   `cf space set-home`), which remains untracked by the URL updater and may carry
-   a separate repository locator
+4. `recreateDefaultPattern()` can replace a non-Home root or initialize an absent
+   Home. It refuses an existing identity Home, which must be updated in place.
+   A URL-based pattern stamps `patternSource`; a custom `RuntimeProgram` (used
+   by `cf space set-home`) remains untracked by the URL updater and may carry a
+   separate repository locator
 5. Before an existing eligible root starts, it is reconciled in place. A root
    with stored `patternSource` tracks that source. A pre-provenance root is
    admitted only when its stored `{ identity, symbol }` exactly matches the

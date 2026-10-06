@@ -58,7 +58,7 @@ describe("pull() and the first sync of an unseen doc", () => {
     const tx = writerRt.edit();
     const receipt = writerRt.getCell(space, RECEIPT_CAUSE, undefined, tx);
     receipt.set(RECEIPT_VALUE);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
   });
@@ -170,7 +170,7 @@ describe("pull() and the first sync of an unseen doc", () => {
       await loadBarrier.promise;
       const tx = readerRt.edit();
       other.withTx(tx).set(7);
-      committing = tx.startCommit().settled;
+      committing = tx.commit().settled;
       await commitEntered.promise;
       releaseLoad.resolve();
       expect(

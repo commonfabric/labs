@@ -87,7 +87,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
       );
       stamping.push({ role: "assistant", content: "model bytes" });
       modelTx.prepareCfc();
-      expect((await modelTx.commit()).ok).toBeDefined();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(
@@ -124,7 +124,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
         userTx,
       ).push({ role: "user", content: "typed by the user" });
       userTx.prepareCfc();
-      expect((await userTx.commit()).ok).toBeDefined();
+      expect((await userTx.commit().settled).ok).toBeDefined();
 
       const modelTx = runtime.edit();
       setCfcImplementationIdentity(modelTx, {
@@ -138,7 +138,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
         modelTx,
       ).push({ role: "assistant", content: "model bytes" });
       modelTx.prepareCfc();
-      expect((await modelTx.commit()).ok).toBeDefined();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(
@@ -196,7 +196,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
         popFrame(frame);
       }
       modelTx.prepareCfc();
-      expect((await modelTx.commit()).ok).toBeDefined();
+      expect((await modelTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(
@@ -237,7 +237,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
       );
       stamping.push({ role: "assistant", content: "forged provenance" });
       authorTx.prepareCfc();
-      expect((await authorTx.commit()).ok).toBeDefined();
+      expect((await authorTx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const messages = runtime.getCell(

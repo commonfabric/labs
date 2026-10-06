@@ -3216,7 +3216,7 @@ type CalculatorRequest = {
         // alias chain to the CFC alias, so no parameter is read unbound.
 
         const CFC =
-          "type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };\n" +
+          "type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };\n" +
           "type Confidential<T, X extends readonly unknown[]> =\n" +
           "  Cfc<T, { confidentiality: X }>;\n";
         const readers = (reader: string) =>
@@ -4307,7 +4307,7 @@ interface HasImage {
 
   describe("nodes narrowed from a value", () => {
     const LABELS = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> =
         Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> =
@@ -4565,7 +4565,7 @@ interface HasImage {
     // `typeof rules` is `unknown`, so `PolicyOf<unknown>` spells the same type
     // as the annotation without naming the binding, as a print of it does.
     const PROGRAM = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> =
         Cfc<T, { confidentiality: X }>;
       type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };

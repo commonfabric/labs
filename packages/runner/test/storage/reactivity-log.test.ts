@@ -60,7 +60,7 @@ describe("reactivity-log", () => {
         tx,
       );
       cell.set({ slot: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = runtime.edit();
       tx.runWithAmbientReadMeta(
         ignoreReadForScheduling,
@@ -81,7 +81,7 @@ describe("reactivity-log", () => {
         shallowReads: [],
         writes: [],
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     } finally {
       await storage.synced();
       await runtime.dispose();
@@ -103,7 +103,7 @@ describe("reactivity-log", () => {
         seed,
       );
       source.set(1);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const stale = runtime.edit();
       expect(stale.readValueOrThrow(source.getAsNormalizedFullLink(), {
         meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
@@ -113,8 +113,8 @@ describe("reactivity-log", () => {
       );
       const concurrent = runtime.edit();
       source.withTx(concurrent).set(2);
-      expect((await concurrent.commit()).error).toBeUndefined();
-      expect((await stale.commit()).error).toBeDefined();
+      expect((await concurrent.commit().settled).error).toBeUndefined();
+      expect((await stale.commit().settled).error).toBeDefined();
     } finally {
       await storage.synced();
       await runtime.dispose();

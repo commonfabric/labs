@@ -137,7 +137,7 @@ describe("aggregate lifecycle", () => {
       const parent = runtime.getCell(signer.did(), "parent", undefined, setup);
       parent.set({});
       const output = runtime.getCell<unknown>(signer.did(), "output");
-      await setup.commit();
+      await setup.commit().settled;
       const builtin = aggregate(
         inputs.withTx(),
         (tx, result) => output.withTx(tx).set(result),
@@ -155,18 +155,18 @@ describe("aggregate lifecycle", () => {
       const retry = runtime.edit();
       await builtin.action(retry);
       runtime.prepareTxForCommit(retry);
-      await retry.commit();
+      await retry.commit().settled;
       addCancel(output.sink(() => {}));
       await runtime.idle();
       expect(await output.pull()).toBe(6);
 
       const replace = runtime.edit();
       inputs.withTx(replace).key("list").set([10, 20]);
-      await replace.commit();
+      await replace.commit().settled;
       const reconcile = runtime.edit();
       await builtin.action(reconcile);
       runtime.prepareTxForCommit(reconcile);
-      await reconcile.commit();
+      await reconcile.commit().settled;
       await runtime.idle();
       expect(await output.pull()).toBe(30);
 

@@ -66,7 +66,7 @@ describe("llmDialog", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -538,7 +538,7 @@ describe("llmDialog", () => {
       ),
     );
     tx.prepareCfc();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -676,7 +676,7 @@ describe("llmDialog", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     tx.prepareCfc();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -817,7 +817,7 @@ describe("llmDialog", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     tx.prepareCfc();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -2304,7 +2304,7 @@ describe("llmDialog", () => {
       expect(turn2Request).toBeDefined();
       expect(JSON.stringify(turn2Request!.messages)).not.toContain(secret);
     } finally {
-      await ceilingTx.commit();
+      await ceilingTx.commit().settled;
       await ceilingRuntime.idle();
       await ceilingRuntime.dispose();
       await ceilingStorageManager.close();

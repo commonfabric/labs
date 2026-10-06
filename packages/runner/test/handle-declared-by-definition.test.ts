@@ -153,7 +153,7 @@ describe("handle declared by a definition", () => {
         const tx = runtime.edit();
         const cell = runtime.getCell(space, cause, undefined, tx);
         cell.setRaw({ name: label });
-        await tx.commit();
+        await tx.commit().settled;
         documents.set(cell.getAsNormalizedFullLink().id, label);
         return cell.getAsLink();
       }
@@ -176,7 +176,7 @@ describe("handle declared by a definition", () => {
       ) {
         const write = runtime.edit();
         runtime.getCell(space, cause, undefined, write).setRaw(value as never);
-        await write.commit();
+        await write.commit().settled;
 
         const tx = runtime.edit();
         tx.markLazyMaterialize(lazy);
@@ -369,7 +369,7 @@ describe("handle declared by a definition", () => {
                 profiles: Array.from({ length: count }, () => profile),
               } as never,
             );
-            await write.commit();
+            await write.commit().settled;
             const tx = runtime.edit();
             tx.markLazyMaterialize(false);
             using resolve = spy(ContextualFlowControl, "resolveSchemaRefs");

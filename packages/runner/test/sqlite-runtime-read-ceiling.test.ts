@@ -103,7 +103,7 @@ async function seed(
 ): Promise<void> {
   const tx = runtime.edit();
   tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-  const res = await tx.commit();
+  const res = await tx.commit().settled;
   if (res.error) throw res.error;
 }
 
@@ -148,7 +148,7 @@ async function runQuery(
   const tx = runtime.edit();
   const resultCell = runtime.getCell(space, cause, p.resultSchema, tx);
   const result = runtime.run(tx, p, {}, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
   if (observer === runtime) {
     const state = await waitForCellValue<QueryState>(runtime, result, settled);
     return { state, cell: result };
@@ -814,7 +814,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
         tx,
       );
       rt.run(tx, p, {}, cell);
-      await tx.commit();
+      await tx.commit().settled;
       // The query runs once a reader demands it.
       const cancel = cell.key("pending").sink(() => {});
       try {

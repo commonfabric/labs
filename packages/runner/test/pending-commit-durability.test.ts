@@ -150,7 +150,7 @@ describe("pending-commit durability barrier", () => {
       tx,
     );
     resultCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -197,7 +197,7 @@ describe("pending-commit durability barrier", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -208,7 +208,7 @@ describe("pending-commit durability barrier", () => {
       const writeTx = runtime.edit();
       cell.withTx(writeTx).set(7);
       runtime.prepareTxForCommit(writeTx);
-      const commitP = writeTx.commit();
+      const commitP = writeTx.commit().settled;
       // Registration is synchronous with commit(): the barrier reports the
       // pending commit in the same turn, so a quiescence check started now
       // cannot miss it.
@@ -247,7 +247,7 @@ describe("pending-commit durability barrier", () => {
       tx,
     );
     cellB.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -258,11 +258,11 @@ describe("pending-commit durability barrier", () => {
       const txA = runtime.edit();
       cellA.withTx(txA).set(1);
       runtime.prepareTxForCommit(txA);
-      const commitA = txA.commit().then(() => {
+      const commitA = txA.commit().settled.then(() => {
         const txB = runtime.edit();
         cellB.withTx(txB).set(2);
         runtime.prepareTxForCommit(txB);
-        return txB.commit();
+        return txB.commit().settled;
       });
 
       let settled = false;
@@ -298,7 +298,7 @@ describe("pending-commit durability barrier", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -312,7 +312,7 @@ describe("pending-commit durability barrier", () => {
       const writeTx = runtime.edit();
       cell.withTx(writeTx).set(9);
       runtime.prepareTxForCommit(writeTx);
-      const result = await writeTx.commit();
+      const result = await writeTx.commit().settled;
       expect(result.error).toBeDefined();
 
       await runtime.scheduler.idleWithPendingCommits();
@@ -337,7 +337,7 @@ describe("pending-commit durability barrier", () => {
       tx,
     );
     resultCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -384,7 +384,7 @@ describe("pending-commit durability barrier", () => {
       tx,
     );
     cellTwo.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -398,11 +398,11 @@ describe("pending-commit durability barrier", () => {
       const tx1 = runtime.edit();
       cellOne.withTx(tx1).set(1);
       runtime.prepareTxForCommit(tx1);
-      const commit1 = tx1.commit();
+      const commit1 = tx1.commit().settled;
       const tx2 = runtime.edit();
       cellTwo.withTx(tx2).set(2);
       runtime.prepareTxForCommit(tx2);
-      const commit2 = tx2.commit();
+      const commit2 = tx2.commit().settled;
 
       expect(transitions).toEqual([true]);
 

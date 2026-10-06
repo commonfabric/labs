@@ -56,6 +56,7 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
+import { createTransactionCommitReceipt } from "../../../../runner/src/storage/commit-receipt.ts";
 
 async function publishedManifestCell(
   connection: Parameters<typeof readStableCellGraphValue>[0],
@@ -417,7 +418,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
     });
     malformedReceipt.withTx(malformedReceiptTx).applyCfcSchemaToExistingValue();
     malformedReceiptTx.prepareCfc();
-    const malformedReceiptCommit = await malformedReceiptTx.commit();
+    const malformedReceiptCommit = await malformedReceiptTx.commit().settled;
     if (malformedReceiptCommit.error) throw malformedReceiptCommit.error;
     await assertRejects(
       () => target.readReceipt("malformed-command"),
@@ -446,7 +447,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
     wrongOwnerReceipt.withTx(wrongOwnerReceiptTx)
       .applyCfcSchemaToExistingValue();
     wrongOwnerReceiptTx.prepareCfc();
-    const wrongOwnerReceiptCommit = await wrongOwnerReceiptTx.commit();
+    const wrongOwnerReceiptCommit = await wrongOwnerReceiptTx.commit().settled;
     if (wrongOwnerReceiptCommit.error) throw wrongOwnerReceiptCommit.error;
     await assertRejects(
       () => target.readReceipt("wrong-owner-command"),
@@ -468,7 +469,8 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       nativeSessionId: snapshot.summary.nativeSessionId,
       status: "succeeded",
     });
-    const unprotectedReceiptCommit = await unprotectedReceiptTx.commit();
+    const unprotectedReceiptCommit = await unprotectedReceiptTx.commit()
+      .settled;
     if (unprotectedReceiptCommit.error) throw unprotectedReceiptCommit.error;
     await assertRejects(
       () => target.readReceipt("unprotected-command"),
@@ -625,7 +627,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       });
       target.cells.commands.withTx(tx).set([command]);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       if (result.error) throw result.error;
       assertEquals(await receivedCommands.promise, [command]);
       assertEquals(await target.pollCommands(), [command]);
@@ -642,11 +644,12 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       if (blockNextCommit) {
         blockNextCommit = false;
         const originalCommit = tx.commit.bind(tx);
-        tx.commit = async () => {
-          firstHealthCommitStarted.resolve();
-          await releaseFirstHealthCommit.promise;
-          return await originalCommit();
-        };
+        tx.commit = () =>
+          createTransactionCommitReceipt((async () => {
+            firstHealthCommitStarted.resolve();
+            await releaseFirstHealthCommit.promise;
+            return await originalCommit().settled;
+          })());
       }
       return tx;
     };
@@ -1055,7 +1058,7 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
       status: "compromised",
     });
     attack.prepareCfc();
-    const attackResult = await attack.commit();
+    const attackResult = await attack.commit().settled;
     assertEquals(attackResult.error !== undefined, true);
   } finally {
     await runtime.dispose();
@@ -1198,7 +1201,7 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
     let rejected = false;
     try {
       attack.prepareCfc();
-      rejected = (await attack.commit()).error !== undefined;
+      rejected = (await attack.commit().settled).error !== undefined;
     } catch {
       rejected = true;
       attack.abort();
@@ -1243,7 +1246,7 @@ Deno.test("stable graph checks remote children before adoption", async () => {
     await otherStorage.synced();
     const seed = otherRuntime.edit();
     otherChild.withTx(seed).setRawUntyped({ exposed: true });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
     await otherStorage.synced();
 
@@ -1480,7 +1483,7 @@ Deno.test("Fabric target refuses an unprotected owner root", async () => {
       sources: [],
       sessions: [],
     });
-    const committed = await seed.commit();
+    const committed = await seed.commit().settled;
     if (committed.error) throw committed.error;
 
     await assertRejects(
@@ -1534,7 +1537,7 @@ Deno.test("Fabric target refuses an owner root with another writer", async () =>
     });
     root.withTx(seed).applyCfcSchemaToExistingValue();
     seed.prepareCfc();
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
 
     assertEquals(
@@ -1574,7 +1577,7 @@ Deno.test("Fabric target binds only an empty owner command queue", async () => {
     );
     const seed = runtime.edit();
     rawCommandCell.withTx(seed).setRawUntyped(["pre-seeded-command"]);
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
     const first = await AgentFabricTarget.open({
       runtime,
@@ -1638,7 +1641,9 @@ Deno.test("Fabric target binds only an empty owner command queue", async () => {
             },
           );
           tx.abort(failure);
-          return Promise.resolve({ error: failure });
+          return createTransactionCommitReceipt(
+            Promise.resolve({ error: failure }),
+          );
         };
         return tx;
       };
@@ -1967,14 +1972,15 @@ Deno.test("publication finishes after its first graph commit", async () => {
         return originalWriteValue(...args);
       };
       const originalCommit = tx.commit.bind(tx);
-      tx.commit = async () => {
-        const result = await originalCommit();
-        if (writesManifest && !result.error) {
-          manifestCommitObserved = true;
-          controller.abort(new Error("cancelled after manifest commit"));
-        }
-        return result;
-      };
+      tx.commit = () =>
+        createTransactionCommitReceipt((async () => {
+          const result = await originalCommit().settled;
+          if (writesManifest && !result.error) {
+            manifestCommitObserved = true;
+            controller.abort(new Error("cancelled after manifest commit"));
+          }
+          return result;
+        })());
       return tx;
     };
     try {
@@ -2111,7 +2117,9 @@ Deno.test("an interrupted publication leaves the prior session graph intact", as
           },
         );
         tx.abort(failure);
-        return Promise.resolve({ error: failure });
+        return createTransactionCommitReceipt(
+          Promise.resolve({ error: failure }),
+        );
       };
       return tx;
     };
@@ -2325,10 +2333,11 @@ Deno.test("session publication captures its snapshot before the first commit", a
     runtime.edit = function () {
       const tx = originalEdit.call(this);
       const originalCommit = tx.commit.bind(tx);
-      tx.commit = async () => {
-        capturesAtCommit.push(captures);
-        return await originalCommit();
-      };
+      tx.commit = () =>
+        createTransactionCommitReceipt((async () => {
+          capturesAtCommit.push(captures);
+          return await originalCommit().settled;
+        })());
       return tx;
     };
     try {
@@ -2755,7 +2764,7 @@ Deno.test("publication refuses a stored index whose source surfaces are malforme
     target.cells.allIndex.key("sources").key(0).key("capabilities").withTx(tx)
       .set({ ...source.capabilities, surfaces: "desktop" });
     tx.prepareCfc();
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
     if (commit.error) throw commit.error;
     await assertRejects(
       () =>
@@ -2813,7 +2822,7 @@ Deno.test("publication refuses a stored index whose source capabilities are malf
     target.cells.allIndex.key("sources").key(0).key("capabilities").withTx(tx)
       .set({ ...source.capabilities, startSession: "yes" });
     tx.prepareCfc();
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
     if (commit.error) throw commit.error;
     await assertRejects(
       () =>
@@ -2863,7 +2872,7 @@ Deno.test("Fabric target binds producer queues and reads commands from every bou
     const existing = queue.getRawUntyped({ frozen: false });
     queue.setRawUntyped([...(Array.isArray(existing) ? existing : []), value]);
     tx.prepareCfc();
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) throw result.error;
   };
   try {
