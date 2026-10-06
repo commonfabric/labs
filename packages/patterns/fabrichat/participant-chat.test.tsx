@@ -40,6 +40,7 @@ import { FabriChatRoomCore, ParticipantChip } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
+  CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
@@ -95,6 +96,7 @@ type UnclaimedProfile = AddIntegrity<
 >;
 
 const sendGesture = { surface: CHAT_SEND_SURFACE, action: CHAT_SEND_ACTION };
+const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
 const typed = (text: string) => ({ type: "click", target: { value: text } });
 
@@ -105,6 +107,15 @@ const chatDisplay = (chip: unknown): unknown =>
       findNodeByProp(chip, "data-ui-pattern", CHAT_START_SURFACE),
       "style",
     ) as { display?: unknown })?.display,
+  );
+
+// Whom a chip's chat control names to the manager it sends its click to.
+const chatCounterpart = (chip: unknown): unknown =>
+  readValue(
+    propValue(
+      findNodeByProp(chip, "data-ui-action", CHAT_START_ACTION),
+      "data-counterpart",
+    ),
   );
 
 // How a manager shows its user's chat address, and the address it offers to
@@ -243,7 +254,22 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           chatDisplay(unclaimedChip[UI]) === "none"
         ),
       },
-      { action: aliceChip.chat, event: {} },
+      // Alice's chip names her by the principal her profile attests, and its
+      // click is the viewer's reviewed start, sent to the manager itself.
+      {
+        assertion: assert(() =>
+          setup.aliceDid.get() !== "" &&
+          chatCounterpart(aliceChip[UI]) === setup.aliceDid.get()
+        ),
+      },
+      {
+        action: manager.openDirect,
+        event: {
+          type: "click",
+          target: { dataset: { counterpart: setup.aliceDid } },
+        },
+        trustedUi: startGesture,
+      },
       {
         assertion: assert(() =>
           rooms.get().length === 1 && rooms.get()[0]?.kind === "direct" &&

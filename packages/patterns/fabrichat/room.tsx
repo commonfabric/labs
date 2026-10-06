@@ -108,20 +108,6 @@ export interface StartDirectEvent {
   counterpart: string;
 }
 
-/**
- * Asks the viewer's manager for a direct chat with the person `participant`
- * stands for, by the principal its `represents-principal` label attests. A
- * profile whose label names no single principal starts nothing.
- */
-const startDirectWith = handler<unknown, {
-  participant: ProfileCell;
-  startDirect?: Stream<StartDirectEvent>;
-}>((_event, { participant, startDirect }) => {
-  const counterpart = principalOf(participant, "represents-principal");
-  if (counterpart === undefined) return;
-  startDirect?.send({ counterpart });
-});
-
 /** What a participant's chip needs. */
 export interface ParticipantChipInput {
   /** The participant's profile. */
@@ -136,7 +122,11 @@ export interface ParticipantChipInput {
    */
   startsDirect?: boolean;
 
-  /** The viewer's manager's `openDirect`, when `startsDirect` holds. */
+  /**
+   * The viewer's manager's `openDirect`, when `startsDirect` holds. The
+   * control sends its click there itself, so that the manager receives the
+   * viewer's reviewed `ChatStart`.
+   */
   startDirect?: Stream<StartDirectEvent>;
 }
 
@@ -144,28 +134,27 @@ export interface ParticipantChipInput {
 export interface ParticipantChipOutput {
   /** The participant's badge, and the control that starts a chat with them. */
   [UI]: VNode;
-
-  /** Starts a direct chat with the participant. */
-  chat: Stream<unknown>;
 }
 
 /**
  * One participant, shown by their profile, with a control that starts a direct
  * chat with them. The control shows only where it can start one: for someone
  * other than the viewer, whose profile attests a principal, to a viewer who
- * has a manager.
+ * has a manager. It names the participant to the manager by the principal
+ * their profile's `represents-principal` label attests.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
   ParticipantChipOutput
 >(({ participant, myProfile, startsDirect, startDirect }) => {
-  const chat = startDirectWith({ participant, startDirect });
+  const counterpart = computed(() =>
+    principalOf(participant, "represents-principal") ?? ""
+  );
   // Who may start a chat differs by viewer, so the control is hidden by a
   // prop rather than built as a different tree (see `FabriChatMessageRow`).
   const chatDisplay = computed((): ChatDisplay =>
     startsDirect === true && myProfile?.get() !== undefined &&
-      !equals(participant, myProfile) &&
-      principalOf(participant, "represents-principal") !== undefined
+      !equals(participant, myProfile) && counterpart !== ""
       ? "inline-flex"
       : "none"
   );
@@ -182,16 +171,16 @@ export const ParticipantChip = pattern<
         >
           <cf-button
             data-ui-action={CHAT_START_ACTION}
+            data-counterpart={counterpart}
             size="sm"
             variant="ghost"
-            onClick={chat}
+            onClick={startDirect}
           >
             Chat
           </cf-button>
         </span>
       </span>
     ),
-    chat,
   };
 });
 

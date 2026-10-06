@@ -66,7 +66,10 @@ export type RequestsCell = Writable<
 /** Notices waiting for a client to deliver them. */
 export type NoticesCell = Writable<ChatManagerNotice[] | Default<[]>>;
 
-/** Every act `commitManager` performs, each bound to one of its streams. */
+/**
+ * Every act the manager performs, each bound to one of its streams: a start by
+ * `commitStart`, and every other act by `commitManager`.
+ */
 export type ManagerAct =
   | "openDirect"
   | "createGroup"
@@ -80,8 +83,10 @@ const isStart = (act: ManagerAct): boolean =>
 
 /**
  * An event on one of the manager's streams. Each stream's event carries the
- * fields its act needs. A rendered control sends the text it holds as
- * `target.value`, and no request id, which the manager then mints.
+ * fields its act needs. A rendered control sends no request id, which the
+ * manager then mints, and either the text it holds, as `target.value`, or, for
+ * a control that starts a direct room with one person, that person's principal
+ * as `target.dataset.counterpart`.
  */
 export interface ManagerStreamEvent {
   /** Chosen by the sender; the outcome is recorded under it. */
@@ -108,8 +113,11 @@ export interface ManagerStreamEvent {
   /** The id of a notice delivered. */
   id?: string;
 
-  /** A rendered control's text. */
-  readonly target?: { readonly value?: string };
+  /** A rendered control's text, or the principal it starts a direct room with. */
+  readonly target?: {
+    readonly value?: string;
+    readonly dataset?: { readonly counterpart?: string };
+  };
 }
 
 /** A group room being composed in the manager's own rendering. */
@@ -311,193 +319,214 @@ const createRoom = (
  * delivered. Each act's outcome is recorded under its `requestId`, and a
  * request already decided changes nothing.
  */
-export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
-  (event, state) => {
-    const { act, rooms, direct, requests, outgoingNotices } = state;
-    const requestId = event?.requestId ?? eventKey();
-    const earlier = requests.key(requestId).get();
-    if (earlier !== undefined && earlier.status !== "pending") return;
-    const typed = event?.target?.value?.trim();
+const performManagerAct = (
+  event: ManagerStreamEvent | undefined,
+  state: ManagerActState,
+): void => {
+  const { act, rooms, direct, requests, outgoingNotices } = state;
+  const requestId = event?.requestId ?? eventKey();
+  const earlier = requests.key(requestId).get();
+  if (earlier !== undefined && earlier.status !== "pending") return;
+  const typed = event?.target?.value?.trim();
 
-    // A chat is started by someone who can take part in it, and taking part
-    // needs a profile.
-    if (
-      isStart(act) &&
-      state.myProfile?.get() === undefined
-    ) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "Starting a chat needs a profile.",
-      });
-      return;
-    }
+  // A chat is started by someone who can take part in it, and taking part
+  // needs a profile.
+  if (
+    isStart(act) &&
+    state.myProfile?.get() === undefined
+  ) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: "Starting a chat needs a profile.",
+    });
+    return;
+  }
 
-    if (act === "delivered") {
-      const id = event?.id ?? state.id;
-      if (typeof id !== "string") return;
-      outgoingNotices.set(
-        ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
-          notice,
-        ) => notice.id !== id),
+  if (act === "delivered") {
+    const id = event?.id ?? state.id;
+    if (typeof id !== "string") return;
+    outgoingNotices.set(
+      ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
+        notice,
+      ) => notice.id !== id),
+    );
+    return;
+  }
+
+  // A start needs to know who this user is, to leave them out of the
+  // room's other members.
+  const self = currentPrincipal();
+  if (isStart(act) && self === undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: "Starting a chat needs a signed-in user.",
+    });
+    return;
+  }
+
+  if (act === "openDirect") {
+    const counterpart = event?.counterpart ??
+      event?.target?.dataset?.counterpart ?? typed;
+    if (!isPrincipalDID(counterpart)) {
+      const reason = "The counterpart is not a principal.";
+      // The session is shown the text it sent, which says what is wrong
+      // with it. The recorded reason is kept for as long as the manager
+      // exists, so it holds no text a person typed.
+      recordOutcome(
+        state,
+        requestId,
+        { status: "refused", reason },
+        counterpart === undefined || counterpart === ""
+          ? undefined
+          : debugStr`${reason} Received: $long${counterpart}`,
       );
       return;
     }
-
-    // A start needs to know who this user is, to leave them out of the
-    // room's other members.
-    const self = currentPrincipal();
-    if (isStart(act) && self === undefined) {
+    if (counterpart === self) {
       recordOutcome(state, requestId, {
         status: "refused",
-        reason: "Starting a chat needs a signed-in user.",
+        reason: "The counterpart is this user.",
       });
       return;
     }
-
-    if (act === "openDirect") {
-      const counterpart = event?.counterpart ?? typed;
-      if (!isPrincipalDID(counterpart)) {
-        const reason = "The counterpart is not a principal.";
-        // The session is shown the text it sent, which says what is wrong
-        // with it. The recorded reason is kept for as long as the manager
-        // exists, so it holds no text a person typed.
-        recordOutcome(
-          state,
-          requestId,
-          { status: "refused", reason },
-          counterpart === undefined || counterpart === ""
-            ? undefined
-            : debugStr`${reason} Received: $long${counterpart}`,
-        );
-        return;
+    const known = direct.key(counterpart).get();
+    if (known !== undefined) {
+      if (!lists(rooms, known.room)) {
+        rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), known]);
       }
-      if (counterpart === self) {
-        recordOutcome(state, requestId, {
-          status: "refused",
-          reason: "The counterpart is this user.",
-        });
-        return;
-      }
-      const known = direct.key(counterpart).get();
-      if (known !== undefined) {
-        if (!lists(rooms, known.room)) {
-          rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), known]);
-        }
-        recordOutcome(state, requestId, { status: "done", entry: known });
-        return;
-      }
-      const entry = createRoom(state, requestId, "direct", [counterpart], {
-        counterpart,
-      });
-      direct.key(counterpart).set(entry);
-      recordOutcome(state, requestId, { status: "done", entry });
+      recordOutcome(state, requestId, { status: "done", entry: known });
       return;
     }
-
-    if (act === "createGroup") {
-      const draft = state.fromDraft === true ? state.draft.get() : undefined;
-      const title = (event?.title ?? draft?.title ?? "").trim();
-      if (title === "") {
-        recordOutcome(state, requestId, {
-          status: "refused",
-          reason: "A group room needs a title.",
-        });
-        return;
-      }
-      const listed = event?.members ?? principalsIn(draft?.members ?? "");
-      const notPrincipals = listed.filter((member) => !isPrincipalDID(member));
-      if (notPrincipals.length > 0) {
-        const reason = "A group's members must be principals.";
-        // As for a direct room, the session is shown what it sent that isn't
-        // one, and the recorded reason holds no text a person typed.
-        recordOutcome(
-          state,
-          requestId,
-          { status: "refused", reason },
-          debugStr`${reason} Received: $long${notPrincipals}`,
-        );
-        return;
-      }
-      const members = otherMembers(listed, self ?? "");
-      const joinableByLink = event?.joinableByLink ??
-        draft?.joinableByLink ?? false;
-      const entry = createRoom(state, requestId, "group", members, {
-        title,
-        joinableByLink,
-      });
-      if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
-      recordOutcome(state, requestId, { status: "done", entry });
-      return;
-    }
-
-    const room = event?.room ?? state.room;
-    if (room === undefined) return;
-
-    if (act === "forget") {
-      rooms.set(
-        ((rooms.get() ?? []) as ChatIndexEntry[]).filter((entry) =>
-          !equals(entry.room, room)
-        ),
-      );
-      recordOutcome(state, requestId, { status: "done" });
-      return;
-    }
-
-    // `accept`. The kind comes from the record the room's creator wrote,
-    // which reads without the room running, as its own view needs; a space's
-    // own chat has none, and its view says what it is.
-    const record = aboutRecordOf(room);
-    const kind = record.key("kind").get() ?? room.key("about").get()?.kind;
-    if (
-      currentPrincipal() === undefined || spaceAccess(room) === "none" ||
-      (kind !== "direct" && kind !== "group")
-    ) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "The room can't be read by this user.",
-      });
-      return;
-    }
-    // A direct room's counterpart is its creator, as its `about` is labeled,
-    // whatever the event claims. A room this user created is found again with
-    // `openDirect`, and its label names no one else.
-    const creator = kind === "direct"
-      ? principalOf(record, "authored-by")
-      : undefined;
-    const refusal = kind !== "direct"
-      ? undefined
-      : creator === undefined
-      ? "The room's creator can't be verified."
-      : creator === currentPrincipal()
-      ? "The room was created by this user."
-      : event?.counterpart !== undefined && event.counterpart !== creator
-      ? "The counterpart is not the room's creator."
-      : undefined;
-    if (refusal !== undefined) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: refusal,
-      });
-      return;
-    }
-    const counterpart = creator;
-    const entry: ChatIndexEntry = {
-      room,
-      kind,
-      ...(kind === "direct" ? { counterpart } : {}),
-      since: epochNsecFromMsec(Date.now()),
-    };
-    if (!lists(rooms, room)) {
-      rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), entry]);
-    }
-    if (
-      kind === "direct" && counterpart !== undefined &&
-      direct.key(counterpart).get() === undefined
-    ) {
-      direct.key(counterpart).set(entry);
-    }
+    const entry = createRoom(state, requestId, "direct", [counterpart], {
+      counterpart,
+    });
+    direct.key(counterpart).set(entry);
     recordOutcome(state, requestId, { status: "done", entry });
-  },
+    return;
+  }
+
+  if (act === "createGroup") {
+    const draft = state.fromDraft === true ? state.draft.get() : undefined;
+    const title = (event?.title ?? draft?.title ?? "").trim();
+    if (title === "") {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "A group room needs a title.",
+      });
+      return;
+    }
+    const listed = event?.members ?? principalsIn(draft?.members ?? "");
+    const notPrincipals = listed.filter((member) => !isPrincipalDID(member));
+    if (notPrincipals.length > 0) {
+      const reason = "A group's members must be principals.";
+      // As for a direct room, the session is shown what it sent that isn't
+      // one, and the recorded reason holds no text a person typed.
+      recordOutcome(
+        state,
+        requestId,
+        { status: "refused", reason },
+        debugStr`${reason} Received: $long${notPrincipals}`,
+      );
+      return;
+    }
+    const members = otherMembers(listed, self ?? "");
+    const joinableByLink = event?.joinableByLink ??
+      draft?.joinableByLink ?? false;
+    const entry = createRoom(state, requestId, "group", members, {
+      title,
+      joinableByLink,
+    });
+    if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
+    recordOutcome(state, requestId, { status: "done", entry });
+    return;
+  }
+
+  const room = event?.room ?? state.room;
+  if (room === undefined) return;
+
+  if (act === "forget") {
+    rooms.set(
+      ((rooms.get() ?? []) as ChatIndexEntry[]).filter((entry) =>
+        !equals(entry.room, room)
+      ),
+    );
+    recordOutcome(state, requestId, { status: "done" });
+    return;
+  }
+
+  // `accept`. The kind comes from the record the room's creator wrote,
+  // which reads without the room running, as its own view needs; a space's
+  // own chat has none, and its view says what it is.
+  const record = aboutRecordOf(room);
+  const kind = record.key("kind").get() ?? room.key("about").get()?.kind;
+  if (
+    currentPrincipal() === undefined || spaceAccess(room) === "none" ||
+    (kind !== "direct" && kind !== "group")
+  ) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: "The room can't be read by this user.",
+    });
+    return;
+  }
+  // A direct room's counterpart is its creator, as its `about` is labeled,
+  // whatever the event claims. A room this user created is found again with
+  // `openDirect`, and its label names no one else.
+  const creator = kind === "direct"
+    ? principalOf(record, "authored-by")
+    : undefined;
+  const refusal = kind !== "direct"
+    ? undefined
+    : creator === undefined
+    ? "The room's creator can't be verified."
+    : creator === currentPrincipal()
+    ? "The room was created by this user."
+    : event?.counterpart !== undefined && event.counterpart !== creator
+    ? "The counterpart is not the room's creator."
+    : undefined;
+  if (refusal !== undefined) {
+    recordOutcome(state, requestId, {
+      status: "refused",
+      reason: refusal,
+    });
+    return;
+  }
+  const counterpart = creator;
+  const entry: ChatIndexEntry = {
+    room,
+    kind,
+    ...(kind === "direct" ? { counterpart } : {}),
+    since: epochNsecFromMsec(Date.now()),
+  };
+  if (!lists(rooms, room)) {
+    rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), entry]);
+  }
+  if (
+    kind === "direct" && counterpart !== undefined &&
+    direct.key(counterpart).get() === undefined
+  ) {
+    direct.key(counterpart).set(entry);
+  }
+  recordOutcome(state, requestId, { status: "done", entry });
+};
+
+/**
+ * Starts a chat, finding or creating a direct room or creating a group room,
+ * from a reviewed `ChatStart` on `ChatStartSurface`: a room's `about` record
+ * names this handler and that action as its only writer, so a start that
+ * creates a room commits only from that gesture.
+ */
+export const commitStart = handler<ManagerStreamEvent, ManagerActState>(
+  (event, state) => performManagerAct(event, state),
+);
+
+/**
+ * Performs one of the manager's other acts: accepting a room, forgetting one,
+ * or reporting a notice delivered. None of them needs a gesture, since each
+ * changes only this user's own manager.
+ */
+export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
+  (event, state) => performManagerAct(event, state),
 );
 
 /** What a manager stores. Every field has a default. */
@@ -658,8 +687,8 @@ export const FabriChatManagerCore = pattern<
       (): ChatDisplay => (myAddress === "" ? "none" : "block"),
     );
     const streams = {
-      openDirect: commitManager({ act: "openDirect", ...records }),
-      createGroup: commitManager({ act: "createGroup", ...records }),
+      openDirect: commitStart({ act: "openDirect", ...records }),
+      createGroup: commitStart({ act: "createGroup", ...records }),
       accept: commitManager({ act: "accept", ...records }),
       forget: commitManager({ act: "forget", ...records }),
       delivered: commitManager({ act: "delivered", ...records }),
@@ -756,7 +785,7 @@ export const FabriChatManagerCore = pattern<
               <cf-button
                 data-ui-action={CHAT_START_ACTION}
                 disabled={cannotStart}
-                onClick={commitManager({
+                onClick={commitStart({
                   act: "createGroup",
                   ...records,
                   fromDraft: true,
