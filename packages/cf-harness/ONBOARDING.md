@@ -649,8 +649,8 @@ defines the three required session flags and the input-cell behavior.
 [Measuring the pattern index loop](docs/pattern-index-measurement.md) is the
 protocol for comparable experiments: the fixed task suite, the rule that a
 discovery task must not mention the index, the CFC and server-parity readings,
-and how label persistence is attributed to the writing session. With a console
-running, the executable entry is
+the sandbox runtime each run recorded, and how label persistence is attributed
+to the writing session. With a console running, the executable entry is
 `deno task measure-batch
 scripts/pattern-index-suite.json --console=<console-url>
 --fabric-api-url=<toolshed-api-url>
