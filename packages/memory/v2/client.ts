@@ -104,7 +104,19 @@ export type Transport = {
   /** Whether this transport can exchange negotiated compression envelopes. */
   readonly supportsMessageCompression?: boolean;
 
+  /**
+   * Hands `payload` to the connection, opening one first when there is none.
+   *
+   * Rejects with an error named `ConnectionError` (see `connectionError()`)
+   * when the payload never reached the connection because the connection was
+   * lost or could not be opened. The client keeps a commit rejected that way
+   * for replay on the next connection, so the transport must report the same
+   * loss to its close receiver, which starts the reconnect that replays it;
+   * `reset()` and `close()` are the exceptions, as the client calls them
+   * itself. Any other rejection fails the request with that error.
+   */
   send(payload: string): Promise<void>;
+
   close(): Promise<void>;
 
   /**
@@ -3381,14 +3393,20 @@ export const loopback = (server: Server): Transport => {
   };
 };
 
-const toConnectionError = (error?: Error): Error => {
-  const connectionError = new Error(
-    error?.message ?? "memory transport closed",
-    error ? { cause: error } : undefined,
-  );
-  connectionError.name = "ConnectionError";
-  return connectionError;
+/**
+ * Returns an error named `ConnectionError`: the name the client reads as a
+ * request that reached no verdict because its connection was lost or could not
+ * be opened. A transport rejects a send with one under the conditions
+ * `Transport.send()` describes.
+ */
+export const connectionError = (message: string, cause?: unknown): Error => {
+  const error = new Error(message, cause === undefined ? undefined : { cause });
+  error.name = "ConnectionError";
+  return error;
 };
+
+const toConnectionError = (error?: Error): Error =>
+  connectionError(error?.message ?? "memory transport closed", error);
 
 const isConnectionError = (error: unknown): boolean =>
   error instanceof Error &&

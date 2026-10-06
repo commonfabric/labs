@@ -10,6 +10,7 @@ import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
   decodeCompressedMemoryMessage,
   encodeCompressedMemoryMessage,
+  type EncodedMemoryMessage,
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
   parseMemoryCompressionControlMessage,
@@ -268,7 +269,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
   /**
    * Sends in submission order using the compression mode active at submission.
    * Every payload stays on the queue because a later text frame must not
-   * overtake earlier asynchronous compression.
+   * overtake earlier asynchronous compression. A payload lost with its
+   * connection — one queued when the socket closes, one whose write fails, or
+   * one sent on a socket that fails to open — rejects with a `ConnectionError`.
    */
   async send(payload: string): Promise<void> {
     const opening = this.#open();
@@ -282,9 +285,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
           : await encodeCompressedMemoryMessage(payload)
         : payload;
       if (this.#socket !== connection.socket) {
-        throw new Error("Memory websocket changed before send");
+        throw MemoryClient.connectionError(
+          "Memory websocket changed before send",
+        );
       }
-      await connection.send(frame);
+      await this.#write(connection, frame);
     });
     this.#sending = send.catch(() => {});
     await send;
@@ -452,11 +457,18 @@ export class WebSocketTransport implements MemoryClient.Transport {
           this.#closeReceiver();
         }
         if (!opened) {
-          reject(new Error("memory websocket transport closed before opening"));
+          reject(
+            MemoryClient.connectionError(
+              "memory websocket transport closed before opening",
+            ),
+          );
         }
       });
       socket.addEventListener("error", (event) => {
         const isCurrentSocket = this.#socket === socket;
+        const error = event.error instanceof Error
+          ? event.error
+          : new Error("memory websocket transport error");
         if (isCurrentSocket) {
           this.#socket = null;
           this.#connection = null;
@@ -471,13 +483,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
           this.#opening = null;
         }
         if (isCurrentSocket) {
-          this.#closeReceiver(
-            event.error instanceof Error
-              ? event.error
-              : new Error("memory websocket transport error"),
-          );
+          this.#closeReceiver(error);
         }
-        reject(event);
+        reject(MemoryClient.connectionError(error.message, error));
       }, { once: true });
     });
     this.#opening = opening;
@@ -497,9 +505,12 @@ export class WebSocketTransport implements MemoryClient.Transport {
     const send = this.#sending.then(async () => {
       const connection = await opening;
       if (this.#socket !== connection.socket) {
-        throw new Error("Memory websocket changed before compression control");
+        throw MemoryClient.connectionError(
+          "Memory websocket changed before compression control",
+        );
       }
-      await connection.send(
+      await this.#write(
+        connection,
         this.#routedMessages
           ? encodeMemoryBoundary({
             type: "memory.compression",
@@ -516,6 +527,29 @@ export class WebSocketTransport implements MemoryClient.Transport {
     } catch (cause) {
       this.#compressionRequests.delete(requestId);
       throw cause;
+    }
+  }
+
+  /**
+   * Helper for `send()` and `#sendCompressionControl()`, which writes `frame`
+   * to `connection`. The socket backends in `memory-socket.ts` refuse a write
+   * on an open socket only once it is failing or closing, and its own error or
+   * close event then reports the loss to the close receiver, so a failed write
+   * rejects with a `ConnectionError` carrying the socket's error as its cause.
+   */
+  async #write(
+    connection: MemorySocketConnection,
+    frame: EncodedMemoryMessage,
+  ): Promise<void> {
+    try {
+      await connection.send(frame);
+    } catch (cause) {
+      throw MemoryClient.connectionError(
+        cause instanceof Error
+          ? cause.message
+          : "Memory websocket write failed",
+        cause,
+      );
     }
   }
 

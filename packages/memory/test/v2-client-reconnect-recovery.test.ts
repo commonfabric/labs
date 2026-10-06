@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
-import { connect, type Transport } from "../v2/client.ts";
+import { connect, connectionError, type Transport } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
   testSessionOpenAuthFactory,
@@ -13,7 +13,7 @@ import {
 /** A reconnectable transport using the real server's handshake and sessions. */
 function reconnectableTransport(
   server: Server,
-  options: { holdFirstTransact?: boolean } = {},
+  options: { holdFirstTransact?: boolean; loseFirstTransact?: boolean } = {},
 ) {
   let connection: ReturnType<Server["connect"]> | undefined;
   let receiver = (_payload: string) => {};
@@ -24,6 +24,7 @@ function reconnectableTransport(
   const transactSent = Promise.withResolvers<void>();
   let heldOnce = false;
   let holding = false;
+  let lostOnce = false;
   const reset = () => {
     connection?.close();
     connection = undefined;
@@ -47,6 +48,16 @@ function reconnectableTransport(
         connection = opened;
       }
       const message = decodeMemoryBoundary(payload) as { type: string };
+      if (
+        options.loseFirstTransact && !lostOnce && message.type === "transact"
+      ) {
+        // The connection drops while this frame waits to be written, as a
+        // socket transport reports it: the close first, then the send.
+        lostOnce = true;
+        reset();
+        closeReceiver(new Error("test connection dropped"));
+        throw connectionError("Memory websocket changed before send");
+      }
       const held = options.holdFirstTransact && !heldOnce &&
         message.type === "transact";
       if (held) {
@@ -353,6 +364,35 @@ describe("v2-client-reconnect-recovery", () => {
       await expect(pending).resolves.toMatchObject({ seq: 1 });
       expect(attempts).toBe(2);
       expect(wire.connections).toBe(3);
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+
+  it("retains a commit whose send rejects with a `ConnectionError` as its connection drops", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-lost-send"),
+    });
+    const wire = reconnectableTransport(server, { loseFirstTransact: true });
+    const client = await connect({ transport: wire.transport });
+    const session = await client.mount(
+      "did:key:z6Mk-reconnect-lost-send",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    let pending: ReturnType<typeof session.transact> | undefined;
+    try {
+      pending = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:lost-send", value: { value: 1 } }],
+      });
+      pending.catch(() => {});
+      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      expect(wire.connections).toBe(2);
     } finally {
       await client.close();
       await pending?.catch(() => {});

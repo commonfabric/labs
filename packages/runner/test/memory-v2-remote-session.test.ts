@@ -9,6 +9,7 @@ import {
   MEMORY_PROTOCOL,
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import {
   decodeCompressedMemoryMessage,
   encodeCompressedMemoryMessage,
@@ -28,12 +29,17 @@ import {
 } from "../src/storage/v2-remote-session.ts";
 import {
   createNativeMemorySocket,
+  type MemorySocket,
   type MemorySocketFactory,
 } from "../src/storage/memory-socket.ts";
 import { SpaceHostValidationError } from "../src/space-host.ts";
 import { StorageManager } from "../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { TEST_HELLO_SESSION_OPEN } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_HELLO_SESSION_OPEN,
+  testSessionOpenAuthFactory,
+} from "./memory-v2-test-utils.ts";
 
 function captureError(run: () => unknown): Error {
   try {
@@ -739,6 +745,61 @@ describe("WebSocketTransport failure signaling", () => {
     }));
   };
 
+  /**
+   * A transport that never negotiates message compression, so every frame it
+   * sends is text an in-process memory server can read.
+   */
+  class TextOnlyTransport extends WebSocketTransport {
+    /** @inheritDoc */
+    override get supportsMessageCompression(): boolean {
+      return false;
+    }
+  }
+
+  /** Returns the message type of the text frame `frame`. */
+  const frameType = (frame: EncodedMemoryMessage): string | undefined =>
+    (decodeMemoryBoundary(requireTextFrame(frame)) as { type?: string }).type;
+
+  /**
+   * Returns a socket factory whose sockets reach `server`. Each socket opens as
+   * soon as the transport has attached its listeners, so the client's
+   * reconnects need nothing from the test. A frame reaches the server once
+   * `write` has settled successfully for it, and only while its socket is still
+   * open, as a frame still being written when the connection drops is lost with
+   * it.
+   */
+  const serverWiredSockets = (
+    server: MemoryServer,
+    write: (frame: EncodedMemoryMessage) => Promise<void> | undefined,
+  ): MemorySocketFactory =>
+  (address) => {
+    const socket = new DrivableWebSocket(address);
+    const peer = server.connect((message) => {
+      if (socket.readyState === DrivableWebSocket.OPEN) {
+        socket.receive(encodeMemoryBoundary(message));
+      }
+    });
+    socket.addEventListener("close", () => peer.close());
+    queueMicrotask(() => socket.openConnection());
+    return {
+      socket: socket as unknown as MemorySocket,
+      send: async (frame) => {
+        socket.send(frame);
+        await write(frame);
+        if (socket.readyState === DrivableWebSocket.OPEN) {
+          void peer.receive(requireTextFrame(frame));
+        }
+      },
+    };
+  };
+
+  /** Returns a commit setting the document `id` to `localSeq`. */
+  const commitAt = (localSeq: number, id: string) => ({
+    localSeq,
+    reads: { confirmed: [], pending: [] },
+    operations: [{ op: "set" as const, id, value: { value: localSeq } }],
+  });
+
   it("resets an open connection and ignores its queued frames and late close events", async () => {
     await withTransport(async (transport, socket) => {
       const received: string[] = [];
@@ -834,11 +895,17 @@ describe("WebSocketTransport failure signaling", () => {
         closeError = error;
       });
 
-      const send = transport.send("frame");
+      const send = transport.send("frame").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       socket().readyState = DrivableWebSocket.CLOSED;
       socket().dispatchEvent(new Event("close"));
 
-      await expect(send).rejects.toThrow(
+      const failure = await send;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe(
         "memory websocket transport closed before opening",
       );
       // A close before opening is not an error, so the receiver gets none.
@@ -932,18 +999,45 @@ describe("WebSocketTransport failure signaling", () => {
   it("propagates an asynchronous write failure without poisoning the send queue", async () => {
     const write = Promise.withResolvers<void>();
     await withTransport(async (transport, socket) => {
-      const first = transport.send("first");
-      const failure = expect(first).rejects.toThrow("TLS write failed");
+      const writeFailure = new Error("TLS write failed");
+      const first = transport.send("first").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       const second = transport.send("second");
       const activeSocket = socket();
       activeSocket.openConnection();
       await activeSocket.whenSent(1);
-      write.reject(new Error("TLS write failed"));
-      await failure;
+      write.reject(writeFailure);
+      const failure = await first;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe("TLS write failed");
+      expect((failure as Error).cause).toBe(writeFailure);
       await second;
       expect(activeSocket.sent).toEqual(["first", "second"]);
       await transport.close();
     }, (frame) => frame === "first" ? write.promise : Promise.resolve());
+  });
+
+  it("rejects a send with a `ConnectionError` carrying the failure when its write fails with a value other than an `Error`", async () => {
+    const write = Promise.withResolvers<void>();
+    await withTransport(async (transport, socket) => {
+      const send = transport.send("frame").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const activeSocket = socket();
+      activeSocket.openConnection();
+      await activeSocket.whenSent(1);
+      write.reject("socket gone");
+      const failure = await send;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe("Memory websocket write failed");
+      expect((failure as Error).cause).toBe("socket gone");
+      await transport.close();
+    }, () => write.promise);
   });
 
   it("rejects queued sends after close without reopening the socket", async () => {
@@ -964,6 +1058,30 @@ describe("WebSocketTransport failure signaling", () => {
       );
       expect(activeSocket.sent).toEqual(["first"]);
       expect(DrivableWebSocket.instances).toHaveLength(1);
+    }, () => write.promise);
+  });
+
+  it("rejects a send queued behind a pending write with a `ConnectionError` when the socket closes", async () => {
+    const write = Promise.withResolvers<void>();
+    await withTransport(async (transport, socket) => {
+      const first = transport.send("first");
+      const second = transport.send("second").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const activeSocket = socket();
+      activeSocket.openConnection();
+      await activeSocket.whenSent(1);
+      activeSocket.close();
+      write.resolve();
+      await first;
+      const failure = await second;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe(
+        "Memory websocket changed before send",
+      );
+      expect(activeSocket.sent).toEqual(["first"]);
     }, () => write.promise);
   });
 
@@ -1179,10 +1297,16 @@ describe("WebSocketTransport failure signaling", () => {
       await opening;
       transport.setMessageCompressionEnabled(true);
 
-      const control = transport.requestMessageCompression(false);
+      const control = transport.requestMessageCompression(false).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       activeSocket.fail(new Error("replace socket before control send"));
 
-      await expect(control).rejects.toThrow(
+      const failure = await control;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe(
         "Memory websocket changed before compression control",
       );
     });
@@ -1638,10 +1762,17 @@ describe("WebSocketTransport failure signaling", () => {
       });
 
       const boom = new Error("connection refused");
-      const send = transport.send("frame");
+      const send = transport.send("frame").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       socket().dispatchEvent(new ErrorEvent("error", { error: boom }));
 
-      await expect(send).rejects.toBeDefined();
+      const failure = await send;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe("connection refused");
+      expect((failure as Error).cause).toBe(boom);
       expect(closeError).toBe(boom);
     });
   });
@@ -1653,12 +1784,118 @@ describe("WebSocketTransport failure signaling", () => {
         closeError = error;
       });
 
-      const send = transport.send("frame");
+      const send = transport.send("frame").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       socket().dispatchEvent(new Event("error"));
 
-      await expect(send).rejects.toBeDefined();
+      const failure = await send;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("ConnectionError");
+      expect((failure as Error).message).toBe(
+        "memory websocket transport error",
+      );
       expect(closeError).toBeInstanceOf(Error);
       expect(closeError?.message).toContain("memory websocket transport error");
     });
+  });
+
+  it("resolves commits queued behind a pending write when the socket closes, once the client reconnects", async () => {
+    // The first commit's write is still in progress when the peer drops the
+    // connection, and the second commit waits behind it. Neither reaches the
+    // server on that connection, so the client replays both on the next one.
+
+    DrivableWebSocket.instances.length = 0;
+    const server = newSharedServer();
+    const write = Promise.withResolvers<void>();
+    let holdNextTransact = false;
+    const transport = new TextOnlyTransport(
+      new URL("wss://memory.test/api/storage/memory"),
+      true,
+      () => {},
+      serverWiredSockets(server, (frame) => {
+        if (!holdNextTransact || frameType(frame) !== "transact") return;
+        holdNextTransact = false;
+        return write.promise;
+      }),
+    );
+    const client = await MemoryClient.connect({ transport });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-queued-commit-replay",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const dropped = DrivableWebSocket.instances.at(-1)!;
+      const sentBefore = dropped.sent.length;
+      holdNextTransact = true;
+      const outcomes = Promise.allSettled([
+        session.transact(commitAt(1, "of:first")),
+        session.transact(commitAt(2, "of:second")),
+      ]);
+      await dropped.whenSent(sentBefore + 1);
+      dropped.close();
+      write.resolve();
+      await client.restoreConnection();
+
+      expect((await outcomes).map((outcome) => outcome.status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+      ]);
+      expect(DrivableWebSocket.instances.at(-1)).not.toBe(dropped);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("resolves a commit whose write fails while the socket is closing, once the client reconnects", async () => {
+    // The peer has started closing the connection, so the socket refuses the
+    // write before it reports the close. The commit never reached the server
+    // and is replayed on the next connection.
+
+    DrivableWebSocket.instances.length = 0;
+    const server = newSharedServer();
+    const write = Promise.withResolvers<void>();
+    let holdNextTransact = false;
+    const transport = new TextOnlyTransport(
+      new URL("wss://memory.test/api/storage/memory"),
+      true,
+      () => {},
+      serverWiredSockets(server, (frame) => {
+        if (!holdNextTransact || frameType(frame) !== "transact") return;
+        holdNextTransact = false;
+        return write.promise;
+      }),
+    );
+    const client = await MemoryClient.connect({ transport });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-closing-commit-replay",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const closing = DrivableWebSocket.instances.at(-1)!;
+      const sentBefore = closing.sent.length;
+      holdNextTransact = true;
+      const outcomes = Promise.allSettled([
+        session.transact(commitAt(1, "of:closing")),
+      ]);
+      await closing.whenSent(sentBefore + 1);
+      closing.readyState = DrivableWebSocket.CLOSING;
+      write.reject(new Error("WebSocket is not open: readyState 2 (CLOSING)"));
+      await clock.settle();
+      closing.close();
+      await client.restoreConnection();
+
+      expect((await outcomes).map((outcome) => outcome.status)).toEqual([
+        "fulfilled",
+      ]);
+      expect(DrivableWebSocket.instances.at(-1)).not.toBe(closing);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
