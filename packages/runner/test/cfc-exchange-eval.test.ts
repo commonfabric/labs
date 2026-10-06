@@ -98,7 +98,6 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         clauseIndex: 0,
         kind: "add",
         added: [userAlice],
-        guardIntegrity: [roleAliceX],
       }]);
       expect(clauseSetsEqual(result.label.confidentiality!, [
         { anyOf: [spaceX, userAlice] },
@@ -176,7 +175,6 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         clauseIndex: 0,
         kind: "drop",
         dropped: cfcAtom.expires(1000),
-        guardIntegrity: [detected],
       }]);
       expect(singleton.label.confidentiality).toEqual([userOwner]);
 
@@ -854,15 +852,12 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         },
         shareSnapshot,
       );
-      // The guard matched the role in space X, the clause it rewrote; the
-      // role in space Y satisfies the same pattern under other bindings.
       expect(result.firings).toEqual([{
         recordId: "share-flow",
         ruleId: "space-reader-access",
         clauseIndex: 0,
         kind: "add",
         added: [userAlice],
-        guardIntegrity: [roleAliceX],
       }]);
       expect(clauseSetsEqual(result.label.confidentiality!, [
         { anyOf: [spaceX, shareRef, userAlice] },

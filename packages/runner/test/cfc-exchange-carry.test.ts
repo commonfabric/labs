@@ -245,12 +245,6 @@ const transformedByOf = (entries: readonly LabelMapEntry[]) =>
     }[]
   );
 
-/** Whether some `TransformedBy` names `project` as an input witness. */
-const witnessesProject = (entries: readonly LabelMapEntry[]): boolean =>
-  transformedByOf(entries).some((atom) =>
-    atom.inputWitness?.identity?.symbol === "project"
-  );
-
 describe("value-intrinsic exchange carry", () => {
   it("drops the released clause from a computed over the released value", async () => {
     await runPiece(
@@ -265,13 +259,6 @@ describe("value-intrinsic exchange carry", () => {
         expect(policyClausesOf(entries)).toEqual([]);
       },
     );
-  });
-
-  it("records the release's guard as an input witness of the computed", async () => {
-    await runPiece(RELEASED, "witness", {}, async ({ send, entriesAt }) => {
-      await send("seed", { a: "alpha", b: "beta" });
-      expect(witnessesProject(entriesAt("viaComputed"))).toBe(true);
-    });
   });
 
   it("admits a publish of the computed into a public store", async () => {

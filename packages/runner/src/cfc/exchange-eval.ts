@@ -113,12 +113,6 @@ export type RuleFiring = {
 
   /** The alternative removed by a `drop` firing. */
   readonly dropped?: unknown;
-
-  /**
-   * The available integrity atoms the rule's integrity guards matched under
-   * the bindings that fired it: the evidence the rewrite rests on.
-   */
-  readonly guardIntegrity: readonly CfcAtom[];
 };
 
 /**
@@ -747,7 +741,7 @@ const applyRuleMatch = (
   rule: ExchangeRule,
 ): {
   confidentiality: readonly CfcConfClause[];
-  firing?: Omit<RuleFiring, "recordId" | "ruleId" | "guardIntegrity">;
+  firing?: Omit<RuleFiring, "recordId" | "ruleId">;
 } => {
   const clause = confidentiality[match.clauseIndex];
   const alternatives = clauseAlternatives(clause);
@@ -980,12 +974,6 @@ export const evaluateExchangeRules = (
           recordId,
           ruleId: rule.id,
           ...applied.firing!,
-          guardIntegrity: availableIntegrity.filter((atom) =>
-            (rule.preCondition?.integrity ?? []).some((pattern) =>
-              conceptGuard(pattern) === undefined &&
-              matchAtomPattern(pattern, atom, match.bindings) !== null
-            )
-          ),
         });
         changed = true;
       }
