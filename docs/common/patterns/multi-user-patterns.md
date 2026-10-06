@@ -740,11 +740,12 @@ again for the same event repairs that.
 
 Both calls work in a handler the serving loop runs as in one a client runs.
 There the change commits when the serving loop commits the handler's run, still
-ahead of the handler's other writes, and a refusal that only the commit finds
-fails the whole run, as a throw the handler lets escape does. A run the serving
-loop withdraws before that commit changes nothing, and its event runs again. A
-client's speculative echo of a served handler changes nothing either: the
-served run makes the change.
+ahead of the handler's other writes. A refusal the call itself cannot see fails
+the whole run when the run seals, as a throw the handler lets escape does. A
+run the serving loop withdraws before that commit changes nothing, and its
+event runs again; that is also what a change to the list made after the run
+sealed leads to. A client's speculative echo of a served handler changes
+nothing either: the served run makes the change.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
 details.
 

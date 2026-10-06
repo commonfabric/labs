@@ -4907,7 +4907,9 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * throws anywhere else. Every refusal the call can see throws. One the
  * handler lets escape drops its whole transaction; the call throws before
  * staging anything, so one the handler catches leaves nothing staged for that
- * call. A refusal found only once the handler returns fails its whole run.
+ * call. A refusal found only once the handler returns fails its whole run,
+ * but for one caused by a concurrent change to the list, after which the
+ * handler runs again for the same event.
  */
 export declare function grantSpaceAccess(
   target: AnyCell<unknown>,
@@ -4938,7 +4940,9 @@ export declare function grantSpaceAccess(
  * throws anywhere else. Every refusal the call can see throws. One the
  * handler lets escape drops its whole transaction; the call throws before
  * staging anything, so one the handler catches leaves nothing staged for that
- * call. A refusal found only once the handler returns fails its whole run.
+ * call. A refusal found only once the handler returns fails its whole run,
+ * but for one caused by a concurrent change to the list, after which the
+ * handler runs again for the same event.
  */
 export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,
