@@ -293,6 +293,14 @@ type WishContext = {
   /** Candidate load failures encountered during this resolution. */
   candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
 
+  /**
+   * Documents of profiles left out of the roster because their load failed:
+   * the roster entry, and any default or MRU reference into the same profile
+   * space. Their failures are not discovery failures: they only exempt those
+   * documents from the final load check.
+   */
+  skippedProfiles?: Set<Cell<unknown>>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -514,6 +522,19 @@ function subscribeProfileName(cell: Cell<unknown>): void {
   cell.key("initialNameApplied").get();
 }
 
+/** A profile document's presence, or the failure that kept it from loading. */
+function profileDocument(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean | DocumentLoadError {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (error instanceof DocumentLoadError) return error;
+    throw error;
+  }
+}
+
 /**
  * Enumerate the user's profile candidate cells from the home `profiles` list,
  * ordered: default first, then by most-recently-used (MRU), then remaining list
@@ -521,8 +542,11 @@ function subscribeProfileName(cell: Cell<unknown>): void {
  * `ProfileHome.inSpace()` space, so the `defaultProfile` / `mru` links are
  * matched to candidates by space, not `Cell.equals` (see `sameProfileCell`;
  * CT-1842). Skips confirmed-absent entries when a valid candidate remains.
- * Throws `DocumentPending` while backing documents load, and `WishError`
- * when absent entries leave no valid candidate.
+ * A profile whose load failed is ordered with the rest, so a failure never
+ * changes which profile is selected: the selected profile's failure is thrown,
+ * and any other failed profile is left out of the roster. Throws
+ * `DocumentPending` while backing documents load, and `WishError` when absent
+ * entries leave no valid candidate.
  */
 function getProfileCandidateCells(
   ctx: WishContext,
@@ -540,12 +564,15 @@ function getProfileCandidateCells(
   const rawList = profilesCell.asSchema(profileLinkListSchema).get();
   const length = Array.isArray(rawList) ? rawList.length : 0;
 
+  // Valid profiles in list order, including those whose load failed.
   const candidates: Cell<unknown>[] = [];
+  const failures = new Map<Cell<unknown>, DocumentLoadError>();
   let hasAbsentProfile = false;
   for (let i = 0; i < length; i++) {
     const entry = profilesCell.key(i);
     const cell = entry.resolveAsCell();
-    if (!ctx.readiness.requireDocument(cell, ctx.tx)) {
+    const loaded = profileDocument(cell, ctx);
+    if (loaded === false) {
       hasAbsentProfile = true;
       continue;
     }
@@ -558,7 +585,11 @@ function getProfileCandidateCells(
     ) {
       continue;
     }
-    subscribeProfileName(cell);
+    if (loaded instanceof DocumentLoadError) {
+      failures.set(cell, loaded);
+    } else {
+      subscribeProfileName(cell);
+    }
     candidates.push(cell);
   }
   if (candidates.length === 0) {
@@ -618,7 +649,24 @@ function getProfileCandidateCells(
     }
     return mruRank(a) - mruRank(b);
   });
-  return { ordered, defaultValid };
+  // Falling back past the selected profile would switch persona silently.
+  const selectedFailure = failures.get(ordered[0]);
+  if (selectedFailure) throw selectedFailure;
+  if (failures.size === 0) return { ordered, defaultValid };
+  // A default or MRU reference can name another document in a skipped
+  // profile's space (see sameProfileCell); resolving it loaded that document,
+  // which fails with the rest of the space.
+  const skipped = ctx.skippedProfiles ??= new Set();
+  for (const cell of failures.keys()) {
+    skipped.add(cell);
+    for (const reference of [defaultCell, ...mruCells]) {
+      if (sameProfileCell(reference, cell, homeSpace)) skipped.add(reference);
+    }
+  }
+  return {
+    ordered: ordered.filter((cell) => !failures.has(cell)),
+    defaultValid,
+  };
 }
 
 /**
@@ -1114,10 +1162,12 @@ function resolveHomeSpaceTarget(
         // create surface (see profileCreateUI).
         throw new NoProfileError();
       }
-      // Always expose the full, ordered roster as `candidates`. The wish action
-      // below still makes `ordered[0]` the current profile and only renders the
-      // picker when no valid default exists. Keeping the roster here is important
-      // for identity-only consumers such as ProfileHome's owner edit gate.
+      // Expose the ordered roster as `candidates`: every profile that loaded,
+      // without any unselected profile whose load failed (see
+      // getProfileCandidateCells). The wish action below still makes
+      // `ordered[0]` the current profile and only renders the picker when no
+      // valid default exists. Keeping the roster here is important for
+      // identity-only consumers such as ProfileHome's owner edit gate.
       return ordered.map((cell) => ({ cell, pathPrefix: [] }));
     }
 
@@ -1579,7 +1629,10 @@ function resolveBase(
 
     throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
   } finally {
-    ctx.readiness.requireLoadedReads(ctx.tx, ctx.candidateFailures.keys());
+    ctx.readiness.requireLoadedReads(ctx.tx, [
+      ...ctx.candidateFailures.keys(),
+      ...(ctx.skippedProfiles ?? []),
+    ]);
   }
 }
 

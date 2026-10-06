@@ -28,6 +28,8 @@ export type {
   RenderDeclassificationPolicy,
   RenderPolicy,
   SpaceAccessProvider,
+  SpaceAccessRetryControl,
+  SpaceAccessRetryState,
   WorkerJSXElement,
   WorkerProps,
   WorkerReconcilerOptions,
