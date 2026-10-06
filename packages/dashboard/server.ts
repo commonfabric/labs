@@ -25,6 +25,8 @@
  *                                     organization-users tile
  *   GH_BILLING_TOKEN                  optional dedicated token for GitHub
  *                                     organization or enterprise billing
+ *   GH_APP_CLIENT_ID, GH_APP_PRIVATE_KEY   a GitHub App the GitHub tiles
+ *                                     authenticate as in place of GH_TOKEN
  */
 
 import { minOf } from "@commonfabric/utils/math";

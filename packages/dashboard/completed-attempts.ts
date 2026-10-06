@@ -1,5 +1,6 @@
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { github } from "./lib.ts";
+import type { GitHubCredential } from "./github-auth.ts";
 import type { Run } from "./types.ts";
 
 /** What is held for one run. */
@@ -35,16 +36,17 @@ export interface JobCounts {
  */
 export class CompletedAttempts {
   #repo: string;
-  #token: string | undefined;
+  #credential: GitHubCredential | undefined;
   #runs = new Map<number, HeldRun>();
 
   /**
    * Constructs an instance that reads the runs of `repo`, an "owner/name",
-   * with `token`, or with the dashboard's own GitHub token when none is given.
+   * with `credential`, or with the dashboard's own GitHub credential when none
+   * is given.
    */
-  constructor(repo: string, token?: string) {
+  constructor(repo: string, credential?: GitHubCredential) {
     this.#repo = repo;
-    this.#token = token;
+    this.#credential = credential;
   }
 
   /**
@@ -74,7 +76,7 @@ export class CompletedAttempts {
     if (held) return held;
     const completed = await github<Run>(
       `repos/${this.#repo}/actions/runs/${run.id}/attempts/${attempt}`,
-      this.#token,
+      this.#credential,
     );
     if (
       completed.id !== run.id ||
@@ -106,7 +108,7 @@ export class CompletedAttempts {
     if (held !== undefined) return !held;
     const listing = await github<unknown>(
       `repos/${this.#repo}/actions/runs/${id}/attempts/${number}/jobs?per_page=1`,
-      this.#token,
+      this.#credential,
     );
     if (!isObjectNotArray(listing) || typeof listing.total_count !== "number") {
       throw new Error(
@@ -135,7 +137,7 @@ export class CompletedAttempts {
       const listing = await github<unknown>(
         `repos/${this.#repo}/actions/runs/${id}/attempts/${number}/jobs` +
           `?per_page=100&page=${page}`,
-        this.#token,
+        this.#credential,
       );
       if (
         !isObjectNotArray(listing) ||

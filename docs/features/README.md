@@ -72,6 +72,8 @@ a line for each new document to the index below.
 
 ## Identity and people
 
+- [`shared-space-catalog.md`](shared-space-catalog.md) — portable collection
+  membership, transactional registration, and archive/restore confirmation
 - [`did-identifiers.md`](did-identifiers.md) — what makes a string a DID, the
   one module that decides it, and the guard for an argument that takes a space
   name rather than a DID
@@ -95,7 +97,8 @@ a line for each new document to the index below.
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current
+  and how it stays current; and what `spaceOf(target)` returns, the DID of
+  that space
 - [`space-access-changes.md`](space-access-changes.md) — how a handler grants
   and revokes access to a space with `grantSpaceAccess()` and
   `revokeSpaceAccess()`: what a grant exposes, who may change the list and

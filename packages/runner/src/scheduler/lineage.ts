@@ -7,6 +7,9 @@ interface OriginRecord {
   status: OriginStatus;
   events: Set<QueuedEvent>;
   pieceStops: Array<() => void>;
+
+  /** Whether the scheduler aborts the origin in order to run it again. */
+  rerun: boolean;
 }
 
 /**
@@ -19,8 +22,15 @@ export class SpeculationLineage {
   #byOrigin = new Map<IExtendedStorageTransaction, OriginRecord>();
 
   readonly #hooks: {
-    /** Drop and settle a not-yet-dispatched event from the queue. */
-    dropQueuedEvent: (event: QueuedEvent, reason: string) => void;
+    /**
+     * Drop and settle a not-yet-dispatched event from the queue, logging
+     * `reason` at debug rather than as a warning when `quiet`.
+     */
+    dropQueuedEvent: (
+      event: QueuedEvent,
+      reason: string,
+      quiet: boolean,
+    ) => void;
 
     /** Wake the scheduler (parked cross-space events become ready). */
     queueExecution: () => void;
@@ -30,8 +40,15 @@ export class SpeculationLineage {
 
   constructor(
     hooks: {
-      /** Drop and settle a not-yet-dispatched event from the queue. */
-      dropQueuedEvent: (event: QueuedEvent, reason: string) => void;
+      /**
+       * Drop and settle a not-yet-dispatched event from the queue, logging
+       * `reason` at debug rather than as a warning when `quiet`.
+       */
+      dropQueuedEvent: (
+        event: QueuedEvent,
+        reason: string,
+        quiet: boolean,
+      ) => void;
 
       /** Wake the scheduler (parked cross-space events become ready). */
       queueExecution: () => void;
@@ -60,6 +77,7 @@ export class SpeculationLineage {
           : "pending",
         events: new Set(),
         pieceStops: [],
+        rerun: false,
       };
       this.#byOrigin.set(origin, record);
       if (record.status !== "pending") return record;
@@ -69,11 +87,16 @@ export class SpeculationLineage {
         if (!settled) return;
         settled.status = result.error ? "failed" : "confirmed";
         if (result.error) {
+          // An origin run again sends its follow-ups again under the re-run's
+          // own transaction, so dropping this attempt's is routine.
           for (const event of settled.events) {
             try {
               this.#hooks.dropQueuedEvent(
                 event,
-                `Event dropped: speculative origin failed before ${event.id} dispatched`,
+                settled.rerun
+                  ? `Event dropped: speculative origin was aborted to run again before ${event.id} dispatched`
+                  : `Event dropped: speculative origin failed before ${event.id} dispatched`,
+                settled.rerun,
               );
             } catch (error) {
               this.#hooks.onError(error);
@@ -112,6 +135,18 @@ export class SpeculationLineage {
 
   recordPieceStop(origin: IExtendedStorageTransaction, stop: () => void): void {
     this.#recordFor(origin).pieceStops.push(stop);
+  }
+
+  /**
+   * Notes that the scheduler is about to abort `origin` in order to run its
+   * work again, so the follow-up events the abort drops are logged at debug
+   * rather than as warnings. Called before the abort, whose settle callback
+   * does the dropping; an origin with no recorded launches has nothing to
+   * note.
+   */
+  noteRerun(origin: IExtendedStorageTransaction): void {
+    const record = this.#byOrigin.get(origin);
+    if (record) record.rerun = true;
   }
 
   /** Called when an event is dispatched or dropped. */

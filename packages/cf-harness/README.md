@@ -134,6 +134,8 @@ What works today:
 - read-only Loom retrieval through a separately configured host transport, with
   every row measured against the run's observation ceiling; see
   [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
+- the commands a host admits, listed and run through the host's own scoped
+  broker; see [Host commands](docs/LOOM_COMMANDS.md);
 - built-in tools:
   - `bash`
   - `browser` (structured browser control for the browser subagent profile only,
@@ -196,6 +198,11 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
+  - `list_commands` and `run_command` (present only with
+    `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
+    the host's broker admits for this run, run as the agent; each answer
+    `run_command` returns is measured like a retrieval row, and the listing is
+    the host's command metadata, unmeasured)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -223,9 +230,15 @@ What works today:
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
-  local/private target blocking, extracted text/links, and raw bounded response
-  retention in tool-output artifacts; `web_fetch` is intentionally not part of
-  the default parent tool surface
+  extracted text/links, and raw bounded response retention in tool-output
+  artifacts; `web_fetch` is intentionally not part of the default parent tool
+  surface. It fetches only from addresses on the open internet, whether the URL
+  names the address or a host name resolves to it. It refuses local, private and
+  reserved addresses, and any address on a network one of this device's
+  interfaces is on, such as a home network's public IPv6 prefix; an IPv6
+  interface's network counts as at least the /64 that holds its address. The
+  process running it needs `--allow-sys=networkInterfaces` to read those
+  networks
 - provider-neutral bounded prompt/tool loop with OpenAI-compatible gateway and
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
@@ -2635,6 +2648,12 @@ the file directly; both ways end at the same path. With `--allow-tool`, name
 `submit_result` alongside the run's other tools. The schema and host path are
 retained in run state, so a resumed root run keeps the same result contract
 without repeating the command-line flags; a conflicting restatement is refused.
+
+The system prompt includes the complete result schema for both batch and
+operator runs, whether the result is submitted through the tool or written to
+the file. Object schemas are closed by default, including nested objects: a
+result includes only properties the schema declares unless that schema allows
+additional properties explicitly.
 
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from

@@ -54,7 +54,7 @@ describe("frozen-object safety contracts", () => {
         type: "application/json",
         path: [],
       }, { value: { existing: "data" } });
-      await tx1.commit();
+      await tx1.commit().settled;
 
       // tx2: writeOrThrow to ["value", "newParent", "child"].
       // "newParent" doesn't exist, so tx.write returns NotFoundError.
@@ -90,7 +90,7 @@ describe("frozen-object safety contracts", () => {
       });
       expect(existingResult).toBe("data");
 
-      await tx2.commit();
+      await tx2.commit().settled;
     });
 
     it("writes multiple levels through frozen parents", async () => {
@@ -101,7 +101,7 @@ describe("frozen-object safety contracts", () => {
         type: "application/json",
         path: [],
       }, { value: { a: 1 } });
-      await tx1.commit();
+      await tx1.commit().settled;
 
       // Writing ["value", "b", "c", "d"] requires creating "b" inside
       // the frozen {a: 1} object.
@@ -117,7 +117,7 @@ describe("frozen-object safety contracts", () => {
         }, "deep");
       }).not.toThrow();
 
-      await tx2.commit();
+      await tx2.commit().settled;
     });
   });
 

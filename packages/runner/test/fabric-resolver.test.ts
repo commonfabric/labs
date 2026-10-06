@@ -95,7 +95,7 @@ describe("FabricAwareResolver", () => {
     const { modules, entryIdentity } = toModules(program);
     const tx = runtime.edit();
     writeSourceDocs(runtime, targetSpace, modules, entryIdentity, tx);
-    await tx.commit();
+    await tx.commit().settled;
     return entryIdentity;
   }
 
@@ -190,7 +190,7 @@ describe("FabricAwareResolver", () => {
       filename: "/main.tsx",
       imports: [],
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     await expect(
       resolver.resolveSource(`cf:pattern:${entryIdentity}`),

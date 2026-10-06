@@ -92,7 +92,7 @@ describe("agent run split writer", () => {
       requester.getCell(space, "split-writer", testPattern.resultSchema, tx),
     ) as Cell<{ pending?: boolean; error?: string; run?: AgentRunRecord }>;
     requester.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const created = await waitForCellValue<AgentRunRecord>(
       requester,
       result.key("run"),

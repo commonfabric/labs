@@ -163,21 +163,40 @@ export type HarnessCommandResultHolder = (
 export const boundHarnessCommandCatalog = (
   catalog: HarnessCommandCatalog,
   detail: readonly string[] = [],
-): { entries: HarnessCommandModelCatalogEntry[]; compacted?: number } => {
+): { entries: HarnessCommandModelCatalogEntry[]; compacted?: number } =>
+  boundCatalogForModel(catalog.entries, (entry) => entry.command, detail);
+
+/**
+ * Like {@link boundHarnessCommandCatalog}, over any catalog whose entries
+ * carry an input schema and a description, each named by `nameOf`. The
+ * catalog of commands a host admits is bounded by the same rule as the
+ * Weaver's.
+ */
+export const boundCatalogForModel = <
+  E extends { inputSchema?: unknown; description?: unknown },
+>(
+  catalogEntries: readonly E[],
+  nameOf: (entry: E) => string,
+  detail: readonly string[] = [],
+): {
+  entries: (E | Omit<E, "inputSchema" | "description">)[];
+  compacted?: number;
+} => {
   if (
-    harnessCommandJsonBytes(catalog) <= HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES
+    harnessCommandJsonBytes({ entries: catalogEntries }) <=
+      HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES
   ) {
-    return { entries: catalog.entries };
+    return { entries: [...catalogEntries] };
   }
   const named = new Set(detail);
   let size = 0;
-  for (const entry of catalog.entries) {
-    if (named.has(entry.command)) size += harnessCommandJsonBytes(entry);
+  for (const entry of catalogEntries) {
+    if (named.has(nameOf(entry))) size += harnessCommandJsonBytes(entry);
   }
-  const entries: HarnessCommandModelCatalogEntry[] = [];
+  const entries: (E | Omit<E, "inputSchema" | "description">)[] = [];
   let compacted = 0;
-  for (const entry of catalog.entries) {
-    if (named.has(entry.command)) {
+  for (const entry of catalogEntries) {
+    if (named.has(nameOf(entry))) {
       entries.push(entry);
       continue;
     }

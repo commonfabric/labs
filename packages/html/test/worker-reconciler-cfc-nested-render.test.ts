@@ -141,7 +141,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         },
       }),
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(inSpace, id);
   };
 
@@ -271,6 +271,27 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
             ? [op.text]
             : []
         ),
+      // How many access placeholders stand as children of an element named
+      // `host`, as the operations leave them.
+      accessPlaceholders: (host: string) => {
+        const tags = new Map<number, string>();
+        const parents = new Map<number, number>();
+        const placeholders = new Set<number>();
+        const removed = new Set<number>();
+        for (const op of ops) {
+          if (op.op === "create-element") tags.set(op.nodeId, op.tagName);
+          if (op.op === "insert-child") parents.set(op.childId, op.parentId);
+          if (op.op === "remove-node") removed.add(op.nodeId);
+          if (op.op === "set-prop" && op.key === "data-space-access-lost") {
+            placeholders.add(op.nodeId);
+          }
+        }
+        return [...placeholders].filter((id) => {
+          const parent = parents.get(id);
+          return !removed.has(id) && parent !== undefined &&
+            !removed.has(parent) && tags.get(parent) === host;
+        }).length;
+      },
     };
   };
 
@@ -1430,6 +1451,238 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         expect(deniedWhileOutOfReach).toEqual(
           Object.fromEntries(Object.keys(outcomes).map((id) => [id, 0])),
         );
+      },
+    );
+
+    await t.step(
+      "shows the access placeholder inside a `cf-render` or `cf-picker` whose binding is withheld while its space is out of reach, and only then",
+      async () => {
+        // Each piece, and each list of one, sits in a space the view loses
+        // access to and regains, except the sealed piece the space in reach
+        // holds. A binding withheld while its space is out of reach leaves the
+        // access placeholder in its element; one withheld for its labels leaves
+        // the element empty, whether or not the space is in reach otherwise.
+
+        const listSpace =
+          (await Identity.fromPassphrase("placeholder list space")).did();
+        let revoked = false;
+        const observers = new Set<() => void>();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            revoked && named === listSpace
+              ? new Error("Access revoked")
+              : undefined,
+          subscribe: (_named, onChange) => {
+            observers.add(onChange);
+            return () => {
+              observers.delete(onChange);
+            };
+          },
+        };
+        const setRevoked = async (value: boolean) => {
+          revoked = value;
+          for (const observer of [...observers]) observer();
+          await t.settle();
+        };
+        const publicPiece = {
+          [NAME]: "Shelf",
+          [UI]: vnode("div", ["Placeholder shelf heading"]),
+        };
+        const sealedPiece = {
+          [NAME]: "Sealed shelf",
+          [UI]: vnode("div", [SEALED]),
+        };
+        const pieces: [
+          string,
+          unknown,
+          [string[], CfcAtom[]][],
+          typeof space,
+        ][] = [
+          ["public", publicPiece, [], listSpace],
+          ["sealed", sealedPiece, [[[], [sealedAtom]]], listSpace],
+          ["sealed in reach", sealedPiece, [[[], [sealedAtom]]], space],
+        ];
+        const pages: [string, Cell<unknown>, string, string][] = [];
+        for (const [held, value, labels, inSpace] of pieces) {
+          const id = `placeholder-${held.replaceAll(" ", "-")}`;
+          const piece = await write(`${id}-piece`, value, labels, inSpace);
+          const pins = await write(
+            `${id}-pins`,
+            { element: { cell: link(piece) } },
+            [],
+            inSpace,
+          );
+          pages.push([
+            `${held}, cfRender`,
+            await tileView(
+              `${id}-render-view`,
+              pins.key("element").key("cell").asSchema(true),
+            ),
+            "cf-render",
+            "cell",
+          ]);
+          const lists = await pickerLists(id, [link(piece)], inSpace);
+          pages.push([
+            `${held}, cfPicker`,
+            await pickerView(`${id}-picker-view`, lists.any),
+            "cf-picker",
+            "items",
+          ]);
+        }
+        const outcomes: Record<string, unknown> = {};
+        let mountedRender: string[] | undefined;
+        for (const [way, page, host, propName] of pages) {
+          for (const revokedAtMount of [false, true]) {
+            await setRevoked(revokedAtMount);
+            const mounted = await mount(createCellRef(page), visitor, access);
+            try {
+              const seen: { placeholders: number; bound: number }[] = [];
+              const look = () =>
+                seen.push({
+                  placeholders: mounted.accessPlaceholders(host),
+                  bound: mounted.bindings(propName).length,
+                });
+              look();
+              await setRevoked(!revokedAtMount);
+              look();
+              await setRevoked(revokedAtMount);
+              look();
+              await setRevoked(false);
+              look();
+              outcomes[`${way}, ${revokedAtMount ? "out of" : "in"} reach`] =
+                seen;
+              if (way === "public, cfRender" && revokedAtMount) {
+                // The binding made once the space is in reach again mounts
+                // the piece's render.
+                const nested = await openThroughCfRender(
+                  mounted.bindings(propName).at(-1)!,
+                  visitor,
+                );
+                try {
+                  mountedRender = nested.full.shown();
+                } finally {
+                  nested.full.cancel();
+                  nested.tile.cancel();
+                }
+              }
+            } finally {
+              mounted.cancel();
+            }
+          }
+        }
+        const look = (placeholders: number, bound: number) => ({
+          placeholders,
+          bound,
+        });
+        // In reach at mount, then out of reach, in reach, and in reach.
+        const publicFromInReach = [
+          look(0, 1),
+          look(1, 1),
+          look(0, 2),
+          look(0, 2),
+        ];
+        // Out of reach at mount, then in reach, out of reach, and in reach.
+        const publicFromOutOfReach = [
+          look(1, 0),
+          look(0, 1),
+          look(1, 1),
+          look(0, 2),
+        ];
+        const sealedFromInReach = [
+          look(0, 0),
+          look(1, 0),
+          look(0, 0),
+          look(0, 0),
+        ];
+        const sealedFromOutOfReach = [
+          look(1, 0),
+          look(0, 0),
+          look(1, 0),
+          look(0, 0),
+        ];
+        const neverShown = [look(0, 0), look(0, 0), look(0, 0), look(0, 0)];
+        expect(outcomes).toEqual({
+          "public, cfRender, in reach": publicFromInReach,
+          "public, cfRender, out of reach": publicFromOutOfReach,
+          "public, cfPicker, in reach": publicFromInReach,
+          "public, cfPicker, out of reach": publicFromOutOfReach,
+          "sealed, cfRender, in reach": sealedFromInReach,
+          "sealed, cfRender, out of reach": sealedFromOutOfReach,
+          "sealed, cfPicker, in reach": sealedFromInReach,
+          "sealed, cfPicker, out of reach": sealedFromOutOfReach,
+          "sealed in reach, cfRender, in reach": neverShown,
+          "sealed in reach, cfRender, out of reach": neverShown,
+          "sealed in reach, cfPicker, in reach": neverShown,
+          "sealed in reach, cfPicker, out of reach": neverShown,
+        });
+        expect(mountedRender).toContain("Placeholder shelf heading");
+      },
+    );
+
+    await t.step(
+      "takes a `cf-render`'s access placeholder away when a write binds it to a piece in reach, and puts it back when a write binds it out of reach again",
+      async () => {
+        // The view is written again with its `cf-render` bound to another
+        // piece, and the element is updated where it stands, so the binding
+        // replaced is the one whose placeholder the element holds.
+
+        const farSpace =
+          (await Identity.fromPassphrase("swapped placeholder space")).did();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            named === farSpace ? new Error("Access revoked") : undefined,
+          subscribe: () => () => {},
+        };
+        const slotOf = async (id: string, inSpace: typeof space) => {
+          const piece = await write(
+            `${id}-piece`,
+            {
+              [NAME]: "Shelf",
+              [UI]: vnode("div", ["Swapped shelf heading"]),
+            },
+            [],
+            inSpace,
+          );
+          const pins = await write(
+            `${id}-pins`,
+            { element: { cell: link(piece) } },
+            [],
+            inSpace,
+          );
+          return pins.key("element").key("cell").asSchema(true);
+        };
+        const far = await slotOf("swapped-far", farSpace);
+        const near = await slotOf("swapped-near", space);
+        const page = await mount(
+          createCellRef(await tileView("swapped-view", far)),
+          visitor,
+          access,
+        );
+        try {
+          const seen: { placeholders: number; bound: number }[] = [];
+          const look = () =>
+            seen.push({
+              placeholders: page.accessPlaceholders("cf-render"),
+              bound: page.bindings().length,
+            });
+          look();
+          await tileView("swapped-view", near);
+          await t.settle();
+          look();
+          await tileView("swapped-view", far);
+          await t.settle();
+          look();
+          expect(seen).toEqual([
+            { placeholders: 1, bound: 0 },
+            { placeholders: 0, bound: 1 },
+            { placeholders: 1, bound: 1 },
+          ]);
+          // The element was updated where it stands, never made again.
+          expect(page.shown().filter((tag) => tag === "<cf-render>"))
+            .toHaveLength(1);
+        } finally {
+          page.cancel();
+        }
       },
     );
 

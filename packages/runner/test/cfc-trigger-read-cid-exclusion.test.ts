@@ -114,7 +114,7 @@ describe("CFC trigger reads: cid: exclusion", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       // Ingest layer: `addCfcTriggerReads` drops the cid: address, keeps the
@@ -188,7 +188,7 @@ describe("CFC trigger reads: cid: exclusion", () => {
       );
       out.set({ flag: 1 });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const outId = out.getAsNormalizedFullLink().id;
       const entries = replicaEntries(storageManager, outId);

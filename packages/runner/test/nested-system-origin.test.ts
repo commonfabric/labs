@@ -116,13 +116,13 @@ describe("a child's origin", () => {
       ...(origin === undefined ? {} : { sourceOrigin: origin }),
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await run.pull();
     await runtime.idle();
 
     const spawnTx = runtime.edit();
     run.withTx(spawnTx).key(verb).send({});
-    expect((await spawnTx.commit()).error).toBeUndefined();
+    expect((await spawnTx.commit().settled).error).toBeUndefined();
     await run.pull();
     await runtime.idle();
     await run.pull();

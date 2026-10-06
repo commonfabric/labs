@@ -1,0 +1,16 @@
+{
+  "name": "@commonfabric/agent-runner",
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno run --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-test-batches.ts . --all-access=test/local-jobs/service.test.ts -- --no-check --parallel --allow-ffi --allow-read --allow-write --allow-run --allow-env --allow-net=127.0.0.1 --shuffle=$(deno task -q test-seed)"
+  },
+  "exports": {
+    ".": "./src/agent-runner.ts",
+    "./agent-run-harness": "./src/agent-run-harness.ts",
+    "./harness-job": "./src/harness-job.ts",
+    "./local-jobs/service": "./src/local-jobs/service.ts"
+  },
+  "imports": {
+    "@db/sqlite": "jsr:@db/sqlite@0.13.0"
+  }
+}

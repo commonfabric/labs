@@ -84,7 +84,8 @@ deno task cf test packages/patterns/my-pattern/
 ### Testing labeled data
 
 Use `cf test <file> --cfc-shell-posture --verbose --stats-threshold 0` to run
-with the shell's `enforce-explicit` enforcement and `persist` flow labels.
+with `enforce-explicit` enforcement and `persist` flow labels, which is laxer
+than the shell's current `enforce-strict` posture.
 Individual dials are `--cfc-enforcement-mode` and `--cfc-flow-labels`; the latter
 accepts `off`, `derive` (the runtime's `observe`), `observe`, and `persist`.
 The run prints the resolved posture. When CFC denies something — a write,

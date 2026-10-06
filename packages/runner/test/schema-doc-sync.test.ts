@@ -77,7 +77,7 @@ describe("schema-doc-sync", () => {
         value,
       );
     }
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   const writeDocs = async (

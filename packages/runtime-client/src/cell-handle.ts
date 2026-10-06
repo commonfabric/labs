@@ -394,10 +394,11 @@ export class CellHandle<T = unknown> {
   /**
    * Atomically stores `value` only if the cell has no backing value, then
    * returns the value selected by that transaction. A readable schema fallback
-   * does not count as stored. The runtime-wide commit barrier settles before
-   * choosing the default, so unrelated pending writes can delay initialization.
-   * Concurrent initializers converge on one winner instead of replacing it
-   * with a blind write.
+   * does not count as stored. An existing value can return after producer and
+   * load readiness when its read dependencies have no pending local writes.
+   * Otherwise demand remains active through the runtime-wide commit barrier
+   * before choosing a value or storing the default. Concurrent initializers
+   * converge on one winner instead of replacing it with a blind write.
    *
    * It goes through a handle whose read is refused: it stores nothing over a
    * value the cell holds, and `value` is the caller's default, computed from

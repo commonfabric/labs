@@ -143,9 +143,10 @@ matches the capture:
   V8's. To get a `.cpuprofile` out of the `cf test` process, drive V8's profiler
   from inside it with `node:inspector`, which Deno implements — connect a
   `Session`, `Profiler.enable`, `Profiler.start` around the phase, and
-  `Profiler.stop` to a file. It needs `--allow-sys`, which the `cf` launcher
-  does not pass, so run `packages/cli/mod.ts` directly with the launcher's own
-  flag set plus that one. Rank it with the same self-time arithmetic
+  `Profiler.stop` to a file. It needs `--allow-sys`, of which the `cf` launcher
+  passes only `--allow-sys=networkInterfaces`, so run `packages/cli/mod.ts`
+  directly with the launcher's own flag set and `--allow-sys` in place of that
+  one. Rank it with the same self-time arithmetic
   `renderProfileReport` uses in
   [`cdp-profiler.ts`](../../../packages/integration/cdp-profiler.ts).
 - **Profiling the browser worker.** The interval has to come from the capture

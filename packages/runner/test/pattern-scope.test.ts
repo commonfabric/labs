@@ -203,7 +203,7 @@ Deno.test("handler bindings preserve scoped cells selected from pattern input sc
       newRoomName: "",
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -211,7 +211,7 @@ Deno.test("handler bindings preserve scoped cells selected from pattern input sc
     const setTx = runtime.edit();
     result.key("newRoomName").withTx(setTx).set("Project");
     runtime.prepareTxForCommit(setTx);
-    await setTx.commit();
+    await setTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -395,7 +395,7 @@ Deno.test("per-user pointer can create and update a space-scoped profile cell", 
       messages: [],
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -481,7 +481,7 @@ Deno.test("pattern factory .asScope() sets child pattern result scope", async ()
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -526,7 +526,7 @@ Deno.test("pattern factory .inSpace() routes child pattern result to DID space",
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -569,7 +569,7 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
     );
 
     const result = runtime.run(tx, Root, { value: "named child" }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -655,7 +655,7 @@ Deno.test("pattern factory .inSpace() handler side effect can write linked child
 
     const result = runtime.run(tx, Root, { profile }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -732,7 +732,7 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
 
     const result = runtime.run(tx, Root, { target }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -825,7 +825,7 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
 
     const result = runtime.run(tx, Root, { target }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -888,7 +888,7 @@ Deno.test("pattern factory .inSpace() with a cell uses that cell's space", async
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -933,7 +933,7 @@ Deno.test("pattern factory .inSpace() without a space creates a fresh DID space 
     );
 
     const result = runtime.run(tx, Root, { value: "random child" }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -989,7 +989,7 @@ Deno.test("pattern result schema scope overrides factory .asScope()", async () =
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await result.pull();
 
@@ -1060,7 +1060,7 @@ Deno.test("cross-space scoped links preserve target space and resolved scope", a
       setupTx,
     );
     target.set("target value");
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     const source = runtime.getCell<{ linked?: unknown }>(
       space,
@@ -1211,7 +1211,7 @@ Deno.test("lift can read session-scoped cell passed from pattern input", async (
     );
     const result = runtime.run(tx, Root, { sessionTarget }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1274,7 +1274,7 @@ Deno.test("broad computed output links to narrower scoped result", async () => {
     );
 
     const result = runtime.run(tx, Root, { secret }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1347,7 +1347,7 @@ Deno.test("opaque JS action result uses narrowest effective output scope", async
     );
 
     const result = runtime.run(tx, Root, { secret }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1411,7 +1411,7 @@ Deno.test("opaque JS action result schema scope participates in effective output
     );
 
     const result = runtime.run(tx, Root, { value: 41 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1476,7 +1476,7 @@ Deno.test("map keeps outer list scope and narrows per-element result cells", asy
 
     const result = runtime.run(tx, Root, { values: [item as any] }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1602,7 +1602,7 @@ Deno.test("map updates when derived list is narrowed by session input", async ()
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1705,7 +1705,7 @@ Deno.test("map materializes initially populated list selected by session input",
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1799,7 +1799,7 @@ Deno.test("ifElse selected branch materializes map over session-derived list", a
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1897,7 +1897,7 @@ Deno.test("ifElse selected VNode branch materializes map over session-derived li
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2060,14 +2060,14 @@ Deno.test("map materializes list through session boxed space-scoped reference", 
 
     const result = runtime.run(tx, Root, { selectedRoom }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
 
     const updateTx = runtime.edit();
     selectedRoom.withTx(updateTx).set({ room: room as unknown as Room });
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2131,7 +2131,7 @@ Deno.test("filter narrows output list when scoped element controls cardinality",
 
     const result = runtime.run(tx, Root, { values: [item as any] }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2194,7 +2194,7 @@ Deno.test("flatMap narrows output list when scoped element controls cardinality"
 
     const result = runtime.run(tx, Root, { values: [item as any] }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2247,7 +2247,7 @@ Deno.test("ifElse output follows condition scope", async () => {
 
     const result = runtime.run(tx, Root, { condition }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2397,7 +2397,7 @@ Deno.test("session scoped derived chains update when broad inputs change", async
       { conversation, room },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2411,7 +2411,7 @@ Deno.test("session scoped derived chains update when broad inputs change", async
     conversation.withTx(updateTx).set({
       rooms: { lobby: [{ body: "hello" }], workshop: [] },
     });
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2462,7 +2462,7 @@ Deno.test("when keeps condition scope while selecting narrower value link", asyn
 
     const result = runtime.run(tx, Root, { value }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2517,7 +2517,7 @@ Deno.test("fetchJson state cells use narrowest input scope", async () => {
 
     const result = runtime.run(tx, Root, { url }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2572,7 +2572,7 @@ Deno.test("generateText result cell uses narrowest input scope", async () => {
 
     const result = runtime.run(tx, Root, { prompt }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2624,7 +2624,7 @@ Deno.test("llmDialog result cell uses narrowest input scope", async () => {
 
     const result = runtime.run(tx, Root, { messages }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2680,7 +2680,7 @@ Deno.test("wish current-space output follows query input scope", async () => {
 
     const result = runtime.run(tx, Root, { query }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2742,7 +2742,7 @@ Deno.test("wish home-space output is at least user scoped", async () => {
 
     const result = runtime.run(tx, Root, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2809,7 +2809,7 @@ Deno.test("wish result schema scope overrides query-derived scope", async () => 
 
     const result = runtime.run(tx, Root, { query }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2862,7 +2862,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
     // Write an object that OMITS the scoped property.
     cell.set({ title: "hello" } as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     // Inspect the base-scope slot through a schema-less handle (so no
@@ -2887,7 +2887,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
     const writeTx = runtime.edit();
     schemaless.withTx(writeTx).key("myProfile").key("name").set("Ada");
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     const userInstance = createCell<{ name: string }>(
@@ -2909,7 +2909,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
     const rewriteTx = runtime.edit();
     cell.withTx(rewriteTx).set({ title: "hello again" } as never);
     runtime.prepareTxForCommit(rewriteTx);
-    await rewriteTx.commit();
+    await rewriteTx.commit().settled;
     await runtime.idle();
 
     assertEquals(
@@ -2956,7 +2956,7 @@ Deno.test("schema-less write AT a scoped slot follows the stored redirect", asyn
 
     cell.set({} as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const baseLink = cell.key("profileDraft").getAsNormalizedFullLink();
@@ -2980,7 +2980,7 @@ Deno.test("schema-less write AT a scoped slot follows the stored redirect", asyn
     const writeTx = runtime.edit();
     schemaless.withTx(writeTx).key("profileDraft").set("Alice");
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     // The base slot still holds the redirect, not the raw string.
@@ -3056,7 +3056,7 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
     );
     const result = runtime.run(tx, Root, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -3098,7 +3098,7 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
     );
     consumer.set({ name: "Ada" });
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     const parentArgument = runtime.getCellFromLink(
@@ -3206,7 +3206,7 @@ for (const recordScope of ["space", "user"] as const) {
       );
       const result = runtime.run(tx, Root, { record }, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await runtime.storageManager.synced();
       await result.pull();
@@ -3273,7 +3273,7 @@ Deno.test("child reads a plain value passed into a value-scoped argument slot fr
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -3345,7 +3345,7 @@ Deno.test("a write through a value-scoped slot's handle lands in the passed cell
     );
     const result = runtime.run(tx, Child, { run: record } as never, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     // Write the way a handler does: through the handle the slot reads as.
@@ -3360,7 +3360,7 @@ Deno.test("a write through a value-scoped slot's handle lands in the passed cell
     );
     argument.get().run.set({ status: "finished" });
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     // The record's shared instance holds the content, not a redirect to a
@@ -3446,7 +3446,7 @@ for (
         resultCell,
       );
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await runtime.storageManager.synced();
       await result.pull();
@@ -3507,7 +3507,7 @@ Deno.test("a handle-scoped argument slot does not follow a narrower cell passed 
     );
     const result = runtime.run(tx, Child, { run: record } as never, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -3589,7 +3589,7 @@ for (const serverExecution of [false, true]) {
               resultCell,
             );
             runtime.prepareTxForCommit(tx);
-            await tx.commit();
+            await tx.commit().settled;
             await runtime.idle();
             await runtime.storageManager.synced();
             await result.pull();
@@ -3677,7 +3677,7 @@ Deno.test("a user-capped child slot does not follow a session cell relayed throu
     );
     const result = runtime.run(tx, Root, { profile } as never, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();

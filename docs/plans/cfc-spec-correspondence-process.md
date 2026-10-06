@@ -270,7 +270,7 @@ disposition proposed and not yet confirmed by each document's owner:
 | `cfc-template-population.md` | split or archive | `SC-4`/`SC-8` applied; what remains is a shipped design |
 | `cfc-label-metadata-confidentiality.md` | promote remainder | invariant 12; parts adopted as §4.6.4.1 |
 | `cfc-custody-seal.md` | split | the trusted-declassifier custody rule is spec text; the host operation stays |
-| `cfc-reviewed-intent.md` | split | single-use intent verification is §6.4.3/§7.5.2 text; the host surface stays |
+| `cfc-reviewed-intent.md` | removed | the operation had no consumer and was removed (#8473); nothing to move |
 | `cfc-protected-initialization.md` | mostly done | `specs#32` adopted the authority split; runtime mechanics stay |
 | `cfc-transformed-by-input-witnesses.md` | promote | `SC-43` is open against it |
 | `cfc-range-scoped-integrity.md` | promote as proposal | belongs beside §14.4.8 |

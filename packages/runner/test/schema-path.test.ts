@@ -53,7 +53,7 @@ describe("schemaPathSelection", () => {
         inner: "inner",
         shared: { outer: "outer", inner: "inner" },
       });
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       for (const keyword of ["anyOf", "oneOf", "allOf"] as const) {
         for (const mixed of [false, true]) {
           const schema: JSONSchema = {
