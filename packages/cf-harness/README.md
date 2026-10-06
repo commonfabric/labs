@@ -1027,17 +1027,20 @@ never a fallback from one driver to the other:
   each instance's runtime, and a default could be another. The same launch with
   no `--instance` takes the platform's default.
 
-A store is set up for the default when it holds all of the following, and the
-default is refused when any is missing:
+A store is set up for the default when it holds each of the following that no
+setting replaces, and the default is refused when any of those is missing. Only
+`config.json` is required whatever is named. The first five are refused as
+symbolic links too: each has to be the file or directory itself, as gVisor's
+installer writes it.
 
-| In the store            | What it is                                         |
-| ----------------------- | -------------------------------------------------- |
-| `bin/runsc`             | the `runsc` shim, an executable file               |
-| `bin/cfc-vm`            | the VM daemon the shim starts, an executable file  |
-| `config.json`           | the VM's configuration                             |
-| `images/kitchensink`    | the directory a container names as its rootfs      |
-| `ext4/kitchensink.ext4` | the block image the shim runs that rootfs from     |
-| a CFC policy            | see below; it may also be under the home directory |
+| In the store            | What it is                                        | Required unless                                   |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| `bin/runsc`             | the `runsc` shim, an executable file              | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `bin/cfc-vm`            | the VM daemon the shim starts, an executable file | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `config.json`           | the VM's configuration                            | always required                                   |
+| `images/kitchensink`    | the directory a container names as its rootfs     | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `ext4/kitchensink.ext4` | the block image the shim runs that rootfs from    | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `policy.json`           | the CFC policy; see below                         | a policy is under the home, or a policy is named  |
 
 A defaulted native run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
@@ -1047,8 +1050,10 @@ default is refused where neither is there, because a run enforces CFC unless
 told otherwise and an enforcing run with no policy cannot start. A `runsc`
 setting that is named replaces the store's: a named rootfs stands in for the
 image, `CF_HARNESS_RUNSC_BINARY` for the shim and the daemon beside it, and a
-named policy for both defaults. `--sandbox-cfc-policy ""` names none, and the
-run then starts only in a mode that does not enforce.
+named policy, by `--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`, for
+both defaults. `--sandbox-cfc-policy ""` names none, and the run then starts
+only in a mode that does not enforce. `--sandbox-rootfs ""` names no rootfs, and
+the default, which runs only from one, is refused for it.
 
 Three more things refuse the default, each before anything executes:
 
@@ -1060,7 +1065,9 @@ Three more things refuse the default, each before anything executes:
   `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR`, are read by Docker alone.
   Whoever gives one with no runtime named means Docker, so the run is refused,
   naming the setting and never its value, until Docker is named or the setting
-  is removed. A named `runsc` is not refused for them and reads none of them.
+  is removed. The selection does not refuse a named `runsc` for them, and the
+  direct driver reads none of them; `console:launch` still refuses its two
+  sidecar directory flags under any direct driver.
 - **A policy that cannot be examined.** A default policy the harness could not
   look at is not known to be absent, so the next default does not stand in for
   it. The refusal names the file and the reason. A named `runsc` is refused the
@@ -1098,8 +1105,10 @@ selects the other runtime, by name or by default, is refused with
 turn of a stored session on a host running the other runtime is refused the same
 way, saying to restart the host on the session's runtime or start a new session.
 A run started on Docker before macOS had a default therefore resumes only with
-`docker` named. A run or session recorded before its runtime was is bound from
-its next resume or turn, as the
+`docker` named. A run recorded before runs recorded their runtime is held to the
+runtime its capability snapshot describes, where it has one; only a run with no
+such description, and a chat session stored before sessions recorded a runtime,
+is bound to the runtime of its next resume or turn, as the
 [current-state reference](docs/CURRENT_STATE.md#selection) sets out.
 
 A run on the native default is a run on the direct driver, with everything the

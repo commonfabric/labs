@@ -129,7 +129,12 @@ The shim is what the driver executes, and it starts the daemon from beside
 itself. The shim reads `config.json` to start the VM. The driver names
 `images/kitchensink` as each container's rootfs, and the shim runs that from
 `ext4/kitchensink.ext4`. A piece that cannot be examined counts as not there,
-and the refusal carries the reason.
+and the refusal carries the reason. So does a piece that is a symbolic link,
+whatever it leads to, and the refusal names its target: the driver hands the
+macOS `runsc` the rootfs and the binary by the paths their links resolve to,
+while that `runsc` knows its store's pieces by their paths in the store, and
+none of gVisor's installer scripts makes a link. The policy is looked at through
+links, as a file anywhere would be.
 
 The macOS default is refused for three more things, each checked before the
 pieces above:
@@ -140,8 +145,11 @@ pieces above:
   `CF_HARNESS_SANDBOX_DOCKER_RUNTIME`, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
   `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` set to anything but white space,
   refuses the default, before the store is looked for. The refusal names every
-  one given and no value. A named `runsc` reads none of them and is not refused
-  for them, and neither is the Docker default of another platform.
+  one given and no value. The selection does not refuse a named `runsc` for
+  them, since it reads none of them, and neither does it refuse the Docker
+  default of another platform. `console:launch` refuses its own two sidecar
+  directory flags, `--cfc-result-dir` and `--cfc-invocation-context-dir`, under
+  every direct driver, a named `runsc` included, as below.
 - **A store given by another path than the one it is at.** The store's path is
   resolved through every symbolic link, as the driver resolves the rootfs it
   hands `runsc`. Where the result differs from the path as given, with `.`, `..`
@@ -282,7 +290,11 @@ it starts, before any command executes in the sandbox and before the first model
 turn. A runtime built outside an engine has no such check in front of it, and
 refuses each enforcing call instead. Under the macOS default, an empty
 `--sandbox-cfc-policy` is a policy that was named, so the default is not refused
-for want of one and the run starts only in a mode that does not enforce.
+for want of one and the run starts only in a mode that does not enforce. An
+empty `--sandbox-rootfs` names no rootfs, and the macOS default, which runs only
+from one, is refused for it rather than taking the store's image; a named
+`runsc` given one is left to its driver's own rootfs default. An empty
+`CF_HARNESS_SANDBOX_ROOTFS` names nothing, so the default applies.
 
 `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
 `--cfc-invocation-context-dir` configure the Docker driver. The direct driver
@@ -1179,10 +1191,10 @@ mode.
   the console's shared workspace to the driver whose runs labelled its files, so
   a new run, or a new interactive session, on the other driver reads those files
   as that driver's `runsc` finds them, which under Docker Desktop on macOS and
-  the native runtime is without the other's labels. A run state, or an
-  interactive session, written before its driver was recorded and holding no
-  runtime description is held to none until its next resume or turn binds it, to
-  whichever driver that runs on.
+  the native runtime is without the other's labels. A run state written before
+  its driver was recorded that holds no runtime description either, and an
+  interactive session stored before sessions recorded a driver, are held to none
+  until their next resume or turn binds them, to whichever driver that runs on.
 - A signal that interrupts a batch CLI run closes the root run's sandbox runtime
   and not the runtimes of its children. A child's sessions still end, because
   they end with the harness process; nothing takes down a container of a child's

@@ -30,13 +30,18 @@
  * CLI capability is taken here: the Docker image and the Docker runtime name
  * are not.
  *
- * The sandbox runtime is selected as the interactive entrypoints select it:
- * from the environment alone, by the variables the CLI reads
- * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions), through the derivation
- * every entrypoint shares. The CLI's three selection flags are refused rather
- * than ignored, because `console:launch` reads the same environment to decide
- * whether Docker is involved at all, and a flag it cannot see would leave the
- * launch and the server describing two different sandboxes.
+ * The sandbox runtime is selected as the interactive entrypoints select it,
+ * through the derivation every entrypoint shares. What names a runtime is the
+ * environment alone, by the variables the CLI reads
+ * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions); the CLI's three
+ * selection flags are refused rather than ignored, because `console:launch`
+ * reads the same environment to decide whether Docker is involved at all,
+ * and a flag it cannot see would leave the launch and the server describing
+ * two different sandboxes. Where the environment names none, a console takes
+ * its platform's default, the native runtime on macOS and Docker elsewhere,
+ * unless `host.sandboxRuntimeNamedBy` says its caller must name one, as
+ * `console:launch` says for a console it launches for a Loom instance; that
+ * console is refused on every platform instead.
  *
  * The one piece of configuration this surface insists on is the fabric
  * session, whose space has to be a name rather than a `did:key`: `assign_slug`
@@ -609,7 +614,7 @@ const BATCH_SANDBOX_FLAGS = [
 
 /**
  * Refuses the batch CLI's sandbox selection flags in any spelling, naming the
- * variable to set instead. The console and its launcher select the sandbox
+ * variable to set instead. The console and its launcher take a named runtime
  * from the environment alone: a flag one of them read and the other did not
  * would leave the launch and the console describing two different sandboxes.
  *

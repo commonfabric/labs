@@ -255,13 +255,16 @@ another than the instance's runs. It tells the console it serves to hold to the
 same. What follows is the default of a launch with no `--instance`.
 
 With no runtime named on macOS, the console and `console:launch` refuse to start
-unless the store holds an executable `bin/runsc` and `bin/cfc-vm`, a
-`config.json`, the `images/kitchensink` directory, the `ext4/kitchensink.ext4`
-image, and a CFC policy either under the home or as its own `policy.json`. The
-refusal names the store and what is missing, and says to set
-`CF_HARNESS_SANDBOX_RUNTIME=docker` to serve on Docker instead. They refuse the
-same way where the environment sets one of the Docker driver's own variables,
-`CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+unless the store holds a `config.json` and each piece no setting replaces: an
+executable `bin/runsc` and `bin/cfc-vm` unless `CF_HARNESS_RUNSC_BINARY` names a
+binary, the `images/kitchensink` directory and the `ext4/kitchensink.ext4` image
+unless `CF_HARNESS_SANDBOX_ROOTFS` names a rootfs, and its own `policy.json`
+unless a CFC policy is under the home or `CF_HARNESS_RUNSC_CFC_POLICY` names
+one. The binaries, `config.json`, the rootfs directory and the image have to be
+the files and directories themselves, not symbolic links. The refusal names the
+store and what is missing, and says to set `CF_HARNESS_SANDBOX_RUNTIME=docker`
+to serve on Docker instead. They refuse the same way where the environment sets
+one of the Docker driver's own variables, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` among them, since whoever set it
 means Docker; where a default CFC policy could not be examined; and where the
 store is reached through a symbolic link, which the macOS `runsc` cannot run
