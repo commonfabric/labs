@@ -771,7 +771,10 @@ has returned. When that space
 publishes a new ready epoch after session restoration, the runtime invalidates
 both parked loads and prior terminal linked-load errors, then wakes their live
 consumers for a fresh load. Initial connection establishment is not
-a reconnect and does not invalidate an in-flight load.
+a reconnect and does not invalidate an in-flight load. A new ready epoch also
+invalidates errors retained from an initially refused session once an
+authenticated access-admission retry succeeds; no disconnected session is
+required for that recovery.
 
 ### Streaming generation
 

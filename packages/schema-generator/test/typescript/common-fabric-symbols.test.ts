@@ -8,8 +8,11 @@
 
 import { assert, assertEquals, assertFalse } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 
 import ts from "typescript";
+import { SchemaGenerator } from "../../src/schema-generator.ts";
+import { isCommonFabricAvailabilityType } from "../../src/typescript/availability-brand.ts";
 
 import {
   getImportTypeModuleName,
@@ -216,6 +219,47 @@ describe("isCommonFabricDeclaration", () => {
 });
 
 describe("isCommonFabricSymbol", () => {
+  it("emits native data-model availability aliases as unavailable primitives", () => {
+    const fileName = "/repo/packages/data-model/src/api.ts";
+    const { program, checker } = createProgram({
+      [fileName]: `
+        declare class NativeUnavailable { readonly native: true; }
+        export type IsPending = NativeUnavailable & { readonly reason: "pending" };
+        export type IsSyncing = NativeUnavailable & { readonly reason: "syncing" };
+        export type HasError = NativeUnavailable & { readonly reason: "error"; readonly errorMessage: string };
+        export type HasSchemaMismatch = HasError & { readonly errorKind: "schemaMismatch" };
+      `,
+    });
+    const sourceFile = program.getSourceFile(fileName)!;
+    for (const node of sourceFile.statements) {
+      if (!ts.isTypeAliasDeclaration(node)) continue;
+      const type = checker.getTypeAtLocation(node.name);
+      expect(isCommonFabricAvailabilityType(type, node.type)).toBe(true);
+      expect(new SchemaGenerator().generateSchema(type, checker, node.type))
+        .toEqual({ type: "FabricUnavailable" });
+    }
+  });
+
+  it("keeps author-defined availability lookalikes as ordinary object schemas", () => {
+    const fileName = "/author/api.ts";
+    const { program, checker } = createProgram({
+      [fileName]: `
+        export type IsPending = { readonly reason: "pending"; readonly label: string };
+        export type IsSyncing = { readonly reason: "syncing"; readonly label: string };
+        export type HasError = { readonly reason: "error"; readonly label: string };
+        export type HasSchemaMismatch = HasError & { readonly errorKind: "schemaMismatch" };
+      `,
+    });
+    const sourceFile = program.getSourceFile(fileName)!;
+    for (const node of sourceFile.statements) {
+      if (!ts.isTypeAliasDeclaration(node)) continue;
+      const type = checker.getTypeAtLocation(node.name);
+      expect(isCommonFabricAvailabilityType(type, node.type)).toBe(false);
+      expect(new SchemaGenerator().generateSchema(type, checker, node.type))
+        .not.toEqual({ type: "FabricUnavailable" });
+    }
+  });
+
   it("matches symbols from Common Fabric source files", () => {
     const { program, checker } = createProgram({
       "/repo/packages/api/index.ts": `

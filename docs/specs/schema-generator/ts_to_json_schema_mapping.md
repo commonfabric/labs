@@ -96,6 +96,11 @@ as the property would in the object type the literal stands for: a callable is
 left out, unless calling it makes a stream, a cell, or a database, which reads
 as that wrapper's `asCell`, with the UI contract hint the member carries.
 
+A synthetic reference backed by `typeRegistry` keeps the reached property's
+instantiated type when its registered semantic type still contains a generic
+parameter. A registered conditional member is formatted as its concrete
+instantiation, not as an unbound conditional accepting any value.
+
 A print can carry syntax its type does not: in place of printing a type, the
 checker writes a member's own annotation where it denotes the member's type,
 and an alias by its name. For CFC labels, whose bindings live only in syntax,
@@ -744,6 +749,16 @@ The
 open event side is pinned as a decision in `test/stream-result.test.ts`; a
 schema that declares the closure by hand is enforced at dispatch by the
 runner (C5).
+
+### 6.6 Availability aliases
+
+The canonical `FabricUnavailable` primitive and its narrowed `IsPending`,
+`IsSyncing`, `HasError`, and `HasSchemaMismatch` aliases emit
+`{ type: "FabricUnavailable" }`. Recognition follows the type's alias or symbol
+and the declaration's Common Fabric provenance, including the canonical
+`packages/data-model/src/api.ts` source file. Intersections retain recognition
+through their constituent types. Author-defined aliases with the same names
+remain ordinary types; their spelling alone does not select this primitive.
 
 ## 7. `Default<T,V>` And `DeepDefault<V>`
 

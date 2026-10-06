@@ -1,7 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import ts from "typescript";
 
 import { SchemaGenerator } from "../../src/schema-generator.ts";
+import type { GenerationContext } from "../../src/interface.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
 
 // The local Default marker supplies the branded union read by the formatter.
@@ -40,6 +42,67 @@ const boxOfNumber = {
 };
 
 describe("type-arguments", () => {
+  for (
+    const [argument, expected] of [["string", "number"], ["number", "boolean"]]
+  ) {
+    it(`preserves the instantiated ${expected} schema of a registered generic member`, async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `
+        type Deferred<T> = T extends string ? number : boolean;
+        interface Box<T> { value: Deferred<T>; }
+        type Root = Box<${argument}>;
+      `,
+        "Root",
+      );
+      if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
+        throw new Error("Root must be a type reference");
+      }
+      const argumentNode = typeNode.typeArguments?.[0];
+      if (!argumentNode) throw new Error("Root must supply its type argument");
+      const declaration = type.getSymbol()?.declarations?.find(
+        ts.isInterfaceDeclaration,
+      );
+      const member = declaration?.members.find(ts.isPropertySignature);
+      if (!declaration?.typeParameters?.[0] || !member?.type) {
+        throw new Error("Box must declare its generic value member");
+      }
+      const actual = checker.getTypeOfSymbol(type.getProperty("value")!);
+      const registered = ts.factory.createTypeReferenceNode(
+        ts.factory.createQualifiedName(
+          ts.factory.createIdentifier("__cfHelpers"),
+          "PrintedValue",
+        ),
+      );
+      const context: GenerationContext = {
+        typeChecker: checker,
+        cyclicTypes: new Set(),
+        cyclicNames: new Set(),
+        definitions: {},
+        emittedRefs: new Set(),
+        definitionStack: new Set(),
+        inProgressNames: new Set(),
+        typeRegistry: new WeakMap([
+          [registered, checker.getTypeFromTypeNode(member.type)],
+        ]),
+        boundTypeParameters: {
+          declaredNode: typeNode,
+          arguments: new Map([[declaration.typeParameters[0], {
+            type: checker.getTypeFromTypeNode(argumentNode),
+          }]]),
+        },
+        instantiatedAs: actual,
+      };
+      expect(
+        new SchemaGenerator().formatChildType(
+          checker.getAnyType(),
+          context,
+          registered,
+          actual,
+        ),
+      ).toEqual({ type: expected });
+    });
+  }
+
   it("emits one schema for equal arms of a generic marker union", async () => {
     expect(
       await schemaOfC(`

@@ -3505,6 +3505,7 @@ export class SchemaGenerator {
           registeredType,
           context,
           typeNode,
+          context.instantiatedAs,
         );
       }
 

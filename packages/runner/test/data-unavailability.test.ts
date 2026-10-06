@@ -1672,6 +1672,77 @@ export default pattern<{ channel: AsyncResult<Stream<number>> }, { send: Stream<
     }
   });
 
+  it("parks an invitation event on a plain profile projection until its Cell resolves", async () => {
+    const setup = runtime.edit();
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { type AsyncResult, type Cell, computed, handler, hasError, pattern, resultOf, Writable } from "commonfabric";
+type Profile = { name: string };
+const create = handler<void, { profile: Profile | undefined; ready: Writable<boolean>; calls: Writable<number> }>((_, { profile, ready, calls }) => {
+  if (profile === undefined) return;
+  ready.set(true);
+  calls.set(calls.get() + 1);
+});
+export default pattern((input: { request: AsyncResult<Cell<Profile>> }) => {
+  const usable = resultOf(input.request);
+  const profile = computed(() => hasError(input.request) ? undefined : usable.get());
+  const ready = new Writable(false);
+  const calls = new Writable(0);
+  return { ready, calls, trigger: create({ profile, ready, calls }) };
+});`,
+      }],
+    }, { space, tx: setup });
+    const result = runtime.getCell<any>(
+      space,
+      "invitation-profile-availability",
+    );
+    runtime.run(setup, compiled, { request: UNAVAILABLE_PENDING }, result);
+    runtime.prepareTxForCommit(setup);
+    expect((await setup.commit().settled).error).toBeUndefined();
+    await result.pull();
+
+    const completed = Promise.withResolvers<string>();
+    let settled = false;
+    completed.promise.then(() => settled = true);
+    sendEvent(
+      result.key("trigger"),
+      undefined,
+      (tx) => completed.resolve(tx.status().status),
+    );
+    await runtime.idle();
+    expect(result.key("ready").get()).toBe(false);
+    expect(result.key("calls").get()).toBe(0);
+    expect(settled).toBe(false);
+
+    const syncing = runtime.edit();
+    result.getArgumentCell()!.withTx(syncing).key("request").setRaw(
+      UNAVAILABLE_SYNCING,
+    );
+    expect((await syncing.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    expect(result.key("ready").get()).toBe(false);
+    expect(result.key("calls").get()).toBe(0);
+    expect(settled).toBe(false);
+
+    const ready = runtime.edit();
+    const profile = runtime.getCell<{ name: string }>(
+      space,
+      "invitation-recovered-profile",
+      undefined,
+      ready,
+    );
+    profile.set({ name: "Reader" });
+    result.getArgumentCell()!.withTx(ready).key("request").set(profile);
+    expect((await ready.commit().settled).error).toBeUndefined();
+    expect(await completed.promise).toBe("done");
+    await runtime.idle();
+    expect(result.key("ready").get()).toBe(true);
+    expect(result.key("calls").get()).toBe(1);
+  });
+
   it("replays a gated handler event once its captured input is available", async () => {
     let calls = 0;
     const valueAlias = {

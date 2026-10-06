@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
 import { StaticCache } from "@commonfabric/static";
 import ts from "typescript";
 
@@ -12,6 +13,86 @@ const diagnosticTypes = (
 const commonfabricTypes = await StaticCache.fromFileSystem().getText(
   "types/commonfabric.d.ts",
 );
+
+for (
+  const [kind, definition] of [
+    ["interface", "interface Input { request: AsyncResult<{ name: string }> }"],
+    ["alias", "type Input = { request: AsyncResult<{ name: string }> };"],
+  ]
+) {
+  Deno.test(`a nested named ${kind} keeps native availability arms and exact guard policy`, async () => {
+    const output = await transformSource(
+      `
+      import { type AsyncResult, computed, hasError, pattern, resultOf } from "commonfabric";
+      ${definition}
+      export default pattern((input: { bundle: Input }) => ({
+        value: computed(() => hasError(input.bundle.request)
+          ? input.bundle.request.errorMessage
+          : resultOf(input.bundle.request).name),
+      }));
+    `,
+      { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+    );
+    const root = parseModule(output);
+    const lift = collect(root, ts.isCallExpression).find((call) =>
+      ts.isPropertyAccessExpression(call.expression) &&
+      ts.isIdentifier(call.expression.expression) &&
+      call.expression.expression.text === "__cfHelpers" &&
+      call.expression.name.text === "lift"
+    );
+    if (!lift?.arguments[1]) throw new Error("Expected the guarded lift");
+    const schema = literalToValue(lift.arguments[1]);
+    expect(schema).toMatchObject({
+      properties: {
+        input: {
+          properties: {
+            bundle: {
+              properties: {
+                request: {
+                  anyOf: expect.arrayContaining([
+                    { $ref: "#/$defs/IsPending" },
+                    { $ref: "#/$defs/IsSyncing" },
+                    { $ref: "#/$defs/HasError" },
+                    {
+                      type: "object",
+                      properties: { name: { type: "string" } },
+                      required: ["name"],
+                    },
+                  ]),
+                },
+              },
+            },
+          },
+        },
+      },
+      $defs: {
+        IsPending: { type: "FabricUnavailable" },
+        IsSyncing: { type: "FabricUnavailable" },
+        HasError: { type: "FabricUnavailable" },
+      },
+    });
+    const inputSchema = schema as {
+      properties: {
+        input: {
+          properties: {
+            bundle: { properties: { request: { anyOf: unknown[] } } };
+          };
+        };
+      };
+    };
+    expect(
+      inputSchema.properties.input.properties.bundle.properties.request.anyOf,
+    )
+      .toHaveLength(4);
+    expect(literalToValue(lift.arguments.at(-1)!)).toEqual({
+      completeSchedulerScopeSummary: true,
+      unavailableInputPolicy: [{
+        path: ["input", "bundle", "request"],
+        reasons: ["error"],
+      }],
+    });
+  });
+}
 
 Deno.test("a terminal async result admits its schema-mismatch observation", async () => {
   const { diagnostics } = await validateSource(

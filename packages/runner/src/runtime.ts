@@ -3035,8 +3035,10 @@ export class Runtime {
             if (entry.space !== space || entry.status === "settled") continue;
             if (state.status === "ready") {
               if (
-                (previous?.status === "disconnected" ||
-                  previous?.status === "closed") && state.epoch > entry.epoch
+                state.epoch > entry.epoch &&
+                (entry.status === "error" ||
+                  previous?.status === "disconnected" ||
+                  previous?.status === "closed")
               ) {
                 this.#linkedDocLoads.delete(key);
                 entry.release?.();
