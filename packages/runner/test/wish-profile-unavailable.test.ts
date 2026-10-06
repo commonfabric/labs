@@ -51,7 +51,7 @@ async function makeRoster(label: string, roster: Roster) {
         ? runtime.getCell(space, "profile result", undefined, tx)
         : cell;
       if (distinct) reference.set(profileValue(`Profile ${index}`));
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       profiles.push(cell);
       references.push(reference);
       continue;
@@ -79,7 +79,7 @@ async function makeRoster(label: string, roster: Roster) {
     defaultPattern.mru = roster.mruIndices.map((index) => references[index]);
   }
   runtime.getHomeSpaceCell(home).key("defaultPattern").set(defaultPattern);
-  expect((await home.commit()).error).toBeUndefined();
+  expect((await home.commit().settled).error).toBeUndefined();
 
   const cancels: (() => void)[] = [];
   return {
@@ -101,7 +101,7 @@ async function makeRoster(label: string, roster: Roster) {
         {},
         runtime.getCell(signer.did(), `consumer ${query}`, undefined, run),
       );
-      expect((await run.commit()).error).toBeUndefined();
+      expect((await run.commit().settled).error).toBeUndefined();
       const found = result.key("found").resolveAsCell();
       cancels.push(found.sink(() => {}));
       await result.pull();
@@ -295,7 +295,7 @@ describe("wish-profile-unavailable", () => {
 
       const arrive = fixture.runtime.edit();
       fixture.profiles[1].withTx(arrive).set(profileValue("Profile 1"));
-      expect((await arrive.commit()).error).toBeUndefined();
+      expect((await arrive.commit().settled).error).toBeUndefined();
       await settle(fixture.runtime);
       expect(found.key("candidates").get()).toHaveLength(2);
       expect(nameOf(found)).toBe("Profile 0");

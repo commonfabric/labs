@@ -140,7 +140,7 @@ describe("wish-reconnect-recovery", () => {
           { cell: readable, tags: ["resources"] },
         ],
       });
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       await storageManager.synced();
       transport.dropId = droppedId;
 
@@ -159,7 +159,7 @@ describe("wish-reconnect-recovery", () => {
         {},
         runtime.getCell(space, "reconnect consumer", undefined, run),
       );
-      expect((await run.commit()).error).toBeUndefined();
+      expect((await run.commit().settled).error).toBeUndefined();
       const found = result.key("found").resolveAsCell();
       cancels.push(found.sink(() => {}));
       const candidates = () =>
