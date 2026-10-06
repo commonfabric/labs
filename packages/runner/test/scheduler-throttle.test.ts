@@ -69,7 +69,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let observed = 0;
@@ -90,7 +90,7 @@ describe("throttle - bounded freshness", () => {
     // auto-advance would fire the armed throttle wake early. The drain lets
     // the scheduler tick observe the dirty gated node and arm the shared
     // wake before the clear, without the throttle window elapsing.
-    const throttledCommit = tx.commit();
+    const throttledCommit = tx.commit().settled;
     tx = runtime.edit();
     await clock.settle();
     await throttledCommit;
@@ -123,7 +123,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -173,7 +173,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -242,7 +242,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computeCount = 0;
@@ -270,7 +270,7 @@ describe("throttle - bounded freshness", () => {
 
     // Change source to mark computation dirty
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Wait for propagation
@@ -296,7 +296,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectCount = 0;
@@ -324,7 +324,7 @@ describe("throttle - bounded freshness", () => {
     // round trip with the clock held so the throttle window cannot elapse
     // under auto-advance before the intermediate assertion.
     source.withTx(tx).send(5);
-    const throttledCommit = tx.commit();
+    const throttledCommit = tx.commit().settled;
     tx = runtime.edit();
     await clock.settle();
     await throttledCommit;
@@ -340,7 +340,7 @@ describe("throttle - bounded freshness", () => {
 
     // Trigger again - now throttle has expired, should run
     source.withTx(tx).send(10);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await clock.tick(500);
 
@@ -364,7 +364,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectCount = 0;
@@ -392,7 +392,7 @@ describe("throttle - bounded freshness", () => {
     // cannot elapse under auto-advance before the parked-state assertion.
     runtime.scheduler.resetFilterStats();
     source.withTx(tx).send(5);
-    const throttledCommit = tx.commit();
+    const throttledCommit = tx.commit().settled;
     tx = runtime.edit();
     await clock.settle();
     await throttledCommit;
@@ -437,7 +437,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -481,7 +481,7 @@ describe("throttle - bounded freshness", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let observed = 0;

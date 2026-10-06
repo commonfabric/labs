@@ -73,7 +73,7 @@ describe("Memory v2 pull reactivity", () => {
   afterEach(async () => {
     const status = tx?.status();
     if (status?.status === "ready") {
-      await tx.commit();
+      await tx.commit().settled;
     }
     await runtime.dispose();
     await remoteClient.close();
@@ -96,7 +96,7 @@ describe("Memory v2 pull reactivity", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await source.sync();
@@ -185,7 +185,7 @@ describe("Memory v2 pull reactivity", () => {
       tx,
     );
     result.set("init");
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     expect(

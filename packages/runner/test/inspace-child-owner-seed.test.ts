@@ -150,7 +150,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
           child,
         );
         runtime.prepareTxForCommit(setup);
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         await result.pull();
         await runtime.idle();
         expect(result.key("name").get()).toBe("hi");
@@ -160,7 +160,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
           const edit = runtime.edit();
           result.withTx(edit).key("setName").send({ name: "owner saved" });
           runtime.prepareTxForCommit(edit);
-          expect((await edit.commit()).error).toBeUndefined();
+          expect((await edit.commit().settled).error).toBeUndefined();
           await result.pull();
           await runtime.idle();
         }
@@ -199,7 +199,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
           "new default",
         );
         runtime.prepareTxForCommit(update);
-        expect((await update.commit()).error).toBeUndefined();
+        expect((await update.commit().settled).error).toBeUndefined();
         await result.pull();
         await runtime.idle();
         expect(errors).toEqual([]);
@@ -221,7 +221,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
           reassert,
         ).set(saved);
         runtime.prepareTxForCommit(reassert);
-        expect((await reassert.commit()).error?.message).toContain(
+        expect((await reassert.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
 
@@ -241,7 +241,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
           schemaRole: "output",
         });
         runtime.prepareTxForCommit(retarget);
-        expect((await retarget.commit()).error?.message).toContain(
+        expect((await retarget.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         expect(result.key("name").get()).toBe(saved);
@@ -280,7 +280,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
       // an unprepared CFC-relevant tx is rejected wholesale at commit, so a
       // manual test tx must prepare too.
       rt1.prepareTxForCommit(tx1);
-      const commit1 = await tx1.commit();
+      const commit1 = await tx1.commit().settled;
       expect(commit1.error).toBeUndefined();
       await r1.pull();
 
@@ -288,7 +288,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
       // read CFC metadata through the cell's tx, and tx1 is already done.
       const tx2 = rt1.edit();
       r1.withTx(tx2).key("create").send({ name: "hi" });
-      const commit2 = await tx2.commit();
+      const commit2 = await tx2.commit().settled;
       expect(commit2.error).toBeUndefined();
       await r1.pull();
       await rt1.idle();
@@ -359,7 +359,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
       for (const address of addresses) {
         expect(readStoredCfcMetadata(inspect, address)).toBeDefined();
       }
-      await inspect.commit();
+      await inspect.commit().settled;
       for (const address of addresses) {
         const attack = rt2.edit();
         const replacement = rt2.getCell(
@@ -379,7 +379,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
           replacement.getAsWriteRedirectLink(),
         );
         rt2.prepareTxForCommit(attack);
-        expect((await attack.commit()).error?.message).toContain(
+        expect((await attack.commit().settled).error?.message).toContain(
           "missing schema write-policy input",
         );
       }
@@ -390,7 +390,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
         overwrite,
       ).set("other");
       rt2.prepareTxForCommit(overwrite);
-      expect((await overwrite.commit()).error?.message).toContain(
+      expect((await overwrite.commit().settled).error?.message).toContain(
         "writeAuthorizedBy",
       );
       expect(nameCell.get()).toBe("hi");

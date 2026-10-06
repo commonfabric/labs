@@ -96,7 +96,7 @@ describe("CFC sink request policy", () => {
       },
     );
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     expect(flushCount).toBe(1);
 
@@ -147,7 +147,7 @@ describe("CFC sink request policy", () => {
       );
     }).toThrow("read-only");
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     expect(flushCount).toBe(1);
 

@@ -1483,7 +1483,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     ) {
       const tx = this.edit();
       cell.withTx(tx).set(value);
-      await tx.commit();
+      await tx.commit().settled;
     }
     return true;
   });

@@ -6,6 +6,7 @@
 
 import type { Runtime } from "../../src/runtime.ts";
 import type { CommitError, MemorySpace } from "../../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
 
 /**
  * The stale-basis refusal in the shape `toRejectedError` hands the
@@ -50,7 +51,9 @@ export function refuseFirstEventCommit(
       }
       refusals++;
       tx.abort(refusal.message);
-      return Promise.resolve({ error: refusal });
+      return createTransactionCommitReceipt(
+        Promise.resolve({ error: refusal }),
+      );
     };
     return tx;
   };

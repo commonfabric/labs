@@ -73,7 +73,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/agent-queue.tsx",
-                  "moduleIdentity": "4dscjSB5Y6NQkKYqcC3b5uCsNVBkh0VAqAqNWaF2HlU",
+                  "moduleIdentity": "SEujS_7ipQsvMj44d8OiaVaDYObe2QZZOhBdJgxw1hM",
                   "path": [
                     "setAgentRunner"
                   ]
@@ -223,7 +223,6 @@
       "AgentRunErrorCode": {
         "enum": [
           "INVALID_INPUT",
-          "INVALID_RESULT",
           "LIMIT_REACHED",
           "PROVIDER_FAILURE",
           "RUNNER_LOST",
@@ -352,7 +351,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setAvatar"
                   ]
@@ -378,7 +377,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setBio"
                   ]
@@ -403,7 +402,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "mutateElements"
                   ]
@@ -432,7 +431,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "mutateExternalProfileLinks"
                   ]
@@ -461,7 +460,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setInbox"
                   ]
@@ -492,7 +491,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setName"
                   ]
@@ -572,7 +571,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "SisP60ACgDdPCQb_6LGGwqxWMYbgXPCPfTYRwqODNOI",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "publishVerifiedIdentities"
                   ]
@@ -587,6 +586,7 @@
         },
         "required": [
           "$NAME",
+          "$UI",
           "name",
           "avatar",
           "bio",
@@ -598,8 +598,7 @@
           "addElement",
           "removeElement",
           "isEditing",
-          "initialNameApplied",
-          "$UI"
+          "initialNameApplied"
         ],
         "type": "object"
       },
@@ -749,23 +748,6 @@
           "about": {
             "$ref": "#/$defs/ChatRoomAbout",
             "description": "What the room says about itself."
-          },
-          "messages": {
-            "description": "Where the conversation stands: what of `messages` every member shares.",
-            "properties": {
-              "count": {
-                "description": "How many messages the room holds, obliterated tombstones included.",
-                "type": "number"
-              },
-              "newestAt": {
-                "description": "The newest message's `sentAt`; absent while there are none.",
-                "type": "FabricEpochNsec"
-              }
-            },
-            "required": [
-              "count"
-            ],
-            "type": "object"
           }
         },
         "type": "object"
@@ -1239,23 +1221,14 @@
         },
         "type": "object"
       },
-      "PrivateInboxHolder": {
-        "properties": {
-          "piece": {
-            "$ref": "#/$defs/ShareInboxPiece",
-            "description": "The inbox piece."
-          }
-        },
-        "type": "object"
-      },
       "ProfileElement": {
         "properties": {
           "cell": true,
           "source": {
             "enum": [
               "piece",
-              "url",
-              "catalog"
+              "catalog",
+              "url"
             ]
           },
           "tag": {
@@ -1396,6 +1369,167 @@
         },
         "type": "object"
       },
+      "SharedSpaceCatalog": {
+        "properties": {
+          "entries": {
+            "additionalProperties": {
+              "$ref": "#/$defs/SharedSpaceEntry"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "offers": {
+            "additionalProperties": {
+              "$ref": "#/$defs/SharedSpaceOfferReceipt"
+            },
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "offers"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceEntry": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastAction": {
+            "type": "unknown"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "since": {
+            "type": "number"
+          },
+          "space": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "host",
+          "kind",
+          "state",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceMembership": {
+        "enum": [
+          "saved",
+          "archived"
+        ]
+      },
+      "SharedSpaceMembershipChange": {
+        "properties": {
+          "expectedRevision": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/SharedSpaceMembership"
+          }
+        },
+        "required": [
+          "space",
+          "id",
+          "expectedRevision",
+          "state"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceOfferReceipt": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "id",
+          "space",
+          "host",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceRegistration": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "initialState": {
+            "$ref": "#/$defs/SharedSpaceMembership"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "offer": {
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "id"
+            ],
+            "type": "object"
+          },
+          "since": {
+            "type": "number"
+          },
+          "space": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "host",
+          "kind"
+        ],
+        "type": "object"
+      },
       "SpaceEntry": {
         "properties": {
           "did": {
@@ -1429,7 +1563,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-create.tsx",
-                  "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
+                  "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
                   "path": [
                     "setDefaultProfile"
                   ]
@@ -1457,7 +1591,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1473,7 +1607,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1493,7 +1627,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
               "path": [
                 "setMruProfile"
               ]
@@ -1517,7 +1651,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/packages/patterns/system/profile-create.tsx",
-                "moduleIdentity": "QcR9t2uwOoL2sZI5R20bph_MOBVlhz7wklRQED1x7-E",
+                "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
                 "path": [
                   "setMruProfile"
                 ]
@@ -1634,6 +1768,12 @@
       "agentQueue": {
         "$ref": "#/$defs/AgentQueueOutput"
       },
+      "changeSharedSpaceMembership": {
+        "$ref": "#/$defs/SharedSpaceMembershipChange",
+        "asCell": [
+          "stream"
+        ]
+      },
       "chatManager": {
         "$ref": "#/$defs/FabriChatManagerOutput"
       },
@@ -1649,12 +1789,6 @@
       },
       "defaultProfile": {
         "$ref": "#/$defs/TrustedDefaultProfile"
-      },
-      "ensurePrivateInbox": {
-        "asCell": [
-          "stream",
-          "opaque"
-        ]
       },
       "favorites": {
         "default": [],
@@ -1677,12 +1811,15 @@
         "$ref": "#/$defs/TrustedProfileMru",
         "default": []
       },
-      "privateInbox": {
-        "$ref": "#/$defs/PrivateInboxHolder"
-      },
       "profiles": {
         "$ref": "#/$defs/TrustedProfileList",
         "default": []
+      },
+      "registerSharedSpace": {
+        "$ref": "#/$defs/SharedSpaceRegistration",
+        "asCell": [
+          "stream"
+        ]
       },
       "removeFavorite": {
         "asCell": [
@@ -1730,6 +1867,9 @@
         ],
         "type": "object"
       },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalog"
+      },
       "spaces": {
         "default": [],
         "items": {
@@ -1747,9 +1887,10 @@
       "mru",
       "agentQueue",
       "chatManager",
-      "privateInbox",
+      "sharedSpaceCatalog",
+      "registerSharedSpace",
+      "changeSharedSpaceMembership",
       "createProfile",
-      "ensurePrivateInbox",
       "addFavorite",
       "removeFavorite",
       "addJournalEntry",

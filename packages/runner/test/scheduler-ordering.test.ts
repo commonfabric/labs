@@ -59,7 +59,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const declaredWrite = cell.getAsNormalizedFullLink();
@@ -93,7 +93,7 @@ describe("push-triggered filtering", () => {
     const cell2 = runtime.getCell<number>(space, "mw-accum-2", undefined, tx);
     cell1.set(0);
     cell2.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const declaredWrite = cell1.getAsNormalizedFullLink();
@@ -133,7 +133,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const declaredWrite = output.getAsNormalizedFullLink();
@@ -177,7 +177,7 @@ describe("push-triggered filtering", () => {
     );
     declared.set(0);
     metadata.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const declaredWrite = declared.getAsNormalizedFullLink();
@@ -219,7 +219,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     root.set({ internal: {} });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const child = root.key("internal").key("__#0");
@@ -258,7 +258,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     root.set({ list: {} });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const list = root.key("list");
@@ -399,7 +399,7 @@ describe("push-triggered filtering", () => {
 
     const cell = runtime.getCell<number>(space, "filter-stats", undefined, tx);
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {
@@ -428,7 +428,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -469,7 +469,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     cell.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -496,7 +496,7 @@ describe("push-triggered filtering", () => {
 
     // Change cell via external means (simulating storage change)
     cell.withTx(tx).send(100);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await cell.pull();
 
@@ -516,7 +516,7 @@ describe("push-triggered filtering", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -596,7 +596,7 @@ describe("parent-child action ordering", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Parent action that subscribes a child during execution
@@ -647,7 +647,7 @@ describe("parent-child action ordering", () => {
       tx,
     );
     toggle.set(true);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childCanceler: (() => void) | null = null;
@@ -690,7 +690,7 @@ describe("parent-child action ordering", () => {
     // Now toggle to false - parent should unsubscribe child
     executionOrder.length = 0;
     toggle.withTx(tx).send(false);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -708,7 +708,7 @@ describe("parent-child action ordering", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childSubscribed = false;
@@ -750,7 +750,7 @@ describe("parent-child action ordering", () => {
     // Change source - both parent and child should become dirty
     executionOrder.length = 0;
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -768,7 +768,7 @@ describe("parent-child action ordering", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childSubscribed = false;
@@ -823,7 +823,7 @@ describe("parent-child action ordering", () => {
     // Change source - all three should become dirty and re-execute in order
     executionOrder.length = 0;
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -838,7 +838,7 @@ describe("parent-child action ordering", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childCanceler: (() => void) | undefined;
@@ -887,7 +887,7 @@ describe("parent-child action ordering", () => {
     // Change source and verify neither runs
     childRunCount = 0;
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 

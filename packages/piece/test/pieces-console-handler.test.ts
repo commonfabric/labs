@@ -182,7 +182,7 @@ describe("PiecesController runtime diagnostics", () => {
     );
     const tx = runtime.edit();
     argumentCell.withTx(tx).setRawUntyped(linkedCell.getAsLink());
-    assertEquals((await tx.commit()).error, undefined);
+    assertEquals((await tx.commit().settled).error, undefined);
 
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,

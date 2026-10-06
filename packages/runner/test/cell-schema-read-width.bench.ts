@@ -61,7 +61,7 @@ for (const size of [74, 296, 1184]) {
             if (seed.status().status === "ready") seed.abort();
           });
           runtime.getCell(identity.did(), "rows", undefined, seed).set(rows);
-          const committed = await seed.commit();
+          const committed = await seed.commit().settled;
           if (committed.error) throw new Error("Benchmark seeding failed");
           const tx = runtime.edit();
           cleanup.defer(() => {

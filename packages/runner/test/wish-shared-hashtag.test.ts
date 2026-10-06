@@ -127,7 +127,7 @@ Deno.test(
         );
         return runtime.run(tx, wishPattern, {}, resultCell);
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const values = await Promise.all(results.map((result) => result.pull()));
       expect(wishSearchCount() - before).toBe(1);
@@ -221,7 +221,7 @@ Deno.test(
         );
       });
 
-      await tx.commit();
+      await tx.commit().settled;
 
       const values = await Promise.all(results.map((result) => result.pull()));
       expect(wishSearchCount() - before).toBe(1);
@@ -303,7 +303,7 @@ Deno.test(
         tx,
       );
       parent.set({});
-      await tx.commit();
+      await tx.commit().settled;
 
       const sent: unknown[] = [];
       const action = wish(
@@ -327,13 +327,13 @@ Deno.test(
 
       const first = runtime.edit();
       action.action(first);
-      await first.commit();
+      await first.commit().settled;
       await runtime.idle();
       expect(subscriptions).toBe(1);
 
       const second = runtime.edit();
       action.action(second);
-      await second.commit();
+      await second.commit().settled;
       await runtime.idle();
       expect(sent.length).toBe(2);
       expect(subscriptions).toBe(1);

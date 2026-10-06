@@ -52,6 +52,7 @@ import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const spaceSigner = await Identity.fromPassphrase("trust attribution space");
 const space = spaceSigner.did() as MemorySpace;
@@ -317,12 +318,12 @@ describe("executor-trust-attribution", () => {
     {
       const seed = runtime.edit();
       argument.withTx(seed).set(initial);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     return { compiled, argument, result };
   };
@@ -742,10 +743,10 @@ describe("executor-trust-attribution", () => {
               permanentEvidence: false as const,
             };
             (tx as unknown as {
-              commit: () => Promise<{ error: typeof error }>;
+              commit: () => ReturnType<typeof createTransactionCommitReceipt>;
             }).commit = () => {
               tx.abort(new Error(error.message));
-              return Promise.resolve({ error });
+              return createTransactionCommitReceipt(Promise.resolve({ error }));
             };
           }
         },
@@ -795,7 +796,7 @@ describe("executor-trust-attribution", () => {
           const poke = clientRuntime!.edit();
           clientRuntime!.getCell<number>(space, "replay-activate", undefined)
             .withTx(poke).set(1);
-          expect((await poke.commit()).error).toBeUndefined();
+          expect((await poke.commit().settled).error).toBeUndefined();
         }
         // Ordered barrier for the negative: append a FRESH entry on the
         // same stream and wait for ITS consequence — the drain processes

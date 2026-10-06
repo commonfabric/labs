@@ -92,7 +92,7 @@ async function shelf() {
         },
       }),
     } as FabricValue);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(space, id);
   };
   const link = (cell: Cell<unknown>) =>

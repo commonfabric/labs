@@ -102,7 +102,7 @@ describe("render-after-first-start", () => {
       await setUp.sync();
       ownerRuntime.run(tx, compiled, {}, setUp);
       ownerRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await ownerRuntime.idle();
       await ownerStorage.synced();
 

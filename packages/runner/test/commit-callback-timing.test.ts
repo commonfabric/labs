@@ -52,7 +52,7 @@ describe("commit callback timing", () => {
       const tx = runtime.edit();
       cell.withTx(tx).set({ v: "v0" });
       runtime.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -74,7 +74,7 @@ describe("commit callback timing", () => {
       commitCallbackFired = true;
     });
     let promiseSettled = false;
-    const commitP = tx.commit().then((result) => {
+    const commitP = tx.commit().settled.then((result) => {
       promiseSettled = true;
       return result;
     });
@@ -104,7 +104,7 @@ describe("commit callback timing", () => {
     expect(cell.get()).toEqual({ v: "v1" });
   });
 
-  it("settles an accepted resolveAt-verdict promise at the verdict, while its commit callback waits for coverage", async () => {
+  it("reports acceptance through the verdict while its commit callback waits for coverage", async () => {
     const cell = runtime.getCell<{ v: string }>(
       space,
       "accept-verdict-mode-doc",
@@ -114,7 +114,7 @@ describe("commit callback timing", () => {
       const tx = runtime.edit();
       cell.withTx(tx).set({ v: "v0" });
       runtime.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -133,10 +133,12 @@ describe("commit callback timing", () => {
       commitCallbackDone.resolve();
     });
     let verdictModeResult: { error?: unknown } | undefined;
-    const commitP = tx.commit({ resolveAt: "verdict" }).then((result) => {
-      verdictModeResult = result;
-      return result;
-    });
+    const commitP = tx.commit({ holdSyncedUntilCovered: false }).verdict.then(
+      (result) => {
+        verdictModeResult = result;
+        return result;
+      },
+    );
 
     // Held-clock fixpoint: the verdict-mode promise has settled with the
     // accept, but the commit callback — on the full settlement timeline —
@@ -172,7 +174,7 @@ describe("commit callback timing", () => {
       const tx = runtime.edit();
       watched.withTx(tx).set({ v: "w" });
       runtime.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
     await watched.sync();
@@ -191,7 +193,7 @@ describe("commit callback timing", () => {
     const tx = runtime.edit();
     unwatched.withTx(tx).set({ v: "x" });
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error, `commit: ${JSON.stringify(res.error)}`).toBeUndefined();
     expect(unwatched.get()).toEqual({ v: "x" });
   });

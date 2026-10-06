@@ -1107,7 +1107,7 @@ export async function commitReviewedIntent(
     // Enforced only under `experimental.commitPreconditions`; otherwise the
     // unpredictable address and the writer claim are what protect it.
     receiptTx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
-    const result = await receiptTx.commit();
+    const result = await receiptTx.commit().settled;
     if (result.error) {
       throw new Error(
         `Reviewed intent receipt failed: ${result.error.message}`,
@@ -1137,7 +1137,7 @@ export async function commitReviewedIntent(
     receipt.withTx(recordTx).get();
     recordCell.withTx(recordTx).set(record);
     recordTx.markCreateOnly?.(recordCell.getAsNormalizedFullLink());
-    const result = await recordTx.commit();
+    const result = await recordTx.commit().settled;
     if (result.error) {
       throw new Error(`Reviewed intent failed: ${result.error.message}`);
     }
@@ -1160,7 +1160,7 @@ export async function commitReviewedIntent(
     if (!deepEqual(locationOf(target), state.resultLocation)) {
       throw new Error(STALE_REVIEW);
     }
-    const result = await linkTx.commit();
+    const result = await linkTx.commit().settled;
     if (result.error) {
       throw new Error(
         `Reviewed intent could not link its record: ${result.error.message}`,

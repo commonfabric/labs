@@ -23,6 +23,17 @@ import FabriChatManager, {
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
 import {
+  changeSharedSpaceMembership,
+  readSharedSpaceCatalog,
+  registerSharedSpace,
+  type SharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+  type SharedSpaceMembershipChange,
+  type SharedSpaceMembershipResult,
+  type SharedSpaceRegistration,
+  type SharedSpaceRegistrationResult,
+} from "./shared-space-catalog.ts";
+import {
   type CreateProfileEvent,
   seedProfileName,
   submitProfileCreation,
@@ -107,6 +118,15 @@ export type HomeOutput = {
   // their profiles that points at no inbox is pointed here; one that points at
   // another inbox keeps it. Absent until `ensurePrivateInbox` runs.
   privateInbox: Writable<PrivateInboxHolder>;
+  sharedSpaceCatalog: SharedSpaceCatalog;
+  registerSharedSpace: Stream<
+    SharedSpaceRegistration,
+    SharedSpaceRegistrationResult
+  >;
+  changeSharedSpaceMembership: Stream<
+    SharedSpaceMembershipChange,
+    SharedSpaceMembershipResult
+  >;
   createProfile: Stream<CreateProfileEvent>;
   // Creates the private inbox if there is none, and points every profile that
   // points at no inbox at it. The host sends it once per runtime worker, the
@@ -266,6 +286,10 @@ const Home = pattern(
     const favorites = new Writable<Favorite[]>([]).for("favorites");
     const journal = new Writable<JournalEntry[]>([]).for("journal");
     const spaces = new Writable<SpaceEntry[]>([]).for("spaces");
+    const catalog = new Writable<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }).for("sharedSpaceCatalog");
     const defaultAppUrl = new Writable("").for("defaultAppUrl");
     // NOTE(CT-1628): the `as any` casts around the profile cells below are
     // required because the CFC wrapper types (TrustedProfile*) don't yet compose
@@ -464,7 +488,11 @@ const Home = pattern(
       chatManager,
       privateInbox,
 
+      sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
+
       // Exported handlers
+      registerSharedSpace: registerSharedSpace({ catalog }),
+      changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

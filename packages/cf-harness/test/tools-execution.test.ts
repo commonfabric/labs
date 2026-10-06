@@ -711,6 +711,33 @@ Deno.test("web_fetch rejects DNS targets that resolve to private addresses befor
   });
 });
 
+Deno.test("web_fetch rejects a resolved address it cannot read", async () => {
+  const calls: string[] = [];
+  const tool = createWebFetchTool({
+    resolveHostAddresses: () => Promise.resolve(["0x7f.0.0.1"]),
+    fetchFn: (input) => {
+      calls.push(String(input));
+      return Promise.resolve(new Response("should not fetch"));
+    },
+  });
+  const context = createContext(new FakeSandboxRuntime());
+
+  const output = await tool.invoke(context, {
+    url: "https://odd.example/",
+  });
+
+  assertEquals(calls, []);
+  assertEquals(output, {
+    type: "cf-harness.web-fetch-error",
+    outputId: "run-1:web_fetch:1",
+    url: "https://odd.example/",
+    code: "blocked_url",
+    message:
+      "web_fetch host odd.example resolved to 0x7f.0.0.1, which is not an IP address",
+    fetchedAt: "2026-05-01T17:54:00.000Z",
+  });
+});
+
 Deno.test("web_fetch rejects DNS rebinding between validation and connect", async () => {
   const resolutions = [["93.184.216.34"], ["10.0.0.7"]];
   const tool = createWebFetchTool({

@@ -35,7 +35,7 @@ describe("query result proxy array key order", () => {
     tx = runtime.edit();
   });
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

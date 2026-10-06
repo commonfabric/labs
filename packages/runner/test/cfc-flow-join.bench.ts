@@ -65,7 +65,7 @@ for (const entries of [100, 300, 1000]) {
       labelMap: { version: 1, entries: labels },
     },
   });
-  const committed = await seed.commit();
+  const committed = await seed.commit().settled;
   if (committed.error) throw committed.error;
   const inspection = runtime.edit();
   try {

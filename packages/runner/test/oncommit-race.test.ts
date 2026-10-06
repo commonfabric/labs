@@ -15,6 +15,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 
 import { Runtime } from "../src/runtime.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test oncommit race");
 const space = signer.did();
@@ -34,7 +35,7 @@ describe("onCommit callback final outcome", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -47,7 +48,7 @@ describe("onCommit callback final outcome", () => {
       tx,
     );
     streamCell.set({} as { piece: string });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const pieceRegistryCell = runtime.getCell<string[]>(
@@ -57,7 +58,7 @@ describe("onCommit callback final outcome", () => {
       tx,
     );
     pieceRegistryCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let handlerCallCount = 0;
@@ -98,7 +99,7 @@ describe("onCommit callback final outcome", () => {
       tx,
     );
     streamCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -111,7 +112,8 @@ describe("onCommit callback final outcome", () => {
       (handlerTx, event) => {
         handlerCallCount++;
         streamCell.withTx(handlerTx).set(event);
-        handlerTx.tx.commit = () => Promise.reject(rejection);
+        handlerTx.tx.commit = () =>
+          createTransactionCommitReceipt(Promise.reject(rejection));
       },
       streamCell.getAsNormalizedFullLink(),
     );
@@ -187,7 +189,7 @@ describe("onCommit callback final outcome", () => {
         tx,
       );
       streamCell.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.storageManager.synced();
 
@@ -196,7 +198,8 @@ describe("onCommit callback final outcome", () => {
         (handlerTx, event) => {
           handlerCallCount++;
           streamCell.withTx(handlerTx).set(event);
-          handlerTx.tx.commit = () => Promise.reject(rejection);
+          handlerTx.tx.commit = () =>
+            createTransactionCommitReceipt(Promise.reject(rejection));
         },
         streamCell.getAsNormalizedFullLink(),
       );
@@ -247,7 +250,7 @@ describe("onCommit callback final outcome", () => {
       tx,
     );
     streamCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -333,7 +336,7 @@ describe("onCommit callback final outcome", () => {
         tx,
       );
       streamCell.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.storageManager.synced();
 
@@ -347,7 +350,8 @@ describe("onCommit callback final outcome", () => {
           attempts++;
           streamCell.withTx(handlerTx).set(event + 1);
           if (attempts === 1) {
-            handlerTx.tx.commit = () => Promise.reject(rejection);
+            handlerTx.tx.commit = () =>
+              createTransactionCommitReceipt(Promise.reject(rejection));
           }
         },
         streamCell.getAsNormalizedFullLink(),
@@ -386,7 +390,7 @@ describe("onCommit callback final outcome", () => {
       tx,
     );
     streamCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const guardedCell = runtime.getCell<{ value: string }>(
@@ -409,7 +413,7 @@ describe("onCommit callback final outcome", () => {
     // it is prepared the way the scheduler prepares the handler's own write
     // below.
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
 
     runtime.scheduler.addEventHandler(

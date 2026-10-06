@@ -169,7 +169,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     await rt.setup(tx, pattern, argument, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await rt.idle();
     return {
       cell,
@@ -454,7 +454,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     const running = rt.run(tx, v1, { count: "seven" }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
 
     // Move the pointer. The swap refuses the stored argument and is LOGGED, so
@@ -465,7 +465,7 @@ describe("pattern update validates the stored argument", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     await cell.pull();
     expect(
@@ -540,7 +540,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     const running = rt.run(tx, v1, vintageArgument, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
 
     // A wrong-typed argument makes the swap refuse, so the piece stays on V1
@@ -557,7 +557,7 @@ describe("pattern update validates the stored argument", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     await cell.pull();
     expect(
@@ -661,7 +661,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     const running = rt.run(tx, pattern, undefined, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
 
     // A value this pattern's OWN schema rejects, written schema-lessly — how it
@@ -743,7 +743,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     const running = rt.run(tx, v1, { count: "seven" }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
 
     // Pointer moves; the swap refuses the wrong-typed argument and is logged,
@@ -753,7 +753,7 @@ describe("pattern update validates the stored argument", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     await cell.pull();
     expect((cell.getAsQueryResult() as { tag: string }).tag).toBe("v1");
@@ -1216,7 +1216,7 @@ describe("pattern update validates the stored argument", () => {
         ).value,
       ).toBeUndefined();
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
 
     // Anything other than an absence surfaces instead of reading as a dead
@@ -1390,7 +1390,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     const running = rt.run(tx, v1, { count: "seven" }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
 
     const tx2 = rt.edit();
@@ -1398,7 +1398,7 @@ describe("pattern update validates the stored argument", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     await cell.pull();
     // Precondition, asserted rather than assumed: the swap refused, so the
@@ -1445,7 +1445,7 @@ describe("pattern update validates the stored argument", () => {
       tx,
     );
     const running = rt.run(tx, v1, { count: "seven" }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     expect((cell.getAsQueryResult() as { marker: string }).marker).toBe("v1");
 
@@ -1454,7 +1454,7 @@ describe("pattern update validates the stored argument", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     await cell.pull();
 

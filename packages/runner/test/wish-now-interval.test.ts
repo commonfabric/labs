@@ -42,7 +42,7 @@ describe("interval #now wish", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   });
@@ -59,7 +59,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -90,7 +90,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -152,7 +152,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -268,7 +268,7 @@ describe("interval #now wish", () => {
         return { nowValue: wish({ query: "#now/1" }) };
       });
       const second = runtime.run(tx, secondPattern, {}, secondResultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await second.pull();
 
@@ -308,7 +308,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
 
@@ -350,7 +350,7 @@ describe("interval #now wish", () => {
         return { nowValue: wish({ query: "#now/1" }) };
       });
       const second = runtime.run(tx, secondPattern, {}, secondResultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await second.pull();
       const revived = answers.length;
@@ -453,7 +453,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -464,7 +464,7 @@ describe("interval #now wish", () => {
     // shared interval must still fire and update the value regardless of the
     // unrelated re-run.
     triggerCell.withTx(tx).set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await clock.tick(1000);
@@ -497,7 +497,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const first = runtime.run(tx, wishPattern, {}, firstResultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await first.pull();
@@ -534,7 +534,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const second = runtime.run(tx, wishPattern, {}, secondResultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await second.pull();

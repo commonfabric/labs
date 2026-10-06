@@ -108,7 +108,7 @@ describe("cross-space value reads", () => {
     );
     // deno-lint-ignore no-explicit-any
     const r1 = rt1.run(tx1, parent as any, {}, resultCell1);
-    await tx1.commit();
+    await tx1.commit().settled;
     await r1.pull();
     r1.key("create").send({ name: "Ada" });
     await r1.pull();

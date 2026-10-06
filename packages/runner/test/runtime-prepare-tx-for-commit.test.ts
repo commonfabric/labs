@@ -113,7 +113,7 @@ describe("Runtime.prepareTxForCommit()", () => {
       tx,
     );
     cell.set({ note: "durable" });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     expect(tx.status().status).toBe("done");
 
     expect(() => runtime.prepareTxForCommit(tx)).not.toThrow();
@@ -135,7 +135,7 @@ describe("Runtime.prepareTxForCommit()", () => {
       seed,
     );
     cell.set({ note: "seeded" });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     const { error } = await runtime.editWithRetry((tx) => {
       cell.withTx(tx).get();
@@ -159,6 +159,6 @@ describe("Runtime.prepareTxForCommit()", () => {
     runtime.prepareTxForCommit(tx);
 
     expect(tx.getCfcState().prepare.status).toBe("prepared");
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
   });
 });

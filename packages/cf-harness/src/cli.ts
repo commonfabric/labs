@@ -2366,6 +2366,10 @@ const appendStructuredResultInstructions = (
     `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
+    "",
+    "Result schema (JSON):",
+    JSON.stringify(structuredResult.schema),
   );
 };
 

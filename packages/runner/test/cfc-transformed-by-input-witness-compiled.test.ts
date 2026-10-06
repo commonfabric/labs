@@ -177,7 +177,7 @@ const runChain = async (
     const result = runtime.getCell<Chain>(space, cause, undefined, tx);
     runtime.run(tx, pattern, {}, result);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await runtime.idle();
 
@@ -185,7 +185,7 @@ const runChain = async (
       const sendTx = runtime.edit();
       // deno-lint-ignore no-explicit-any
       (result.withTx(sendTx) as any).key(stream).send(event);
-      expect((await sendTx.commit()).error).toBeUndefined();
+      expect((await sendTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
     };

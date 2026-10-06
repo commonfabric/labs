@@ -1498,7 +1498,7 @@ export async function runTestPattern(
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       runtime.prepareTxForCommit?.(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await runtime.idle();
     });
 
@@ -1536,7 +1536,7 @@ export async function runTestPattern(
 
           // Commit the transaction
           runtime.prepareTxForCommit?.(tx);
-          await tx.commit();
+          await tx.commit().settled;
           return value;
         } catch (error) {
           tx.abort(error);

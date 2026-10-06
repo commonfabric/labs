@@ -105,7 +105,7 @@ describe("CFC flow labels: the rows of a query result", () => {
   ): Promise<void> => {
     const tx = runtime!.edit();
     tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   };
 
@@ -145,7 +145,7 @@ describe("CFC flow labels: the rows of a query result", () => {
     const resultCell = runtime!.getCell(space, cause, p.resultSchema, tx);
     const result = runtime!.run(tx, p, {}, resultCell);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await waitForCellValue<QueryState>(
       runtime!,
       // deno-lint-ignore no-explicit-any -- the query's state, as the builtin writes it
@@ -164,7 +164,7 @@ describe("CFC flow labels: the rows of a query result", () => {
     const out = runtime!.getCell(space, `${cause}-probe`, undefined, ptx);
     out.set({ copied: summary } as FabricValue);
     ptx.prepareCfc();
-    expect((await ptx.commit()).ok).toBeDefined();
+    expect((await ptx.commit().settled).ok).toBeDefined();
     return {
       confidentiality: confidentialityOf(out.getAsNormalizedFullLink().id),
       summary,

@@ -50,7 +50,7 @@ async function cleanup(
   storageManager: ReturnType<typeof StorageManager.emulate>,
   tx: IExtendedStorageTransaction,
 ) {
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.dispose();
   await storageManager.close();
 }
@@ -664,7 +664,7 @@ Deno.bench(
 
     // Measure commit separately
     const start = performance.now();
-    await tx.commit();
+    await tx.commit().settled;
     const commitTime = performance.now() - start;
 
     if (commitTime > 100 && Deno.env.get("BENCH_DIAGNOSTICS") === "1") {
@@ -681,7 +681,7 @@ Deno.bench(
   { group: "overhead" },
   async () => {
     const { runtime, storageManager, tx } = setup();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   },
@@ -708,7 +708,7 @@ Deno.bench(
       );
     }
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   },

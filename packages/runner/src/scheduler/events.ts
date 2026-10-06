@@ -2495,7 +2495,7 @@ export async function dispatchQueuedEvent(state: {
         }
         return requeue;
       };
-      const handled = tx.startCommit().settled.then(
+      const handled = tx.commit().settled.then(
         ({ error }) => handleCommitResult(error),
         (reason) => handleCommitResult(normalizeEventCommitRejection(reason)),
       ).catch((error) => {

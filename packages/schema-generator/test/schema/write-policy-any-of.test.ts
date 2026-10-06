@@ -4,7 +4,7 @@ import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
 
 const PRELUDE = `
-  type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+  type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
   type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
   type TrustedActionWriteWithIntegrity<
     T,

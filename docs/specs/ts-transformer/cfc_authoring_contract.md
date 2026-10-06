@@ -41,13 +41,21 @@ Related contracts:
 The canonical compiler-facing carrier is:
 
 ```ts
+type CfcStamp<T, Meta> = {
+  readonly meta?: Meta;
+  readonly of?: T;
+};
+
 type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: Meta;
+  readonly __ct_cfc__?: CfcStamp<T, Meta>;
 };
 ```
 
 `Cfc<T, Meta>` must preserve the runtime/schema shape of `T` and only add to
-the emitted `ifc` metadata.
+the emitted `ifc` metadata. The stamp records the payload `T` beside the
+metadata. TypeScript merges the carrier into whatever the value is merged
+into, and the recorded payload is what tells the schema generator which part
+of the merged value the policy names (mapping spec §11).
 
 ### Path-Bearing Helpers
 

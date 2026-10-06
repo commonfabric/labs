@@ -61,7 +61,7 @@ describe("read-stats", () => {
             write,
           );
           cell.set(Array.from({ length: size }, (_, n) => ({ n })));
-          await write.commit();
+          await write.commit().settled;
           const tx = runtime.edit();
           tx.markLazyMaterialize();
           const view = schema
@@ -98,7 +98,7 @@ describe("read-stats", () => {
           write,
         );
         cell.set([{ n: 7 }]);
-        await write.commit();
+        await write.commit().settled;
         const tx = runtime.edit();
         tx.markLazyMaterialize();
         const view = schema
@@ -134,7 +134,7 @@ describe("read-stats", () => {
           write,
         );
         cell.set([{ n: 7 }, { n: 8 }]);
-        await write.commit();
+        await write.commit().settled;
         const tx = runtime.edit();
         tx.markLazyMaterialize();
         const view = schema
@@ -164,7 +164,7 @@ describe("read-stats", () => {
           write,
         );
         cell.set([{ n: 7 }]);
-        await write.commit();
+        await write.commit().settled;
         const tx = runtime.edit();
         tx.markLazyMaterialize();
         const view = schema
@@ -257,7 +257,7 @@ describe("read-stats", () => {
           write,
         );
         cell.set(Array.from({ length: size }, (_, n) => ({ n })));
-        await write.commit();
+        await write.commit().settled;
         runtime.scheduler.setReadStatsEnabled(true);
         let result = 0;
         const action: Action = (tx) => {
@@ -276,7 +276,7 @@ describe("read-stats", () => {
           const beforeAccesses = initial.reads!.proxyAccesses;
           const edit = runtime.edit();
           cell.withTx(edit).key(0).key("n").set(10);
-          await edit.commit();
+          await edit.commit().settled;
           await runtime.idle();
           expect(result).toBe(reduction.result(size));
           const updated = runtime.scheduler.getActionStats(action)!;
@@ -298,7 +298,7 @@ describe("read-stats", () => {
       items: { type: "number" },
     }, write);
     cell.set(Array.from({ length: 100 }, (_, n) => n));
-    await write.commit();
+    await write.commit().settled;
     runtime.scheduler.setReadStatsEnabled(true);
     let result = 0;
     const action: Action = (tx) => {
@@ -317,7 +317,7 @@ describe("read-stats", () => {
         runtime.scheduler.getActionStats(action)!.reads!.proxyAccesses;
       const edit = runtime.edit();
       cell.withTx(edit).push(100);
-      await edit.commit();
+      await edit.commit().settled;
       await runtime.idle();
       expect(result).toBe(101);
       expect(
@@ -339,7 +339,7 @@ describe("read-stats", () => {
       write,
     );
     holder.key("n").set(target);
-    await write.commit();
+    await write.commit().settled;
     const tx1 = runtime.edit();
     const tx2 = runtime.edit();
     const view1 = holder.withTx(tx1).get();
@@ -375,7 +375,7 @@ describe("read-stats", () => {
       );
       const values = Array.from({ length: size }, (_, n) => ({ n }));
       rows.set(values);
-      await write.commit();
+      await write.commit().settled;
       const tx = runtime.edit();
       const finish = startReadStats(tx);
       try {
@@ -398,7 +398,7 @@ describe("read-stats", () => {
       write,
     );
     rows.set([{ n: 1 }, { n: 2 }]);
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     const sourceId = rows.getAsNormalizedFullLink().id;
     const read = tx.read.bind(tx);
@@ -472,7 +472,7 @@ describe("read-stats", () => {
       write,
     );
     holder.key("n").set(target);
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     const finish = startReadStats(tx);
     try {
@@ -501,7 +501,7 @@ describe("read-stats", () => {
       write,
     );
     holder.key("n").set(target);
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     const finish = startReadStats(tx);
     try {
@@ -529,7 +529,7 @@ describe("read-stats", () => {
       write,
     );
     holder.key("n").set(target);
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize();
     const finish = startReadStats(tx);
@@ -557,7 +557,7 @@ describe("read-stats", () => {
       write,
     );
     cell.set({ n: 7 });
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     const view = cell.withTx(tx).get();
     const finish = startReadStats(tx);
@@ -584,7 +584,7 @@ describe("read-stats", () => {
       write,
     );
     cell.set([{ n: 1 }, { n: 2 }]);
-    await write.commit();
+    await write.commit().settled;
     const events: RuntimeTelemetryEvent[] = [];
     runtime.telemetry.addEventListener("telemetry", (event) => {
       if (
@@ -631,7 +631,7 @@ describe("read-stats", () => {
       write,
     );
     cell.set({ n: 3 });
-    await write.commit();
+    await write.commit().settled;
     const errors: Error[] = [];
     runtime.scheduler.onError((error) => errors.push(error));
     runtime.scheduler.setReadStatsEnabled(true);
@@ -658,7 +658,7 @@ describe("read-stats", () => {
       write,
     );
     cell.set({ n: 3 });
-    await write.commit();
+    await write.commit().settled;
     const action: Action = (tx) => cell.withTx(tx).get().n;
     expect(await runtime.scheduler.run(action)).toBe(3);
     expect(readStatsActive).toBe(false);
