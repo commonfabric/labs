@@ -124,8 +124,10 @@ export class ACLManager {
 /**
  * Replaces, in `tx`, the access list of `space` with what `mutate` returns
  * given the list `tx` reads there, or `null` when the space has none, and
- * returns the replacement. This is the one place the runtime writes an access
- * list after a space's genesis.
+ * returns the replacement. This is the one place a runtime writes an access
+ * list after a space's genesis. A handler on a serving runtime changes one
+ * through the memory server instead, which writes it
+ * (`Server.commitServedAclChange()`).
  *
  * The write is the single whole-document `set` of the access-list document
  * that the memory server requires of an access-list change (INV-12 in

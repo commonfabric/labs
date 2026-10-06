@@ -384,8 +384,10 @@ export type Frame = {
   /**
    * The access-list changes `grantSpaceAccess()` and `revokeSpaceAccess()`
    * staged during this handler frame, by space, each space's in call order.
-   * Each space's changes commit as a commit of their own, ahead of the
-   * handler's own writes (see `settleSpaceAccessChanges()`).
+   * Where they commit, each space's changes commit as a commit of their own,
+   * ahead of the handler's own writes; a speculative run's commit nowhere,
+   * and a served run's commit only if its run survives to the wave's commit
+   * (see `settleSpaceAccessChanges()`).
    */
   pendingSpaceAccessChanges?: Map<MemorySpace, SpaceAccessChange[]>;
 };

@@ -4897,12 +4897,17 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * runtimes act through, so it does not refuse one of those as `principal`.
  *
  * The change commits as a commit of its own, before the handler's other
- * writes commit. If the handler's writes then fail, the change stands.
+ * writes commit. If the handler's writes then fail, the change stands. On a
+ * serving runtime it commits when the serving loop commits the handler's run,
+ * still ahead of the run's writes; a run the serving loop withdraws before
+ * that commit changes nothing, and its event runs again. A client's
+ * speculative echo of a handler the serving loop runs changes nothing.
  *
  * Available only in a handler, on a client or a serving runtime alike, and
- * throws anywhere else. Every refusal throws. One the handler lets escape drops its whole
- * transaction; the call throws before staging anything, so one the handler
- * catches leaves nothing staged for that call.
+ * throws anywhere else. Every refusal the call can see throws. One the
+ * handler lets escape drops its whole transaction; the call throws before
+ * staging anything, so one the handler catches leaves nothing staged for that
+ * call. A refusal found only once the handler returns fails its whole run.
  */
 export declare function grantSpaceAccess(
   target: AnyCell<unknown>,
@@ -4923,12 +4928,17 @@ export declare function grantSpaceAccess(
  * refused.
  *
  * The change commits as a commit of its own, before the handler's other
- * writes commit. If the handler's writes then fail, the change stands.
+ * writes commit. If the handler's writes then fail, the change stands. On a
+ * serving runtime it commits when the serving loop commits the handler's run,
+ * still ahead of the run's writes; a run the serving loop withdraws before
+ * that commit changes nothing, and its event runs again. A client's
+ * speculative echo of a handler the serving loop runs changes nothing.
  *
  * Available only in a handler, on a client or a serving runtime alike, and
- * throws anywhere else. Every refusal throws. One the handler lets escape drops its whole
- * transaction; the call throws before staging anything, so one the handler
- * catches leaves nothing staged for that call.
+ * throws anywhere else. Every refusal the call can see throws. One the
+ * handler lets escape drops its whole transaction; the call throws before
+ * staging anything, so one the handler catches leaves nothing staged for that
+ * call. A refusal found only once the handler returns fails its whole run.
  */
 export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,

@@ -738,9 +738,15 @@ The change to the access list commits on its own, just before the handler's
 other writes, so if those fail the change still stands; the handler running
 again for the same event repairs that.
 
-Both calls work alike in a handler a client runs and in one the serving loop
-runs. [`space-access-changes.md`](../../features/space-access-changes.md) has
-the details.
+Both calls work in a handler the serving loop runs as in one a client runs.
+There the change commits when the serving loop commits the handler's run, still
+ahead of the handler's other writes, and a refusal that only the commit finds
+fails the whole run, as a throw the handler lets escape does. A run the serving
+loop withdraws before that commit changes nothing, and its event runs again. A
+client's speculative echo of a served handler changes nothing either: the
+served run makes the change.
+[`space-access-changes.md`](../../features/space-access-changes.md) has the
+details.
 
 ### Naming a space
 
