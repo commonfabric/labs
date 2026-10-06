@@ -43,3 +43,19 @@ Two things follow for a class written here:
   since nothing can be added to a frozen class.
 - `test/frozen-classes.test.ts` walks `src/` and fails for any exported class
   that is not frozen, so a new class cannot leave the block out unnoticed.
+
+## Conformance fixtures
+
+Two fixtures record what this package does, for an implementation in another
+language to test itself against:
+
+- `test/fixtures/fvj1-conformance.json`, what the JSON codec writes and reads in
+  the `fvj1:` format, described in `test/fixtures/fvj1-conformance.md`.
+- `test/fixtures/hash-conformance.json`, the bytes `hashOf()` feeds SHA-256 and
+  the digest it returns, described in `test/fixtures/hash-conformance.md`.
+
+Both write their values in the notation `test/fixtures/value-descriptors.md`
+defines. Each is generated from its cases, in `src/fvj1-conformance.ts` and
+`src/hash-conformance.ts`, by `deno task regenerate-fvj1-conformance` and
+`deno task regenerate-hash-conformance`, and a test fails whenever a fixture and
+the code disagree.

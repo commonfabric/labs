@@ -38,6 +38,7 @@ import {
   type CfcTrustConfigInput,
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
+  hostGestureProvenance,
   loadStoredCfcEnvelope,
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
@@ -90,11 +91,7 @@ const trustIn = (policy: Record<string, string>): CfcTrustConfigInput => ({
 const trustedClick = () => {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: CUSTODY_SEAL_GESTURE },
-    },
+    provenance: hostGestureProvenance(CUSTODY_SEAL_GESTURE),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -217,7 +214,7 @@ const sealAndRelease = async (
       );
       host.run(start, compiled, inputs as never, piece);
       host.prepareTxForCommit(start);
-      expect((await start.commit()).error).toBeUndefined();
+      expect((await start.commit().settled).error).toBeUndefined();
       await host.idle();
       await host.storageManager.synced();
       return piece.withTx(undefined);
@@ -247,7 +244,7 @@ const sealAndRelease = async (
         },
       } as never, tx);
       seat.set({} as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.storageManager.synced();
       return seat.withTx(undefined);
     };
@@ -396,7 +393,7 @@ const sealAndRelease = async (
         ifc: { confidentiality: [cfcAtom.user(home)] },
       } as never, tx);
       draft.set({ ratings } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const own = (cell: Cell<unknown>) => runtime.getCellFromLink(cell);
       const prepared = await prepareCustodySeal(draft.withTx(undefined), {
         terms: own(into.key("terms")),
@@ -586,15 +583,17 @@ const sealAndRelease = async (
           break;
         case "copy": {
           // The member's own instance of the room's pattern, its `terms`
-          // bound beneath the room's, and then the room's own `propose`.
+          // bound beneath the room's, and then the room's own `propose`. Each
+          // binding is a write redirect, the one link a setup may stage into
+          // an argument field carrying a writer claim.
           const { schema: _schema, ...link } = argument
             .getAsNormalizedFullLink();
           const copy = await startRoom(`${file}-copy`, {
             terms: host.getCellFromLink({
               ...link,
               path: [...link.path, "terms", "seats"],
-            }),
-            policy: room.key("policy"),
+            }).getAsWriteRedirectLink(),
+            policy: room.key("policy").getAsWriteRedirectLink(),
           });
           copy.key("propose").send({
             seats: [host.getCellFromLink(seats[1])],

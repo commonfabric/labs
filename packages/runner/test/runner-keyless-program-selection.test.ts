@@ -61,7 +61,7 @@ describe("runner-keyless-program-selection", () => {
     );
     const tx = runtime.edit();
     runtime.run(tx, first, { value: 1 }, result.withTx(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     cancelDemands.push(result.sink(() => {}));
     expect(await result.pull()).toEqual({ answer: 2 });
     const original = runtime.runner.sessionPatternPointerFor(result);
@@ -75,7 +75,7 @@ describe("runner-keyless-program-selection", () => {
     expect(argument).toBeDefined();
     const tx = runtime.edit();
     argument!.withTx(tx).key("value").set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
   }
 
@@ -172,7 +172,7 @@ describe("runner-keyless-program-selection", () => {
     const { result, second, original } = await startProgram();
     const { wave, tx, abandon } = beginWave();
     runtime.setup(new TransactionWrapper(tx), second, { value: 2 }, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
     expect(runtime.runner.sessionPatternPointerFor(result)?.identity).toBe(
@@ -193,7 +193,7 @@ describe("runner-keyless-program-selection", () => {
     const { result, second, original } = await startProgram();
     const { wave, tx, abandon } = beginWave();
     runtime.setup(tx, second, { value: 1 }, result.withTx(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const published = runtime.runner.sessionPatternPointerFor(result);
 
     abandon("The program-only setup wave is withdrawn");
@@ -210,7 +210,7 @@ describe("runner-keyless-program-selection", () => {
     const { result, second, original } = await startProgram();
     const { wave, tx, effects } = beginWave();
     runtime.setup(tx, second, { value: 2 }, result.withTx(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
 
@@ -237,11 +237,11 @@ describe("runner-keyless-program-selection", () => {
       kind: "derivation",
     });
     choice.withTx(parent).set(10);
-    expect((await parent.commit()).error).toBeUndefined();
+    expect((await parent.commit().settled).error).toBeUndefined();
 
     expect(choice.withTx(tx).get()).toBe(10);
     runtime.setup(new TransactionWrapper(tx), second, { value: 1 }, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(wave.contributionCount).toBe(2);
     const choiceId = choice.getAsNormalizedFullLink().id;
     const outcome = await wave.commitWave({
@@ -267,7 +267,7 @@ describe("runner-keyless-program-selection", () => {
   it("holds an opted-in local change with no reads until the wave verdict", async () => {
     const { wave, tx, abandon } = beginWave();
     requireWaveAcceptance(new TransactionWrapper(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
     let settled = false;
@@ -285,7 +285,7 @@ describe("runner-keyless-program-selection", () => {
     const { result, second, original } = await startProgram();
     const tx = runtime.edit();
     runtime.setup(tx, second, { value: 1 }, result.withTx(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(runtime.runner.sessionPatternPointerFor(result)?.identity).not.toBe(
       original.identity,
     );
@@ -301,7 +301,7 @@ describe("runner-keyless-program-selection", () => {
     const { result, second, original } = await startProgram();
     const { wave, tx, effects } = beginWave();
     runtime.setup(tx, second, { value: 1 }, result.withTx(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
     expect(effects.length).toBeGreaterThan(0);
@@ -329,7 +329,7 @@ describe("runner-keyless-program-selection", () => {
     );
     const { wave, tx, effects } = beginWave();
     runtime.run(tx, second, { value: 1 }, result.withTx(tx));
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const newActions = [
       ...runtime.scheduler.accessForTestingOnly.nodes.computations,
     ].filter((action) => !priorActions.has(action));
@@ -373,7 +373,7 @@ describe("runner-keyless-program-selection", () => {
     runtime.runner.clearInTransaction(new TransactionWrapper(tx), result);
     expect(runtime.runner.sessionPatternPointerFor(result.withTx(tx)))
       .toBeUndefined();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const settlement = waveSettlementOf(tx);
     expect(settlement).toBeDefined();
     expect(runtime.runner.sessionPatternPointerFor(result)?.identity).toBe(
@@ -395,7 +395,7 @@ describe("runner-keyless-program-selection", () => {
     const tx = runtime.edit();
     runtime.setup(tx, second, { value: 2 }, result.withTx(tx));
     runtime.runner.stopAll();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     expect(runtime.runner.sessionPatternPointerFor(result)?.identity).toBe(

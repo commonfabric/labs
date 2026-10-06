@@ -1,3 +1,4 @@
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { ProfileBadgeSchema } from "@commonfabric/runner/component-read-contract";
 import { consume } from "@lit/context";
 import { css, html, nothing, type PropertyValues } from "lit";
@@ -728,7 +729,10 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       this._unsubscribe = named.subscribe((val, cfcLabel) => {
         this._applyValue(val);
         this._deriveVerification(cfcLabel, generation);
-      }, { includeCfcLabel: true });
+      }, {
+        includeCfcLabel: true,
+        onRefused: () => this._applyRefusal(generation),
+      });
     } catch (e) {
       if (generation !== this._resolveGeneration || !this.isConnected) return;
       // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -785,6 +789,24 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     this._avatar = avatar;
     this._bio = bio;
     this._pinnedCount = pinnedCount;
+    this.requestUpdate();
+  }
+
+  /**
+   * Shows a profile the worker will not show as withheld: the placeholder in
+   * place of its name, and no seal, since the label that earns one was not
+   * delivered. It is not shown as a row holding no profile, so a fallback name
+   * is not lent to it.
+   */
+  private _applyRefusal(generation: number): void {
+    if (generation !== this._resolveGeneration || !this.isConnected) return;
+    this._resolved = true;
+    this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+    this._avatar = undefined;
+    this._bio = undefined;
+    this._pinnedCount = 0;
+    this._seal = undefined;
+    this._state = "presented";
     this.requestUpdate();
   }
 

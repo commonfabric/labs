@@ -51,7 +51,7 @@ describe("scoped-conflict-retry", () => {
       );
       alternate.set("alternate value");
       writer.getCell(space, "output", undefined, seed).set(alternate);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await writerStorage.synced();
 
       const output = reader.getCell(space, "output");
@@ -85,7 +85,7 @@ describe("scoped-conflict-retry", () => {
           toMemorySpaceAddress(output.getAsNormalizedFullLink()),
           createSigilLinkFromParsedLink(scoped.getAsNormalizedFullLink()),
         );
-        return tx.commit();
+        return tx.commit().settled;
       };
       const rejected = await attempt();
       expect(rejected.error?.name).toBe("ConflictError");

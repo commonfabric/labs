@@ -292,20 +292,17 @@ The strict-only delta is:
   declared-monotonicity gates too. Recorded in
   [`cfc-spec-changes.md`](./cfc-spec-changes.md) SC-39.
 
-  The raw meta seam is outside the check at EVERY rung, so a meta path
+  The raw meta seam is outside the check at EVERY rung, so a meta write
   raises neither a strict reject nor a persist-and-flag diagnostic. The
-  measurement quantifies over paths a schema could have declared a policy
-  at, and no value schema describes the document-root siblings of `value`
-  that `setMetaRaw` addresses. One route does reach a ceiling there: a
-  document-root declared entry resolves at every meta path by longest
-  prefix. It is skipped anyway. That entry sits at logical `[]`, the
-  payload root, and reaches the seam only because canonicalization strips a
-  leading `value` — so it is not a declaration about the seam, and honoring
-  it would make a piece updatable or not according to whether its pattern
-  carries a root `ifc`. Declaring on a single result field, which is how a
-  pattern normally labels one, leaves the seam's ceiling empty, and the
-  piece is then un-updatable under strict because the pattern updater,
-  `setsrc`, and setup over an existing piece all stamp meta.
+  document-root siblings of `value` that `setMetaRaw` addresses are the
+  document's own members rather than payload, so a write to one names no
+  payload path (spec §4.6.5): it is no flow stamp target, and nothing is
+  measured for it. No declared entry reaches it either, since a
+  document-root declared entry labels the payload root. Measuring the seam
+  would leave a piece un-updatable under strict whenever its pattern
+  declares on a single result field, which is how a pattern normally labels
+  one, because the pattern updater, `setsrc`, and setup over an existing
+  piece all write meta.
 
   Two id classes are outside the check at every rung too, and that is the
   same rule over a document rather than over a path. A computed cell is the
@@ -326,10 +323,10 @@ The strict-only delta is:
   entries document refuses every mark a served run writes to record that it
   handled an event, and every entry a same-space served emission carries into
   the document on its own transaction. Both are ordinary operation rather
-  than edge cases. One predicate covers those two classes, the marked class
-  below, and the meta seam above (`isDeclarablePolicyPath` in `prepare.ts`),
-  because all of them answer one question: could a schema have declared a
-  policy here.
+  than edge cases. One predicate covers those two classes and the marked
+  class below (`isDeclarablePolicyStore` in `prepare.ts`), because all of
+  them answer one question: could a schema have declared a policy on this
+  document.
 
   Two id classes is what this is, rather than a rule about documents the
   runtime mints. The runtime mints many more and route 2 below is what most
@@ -479,14 +476,13 @@ The strict-only delta is:
   stamp.
 
   A declared entry can still reach one of these documents, from a
-  schema-carrying write to it, and the skip is unconditional over that route
-  as it is over the meta seam's document-root route. Honoring it would make a
-  derivation admit its own inputs' taint or refuse it according to whether
-  the schema behind it happens to carry an `ifc`, while the atoms arriving in
-  the join come from what the transaction read rather than from anything that
-  schema describes. The residual is that a declaration which did reach such a
-  document stops being a write ceiling; it stays a read floor, and the
-  persisted stamp is unaffected.
+  schema-carrying write to it, and the skip is unconditional over that route.
+  Honoring it would make a derivation admit its own inputs' taint or refuse it
+  according to whether the schema behind it happens to carry an `ifc`, while
+  the atoms arriving in the join come from what the transaction read rather
+  than from anything that schema describes. The residual is that a declaration
+  which did reach such a document stops being a write ceiling; it stays a read
+  floor, and the persisted stamp is unaffected.
 
   What the skip does NOT do is release the value. A derivation's result
   leaves the fabric only through a sink, and a sink measures the join it is
@@ -507,19 +503,16 @@ The strict-only delta is:
   other gate — at `disabled` and `observe` it records nothing that
   withholds.
 
-  The exemption is not a hole. A path counts as meta only while no payload
-  write landed on it too, so a transaction writing both leaves the path
-  measured. The collapse of a deeper path against a covering ancestor runs
-  over the measured paths only, so an exempt meta path cannot shadow a value
-  write beneath it. Meta paths remain flow stamp targets, so the join still
-  persists there and the egress, display, and observation gates read the
-  unchanged label. And the seam sits in the same document, space, and
-  replica set as the value surface beside it, so it reaches no reader that
-  surface did not. One residual comes with it: where a payload field carries
-  a `MetaField` name, an exempt meta write can raise the stored derived
-  label at their shared logical path past what that field declares. The
-  direction is over-taint, so reads stay protected; giving the envelope seam
-  a path space of its own is what removes the collision.
+  The exemption is not a hole. The seam is the runtime's to read and write,
+  and no pattern compiles against it. A meta read consumes no payload label
+  just as a meta write stamps none, so no payload label is dropped on the
+  way through the seam, and a payload field that carries a `MetaField` name
+  is measured and labeled like any other. The seam sits in the same
+  document, space, and replica set as the value surface beside it, so it
+  reaches no reader that surface did not. One residual comes with it, which
+  the CFC owner accepted: until a stored entry can name a document's own
+  member, a runtime write of label-derived data into a meta field arrives
+  unlabeled ([`cfc-spec-changes.md`](./cfc-spec-changes.md) SC-55).
 
   What the check measures is bounded on the read side as well, and not only
   at this rung: the write machinery's own reads of the region it is writing

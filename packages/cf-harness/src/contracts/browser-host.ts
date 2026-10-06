@@ -45,9 +45,9 @@ export type BrowserHostLoadState = typeof BROWSER_HOST_LOAD_STATES[number];
 
 /**
  * A value a handle resolved to, which no model that saw it chose for the
- * page: a string a browser child found on the web and returned, which the
- * agent passes on by its handle. `description` says where it came from. The
- * host enters it and keeps it out of every later observation of the page.
+ * page: a string a browser child returned, which the agent passes on by its
+ * handle. `description` says where it came from. The host enters it and keeps
+ * it out of every later observation of the page.
  */
 export interface BrowserHostHandleValue {
   kind: "handle-value";

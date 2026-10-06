@@ -1826,8 +1826,12 @@ export async function newPiece(
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
-        `If this space's root pattern predates a runtime format change, ` +
-        `repair it with: ${cliCommand(["space", "recreate-root"])}`,
+        `If a non-Home space's root pattern predates a runtime format change, ` +
+        `repair it with: ${cliCommand(["space", "recreate-root"])}. ` +
+        `Update an existing Home in place with ${
+          cliCommand(["piece", "setsrc"])
+        } ` +
+        `to preserve its account data.`,
       { cause: error },
     );
   }
@@ -2468,7 +2472,7 @@ async function tryResolveLivePieceToolCallable(
   );
   pieces.runtime.run(tx, pattern, input, liveResult);
   pieces.runtime.prepareTxForCommit?.(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await pieces.runtime.idle();
 
   const callableCell = liveResult.key(callableName).asSchemaFromLinks();
@@ -5401,7 +5405,7 @@ export async function setCellCfcLabel(
     },
   }).applyCfcSchemaToExistingValue();
   pieces.runtime.prepareTxForCommit(tx);
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error !== undefined) {
     throw new Error(
       `Could not set the CFC label at ${
@@ -6084,7 +6088,7 @@ export async function createSpace(
 }
 
 /**
- * Reset the home pattern to the system default.
+ * Initializes an absent Home with the system default; refuses existing Home.
  */
 export async function resetHomePattern(
   config: Omit<SpaceConfig, "space">,

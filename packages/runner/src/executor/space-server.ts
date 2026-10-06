@@ -2893,7 +2893,7 @@ export class SpaceServer implements TransactionSealDestination {
    * Commit a transaction stamped `directCommit` to the store on its own
    * (docs/features/server-pattern-lifecycle.md): the serving loop's own
    * derived-class commit under the space's lease, made outside the wave,
-   * so the transaction's `commit()` resolves with the store's verdict and
+   * so the transaction's `commit().verdict` reports the store's outcome and
    * nothing the wave later decides can withdraw it.
    *
    * The store validates the transaction's own read set as it does a client
@@ -3481,7 +3481,7 @@ export class SpaceServer implements TransactionSealDestination {
           "deliveryDeferral",
         ],
       }).withTx(tx).set(checkpoint);
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       const pending = this.#pendingDeliveryCheckpointWrites.get(entry.eventId);
       if (pending?.checkpoint === checkpoint) {
         pending.wave = this.#waveByTx.get(tx);
@@ -4652,7 +4652,7 @@ export class SpaceServer implements TransactionSealDestination {
           }
         }
       }
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       if (outcome?.kind === "needs-attention") {
         const pending = this.#pendingAttentionNotices.get(entry.eventId);
         if (pending?.attention === outcome.attention) {
@@ -4778,7 +4778,7 @@ export class SpaceServer implements TransactionSealDestination {
             acks: instance.remainingAcks,
           } as never,
         );
-        tx.commit().then(({ error }) => {
+        tx.commit().settled.then(({ error }) => {
           if (error) {
             logger.warn("effects-retirement-seal-failed", () => [
               `retirement for ${instance.scopeKey} failed to seal; ` +
@@ -5797,8 +5797,8 @@ export class SpaceServer implements TransactionSealDestination {
     // passes below load what the ensure materializes. Fully awaited
     // like the drain — once per tenure, so a slow first compile costs
     // the first wave only; its seal joins THIS cycle's wave and commits
-    // with it. (Its commit resolves at seal-accept — the wave commit
-    // happens at this cycle's end — so awaiting it here cannot
+    // with it. (`commit().settled` resolves at seal acceptance — the wave
+    // commit happens at this cycle's end — so awaiting it here cannot
     // deadlock against the wave.)
     if (this.#rootEnsureOwed) {
       this.#rootEnsureOwed = false;
@@ -6416,7 +6416,7 @@ export class SpaceServer implements TransactionSealDestination {
         },
         advanceTo,
       );
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error) {
         // The advance did not enter the wave: W must not move either —
         // the doc and the metadata advance together or not at all

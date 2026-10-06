@@ -41,7 +41,7 @@ describe("scheduler deferred demand", () => {
     source.set(1);
     output.set(0);
     siblingOutput.set(0);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
 
     let childRuns = 0;
@@ -82,7 +82,7 @@ describe("scheduler deferred demand", () => {
       cancelConsumer = undefined;
       await runtime.idle();
       source.withTx(tx).set(2);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = runtime.edit();
       await runtime.idle();
       expect(childRuns).toBe(1);

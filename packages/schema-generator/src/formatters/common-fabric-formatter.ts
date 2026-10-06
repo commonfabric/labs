@@ -8,7 +8,7 @@ import {
   CFC_ATOM_TYPE,
   CFC_CANONICAL_ALIAS_NAMES,
 } from "@commonfabric/api/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
@@ -464,31 +464,401 @@ const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
 };
 
 /**
- * The labelled parts of `type`, an intersection of CFC metadata carriers and
- * one other member, or `undefined` for any other type: that member, the
- * payload, and each carrier's metadata. The checker drops a CFC alias's name
- * where it reduces the alias's type, as `Confidential<T | null, …>` at
- * `T = string` reduces to `string & carrier` once `null & carrier` is
- * nothing. Then the carrier is all that says the value is labelled.
+ * Whether `member`, a member of an intersection, is a CFC metadata carrier,
+ * which holds no part of the value.
+ */
+export const isCfcCarrier = (member: ts.Type): boolean =>
+  cfcCarrierProperty(member) !== undefined;
+
+/**
+ * One policy a CFC carrier records: its metadata, and the payload it was
+ * written around, where the carrier records one (`CfcStamp` in
+ * `packages/api/cfc.ts`). A carrier that holds its metadata alone records
+ * none.
+ */
+type CarrierStamp = {
+  readonly meta: ts.Type;
+  readonly of: ts.Type | undefined;
+};
+
+/** The members a `CfcStamp` holds. */
+const STAMP_MEMBER_NAMES: ReadonlySet<string> = new Set(["meta", "of"]);
+
+/** Whether `type` is a `CfcStamp`: an object holding `meta`, and `of` at most besides. */
+const isCarrierStamp = (type: ts.Type): boolean => {
+  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
+  const names = type.getProperties().map((property) => property.name);
+  return names.includes("meta") &&
+    names.every((name) => STAMP_MEMBER_NAMES.has(name));
+};
+
+/**
+ * The policies `value`, the type a carrier's `__ct_cfc__` holds, records. An
+ * intersection or a mapped type folds several carriers into one, whose value
+ * is then the intersection of what each held, and two spreads that may each
+ * supply it make it their union; each member is a policy of its own.
+ */
+const carrierStamps = (
+  value: ts.Type,
+  checker: ts.TypeChecker,
+): CarrierStamp[] => {
+  const parts = value.isIntersection() ||
+      (value.isUnion() && value.types.every(isCarrierStamp))
+    ? value.types
+    : [value];
+  return parts.map((part) => {
+    if (!isCarrierStamp(part)) return { meta: part, of: undefined };
+    const member = (name: string) => {
+      const symbol = part.getProperty(name);
+      return symbol &&
+        memberValueType(symbol, checker.getTypeOfSymbol(symbol), checker);
+    };
+    // The payload is what the policy was written around, as written: only
+    // the `undefined` its optional `?` adds is taken off, since the checker's
+    // non-nullable form of a parameter `T` is `T & {}`, which no binding
+    // names.
+    const ofSymbol = part.getProperty("of");
+    const of = ofSymbol && checker.getTypeOfSymbol(ofSymbol);
+    const definedOf = of?.isUnion()
+      ? of.types.filter((type) => (type.flags & ts.TypeFlags.Undefined) === 0)
+      : undefined;
+    return {
+      meta: member("meta")!,
+      of: definedOf?.length === 1 ? definedOf[0] : of,
+    };
+  });
+};
+
+/**
+ * The payload `stamp`'s policy was written around, where `payload` holds the
+ * members its carrier is intersected with: the payload the stamp records, or,
+ * for a carrier that records none, the one member where there is only one,
+ * which can then be nothing but the payload. Beside more than one, nothing
+ * says which the policy was written around.
+ */
+const payloadOfStamp = (
+  stamp: CarrierStamp,
+  payload: readonly ts.Type[],
+): ts.Type | undefined =>
+  stamp.of ?? (payload.length === 1 ? payload[0] : undefined);
+
+/** The flags of a primitive type, a literal of one included. */
+const PRIMITIVE_TYPE_FLAGS = ts.TypeFlags.StringLike |
+  ts.TypeFlags.NumberLike | ts.TypeFlags.BigIntLike |
+  ts.TypeFlags.BooleanLike | ts.TypeFlags.EnumLike |
+  ts.TypeFlags.ESSymbolLike;
+
+/**
+ * Whether `type` is a primitive, alone or intersected with carriers and
+ * brands, so that the primitive is all the data a value of it holds. An
+ * object it is intersected with that holds data of its own, under a name or
+ * an index signature, makes it no primitive value.
+ */
+const isPrimitiveValue = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean => {
+  const parts = type.isIntersection() ? type.types : [type];
+  return parts.some((part) => (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0) &&
+    parts.every((part) =>
+      (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0 ||
+      (checker.getIndexInfosOfType(part).length === 0 &&
+        part.getProperties().every((property) =>
+          property.name === CFC_CARRIER_PROPERTY ||
+          property.name.startsWith("__@")
+        ))
+    );
+};
+
+/** The alternatives of `type`: its members where it is a union. */
+const alternativesOf = (type: ts.Type): readonly ts.Type[] =>
+  type.isUnion() ? type.types : [type];
+
+/**
+ * The declarations of each member `type` holds as data, by name: none for a
+ * primitive, and never a CFC carrier or a symbol-keyed brand. A union's are
+ * those of every alternative, each name holding the declarations of each
+ * alternative that has it.
+ */
+const dataMemberDeclarations = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ReadonlyMap<string, readonly ts.Declaration[]> => {
+  const members = new Map<string, ts.Declaration[]>();
+  for (const alternative of alternativesOf(type)) {
+    if (
+      (alternative.flags &
+          (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) === 0 ||
+      isPrimitiveValue(alternative, checker)
+    ) continue;
+    for (const property of checker.getPropertiesOfType(alternative)) {
+      if (
+        property.name === CFC_CARRIER_PROPERTY ||
+        property.name.startsWith("__@")
+      ) continue;
+      const declarations = members.get(property.name) ?? [];
+      for (const declaration of property.declarations ?? []) {
+        declarations.push(declaration);
+      }
+      members.set(property.name, declarations);
+    }
+  }
+  return members;
+};
+
+/**
+ * The payload `metadata`'s carrier recorded, read under the bindings its
+ * metadata is read under: a type parameter they bind is its argument, as
+ * the checker would instantiate it.
+ */
+const boundPayloadOf = (metadata: CarriedMetadata): ts.Type | undefined => {
+  let payload = metadata.of;
+  let bound = metadata.bound;
+  for (
+    let argument = payload && boundArgumentOfType(payload, bound);
+    argument;
+    argument = boundArgumentOfType(argument.type, argument.bound)
+  ) {
+    payload = argument.type;
+    bound = argument.bound;
+  }
+  return payload;
+};
+
+/**
+ * The labels that are evidence a value carries, which a part of a value may
+ * carry only where it provably came from the policy's payload. Every other
+ * label restricts what may happen to the value or is a claim the runtime
+ * verifies at the write, and is safe wherever the payload's data may be.
+ */
+const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
+  "integrity",
+  "addIntegrity",
+]);
+
+/**
+ * A mapped type as the checker holds it, with the type it maps over:
+ * `modifiersType` is `T` in `{ readonly [K in keyof T]: T[K] }`, which the
+ * checker sets once it resolves the mapped type's members.
+ */
+type MappedTypeWithInternals = ts.ObjectType & {
+  readonly modifiersType?: ts.Type;
+};
+
+/**
+ * Whether nothing between a value of `type` and the CFC carriers it holds
+ * writes over the payload's members: each carrier sits in an intersection
+ * beside them, or a mapped type copied it from such a type. A spread's result
+ * holds the carrier the spread of a labeled value copied into it, and a later
+ * spread of a value of the payload's own type writes over the payload's
+ * members while keeping their declarations, so the type cannot tell which
+ * value a member came from. Any other object type that holds a carrier beside
+ * members or an index signature of its own, as an interface extending a CFC
+ * alias does, counts as one; so does a mapped type whose carrier did not come
+ * from the type it maps over, or that the checker holds no such type for.
+ */
+const holdsCarriersUnwritten = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Type> = new Set(),
+): boolean => {
+  if (seen.has(type)) return true;
+  seen.add(type);
+  if (type.isUnionOrIntersection()) {
+    return type.types.every((part) =>
+      holdsCarriersUnwritten(part, checker, seen)
+    );
+  }
+  if (
+    !type.getProperty(CFC_CARRIER_PROPERTY) ||
+    (isCfcCarrier(type) && checker.getIndexInfosOfType(type).length === 0)
+  ) {
+    return true;
+  }
+  if (
+    ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0
+  ) {
+    return false;
+  }
+  const source = (type as MappedTypeWithInternals).modifiersType;
+  return source !== undefined &&
+    source.getProperty(CFC_CARRIER_PROPERTY) !== undefined &&
+    holdsCarriersUnwritten(source, checker, seen);
+};
+
+/**
+ * Which members of a value of `type` a policy whose payload is `of` reaches:
+ * those that may hold the payload's data, where a restriction belongs, and
+ * those that must, where evidence belongs. `all` stands for the whole value.
+ */
+const payloadReach = (
+  type: ts.Type,
+  of: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
+  // No payload recorded (`payloadOfStamp()`): the payload's data may be
+  // anywhere in the value, and nothing says where it must be.
+  if (!of) return { may: "all", must: [] };
+  // A primitive value of a payload one of whose alternatives is a primitive:
+  // the value is that alternative, all of it the payload's data.
+  if (
+    alternativesOf(type).every((alternative) =>
+      isPrimitiveValue(alternative, checker)
+    ) &&
+    alternativesOf(of).some((alternative) =>
+      isPrimitiveValue(alternative, checker)
+    )
+  ) {
+    return { may: "all", must: "all" };
+  }
+  const payloadMembers = dataMemberDeclarations(of, checker);
+  const indexed = alternativesOf(of).some((alternative) =>
+    checker.getIndexInfosOfType(alternative).length > 0
+  );
+  const valueMembers = [...dataMemberDeclarations(type, checker)];
+  const unwritten = holdsCarriersUnwritten(type, checker);
+  // A payload whose type lists no members, such as `{}` or `unknown`: its
+  // data may be under any key, and is the whole value only where nothing
+  // writes over the value's members and the value holds nothing besides.
+  if (payloadMembers.size === 0 && !indexed) {
+    return {
+      may: "all",
+      must: unwritten && valueMembers.length === 0 ? "all" : [],
+    };
+  }
+  if (valueMembers.length === 0) {
+    const whole = payloadMembers.size === 0;
+    return {
+      may: whole ? "all" : [],
+      must: whole && unwritten ? "all" : [],
+    };
+  }
+  // A member with no declaration may hold the payload's data under a name the
+  // payload does not have: a mapped type that renames its keys keeps no
+  // member's declaration, and a spread of its result keeps none either.
+  const may = indexed ? "all" as const : valueMembers
+    .filter(([name, declarations]) =>
+      payloadMembers.has(name) || declarations.length === 0
+    )
+    .map(([name]) => name);
+  const must = !unwritten ? [] : valueMembers
+    .filter(([name, declarations]) => {
+      const payload = payloadMembers.get(name);
+      if (!payload) return false;
+      // A member a mapped type such as `Record` synthesizes has no
+      // declaration on either side; a mapped type cannot write over it.
+      return declarations.length === 0 && payload.length === 0
+        ? true
+        : declarations.some((declaration) => payload.includes(declaration));
+    })
+    .map(([name]) => name);
+  const whole = (members: readonly string[] | "all") =>
+    members === "all" ||
+      (members.length > 0 && members.length === valueMembers.length)
+      ? "all" as const
+      : members;
+  return { may: whole(may), must: whole(must) };
+};
+
+/**
+ * `schema` with `labels` on `members` of the value: the whole value, or each
+ * of those members alone, or nowhere where there are none. Read for its
+ * labels alone (`labelsOnly`), a value whose label belongs to some of its
+ * members carries none at its top.
+ */
+const placeLabelsOn = (
+  schema: MutableJSONSchema,
+  labels: Record<string, unknown>,
+  members: readonly string[] | "all",
+  context: GenerationContext,
+): MutableJSONSchema => {
+  if (members === "all") return withIfcLabels(schema, labels);
+  if (members.length === 0 || context.labelsOnly) return schema;
+  const properties = isObjectNotArray(schema) &&
+      isObjectOrArray(schema.properties)
+    ? schema.properties as Record<string, MutableJSONSchema>
+    : undefined;
+  if (!properties) return withIfcLabels(schema, labels);
+  const labeled: Record<string, MutableJSONSchema> = { ...properties };
+  for (const name of members) {
+    const property = labeled[name];
+    if (property !== undefined) {
+      labeled[name] = withIfcLabels(property, labels);
+    }
+  }
+  return { ...(schema as MutableJSONSchemaObj), properties: labeled };
+};
+
+/**
+ * `schema`, the schema of a value of `type`, with each of `placed`'s labels
+ * on the part of the value its policy was written around (`CarrierStamp.of`;
+ * `payloadReach()`). A restriction goes wherever the payload's data may be:
+ * the members of the payload's names, or the whole value for a payload that
+ * an index signature leaves open. Evidence goes only where the payload's data
+ * must be: members whose declarations are the payload's own, and only where
+ * nothing writes over them (`holdsCarriersUnwritten()`). Either is on the
+ * whole value where it reaches every member, and nowhere where it reaches
+ * none.
+ */
+const placeCarriedLabels = (
+  schema: MutableJSONSchema,
+  type: ts.Type,
+  placed: readonly {
+    readonly labels: Record<string, unknown>;
+    readonly of: ts.Type | undefined;
+  }[],
+  context: GenerationContext,
+): MutableJSONSchema => {
+  let result = schema;
+  for (const { labels, of } of placed) {
+    const reach = payloadReach(type, of, context.typeChecker);
+    const evidence: Record<string, unknown> = {};
+    const restrictions: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(labels)) {
+      (EVIDENCE_LABELS.has(key) ? evidence : restrictions)[key] = value;
+    }
+    if (Object.keys(restrictions).length > 0) {
+      result = placeLabelsOn(result, restrictions, reach.may, context);
+    }
+    if (Object.keys(evidence).length > 0) {
+      result = placeLabelsOn(result, evidence, reach.must, context);
+    }
+  }
+  return result;
+};
+
+/**
+ * The labeled parts of `type`, an intersection holding CFC metadata
+ * carriers, or `undefined` for any other type: its other members, whose
+ * intersection is the payload, and each carrier's policies. The checker drops
+ * a CFC alias's name where it reduces the alias's type, as
+ * `Confidential<T | null, …>` at `T = string` reduces to `string & carrier`
+ * once `null & carrier` is nothing. Then the carriers are all that say the
+ * value is labeled. A payload that is itself an intersection is several
+ * members; which of them a policy was written around, the intersection
+ * itself does not say, and each carrier records it (`CarrierStamp.of`). A
+ * payload the checker drops from an intersection, as it drops `unknown` and
+ * `{}`, is none.
  */
 const cfcCarriedParts = (
   type: ts.Type,
   checker: ts.TypeChecker,
-): { payload: ts.Type; metadata: ts.Type[] } | undefined => {
+): { payload: readonly ts.Type[]; metadata: CarrierStamp[] } | undefined => {
   if (!type.isIntersection()) return undefined;
-  const metadata: ts.Type[] = [];
+  const metadata: CarrierStamp[] = [];
   const rest: ts.Type[] = [];
   for (const member of type.types) {
     const carrier = cfcCarrierProperty(member);
     if (carrier) {
-      metadata.push(
-        memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
-      );
+      for (
+        const stamp of carrierStamps(
+          memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
+          checker,
+        )
+      ) metadata.push(stamp);
     } else rest.push(member);
   }
-  return metadata.length > 0 && rest.length === 1
-    ? { payload: rest[0]!, metadata }
-    : undefined;
+  return metadata.length > 0 ? { payload: rest, metadata } : undefined;
 };
 
 /**
@@ -535,6 +905,9 @@ const leavesNoCarrier = (type: ts.Type): boolean =>
 type CarriedMetadata = {
   readonly type: ts.Type;
   readonly bound: BoundTypeParameters | undefined;
+
+  /** The payload its policy was written around (`CarrierStamp.of`). */
+  readonly of?: ts.Type | undefined;
 };
 
 /**
@@ -543,15 +916,19 @@ type CarriedMetadata = {
  * `#libraryView()`).
  */
 type LibraryView = {
-  /** The payload of the alias's labeled operand. */
-  readonly payload: ts.Type;
+  /**
+   * The members of the payload of the alias's labeled operand, whose
+   * intersection the payload is (`cfcCarriedParts()`).
+   */
+  readonly payload: readonly ts.Type[];
 
   /** The metadata of each carrier the operand holds. */
   readonly metadata: readonly CarriedMetadata[];
 
   /**
    * Whether the value is the payload: a primitive, which `Readonly`,
-   * `Partial` and `Required` leave as it is.
+   * `Partial` and `Required` leave as it is. A payload of several members,
+   * or none, is an intersection, which they map as they map an object.
    */
   readonly primitive: boolean;
 };
@@ -820,7 +1197,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
-    if (cfcCarriedParts(type, context.typeChecker)) {
+    if (
+      context.carriersRead !== type &&
+      cfcCarriedParts(type, context.typeChecker)
+    ) {
       return true;
     }
 
@@ -943,16 +1323,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (view) {
       const shape = view.primitive
         ? this.#schemaGenerator.formatChildType(
-          view.payload,
+          view.payload[0]!,
           context,
           undefined,
         )
         : this.#schemaGenerator.formatStructure(type, context);
       // The structure may carry the same labels, from the carrier folded into
       // it; labelling it again with them changes nothing.
-      return (this.#labelsOf(view.metadata, context) ?? []).reduce<
-        MutableJSONSchema
-      >((labelled, label) => withIfcLabels(labelled, label), shape);
+      return this.#withPlacedLabels(shape, type, view.metadata, context);
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -961,33 +1339,29 @@ export class CommonFabricFormatter implements TypeFormatter {
     // break an invariant between its parts: an `ownerPrincipal` needs the
     // `writeAuthorizedBy` whose binding, a `typeof`, no type spells. So the
     // carriers are read in full, or the value is its payload alone.
-    const carried = cfcCarriedParts(type, context.typeChecker);
+    const carried = context.carriersRead !== type &&
+      cfcCarriedParts(type, context.typeChecker);
     if (carried) {
       if (
-        carried.metadata.some((metadata) =>
-          context.typeChecker.getNonNullableType(metadata).getProperty(
+        carried.metadata.some((stamp) =>
+          context.typeChecker.getNonNullableType(stamp.meta).getProperty(
             "writeAuthorizedBy",
           )
         )
       ) this.#reportUnreadOperatorWriter(context);
-      const payload = this.#schemaGenerator.formatChildType(
-        carried.payload,
-        context,
-        undefined,
-      );
-      const metadata = carried.metadata.map((carrier) =>
-        this.#extractLiteralLikeValue(carrier, undefined, context)
-      );
-      return metadata.every((labels) =>
-          isObjectOrArray(labels) && !Array.isArray(labels) &&
-          readInFull(labels)
+      const payload = carried.payload.length === 1
+        ? this.#schemaGenerator.formatChildType(
+          carried.payload[0]!,
+          context,
+          undefined,
         )
-        ? metadata.reduce<MutableJSONSchema>(
-          (schema, labels) =>
-            withIfcLabels(schema, labels as Record<string, unknown>),
-          payload,
-        )
-        : payload;
+        : this.#formatPayloadInPlace(type, context);
+      const metadata = carried.metadata.map((stamp) => ({
+        type: stamp.meta,
+        bound: context.boundTypeParameters,
+        of: payloadOfStamp(stamp, carried.payload),
+      }));
+      return this.#withPlacedLabels(payload, type, metadata, context);
     }
 
     // Handle wrapper unions first (before FactoryInput<T> union check)
@@ -1874,27 +2248,60 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * The labels `carrier`, a CFC metadata carrier an object holds as one of its
-   * members, attaches: one per metadata type, an intersection holding one per
-   * label that was folded into it (`#labelsOf()`).
+   * `schema`, the schema of an object of `type`, with the labels `carrier`, a
+   * CFC metadata carrier the object holds as one of its members, attaches:
+   * one per policy it records, folded into it by a mapped type or a spread
+   * (`carrierStamps()`), each placed on the part of the object its policy
+   * names.
    */
-  labelsCarriedBy(
+  withLabelsCarriedBy(
+    schema: MutableJSONSchema,
+    type: ts.Type,
     carrier: ts.Symbol,
     context: GenerationContext,
-  ): Record<string, unknown>[] | undefined {
+  ): MutableJSONSchema {
     const checker = context.typeChecker;
     const value = memberValueType(
       carrier,
       checker.getTypeOfSymbol(carrier),
       checker,
     );
-    return this.#labelsOf(
-      (value.isIntersection() ? value.types : [value]).map((type) => ({
-        type,
+    return this.#withPlacedLabels(
+      schema,
+      type,
+      carrierStamps(value, checker).map((stamp) => ({
+        type: stamp.meta,
         bound: context.boundTypeParameters,
+        of: stamp.of,
       })),
       context,
     );
+  }
+
+  /**
+   * `schema`, the schema of a value of `type`, with the labels each of
+   * `metadata` spells placed on the part of the value its policy names
+   * (`placeCarriedLabels()`), each read in full, or `schema` alone where any
+   * is not (`#labelsOf()`).
+   */
+  #withPlacedLabels(
+    schema: MutableJSONSchema,
+    type: ts.Type,
+    metadata: readonly CarriedMetadata[],
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const labels = this.#labelsOf(metadata, context);
+    return labels
+      ? placeCarriedLabels(
+        schema,
+        type,
+        labels.map((label, index) => ({
+          labels: label,
+          of: boundPayloadOf(metadata[index]!),
+        })),
+        context,
+      )
+      : schema;
   }
 
   /**
@@ -1921,6 +2328,35 @@ export class CommonFabricFormatter implements TypeFormatter {
       )
       ? labels as Record<string, unknown>[]
       : undefined;
+  }
+
+  /**
+   * The value of `type`, an intersection of CFC metadata carriers and other
+   * members, several or none, as those members' intersection reads. The
+   * checker's public API builds no intersection, so the value is read in
+   * place: by this formatter where it claims `type` for anything besides its
+   * carriers, such as a cell, and otherwise by the formatters after it
+   * (`SchemaGenerator.formatStructure()`), which read a carrier as no part of
+   * the value. Either reads it with no node, as a payload of one member is
+   * read: the node names the policy, not its payload.
+   */
+  #formatPayloadInPlace(
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const {
+      typeNode: _,
+      hintsNode: __,
+      instantiatedAs: ___,
+      ...unplaced
+    } = context;
+    const payloadContext: GenerationContext = {
+      ...unplaced,
+      carriersRead: type,
+    };
+    return this.supportsType(type, payloadContext)
+      ? this.formatType(type, payloadContext)
+      : this.#schemaGenerator.formatStructure(type, payloadContext);
   }
 
   /**
@@ -2082,10 +2518,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * Helper for {@link #libraryView}, which returns the labeled parts of
    * `operand`, the type a default-library alias mapping an object's members
    * is given, read under `bound`: for a type parameter `bound` binds, its
-   * argument's; for an intersection of CFC metadata carriers and one other
-   * member, that member as its payload is read (`#payloadParts()`), with the
-   * carriers' metadata and any its payload adds; for such an alias in turn,
-   * its operand's; and `undefined` for any other type.
+   * argument's; for an intersection of CFC metadata carriers and other
+   * members, those members as its payload's are read (`#payloadParts()`),
+   * with the carriers' metadata and any its payload adds; for such an alias
+   * in turn, its operand's; and `undefined` for any other type.
    */
   #operandView(
     operand: ts.Type,
@@ -2103,45 +2539,65 @@ export class CommonFabricFormatter implements TypeFormatter {
       payload: payload.payload,
       metadata: [
         ...payload.metadata,
-        ...carried.metadata.map((type) => ({ type, bound })),
+        ...carried.metadata.map((stamp) => ({
+          type: stamp.meta,
+          bound,
+          of: payloadOfStamp(stamp, carried.payload),
+        })),
       ],
-      primitive: (payload.payload.flags & ts.TypeFlags.Object) === 0,
+      primitive: payload.payload.length === 1 &&
+        (payload.payload[0]!.flags & ts.TypeFlags.Object) === 0,
     };
   }
 
   /**
-   * Helper for {@link #operandView}, which returns what `payload`, the member
-   * a labeled operand intersects its carriers with, is under `bound`, and the
-   * metadata of the carriers it adds to the operand's. A type parameter
-   * `bound` binds is its argument. The checker folds an argument that is
-   * itself labeled into the operand's intersection, as it folds any
-   * intersection into another, so the argument's payload is the operand's
-   * and its carriers add their metadata. An argument that leaves the
-   * intersection no carrier (`leavesNoCarrier()`) leaves the operand
-   * unlabeled, and so returns `undefined`. Any other payload adds no carrier.
+   * Helper for {@link #operandView}, which returns what `payload`, the
+   * members a labeled operand intersects its carriers with, is under `bound`,
+   * and the metadata of the carriers it adds to the operand's. A type
+   * parameter `bound` binds is its argument. The checker folds an argument
+   * that is itself labeled into the operand's intersection, as it folds any
+   * intersection into another, so the argument's payload members are the
+   * operand's and its carriers add their metadata. An argument that leaves
+   * the intersection no carrier (`leavesNoCarrier()`) leaves the operand
+   * unlabeled, and so returns `undefined`. Any other member adds no carrier.
    */
   #payloadParts(
-    payload: ts.Type,
+    payload: readonly ts.Type[],
     bound: BoundTypeParameters | undefined,
     context: GenerationContext,
   ):
-    | { readonly payload: ts.Type; readonly metadata: CarriedMetadata[] }
-    | undefined {
-    const argument = boundArgumentOfType(payload, bound);
-    if (!argument) return { payload, metadata: [] };
-    if (leavesNoCarrier(argument.type)) return undefined;
-    const carried = cfcCarriedParts(argument.type, context.typeChecker);
-    if (!carried) {
-      return this.#payloadParts(argument.type, argument.bound, context);
+    | {
+      readonly payload: readonly ts.Type[];
+      readonly metadata: CarriedMetadata[];
     }
-    const inner = this.#payloadParts(carried.payload, argument.bound, context);
-    return inner && {
-      payload: inner.payload,
-      metadata: [
-        ...inner.metadata,
-        ...carried.metadata.map((type) => ({ type, bound: argument.bound })),
-      ],
-    };
+    | undefined {
+    const members: ts.Type[] = [];
+    const metadata: CarriedMetadata[] = [];
+    for (const member of payload) {
+      const argument = boundArgumentOfType(member, bound);
+      if (!argument) {
+        members.push(member);
+        continue;
+      }
+      if (leavesNoCarrier(argument.type)) return undefined;
+      const carried = cfcCarriedParts(argument.type, context.typeChecker);
+      const inner = this.#payloadParts(
+        carried?.payload ?? [argument.type],
+        argument.bound,
+        context,
+      );
+      if (!inner) return undefined;
+      for (const part of inner.payload) members.push(part);
+      for (const part of inner.metadata) metadata.push(part);
+      for (const stamp of carried?.metadata ?? []) {
+        metadata.push({
+          type: stamp.meta,
+          bound: argument.bound,
+          of: payloadOfStamp(stamp, carried?.payload ?? []),
+        });
+      }
+    }
+    return { payload: members, metadata };
   }
 
   /**
@@ -3983,8 +4439,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * Uses type-based detection which handles complex cases like intersection types
    * and conditional type expansions.
    * Returns true ONLY for unions where ALL non-null/undefined members are wrapper types.
+   * A wrapper that CFC labels hold is not one here (see the member loop).
    * Examples that return true: Reactive<T> | undefined, Cell<T> | null, Stream<T> | null | undefined
-   * Examples that return false: string | Cell | null (mixed union, should use UnionFormatter)
+   * Examples that return false: string | Cell | null (mixed union, should use UnionFormatter),
+   * Confidential<Cell<T>, …> | undefined (a labeled value)
    */
   #isWrapperUnion(type: ts.Type, context: GenerationContext): boolean {
     // Must be a union type
@@ -4016,9 +4474,15 @@ export class CommonFabricFormatter implements TypeFormatter {
         continue;
       }
 
-      // Check if this member is a wrapper type
+      // A wrapper under CFC labels, as `Confidential<Cell<T>, …>` is, is a
+      // labeled value rather than a wrapper: the labels ride on a carrier the
+      // wrapper's own formatting reads past, so the union formatter reads it,
+      // through the CFC alias.
       const wrapperInfo = getCellWrapperInfo(memberType, context.typeChecker);
-      if (wrapperInfo !== undefined) {
+      if (
+        wrapperInfo !== undefined &&
+        cfcCarriedParts(memberType, context.typeChecker) === undefined
+      ) {
         hasWrapperMember = true;
       } else {
         hasNonWrapperMember = true;

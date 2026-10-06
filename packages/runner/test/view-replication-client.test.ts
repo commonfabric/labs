@@ -431,7 +431,7 @@ describe("view replication client", () => {
       expect(() => cachedHidden.withTx(rejected).get()).toThrow(
         LocalReadUnavailable,
       );
-      expect((await rejected.commit()).error?.name).toBe(
+      expect((await rejected.commit().settled).error?.name).toBe(
         "StorageTransactionAborted",
       );
       expect(rendered).toBe(18);

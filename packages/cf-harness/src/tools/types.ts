@@ -22,7 +22,7 @@ import type {
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
 import type { HarnessBrowserHost } from "../contracts/browser-host.ts";
-import type { HarnessClientActionRequester } from "../contracts/client-action.ts";
+import type { HarnessClientActionRequester } from "../client-actions/coordinator.ts";
 import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import type {
@@ -49,6 +49,7 @@ import type {
 } from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
+import type { HarnessLoomCommandsConfig } from "../loom-commands.ts";
 import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
 import type {
@@ -253,6 +254,9 @@ export interface HarnessToolContext {
 
   /** Host-owned Loom retrieval routing, absent when the run has no grant. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /** Host-owned command broker routing, absent when the run has no grant. */
+  loomCommands?: HarnessLoomCommandsConfig;
 
   /**
    * Registers content a tool observed as a referent the run holds, and

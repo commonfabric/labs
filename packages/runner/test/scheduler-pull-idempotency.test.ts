@@ -60,7 +60,7 @@ describe("inline idempotency check mode", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const randomWriter: Action = (tx) => {
@@ -100,7 +100,7 @@ describe("inline idempotency check mode", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Writes a different value on every invocation, so the recheck's second
@@ -131,7 +131,7 @@ describe("inline idempotency check mode", () => {
     // a second time.
     const external = runtime.edit();
     input.withTx(external).set(1);
-    await external.commit();
+    await external.commit().settled;
     await output.pull();
 
     // Two runs and two rechecks.
@@ -160,7 +160,7 @@ describe("inline idempotency check mode", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const doubler: Action = (tx) => {
@@ -203,7 +203,7 @@ describe("inline idempotency check mode", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Pure function of its input — idempotent by construction. The first run
@@ -255,7 +255,7 @@ describe("inline idempotency check mode", () => {
       tx,
     );
     log.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Reads what it writes — the accumulator anti-pattern. The recheck's

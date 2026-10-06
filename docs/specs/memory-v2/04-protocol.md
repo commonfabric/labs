@@ -1579,8 +1579,8 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   Visible state is unaffected by parking — the pending overlay already
   shows the write.
 - parking splits what an accepted commit's client observers wait for. The
-  commit PROMISE the submitting caller awaits resolves at marker coverage:
-  a resolved commit means the caller's subscribed view reflects the
+  transaction receipt's SETTLEMENT resolves at marker coverage:
+  a settled commit means the caller's subscribed view reflects the
   committed write and the foreign novelty it was applied on top of.
   Post-commit effects gated on durability alone — verdict callbacks and
   the outbox flush — run at the VERDICT instead: delaying them to
@@ -1588,13 +1588,14 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   a fan-out window on every effect-bearing commit. Commit callbacks keep
   the SETTLEMENT timeline — after coverage on accept, after the
   read-repair gate on rejection — because their consumers act on the
-  post-commit view; a `resolveAt: "verdict"` caller's returned promise
-  settles early, but its commit callbacks still wait. The same split holds on rejection: the fate is sealed
-  at rejection receipt (verdict callbacks fire), while the promise and
-  commit callbacks wait out the read-repair gate a retry needs. A caller may opt a commit back to
-  verdict timing (`commit({ resolveAt: "verdict" })`) when it needs
-  "durably accepted" without forcing the fan-out through —
-  controlled-staleness test fixtures foremost.
+  post-commit view. A caller observing `commit().verdict` gets the earlier
+  fate, while its commit callbacks still wait. The same split holds on
+  rejection: the fate is sealed at rejection receipt (verdict callbacks
+  fire), while settlement and commit callbacks wait out the read-repair
+  gate a retry needs. Controlled-staleness fixtures can additionally use
+  `commit({ holdSyncedUntilCovered: false }).verdict` to disable the
+  replica's `synced()` coverage hold. Settlement and the runtime's
+  pending-commit barrier keep their full timeline.
 
 The server advertises this contract with the build-inherent
 `verdictCatchUpMarkers` protocol flag. A client that sees it absent (an

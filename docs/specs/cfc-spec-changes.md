@@ -2,14 +2,18 @@
 
 Changes `~/src/specs/cfc` needs so the spec can answer the questions that came
 up while designing implementation work. Started 2026-06-10 during the S16
-(default transition) design; intended to grow as later sessions hit new gaps.
-Each item: where, what's missing or contradictory, proposed edit. Tags:
+(default transition) design. **Closed to new entries since 2026-10-05:** a new
+gap is filed as a specs pull request, as
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+describes, and the `open` entries below are being migrated to specs pull
+requests one group at a time, after which this list is archived. Each item: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
-Status legend: `open` (not yet applied to the spec), `adopted` (the spec has
-ruled on the entry and carries the requirement, in the section named),
-`applied`.
+Status legend: `open` (not yet before the spec), `proposed` (a specs pull
+request carrying it is open, named in the entry), `applied` (the proposed edit
+landed as written), `adopted` (the spec has ruled on the entry and carries the
+requirement in its own words, in the section named).
 
 ## From the S16 default-transition design
 
@@ -322,35 +326,26 @@ already calls its own exclusion "a profile decision, not a core-semantics
 fact" and mirrors it to "the write-side rule that the same addresses are not
 value-write targets".
 
-One narrowing landed alongside: the measurement quantifies over paths a
-schema could have declared a policy at, and the raw meta seam is not one.
+One narrowing landed alongside: the measurement quantifies over payload
+writes, and a write to one of a document's own members is not one.
 `setMetaRaw` lands on a document-root sibling of `value` (`schema`,
 `internal`, `patternIdentity`, and the rest of the `MetaField` union), which
-no value schema describes. The seam is outside the check at every rung, so a
-meta path raises neither a strict reject nor a persist-and-flag diagnostic.
+no value schema describes. Such a write names no payload path (§4.6.5), so it
+is neither a flow-label target nor measured, and raises neither a strict
+reject nor a persist-and-flag diagnostic. No declared entry reaches it
+either: a document-root declared entry labels the payload root, which a
+member is not. Measuring the seam would leave a piece un-updatable under
+strict whenever its pattern declares on a single result field, which is how a
+pattern normally labels one, because the pattern updater, `setsrc`, and setup
+over an existing piece all write meta.
 
-A ceiling can still resolve at a meta path, from a document-root declared
-entry by longest prefix, and that route is skipped too. The entry sits at
-logical `[]`, the payload root, and reaches the seam only because
-canonicalization strips a leading `value`. Honoring it would make a piece
-updatable or not according to whether its pattern carries a root `ifc`.
-Declaring on a single result field, which is how a pattern normally labels
-one, leaves the seam's ceiling empty; the piece is then un-updatable under
-strict, because the pattern updater, `setsrc`, and setup over an existing
-piece all stamp meta.
-
-Nothing is laundered. A path counts as meta only while no payload write
-landed on it too, so a transaction writing both leaves the path measured; the
-ancestor collapse runs over measured paths only, so an exempt meta path
-cannot shadow a value write beneath it; meta paths remain flow-label targets,
-so the join persists there and the egress, display, and observation gates
-read the unchanged label; and the seam shares the document, space, and
-replica set of the value surface beside it, so it reaches no further. The
-residual is the shared namespace: where a payload field carries a `MetaField`
-name, an exempt meta write can raise the stored derived label at their common
-logical path past what that field declares. That is over-taint, so reads stay
-protected, and giving the envelope seam its own path space is the fix. Shares
-the meta-seam predicate with the schema write-policy requirement (#6077).
+Nothing is laundered. The seam is the runtime's to read and write, and no
+pattern compiles against it. A member's read consumes no payload label just
+as its write stamps none, so no payload label is dropped on the way through
+it, and a payload field that carries a `MetaField` name is labeled and
+measured like any other. The seam shares the document, space, and replica
+set of the value surface beside it, so it reaches no further. The schema
+write-policy requirement (#6077) skips a member write for the same reason.
 
 A second narrowing follows the same rule over a document rather than a path,
 and covers two id classes.
@@ -418,8 +413,8 @@ the space running that module addresses it, and it outlives all of them —
 and on a second: route 2 leaves a `declared` entry per measured path, which
 §8.12.1 does not let back, on a document nothing collects.
 
-All three are outside the check at every rung, through the same
-predicate the meta seam uses, and the skip is scoped to a join the target's
+All three are outside the check at every rung, through one predicate
+(`isDeclarablePolicyStore`), and the skip is scoped to a join the target's
 own space produced: the join records the space each contributing document
 lived in, and a target whose join drew a clause from elsewhere is measured
 like any other document. The residency half of the ceiling therefore still
@@ -783,9 +778,10 @@ commitment-aware matching), stage 2 as labs#4657
 `labelMetadata` observation channel — the SC-6 revisit discharged)
 completed by template-population Stage B (labs#4660): the full per-field
 §4.6.4.2 profile persists as multi-`*` templates under `/cfc/labels/...`
-(`origin:"label-metadata"`, `observes:"labelMetadata"` — no payload read
-class consumes them), minted at the persist seam from each source-bearing
-derived-containment payload entry, resolved by `inspectConfLabel` at
+(`origin:"label-metadata"`, `observes:"labelMetadata"` — a reader decodes
+them apart from the payload entries, so no payload lookup sees one), minted
+at the persist seam from each source-bearing derived-containment payload
+entry, resolved by `inspectConfLabel` at
 concrete clause/alternative metadata paths with the interim rule staying
 the label source and the in-hand computation the fallback on template-less
 envelopes ([`cfc-template-population.md`](./cfc-template-population.md)
@@ -927,10 +923,9 @@ this file is the single tracking place:
   normative (audit 3.12). Not re-verified.
 - ~~`/value` envelope-prefix wire-format decision (audit Wave 4 #28)~~ —
   **decided (owner, 2026-09-30): value-relative entries stay, and §4.6.4
-  changes to match (SC-55).** The remaining work is **implementation
-  conformance** with §4.6.5: the runner converts a document path outside
-  `value`, such as `["source"]`, to the payload path of the same name, and
-  matches it against payload labels.
+  changes to match (SC-55).** The runner conforms to §4.6.5: a document path
+  outside `value`, such as `["source"]`, names no payload path, and is never
+  matched against payload labels.
 
 ## Also noted by the sweep (not previously tracked)
 
@@ -1518,7 +1513,7 @@ query's selection inputs are labeled"). Three points where the text and the
 runner differ, or where the text leaves a choice open:
 
 **SC-49 [normative] A secret in a member's address — §8.17.6 rule 4.**
-`open`. Rule 4 derives a member's address from its content and payload
+`proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: keyed derivation permitted, the slot carries `S` alone, the key-disclosure and address-equality residuals recorded under §18.6.4; the runner's salt conforms, no code change. Rule 4 derives a member's address from its content and payload
 label, and so puts the payload label on the reference identity at each slot,
 since a reader could otherwise confirm a guess at a member by recomputing
 its address. The runner keys each member's address on a per-space secret as
@@ -1534,7 +1529,7 @@ equal members, and a member kept across a change of the selection, share an
 address.
 
 **SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
-item.** `open`. The item requires that untrusted code obtain a member
+item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: the requirement stated over both routes, keyed derivation as the means for the constructed-reference route; no code change. The item requires that untrusted code obtain a member
 reference only through a result, and offers a namespace untrusted code cannot
 write to as the means. A namespace stops a member's address from being
 received by writing the same content. It does not stop a reference from being
@@ -1546,7 +1541,7 @@ Proposed edit: state the requirement over both routes, and allow a secret
 in the address as the means for the second.
 
 **SC-51 [clarify] The existence entry of a member with labels at two levels —
-§8.17.6 rule 4, last item.** `open`. The item says the existence entry
+§8.17.6 rule 4, last item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option C: root label where present, else the join of field labels, the full join under an unkeyed address; the runner's root-label existence entries conform, no code change. The item says the existence entry
 carries the member's payload label. A member can carry a label at its root
 and further labels on its fields. The runner's existence observation of such
 a member consumes the root label. Proposed edit: say whether the payload
@@ -1678,7 +1673,7 @@ map whose entry paths are relative to `value`: an entry at `["error", "code"]`
 labels what §4.6.4 spells `/value/error/code`, and an entry at the empty path
 labels the payload root. No entry can name an envelope member.
 
-**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `open`.
+**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `applied`.
 §4.6.4 requires persisted payload labels under an explicit `/value` prefix and
 allows an equivalent internal layout. The runner's map is such a layout, and it
 spares the common case, a payload label, from spelling `value` (owner decision
@@ -1693,6 +1688,22 @@ version reads an entry's `path` and `label` and ignores any other member, so
 it would take a `root` entry for a payload label. The first such entry
 therefore needs a new label-map version, which today's readers refuse. §4.6.5
 is unchanged: an envelope member's path is never matched as a payload path.
+
+The `root` entry is deferred (owner decision 2026-10-01). Until it exists, an
+envelope member carries no label: a write to one stamps nothing, and a read of
+one consumes nothing. The residual is that a runtime write of label-derived
+data into a member would arrive unlabeled. No pattern reaches the meta seam,
+and every runtime write there is a link, a pattern identity or definition, a
+schema, a source origin or reconciliation record, or a slug an operator
+chooses.
+
+`applied` — specs#39 (2026-10-03): §4.6.4 keys a payload label by its path
+relative to `value` and marks the label-metadata entries `root: "document"`,
+the only document-rooted entries it persists. Label lookup selects the root
+before matching a path, so an entry of the other root never takes part, and
+a runtime should decode the two kinds into distinct address forms before any
+lookup sees them. §4.6.5 and §8.10.1.1 keep envelope metadata out of payload
+matching.
 
 ## From the render-time remote-load gate (2026-10-01)
 
@@ -1782,3 +1793,37 @@ What this costs, and what is not covered:
 - **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
   given. The gate keys on labels, not URLs, so a labelled value does not get
   through; an unlabelled one is outside this entry.
+
+## From appending to another principal's private list (2026-10-01)
+
+**SC-57 [normative] A document created beneath a private parent takes the
+parent's readers — the `User(CurrentPrincipal)` creator binding, beside
+§8.12.4.** `open`, for the CFC spec owner's ruling. A `User` confidentiality
+clause whose subject is `CurrentPrincipal` binds, at commit, to a concrete
+reader: a store already holding labels keeps the readers it stores, and a new
+store takes the acting principal. An item a second principal appends to an
+owner-private list falls between the two. It is a new document, so it took
+the appender, while the transaction that appended it read the list and so
+carries the owner's reader in its taint. §8.12.4's `canWrite` then measured
+that taint against a ceiling naming the appender, and refused the append,
+whether the appender's own runtime or the serving loop ran the handler. The
+runner now binds a document created beneath a stored parent
+to the parent instead. When a transaction creates a document and links it
+into a document that existed before the transaction, the placeholder binds to
+the concrete `User` readers the parent's declared policy names at the position
+the link lands on, gathered across every such parent; a document created
+beneath such a document in the same transaction takes the same readers. Where
+the parents name no `User` reader there, the binding falls to the acting
+principal as before. The binding only raises: the new document's readers are
+ones the parent already promised that position to, a reader has to satisfy
+every clause the document holds, and the appender gains no standing as a
+reader. What it changes is the write ceiling, which now admits the parent's
+readers in a transaction's taint and nothing else, so data labeled for any
+other reader, the appender's own included, still misfits. Proposed edit: state
+the parent rule where the spec describes binding a reader-private declaration
+to its creator, define "beneath" as the link placement above, and say that the
+parent is read as stored before the transaction. Implemented in
+`packages/runner/src/cfc/prepare.ts` (`creatorBinding`, through
+`bindCurrentPrincipalToStoredConfidentiality` in
+`packages/runner/src/cfc/current-principal-confidentiality.ts`); described in
+[`current-principal.md`](../features/current-principal.md).

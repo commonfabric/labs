@@ -1121,6 +1121,21 @@ export class PreconditionFailedError extends Error {
   }
 }
 
+/**
+ * An `entity-value-hash` commit precondition failed: the pinned document no
+ * longer holds the value the pin was taken over. It is a `ConflictError` on
+ * the wire, name and message alike, so a client re-runs the transaction that
+ * took the pin against fresh state. The subclass exists for the wave commit
+ * pre-check, which names a failing pin by index as it names a failed
+ * create-only mark.
+ */
+export class EntityValueHashConflictError extends ConflictError {
+  /** Constructs an instance naming the pinned entity `id`. */
+  constructor(id: string) {
+    super(`entity-value-hash precondition target changed: ${id}`);
+  }
+}
+
 // ProtocolError moved to the wire-shape module (../v2.ts) with the shared
 // scope-key vocabulary that throws it; re-exported near the imports above.
 
@@ -3751,8 +3766,8 @@ export class WaveCommitConflictError extends Error {
  * validator's first-failure throw, this NAMES every failing precondition
  * by index into the batch's preconditions array, so the wave commit step
  * can resolve each failure to its owning contribution per write class
- * (serving-loop.md §3d — one contribution's violated create-only mark
- * must not abort every other contribution's work).
+ * (serving-loop.md §3d — one contribution's violated create-only mark or
+ * value pin must not abort every other contribution's work).
  */
 export class WavePreconditionError extends Error {
   override readonly name = "WavePreconditionError";
@@ -4170,7 +4185,10 @@ export const applyWaveCommit = (
             sessionId: applyOptions.sessionId,
           });
         } catch (error) {
-          if (error instanceof PreconditionFailedError) {
+          if (
+            error instanceof PreconditionFailedError ||
+            error instanceof EntityValueHashConflictError
+          ) {
             failedPreconditions.push(index);
             if (firstDetail === "") {
               firstDetail = error.message;
@@ -6637,9 +6655,7 @@ const validateCommitPreconditions = (
           ? null
           : commitPreconditionValueHash(state.document.value);
         if (currentHash !== precondition.valueHash) {
-          throw new ConflictError(
-            `entity-value-hash precondition target changed: ${precondition.id}`,
-          );
+          throw new EntityValueHashConflictError(precondition.id);
         }
         break;
       }

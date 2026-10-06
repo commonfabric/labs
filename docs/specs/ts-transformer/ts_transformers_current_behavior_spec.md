@@ -819,7 +819,10 @@ structurally representable.
   rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
-  (`reportUnknownPatternResult()` in `schema-injection.ts`)
+  (`reportUnknownPatternResult()` in `schema-injection.ts`). Under
+  `TransformationOptions.storedSource` it reports as a **Warning**: a reload of
+  stored source reconstructs what was admitted when it was deployed, which may
+  hold a shape this check covers only since
 - authors who intentionally want a permissive/opaque output boundary must make
   it explicit with `pattern<Input, Output>(...)`
 
@@ -841,6 +844,19 @@ out of an object's schema, a symbol-keyed member or a cell's internal marker
 it as a field. It stops at a type it is already inside, since a type with no
 name can hold itself through `typeof`, and walks a type reached again by
 another path under that path.
+
+Neither walk descends a named type: an alias, whether it names an object, an
+array, a tuple, or a union; an interface; a class; or an instance of a named
+class. A named type is a declaration, and `unknown` in a declaration is the form
+for a reference to another piece
+([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)). So an
+`unknown` reached only through a name is the declaration's, and the check
+leaves it alone. A pattern that returns another pattern's instance, whose
+declared result holds such references, passes them on without a report. The
+schema carries `{ type: "unknown" }` at those fields as it does at any
+reference. An alias of `unknown` itself is the exception: the checker keeps no
+name on `unknown`, so a field declared through `type Ref = unknown` is `unknown`
+to both walks, and is reported.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1164,8 +1180,9 @@ report these through the same collector (deduplicated via §2.2's
 - **Error** `pattern-context:inline-reactive-root-access`
   (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
   reactive-root read at a position that stage cannot lower
-- **Error** `pattern-result:unknown-type` (`schema-injection.ts:2621`) — see
-  §6.6
+- **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
+  `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
+  `TransformationOptions.storedSource`
 - **Error** `pattern-result:opaque-reserved-key`
   (`reserved-result-keys.ts`, called from `schema-generator.ts`) — a pattern's
   own result declares one of the framework's reserved keys `unknown` at its
@@ -2667,9 +2684,26 @@ Special path:
   pinned by `test/cfc-authoring.test.ts`,
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
-- Authored writer identities also survive plain generic interfaces and object
-  aliases, forwarded aliases, inherited members, index signatures, and `Record`
-  value arguments, in both pattern input and explicit output schemas. A whole
+- Plain generic declarations read members under their argument bindings,
+  including inherited interface and class members, merged interface
+  declarations and structural alias bodies.
+  Member defaults, scope wrappers and `Default` union validation use those
+  bindings. Default validation recovers instantiated compound arguments and
+  anonymous members from the checker's union members and type arguments.
+  Printed captures bind checker-created argument types when authored
+  argument nodes are unavailable. Mapped views such as
+  `Readonly<Input<number>>` retain the input declaration's member bindings;
+  synthetic generic references resolve and bind their declarations from module
+  scope. Optional declared members stay outside `required` and retain the
+  checker's `undefined` alternative beside the bound value; explicitly written
+  `undefined` remains. Pinned by
+  `test/generic-pattern-input.test.ts`, `test/aliased-binding-declared-type.test.ts`
+  and schema-generator `test/typescript/type-arguments.test.ts`; binding terms
+  are defined in the mapping spec §4.1.
+- Authored writer identities also survive plain generic interfaces, classes and
+  structural aliases, forwarded aliases, inherited members, tuples, literal index
+  signatures, array and nullable alias bodies, and `Record` value arguments,
+  in both pattern input and explicit output schemas. A whole
   `WriteAuthorizedBy` can be passed as a type argument, or a member can apply it
   to a writer parameter supplied as a direct `typeof` query. Defaults read under
   preceding parameters. Recursive `$defs` preserve the declaration identity of
@@ -2680,7 +2714,10 @@ Special path:
   also reports `cfc-write-authorized-by:unread`, including on stored-source
   compilation. Pinned by `test/generic-writer-policy.test.ts` and
   `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
-  mapping spec §11 describes the binding rules.
+  mapping spec §§4.1 and 11 describe the binding rules. The library syntax
+  branch follows named aliases to reachable writer queries, so
+  `Readonly<Protected>` retains a policy written in `Protected`; ordinary value
+  queries such as `Partial<typeof value>` retain checker semantics.
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 

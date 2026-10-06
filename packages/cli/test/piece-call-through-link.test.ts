@@ -115,7 +115,7 @@ describe("piece-call-through-link", () => {
     // deno-lint-ignore no-explicit-any
     const piece = runtime.run(tx, compiled as any, argument, resultCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await piece.pull();
     return piece;
   }
@@ -210,7 +210,7 @@ describe("piece-call-through-link", () => {
     const tx = runtime.edit();
     const bare = runtime.getCell<unknown>(inboxSpace, "bare", undefined, tx);
     bare.set({ note: "a document no pattern runs" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const held = {
       bare,
       inbox: { piece: inbox },

@@ -3,6 +3,13 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import type { HarnessFetch } from "../contracts/http-fetch.ts";
+import {
+  interfaceNetworks,
+  isOpenInternetAddress,
+  type LocalNetwork,
+  normalizeHostname,
+  parseIpAddress,
+} from "../network-address.ts";
 
 export interface WebFetchToolInput {
   url: string;
@@ -75,6 +82,15 @@ export type ResolveHostAddresses = (
   signal?: AbortSignal,
 ) => Promise<readonly string[]>;
 
+/**
+ * Where web_fetch learns the addresses a host name resolves to, and the
+ * networks this device's interfaces are on, read for each check.
+ */
+interface AddressSources {
+  resolveHostAddresses: ResolveHostAddresses;
+  localNetworks: () => readonly LocalNetwork[];
+}
+
 type WebFetchBytes = Uint8Array<ArrayBuffer>;
 
 const DEFAULT_MAX_BYTES = 200_000;
@@ -95,7 +111,7 @@ export const webFetchToolDescriptor: HarnessToolDescriptor = {
   toolId: "web_fetch",
   title: "Web Fetch",
   description:
-    "Fetch a public HTTP(S) URL with bounded output, redirect validation, and extracted text metadata. Does not use cookies or ambient browser state.",
+    "Fetch an HTTP(S) URL on the open internet with bounded output, redirect validation, and extracted text metadata. Refuses local, private and reserved addresses, and addresses on this device's own networks. Does not use cookies or ambient browser state.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -214,15 +230,19 @@ export const webFetchToolDescriptor: HarnessToolDescriptor = {
 export interface CreateWebFetchToolOptions {
   fetchFn?: HarnessFetch;
   resolveHostAddresses?: ResolveHostAddresses;
+  /** By default, the networks Deno reports (`interfaceNetworks`). */
+  localNetworks?: () => readonly LocalNetwork[];
 }
 
 export const createWebFetchTool = (
   options: CreateWebFetchToolOptions = {},
 ): HarnessToolDefinition<WebFetchToolInput, WebFetchToolOutput> => {
-  const resolveHostAddresses = options.resolveHostAddresses ??
-    defaultResolveHostAddresses;
-  const fetchFn = options.fetchFn ??
-    createPinnedPublicFetch(resolveHostAddresses);
+  const sources: AddressSources = {
+    resolveHostAddresses: options.resolveHostAddresses ??
+      defaultResolveHostAddresses,
+    localNetworks: options.localNetworks ?? interfaceNetworks,
+  };
+  const fetchFn = options.fetchFn ?? createPinnedPublicFetch(sources);
   return {
     descriptor: webFetchToolDescriptor,
     async invoke(context, input) {
@@ -254,7 +274,7 @@ export const createWebFetchTool = (
       try {
         const initialUrl = await validatePublicHttpUrl(
           input.url,
-          resolveHostAddresses,
+          sources,
           controller.signal,
         );
         if (!initialUrl.ok) {
@@ -270,7 +290,7 @@ export const createWebFetchTool = (
         const fetchResult = await fetchWithRedirects({
           url: initialUrl.url,
           fetchFn,
-          resolveHostAddresses,
+          sources,
           signal: controller.signal,
         });
 
@@ -435,7 +455,7 @@ class WebFetchBlockedUrlError extends Error {
 
 const validatePublicHttpUrl = async (
   input: string,
-  resolveHostAddresses: ResolveHostAddresses,
+  sources: AddressSources,
   signal?: AbortSignal,
 ): Promise<PublicHttpUrlResult> => {
   let url: URL;
@@ -462,7 +482,7 @@ const validatePublicHttpUrl = async (
       message: "web_fetch URLs may not include credentials",
     };
   }
-  const hostBlockReason = blockedHostReason(url.hostname);
+  const hostBlockReason = blockedHostReason(url.hostname, sources);
   if (hostBlockReason !== undefined) {
     return {
       ok: false,
@@ -472,7 +492,7 @@ const validatePublicHttpUrl = async (
   }
   const resolution = await resolveValidatedPublicAddresses(
     url.hostname,
-    resolveHostAddresses,
+    sources,
     signal,
   );
   if (!resolution.ok) {
@@ -485,7 +505,10 @@ const validatePublicHttpUrl = async (
   return { ok: true, url: url.toString() };
 };
 
-const blockedHostReason = (hostname: string): string | undefined => {
+const blockedHostReason = (
+  hostname: string,
+  sources: AddressSources,
+): string | undefined => {
   const normalized = normalizeHostname(hostname);
   if (
     normalized === "localhost" ||
@@ -495,21 +518,19 @@ const blockedHostReason = (hostname: string): string | undefined => {
   ) {
     return `web_fetch host ${hostname} is local and is not allowed`;
   }
-  if (isIpv6Address(normalized) && isBlockedIpv6Address(normalized)) {
-    return `web_fetch host ${hostname} is private and is not allowed`;
-  }
-  if (isBlockedIpv4Address(normalized)) {
-    return `web_fetch host ${hostname} is private and is not allowed`;
+  const address = parseIpAddress(normalized);
+  if (
+    address !== undefined &&
+    !isOpenInternetAddress(address, sources.localNetworks())
+  ) {
+    return `web_fetch host ${hostname} is not on the open internet and is not allowed`;
   }
   return undefined;
 };
 
-const normalizeHostname = (hostname: string): string =>
-  hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-
 const resolveValidatedPublicAddresses = async (
   hostname: string,
-  resolveHostAddresses: ResolveHostAddresses,
+  sources: AddressSources,
   signal?: AbortSignal,
 ): Promise<
   | { ok: true; addresses: readonly string[] }
@@ -519,7 +540,7 @@ const resolveValidatedPublicAddresses = async (
   try {
     throwIfWebFetchAborted(signal);
     addresses = await withWebFetchAbort(
-      resolveHostAddresses(hostname, signal),
+      sources.resolveHostAddresses(hostname, signal),
       signal,
     );
     throwIfWebFetchAborted(signal);
@@ -542,8 +563,13 @@ const resolveValidatedPublicAddresses = async (
         `web_fetch host ${hostname} could not be resolved to a public address`,
     };
   }
+  const networks = sources.localNetworks();
   for (const address of addresses) {
-    const addressBlockReason = blockedResolvedAddressReason(hostname, address);
+    const addressBlockReason = blockedResolvedAddressReason(
+      hostname,
+      address,
+      networks,
+    );
     if (addressBlockReason !== undefined) {
       return { ok: false, message: addressBlockReason };
     }
@@ -556,7 +582,7 @@ const defaultResolveHostAddresses: ResolveHostAddresses = async (
   signal,
 ) => {
   const normalized = normalizeHostname(hostname);
-  if (isIpv4Address(normalized) || normalized.includes(":")) {
+  if (parseIpAddress(normalized) !== undefined || normalized.includes(":")) {
     return [normalized];
   }
   const results = await withWebFetchAbort(
@@ -583,16 +609,20 @@ const defaultResolveHostAddresses: ResolveHostAddresses = async (
 const blockedResolvedAddressReason = (
   hostname: string,
   address: string,
+  networks: readonly LocalNetwork[],
 ): string | undefined => {
-  const addressHostReason = blockedHostReason(address);
-  if (addressHostReason !== undefined) {
-    return `web_fetch host ${hostname} resolved to private address ${address} and is not allowed`;
+  const parsed = parseIpAddress(normalizeHostname(address));
+  if (parsed === undefined) {
+    return `web_fetch host ${hostname} resolved to ${address}, which is not an IP address`;
+  }
+  if (!isOpenInternetAddress(parsed, networks)) {
+    return `web_fetch host ${hostname} resolved to ${address}, which is not on the open internet, and is not allowed`;
   }
   return undefined;
 };
 
 const createPinnedPublicFetch = (
-  resolveHostAddresses: ResolveHostAddresses,
+  sources: AddressSources,
 ): HarnessFetch =>
 async (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
@@ -600,7 +630,7 @@ async (input, init = {}) => {
   throwIfWebFetchAborted(signal);
   const resolution = await resolveValidatedPublicAddresses(
     url.hostname,
-    resolveHostAddresses,
+    sources,
     signal,
   );
   if (!resolution.ok) {
@@ -1123,208 +1153,10 @@ const closeConnection = (conn: Deno.Conn): void => {
   }
 };
 
-const isIpv4Address = (value: string): boolean => {
-  const octets = value.split(".").map((part) => Number(part));
-  return octets.length === 4 &&
-    octets.every((octet) =>
-      Number.isInteger(octet) && octet >= 0 && octet <= 255
-    );
-};
-
-const isBlockedIpv4Address = (value: string): boolean => {
-  const octets = parseIpv4Address(value);
-  if (octets === undefined) {
-    return false;
-  }
-  return !isGloballyRoutableIpv4(octets);
-};
-
-const parseIpv4Address = (
-  value: string,
-): [number, number, number, number] | undefined => {
-  const octets = value.split(".").map((part) => Number(part));
-  if (
-    octets.length !== 4 ||
-    !octets.every((octet) =>
-      Number.isInteger(octet) && octet >= 0 && octet <= 255
-    )
-  ) {
-    return undefined;
-  }
-  return octets as [number, number, number, number];
-};
-
-const isGloballyRoutableIpv4 = (
-  [a, b, c, d]: [number, number, number, number],
-): boolean => {
-  if (a === 0) return false; // Current network.
-  if (a === 10) return false; // RFC 1918 private.
-  if (a === 100 && b >= 64 && b <= 127) return false; // CGNAT.
-  if (a === 127) return false; // Loopback.
-  if (a === 169 && b === 254) return false; // Link-local.
-  if (a === 172 && b >= 16 && b <= 31) return false; // RFC 1918 private.
-  if (a === 192 && b === 0 && c === 0) return false; // IETF protocol assignments.
-  if (a === 192 && b === 0 && c === 2) return false; // TEST-NET-1.
-  if (a === 192 && b === 88 && c === 99) return false; // Deprecated 6to4 relay anycast.
-  if (a === 192 && b === 168) return false; // RFC 1918 private.
-  if (a === 198 && (b === 18 || b === 19)) return false; // Benchmarking.
-  if (a === 198 && b === 51 && c === 100) return false; // TEST-NET-2.
-  if (a === 203 && b === 0 && c === 113) return false; // TEST-NET-3.
-  if (a >= 224) return false; // Multicast, reserved, broadcast.
-  return !(a === 255 && b === 255 && c === 255 && d === 255);
-};
-
-const isBlockedIpv6Address = (value: string): boolean => {
-  const bytes = parseIpv6Address(value);
-  if (bytes === undefined) {
-    return false;
-  }
-  return !isGloballyRoutableIpv6(bytes);
-};
-
-const isIpv6Address = (value: string): boolean =>
-  parseIpv6Address(value) !== undefined;
-
-const parseIpv6Address = (value: string): Uint8Array | undefined => {
-  const normalized = value.toLowerCase();
-  if (normalized === "") {
-    return undefined;
-  }
-  const doubleColon = normalized.match(/::/g) ?? [];
-  if (doubleColon.length > 1) {
-    return undefined;
-  }
-
-  let input = normalized;
-  const embeddedIpv4Match = /(^|:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(input);
-  if (embeddedIpv4Match !== null) {
-    const ipv4 = parseIpv4Address(embeddedIpv4Match[2]!);
-    if (ipv4 === undefined) {
-      return undefined;
-    }
-    const ipv4Hextets = [
-      ((ipv4[0] << 8) | ipv4[1]).toString(16),
-      ((ipv4[2] << 8) | ipv4[3]).toString(16),
-    ];
-    input = `${input.slice(0, embeddedIpv4Match.index + 1)}${
-      ipv4Hextets.join(":")
-    }`;
-  }
-
-  const hasCompression = input.includes("::");
-  const [headText, tailText = ""] = input.split("::", 2);
-  const head = headText === "" ? [] : headText.split(":");
-  const tail = tailText === "" ? [] : tailText.split(":");
-  if (
-    head.some((part) => part === "") ||
-    tail.some((part) => part === "")
-  ) {
-    return undefined;
-  }
-  const explicitParts = [...head, ...tail];
-  if (hasCompression) {
-    if (explicitParts.length >= 8) {
-      return undefined;
-    }
-  } else if (explicitParts.length !== 8) {
-    return undefined;
-  }
-  const missingParts = hasCompression ? 8 - explicitParts.length : 0;
-  const parts = [...head, ...Array(missingParts).fill("0"), ...tail];
-  const bytes = new Uint8Array(16);
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index]!;
-    if (!/^[0-9a-f]{1,4}$/.test(part)) {
-      return undefined;
-    }
-    const value = Number.parseInt(part, 16);
-    bytes[index * 2] = value >> 8;
-    bytes[index * 2 + 1] = value & 0xff;
-  }
-  return bytes;
-};
-
-const isGloballyRoutableIpv6 = (bytes: Uint8Array): boolean => {
-  const mappedIpv4 = ipv4FromMappedIpv6(bytes) ??
-    ipv4FromNat64WellKnownPrefix(bytes);
-  if (mappedIpv4 !== undefined) {
-    return isGloballyRoutableIpv4(mappedIpv4);
-  }
-  if (bytes.every((byte) => byte === 0)) return false; // Unspecified.
-  if (bytes.slice(0, 15).every((byte) => byte === 0) && bytes[15] === 1) {
-    return false; // Loopback.
-  }
-  if ((bytes[0]! & 0xfe) === 0xfc) return false; // Unique local.
-  if (bytes[0] === 0xfe && (bytes[1]! & 0xc0) === 0x80) {
-    return false; // Link-local.
-  }
-  if (bytes[0] === 0xff) return false; // Multicast.
-  if (!((bytes[0]! & 0xe0) === 0x20)) {
-    return false; // Not global unicast 2000::/3.
-  }
-  if (hasIpv6Prefix(bytes, [0x20, 0x01, 0x0d, 0xb8], 32)) {
-    return false; // Documentation.
-  }
-  if (hasIpv6Prefix(bytes, [0x20, 0x02], 16)) {
-    return false; // Deprecated 6to4.
-  }
-  if (hasIpv6Prefix(bytes, [0x20, 0x01, 0x00, 0x00], 32)) {
-    return false; // Teredo.
-  }
-  if (hasIpv6Prefix(bytes, [0x20, 0x01, 0x00, 0x02], 48)) {
-    return false; // Benchmarking.
-  }
-  if (hasIpv6Prefix(bytes, [0x20, 0x01, 0x00, 0x10], 28)) {
-    return false; // ORCHID.
-  }
-  return true;
-};
-
-const ipv4FromMappedIpv6 = (
-  bytes: Uint8Array,
-): [number, number, number, number] | undefined => {
-  if (
-    bytes.slice(0, 10).every((byte) => byte === 0) &&
-    bytes[10] === 0xff &&
-    bytes[11] === 0xff
-  ) {
-    return [bytes[12]!, bytes[13]!, bytes[14]!, bytes[15]!];
-  }
-  return undefined;
-};
-
-const ipv4FromNat64WellKnownPrefix = (
-  bytes: Uint8Array,
-): [number, number, number, number] | undefined => {
-  if (hasIpv6Prefix(bytes, [0x00, 0x64, 0xff, 0x9b], 96)) {
-    return [bytes[12]!, bytes[13]!, bytes[14]!, bytes[15]!];
-  }
-  return undefined;
-};
-
-const hasIpv6Prefix = (
-  bytes: Uint8Array,
-  prefix: readonly number[],
-  bitLength: number,
-): boolean => {
-  const fullBytes = Math.floor(bitLength / 8);
-  for (let index = 0; index < fullBytes; index += 1) {
-    if (bytes[index] !== (prefix[index] ?? 0)) {
-      return false;
-    }
-  }
-  const remainingBits = bitLength % 8;
-  if (remainingBits === 0) {
-    return true;
-  }
-  const mask = 0xff << (8 - remainingBits) & 0xff;
-  return (bytes[fullBytes]! & mask) === ((prefix[fullBytes] ?? 0) & mask);
-};
-
 interface FetchWithRedirectsOptions {
   url: string;
   fetchFn: HarnessFetch;
-  resolveHostAddresses: ResolveHostAddresses;
+  sources: AddressSources;
   signal: AbortSignal;
 }
 
@@ -1402,7 +1234,7 @@ const fetchWithRedirects = async (
     await cancelResponseBody(response);
     const validation = await validatePublicHttpUrl(
       nextUrl,
-      options.resolveHostAddresses,
+      options.sources,
       options.signal,
     );
     if (!validation.ok) {

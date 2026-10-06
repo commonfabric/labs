@@ -51,7 +51,7 @@ describe("CFC envelope version guard", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -116,7 +116,7 @@ describe("CFC envelope version guard", () => {
       }, tx);
       cell.set({ secret: "updated" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "not one this build interprets",
       );
@@ -151,7 +151,7 @@ describe("CFC envelope version guard", () => {
           labelMap: { version: 1, entries: [{ path: ["secret"] }] },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const cell = runtime.getCell(space, "shape-guard-target", {
@@ -163,7 +163,7 @@ describe("CFC envelope version guard", () => {
       }, tx);
       cell.set({ secret: "updated" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "carries no label map this build can read",
       );
@@ -237,7 +237,7 @@ describe("CFC envelope version guard", () => {
           value: { secret: "sealed" },
           cfc: envelope,
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         tx.readOrThrow({
@@ -255,7 +255,7 @@ describe("CFC envelope version guard", () => {
         }, tx);
         target.set({ note: "copied" });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "carries no label map this build can read",
         );
@@ -295,7 +295,7 @@ describe("CFC envelope version guard", () => {
       }, tx);
       target.set({ note: "copied" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "not one this build interprets",
       );
@@ -324,7 +324,7 @@ describe("CFC envelope version guard", () => {
         value: { secret: "sealed" },
         cfc: { version: 3, payload: { labels: [] } },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       expect(() => readStoredCfcMetadata(tx, { space, id })).toThrow(
@@ -434,7 +434,7 @@ describe("CFC envelope version guard", () => {
       // CFC-relevant and prepare meets the same unreadable envelope.
       target.key("ref").set(source.getAsLink() as never);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("not one this build interprets");
     } finally {
       await runtime.dispose();
@@ -492,7 +492,7 @@ describe("CFC envelope version guard", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const envelope = loadStoredCfcEnvelope(tx, { space, id });
@@ -566,6 +566,17 @@ describe("CFC envelope version guard", () => {
         path: ["secret"],
         label: { confidentiality: ["vaulted"], secrecy: ["vaulted"] },
       }]),
+      "a template-origin entry keyed at a payload path": entriesHolding([{
+        path: ["secret"],
+        label: { confidentiality: ["vaulted"] },
+        origin: "label-metadata",
+        observes: "labelMetadata",
+      }]),
+      "a template-origin entry a payload read consumes": entriesHolding([{
+        path: ["cfc", "labels", "value", "secret", "confidentiality"],
+        label: { confidentiality: ["vaulted"] },
+        origin: "label-metadata",
+      }]),
       "a label map of a version this build does not know": {
         version: 1,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
@@ -607,7 +618,7 @@ describe("CFC envelope version guard", () => {
             { space, scope: "space", id, path: [] },
             { value: { secret: "sealed" }, cfc } as never,
           );
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
 
           const tx = runtime.edit();
           let thrown: unknown;
@@ -675,7 +686,7 @@ describe("CFC envelope version guard", () => {
             },
           },
         } as never);
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         expect(readStoredCfcMetadata(tx, { space, id })?.labelMap.entries[0])
@@ -721,7 +732,7 @@ describe("CFC envelope version guard", () => {
             },
           },
         } as never);
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         expect(() =>
@@ -750,7 +761,7 @@ describe("CFC envelope version guard", () => {
           value: { secret: "sealed" },
           cfc: null,
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         expect(readStoredCfcMetadata(tx, { space, id })).toBeUndefined();

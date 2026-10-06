@@ -1,0 +1,15 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-2",
+  "settlement": {
+    "status": "declined",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "reason": "not now"
+  }
+}

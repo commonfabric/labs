@@ -79,14 +79,14 @@ async function runCollection(members: number): Promise<Row> {
     scheduler.subscribe(reader, { isEffect: true });
   }
 
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   // One write to one member, which reaches that member's reader and no other.
   resetTriggerScanWork();
   const memberTx = runtime.edit();
   collection.withTx(memberTx).key(members >> 1).set(1);
-  await memberTx.commit();
+  await memberTx.commit().settled;
   await runtime.idle();
   const memberWrite = work();
 
@@ -95,7 +95,7 @@ async function runCollection(members: number): Promise<Row> {
   resetTriggerScanWork();
   const appendTx = runtime.edit();
   collection.withTx(appendTx).set([...collection.get(), 0]);
-  await appendTx.commit();
+  await appendTx.commit().settled;
   await runtime.idle();
   const row: Row = { members, memberWrite, append: work() };
 

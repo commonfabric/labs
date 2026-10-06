@@ -339,11 +339,12 @@ minted into the same entries, not the mechanism.
   entry / SC-11-no-op by construction and keeps every derived/structure-
   keyed persist rule (freeze-carry, SC-4 pooling, writer-fit selection,
   restamp drops) ignoring them without carve-outs. The Stage-2 observation
-  CLASS on the `observes` axis because `readConsumesEntry` then already
-  yields the needed consumption table: no payload read class consumes them —
-  the introspection surface is the only consumer (the deliberately
-  over-inclusive `"all"` write-gate selection may, harmlessly: template
-  content duplicates the payload entries it derives from). Per labeled
+  CLASS on the `observes` axis marks them as observations of metadata. They
+  are keyed under `cfc/labels/...` relative to the stored document, so a
+  reader decodes them out of an envelope's payload entries
+  (`labelMap.documentEntries`, spec §4.6.4's resolution isolation): no
+  payload lookup, the over-inclusive write-gate selection included, ever
+  sees one, and the introspection surface is the only consumer. Per labeled
   target path: the whole-atom template plus one per-field template per
   DISTINCT protected top-level field name (deeper protected content —
   nested atoms behind public wrapper fields, array elements, bare

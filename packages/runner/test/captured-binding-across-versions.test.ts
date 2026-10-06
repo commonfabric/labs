@@ -117,7 +117,7 @@ describe("captured-binding-across-versions", () => {
       runtime.getCell(space, "output", v1.resultSchema, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancel = result.sink(() => {});
     await runtime.idle();
     result.key("add").send({ add: "a" });
@@ -136,7 +136,7 @@ describe("captured-binding-across-versions", () => {
       runtime.getCell(space, "output", v2.resultSchema, upgrade),
     );
     runtime.prepareTxForCommit(upgrade);
-    const setupError = (await upgrade.commit()).error?.message;
+    const setupError = (await upgrade.commit().settled).error?.message;
     await runtime.idle();
     await manager.synced();
     cancel();
@@ -181,7 +181,7 @@ describe("captured-binding-across-versions", () => {
       runtime.getCell(space, "composed", v1.resultSchema, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancel = result.sink(() => {});
     await runtime.idle();
     result.key("add").send({ add: "a" });
@@ -199,7 +199,7 @@ describe("captured-binding-across-versions", () => {
       runtime.getCell(space, "composed", v2.resultSchema, upgrade),
     );
     runtime.prepareTxForCommit(upgrade);
-    expect((await upgrade.commit()).error).toBeUndefined();
+    expect((await upgrade.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await manager.synced();
     result.key("add").send({ add: "after" });

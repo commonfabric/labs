@@ -112,7 +112,7 @@ describe("pattern swap superseded while the incoming pattern is named", () => {
       });
       const identity = other.patternManager.getArtifactEntryRef(v2)!.identity;
       other.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await other.idle();
       await other.patternManager.flushCompileCacheWrites();
       await other.storageManager.synced();
@@ -138,7 +138,7 @@ describe("pattern swap superseded while the incoming pattern is named", () => {
     );
     const running = rt.run(tx, v1, {}, cell);
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     expect(markerOf(cell)).toBe("v1");
     expect(getPatternSetupIdentityRef(cell)?.identity).toBe(v1Ref.identity);
@@ -192,7 +192,7 @@ describe("pattern swap superseded while the incoming pattern is named", () => {
       symbol: "default",
     }, rawMetaWriteAuthorization);
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await rt.idle();
   };
 

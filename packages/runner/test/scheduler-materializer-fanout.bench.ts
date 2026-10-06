@@ -56,7 +56,7 @@ async function setupMaterializerFanoutGraph(
   target.set(Object.fromEntries(
     Array.from({ length: fanout }, (_, index) => [`k${index}`, 0]),
   ));
-  await tx.commit();
+  await tx.commit().settled;
 
   let materializerRuns = 0;
   const materializer = Object.assign(
@@ -132,7 +132,7 @@ async function setupStaticWriteGraph(
     tx,
   );
   target.set(0);
-  await tx.commit();
+  await tx.commit().settled;
 
   let computationRuns = 0;
   const computation: Action = (actionTx) => {
@@ -171,7 +171,7 @@ async function updateSource(
 ) {
   const tx = env.runtime.edit();
   source.withTx(tx).set(value);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 for (const fanout of FANOUT_SIZES) {

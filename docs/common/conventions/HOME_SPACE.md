@@ -89,16 +89,30 @@ most-recently-used (MRU) ordering:
 
 - `homeSpaceCell.defaultPattern.profiles` — the list of profile links (each a
   cross-space link to a `profile-home.tsx` default pattern in its own space).
-- `homeSpaceCell.defaultPattern.defaultProfile` — the profile `#profile`
-  resolves to in headless mode and that the picker selects by default.
+- `homeSpaceCell.defaultPattern.defaultProfile` — a slot holding, under
+  `profile`, the link to the profile `#profile` resolves to in headless mode and
+  that the picker selects by default; no `profile` while none is chosen. The
+  link sits under a key because a handle to a cell whose root holds a link
+  denotes the cell that link names, so a link stored at the root could be set
+  once and never re-pointed.
+- `homeSpaceCell.defaultPattern.legacyDefaultProfile` — a default chosen before
+  the slot, kept as a link at the root of its cell. It is the default while the
+  slot holds none, and nothing writes it. A home that has not yet run with the
+  slot keeps its default this way in `defaultProfile` itself; `#profile` reads
+  it from there, and the picker it shows for such a home offers no "Set
+  default".
 - `homeSpaceCell.defaultPattern.mru` — recency-ordered links; drives ordering
   after the default.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID owned by the creating user and readable by anyone, since its ACL
-grants the wildcard `"*"` READ (a *named* `inSpace(name)` would put every
-profile created under one name in one space) — running `/api/patterns/system/profile-home.tsx`; the link
+a random DID owned by the creating user and writable by anyone, since its ACL
+grants the wildcard `"*"` WRITE: a runtime showing a profile writes into the
+profile's space, so a visitor needs more than READ. CFC owner-protects the
+profile's data fields, and its view state is per session; nothing else in the
+space is protected from a visitor (a *named* `inSpace(name)` would put every
+profile created under one name in one space) —
+running `/api/patterns/system/profile-home.tsx`; the link
 is appended to `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
 the default, and stamp MRU. There is no `profileName` mirror field anymore.
@@ -180,7 +194,8 @@ no runner is registered, the tab explains that requests remain queued until one
 starts. A queue with no entries shows "No agent runs yet."
 
 A request made in a home space that holds no queue — its home pattern does not
-exist, or is a version without the field — ends `refused`.
+exist, or is a version without the field — ends `refused`, and
+`wish({ query: "#agent_queue" })` there resolves to nothing.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
 
@@ -206,21 +221,33 @@ Home holds it but renders it nowhere of its own: a page shows it at its path
 in home's result, `chatManager`, with the user's rooms, the room chosen among
 them, and the controls that start a direct or a group chat.
 
+A home space whose system home pattern was set up before it held a chat manager
+holds none until the home space is next opened, since nothing updates a piece
+nobody opens, and the wish does not open it; a custom home pattern
+([Custom Home Pattern](#custom-home-pattern)) holds one only if it says so.
+Until then `wish({ query: "#chatManager" })` reports an error naming both
+remedies, rather than resolving to nothing.
+
 ## Custom Home Pattern
 
 The home space's default pattern is the home experience itself — by default,
-`/api/patterns/system/home.tsx`. You can replace it with a custom pattern using
-the CF CLI:
+`/api/patterns/system/home.tsx`. An existing Home owns account data, including
+profiles, favorites, navigation, and shared-space membership. Update its source
+in place to retain that data. Root recreation refuses an existing Home before
+stopping or unlinking it, even if its target cannot currently be loaded.
+
+For an identity that has no Home root yet, initialize custom or system source
+using the CF CLI:
 
 ```bash
 # Run its automated pattern test
 cf test ./my-home.test.tsx
 
-# Deploy a custom home pattern with the test attached
+# Initialize a custom Home with its test attached
 cf space set-home -i ./my.key -a http://localhost:8000 \
   --test ./my-home.test.tsx ./my-home.tsx
 
-# Reset to the system default
+# Alternatively, initialize the system Home
 cf space set-home -i ./my.key -a http://localhost:8000 --reset
 ```
 
@@ -228,10 +255,11 @@ Write automated tests for new or changed home-pattern behavior. Repeat
 `--test` for every authored test entry. Deployment packages and type-checks
 the tests but does not run them, so run each entry with `cf test` first.
 
-Under the hood, `set-home` calls `PiecesController.recreateDefaultPattern()`
-with the compiled program. This tears down the existing default pattern, creates
-a new piece from the custom source, and links it as the space's
-`defaultPattern`.
+`set-home`, including `--reset`, initializes only an absent Home. It rechecks
+the root in the creation transaction so two initializers cannot replace each
+other's Home. To change an existing Home, use `cf piece setsrc` on that root
+with the complete authored source and test entries. Compatible source changes
+retain its owned cells; incompatible changes require an explicit migration.
 
 ### Identity Matching
 
@@ -267,8 +295,8 @@ To share identity between browser and CLI:
 #    history and the process list:
 deno run -A packages/cli/mod.ts id from-mnemonic -- phrase.txt > ./browser.key
 
-# 3. Use that key with cf, retaining the tested source package
-cf space set-home -i ./browser.key -a http://localhost:8000 \
+# 3. Update the existing Home in place, retaining the tested source package
+cf piece setsrc -i ./browser.key -a http://localhost:8000 --cell <home-root> \
   --test ./my-home.test.tsx ./my-home.tsx
 ```
 
@@ -303,10 +331,11 @@ Both the home pattern and the default app pattern follow the same mechanism:
      `/api/patterns/system/default-app.tsx`
 3. The pattern is compiled, run, linked as `spaceCell.defaultPattern`, and its
    source URL is stamped as `patternSource` for future updates
-4. `recreateDefaultPattern()` can replace it — either with a URL-based pattern,
-   which also stamps `patternSource`, or a custom `RuntimeProgram` (used by
-   `cf space set-home`), which remains untracked by the URL updater and may carry
-   a separate repository locator
+4. `recreateDefaultPattern()` can replace a non-Home root or initialize an absent
+   Home. It refuses an existing identity Home, which must be updated in place.
+   A URL-based pattern stamps `patternSource`; a custom `RuntimeProgram` (used
+   by `cf space set-home`) remains untracked by the URL updater and may carry a
+   separate repository locator
 5. Before an existing eligible root starts, it is reconciled in place. A root
    with stored `patternSource` tracks that source. A pre-provenance root is
    admitted only when its stored `{ identity, symbol }` exactly matches the

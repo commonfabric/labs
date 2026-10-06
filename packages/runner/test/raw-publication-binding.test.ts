@@ -71,7 +71,7 @@ describe("Raw builtin publication binding", () => {
         {},
         result,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
 
       expect(captured).toHaveLength(1);

@@ -83,7 +83,7 @@ const runtime = new Runtime({
 const seedTx = runtime.edit();
 runtime.getCell<typeof items>(space, "schema-read-depth-doc", undefined, seedTx)
   .set(items);
-await seedTx.commit();
+await seedTx.commit().settled;
 
 function readOnce(): number {
   const tx = runtime.edit();

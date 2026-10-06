@@ -10,8 +10,10 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
+  isTrustedGesture,
   markRendererTrustedEvent,
   recordTrustedEventPolicyInputs,
+  reviewedActionProvenance,
   trustedEventMatchesUiContract,
   uiContractFromSchema,
   uiContractsFromSchema,
@@ -62,6 +64,16 @@ const rendererEvent = <T extends Record<string, unknown>>(event: T): T => {
 };
 
 describe("CFC UI contract matching", () => {
+  it("counts only a marked event of `dom` origin as a trusted gesture", () => {
+    const dom = { provenance: { origin: "dom", trusted: true, ui: {} } };
+    const native = { provenance: { origin: "native", trusted: true, ui: {} } };
+    expect(isTrustedGesture(dom)).toBe(false);
+    markRendererTrustedEvent(dom);
+    markRendererTrustedEvent(native);
+    expect(isTrustedGesture(dom)).toBe(true);
+    expect(isTrustedGesture(native)).toBe(false);
+  });
+
   it("matches UiAction contracts against trusted DOM dataset markers", () => {
     const contract = uiContractFromSchema({
       ...uiActionSchema,
@@ -120,6 +132,61 @@ describe("CFC UI contract matching", () => {
         contract,
       ),
     ).toBe(false);
+  });
+
+  describe("reviewedActionProvenance()", () => {
+    const contract = uiContractFromSchema(trustedPatternUiActionSchema);
+    const surface = "TrustedDirectCommandSurface";
+    const action = "SubmitDirectCommand";
+
+    for (const origin of ["dom", "native"] as const) {
+      it(`returns \`${origin}\` provenance naming the surface and the action`, () => {
+        expect(reviewedActionProvenance(origin, { surface, action }))
+          .toStrictEqual({
+            origin,
+            trusted: true,
+            ui: {
+              pattern: surface,
+              eventIntegrity: [surface],
+              uiContractDataset: { uiAction: action },
+            },
+          });
+      });
+
+      it(`returns \`${origin}\` provenance that matches the contract on a marked event, and not for another action`, () => {
+        const provenance = reviewedActionProvenance(origin, {
+          surface,
+          action,
+        });
+        const otherAction = reviewedActionProvenance(origin, {
+          surface,
+          action: "DeleteDirectCommand",
+        });
+        expect(
+          trustedEventMatchesUiContract(
+            rendererEvent({ provenance }),
+            contract,
+          ),
+        ).toBe(true);
+        expect(trustedEventMatchesUiContract({ provenance }, contract)).toBe(
+          false,
+        );
+        expect(
+          trustedEventMatchesUiContract(
+            rendererEvent({ provenance: otherAction }),
+            contract,
+          ),
+        ).toBe(false);
+      });
+    }
+
+    it("returns a fresh object on each call", () => {
+      const first = reviewedActionProvenance("dom", { surface, action });
+      const second = reviewedActionProvenance("dom", { surface, action });
+      expect(second).not.toBe(first);
+      expect(second.ui).not.toBe(first.ui);
+      expect(second.ui.eventIntegrity).not.toBe(first.ui.eventIntegrity);
+    });
   });
 
   it("requires renderer-attested trusted pattern provenance when declared", () => {

@@ -165,7 +165,7 @@ describe("stream declaration", () => {
       tx,
     );
     const running = rt.run(tx, pattern, {}, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     return { pattern, cell };
   };
@@ -239,7 +239,7 @@ describe("stream declaration", () => {
     const before = countOf(cell);
     const tx = rt.edit();
     recreated.withTx(tx).send({});
-    await tx.commit();
+    await tx.commit().settled;
     await cell.pull();
     expect(countOf(cell)).toBe(before + 1);
     expect(recreated.getRaw()).toBeUndefined();
@@ -582,7 +582,7 @@ describe("stream declaration", () => {
       const before = countOf(cell);
       const tx = rt.edit();
       resolved.handler.withTx(tx).send({});
-      await tx.commit();
+      await tx.commit().settled;
       await cell.pull();
       expect(countOf(cell)).toBe(before + 1);
       expect(bare.getRaw()).toBeUndefined();

@@ -23,6 +23,9 @@ export interface HarnessChatResearchContext {
 }
 
 export interface HarnessChatSessionSnapshot {
+  /** Admitted catalog fingerprints by action id, committed with their events. */
+  clientActionCatalogAnswers?: Readonly<Record<string, string>>;
+
   session: HarnessChatSessionStatus;
   transcript: readonly HarnessTranscriptMessage[];
 

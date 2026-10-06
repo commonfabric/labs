@@ -63,7 +63,7 @@ describe("getCellValue()", () => {
         sql: "INSERT INTO notes (body) VALUES (?), (?)",
         params: ["first", "second"],
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const compiled = await runtime.patternManager.compilePattern(PROGRAM, {
         space,

@@ -55,6 +55,7 @@ import {
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
   CHAT_UNREACT_ACTION,
+  type ChatDisplay,
   type ChatReaction,
   type ChatReactionTally,
   type ChatRoomKind,
@@ -254,49 +255,65 @@ export const FabriChatMessageRow = pattern<
     const reply = message.get()?.replyTo;
     return reply?.shownIn === "main" ? bodyText(reply.message.get()) : "";
   });
-  // Where the message belongs: the main conversation, the open thread, or
-  // both, and how many replies the thread it roots holds.
+  // Whether the message belongs in the main conversation, and how many
+  // replies the thread it roots holds. Both read the room's messages alone,
+  // so whichever runtime runs the room computes them for every viewer.
   const placement = computed(() => {
     const entries = messageEntries(messages);
     const own = entryFor(entries, message);
-    if (own === undefined) {
-      return { inMain: false, inOpenThread: false, replies: 0 };
-    }
-    const openRoot = composer.get()?.thread;
-    const root = openRoot?.get() === undefined
-      ? undefined
-      : entryFor(entries, openRoot);
-    const byKey = new Map<string, ViewItem>(
-      entries.map((entry) => [entry.key, entry]),
-    );
+    if (own === undefined) return { inMain: false, replies: 0 };
     return {
       inMain: isInMain(own),
-      inOpenThread: root !== undefined &&
-        (own.key === root.key || threadRootOf(own, byKey) === root.key),
       replies: threadReplyCounts(entries).get(own.key) ?? 0,
     };
   });
-  const rowDisplay = computed(() =>
-    (inThread ? placement.inOpenThread : placement.inMain) ? "block" : "none"
+  // Whether the message is in the session's open thread, which only the
+  // session's own runtime computes.
+  const inOpenThread = computed(() => {
+    const openRoot = composer.get()?.thread;
+    if (openRoot?.get() === undefined) return false;
+    const entries = messageEntries(messages);
+    const own = entryFor(entries, message);
+    const root = entryFor(entries, openRoot);
+    if (own === undefined || root === undefined) return false;
+    const byKey = new Map<string, ViewItem>(
+      entries.map((entry) => [entry.key, entry]),
+    );
+    return own.key === root.key || threadRootOf(own, byKey) === root.key;
+  });
+  const mainRowDisplay = computed((): ChatDisplay =>
+    placement.inMain ? "block" : "none"
+  );
+  const threadRowDisplay = computed((): ChatDisplay =>
+    inOpenThread ? "block" : "none"
   );
   const threadLabel = computed(() =>
     placement.replies === 1 ? "1 reply" : `${placement.replies} replies`
   );
-  const threadLinkDisplay = computed(() =>
+  const threadLinkDisplay = computed((): ChatDisplay =>
     !inThread && placement.replies > 0 ? "inline-flex" : "none"
   );
   // What differs by viewer or by session is shown or hidden through a prop,
   // never by building a different tree: a branch chosen per viewer is stored
   // once for everyone, and runtimes that chose differently overwrite each
-  // other without end.
-  const ownDisplay = computed(() =>
+  // other without end. Each element shown or hidden this way also carries a
+  // static `hidden`, which keeps it out of view until its display computed has
+  // a value and is outranked by that value once it has one, so an element
+  // whose computed has yet to run stays hidden. A computed that reads the
+  // viewer's or the session's state has a value only once a runtime acting
+  // for that viewer runs the room, which one that only renders it does not,
+  // so a row's place in the main conversation, which every viewer is shown,
+  // is decided by a computed reading the room's messages alone.
+  const ownDisplay = computed((): ChatDisplay =>
     isMine && !isDeletedNow ? "inline-flex" : "none"
   );
-  const obliterateDisplay = computed(() =>
+  const obliterateDisplay = computed((): ChatDisplay =>
     canObliterate ? "inline-flex" : "none"
   );
-  const editorDisplay = computed(() => (isEditing ? "block" : "none"));
-  const pickerDisplay = computed(() =>
+  const editorDisplay = computed(
+    (): ChatDisplay => (isEditing ? "block" : "none"),
+  );
+  const pickerDisplay = computed((): ChatDisplay =>
     pickerOpen.get() === true ? "flex" : "none"
   );
   const pickerLabel = computed(() => (pickerOpen.get() === true ? "✕" : "☺+"));
@@ -353,7 +370,14 @@ export const FabriChatMessageRow = pattern<
 
   return {
     [UI]: (
-      <div style={{ display: rowDisplay }}>
+      // A row of the main conversation takes its display from shared state
+      // alone, never the session's, or a viewer whose runtime only renders
+      // the room would have the row hidden for good. A thread row's display
+      // is the session's, and stays hidden until the session runs the room.
+      <div
+        hidden
+        style={{ display: inThread ? threadRowDisplay : mainRowDisplay }}
+      >
         <cf-hover-reveal revealed={pickerOpen}>
           <div
             style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}
@@ -405,6 +429,7 @@ export const FabriChatMessageRow = pattern<
               <div
                 data-ui-pattern={CHAT_EDIT_SURFACE}
                 data-ui-event-integrity={CHAT_EDIT_SURFACE}
+                hidden
                 style={{ display: editorDisplay }}
               >
                 <cf-hstack gap="1" align="center">
@@ -460,6 +485,7 @@ export const FabriChatMessageRow = pattern<
                       aria-label="Remove my reaction"
                       title="Remove my reaction"
                       disabled={cannotWrite}
+                      hidden
                       style={{ display: tally.mine ? "inline-flex" : "none" }}
                       onClick={commitDeleteReaction({
                         myProfile,
@@ -492,6 +518,7 @@ export const FabriChatMessageRow = pattern<
               <cf-button
                 size="sm"
                 variant="link"
+                hidden
                 style={{ display: threadLinkDisplay }}
                 onClick={openThread}
               >
@@ -503,6 +530,7 @@ export const FabriChatMessageRow = pattern<
             <div
               data-ui-pattern={CHAT_REACT_SURFACE}
               data-ui-event-integrity={CHAT_REACT_SURFACE}
+              hidden
               style={{
                 display: pickerDisplay,
                 gap: "0.25rem",
@@ -571,6 +599,7 @@ export const FabriChatMessageRow = pattern<
             <cf-button
               size="sm"
               variant="ghost"
+              hidden
               style={{ display: ownDisplay }}
               onClick={startEdit}
             >
@@ -585,6 +614,7 @@ export const FabriChatMessageRow = pattern<
                 data-ui-action={CHAT_DELETE_ACTION}
                 size="sm"
                 variant="ghost"
+                hidden
                 style={{ display: ownDisplay }}
                 onClick={deleteMessage}
               >
@@ -600,6 +630,7 @@ export const FabriChatMessageRow = pattern<
                 data-ui-action={CHAT_OBLITERATE_ACTION}
                 size="sm"
                 variant="ghost"
+                hidden
                 style={{ display: obliterateDisplay }}
                 onClick={obliterateMessage}
               >

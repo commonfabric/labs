@@ -1,7 +1,11 @@
 import type { NonDocumentPath } from "@commonfabric/memory/v2";
 
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
+import {
+  readStoredCfcMetadata,
+  type StoredCfcLabels,
+  StoredCfcMetadataError,
+} from "./metadata.ts";
 import { entryObservationClass } from "./observation-classes.ts";
 import { PathPrefixIndex } from "./path-prefix-index.ts";
 import type { CfcAddress, CfcDereferenceTrace, CfcMetadata } from "./types.ts";
@@ -11,6 +15,7 @@ import {
   type CfcLabelViewEntry,
   cfcLabelViewOriginSpaces,
   cfcLabelViewPathKey,
+  confidentialityOnly,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
   withCfcLabelViewOrigins,
@@ -39,7 +44,7 @@ export {
  * each carrying its effective observation class.
  */
 const cfcLabelViewEntriesFromMetadata = (
-  metadata: CfcMetadata,
+  metadata: StoredCfcLabels,
 ): CfcLabelViewEntry[] =>
   metadata.labelMap.entries.flatMap((entry) => {
     // The view carries the EFFECTIVE class: the persisted
@@ -47,12 +52,9 @@ const cfcLabelViewEntriesFromMetadata = (
     // resolved here, so view consumers classify without knowing about
     // origins.
     const observes = entryObservationClass(entry);
-    // Label-metadata population templates (template-population Stage B)
-    // are envelope-LOCAL: they describe this envelope's own payload
-    // entries and are re-derived per envelope at persist, so they never
-    // ride label views — a link transports the source's payload labels,
-    // and the target's envelope mints its own templates from whatever
-    // entries land there.
+    // Only a label-metadata template carries this class, and a decoded
+    // envelope keeps templates out of its entries; a view entry cannot
+    // carry the class either.
     if (observes === "labelMetadata") {
       return [];
     }
@@ -64,7 +66,8 @@ const cfcLabelViewEntriesFromMetadata = (
   });
 
 export const cfcLabelViewFromMetadata = (
-  metadata: CfcMetadata | undefined,
+  // A stored envelope, or a reader's labels without the envelope around them.
+  metadata: CfcMetadata | StoredCfcLabels | undefined,
   path: NonDocumentPath,
 ): CfcLabelView | undefined => {
   if (!metadata) {
@@ -236,11 +239,14 @@ export const referenceRestrictionsOf = (
   view === undefined ? undefined : withCfcLabelViewOrigins(
     mergeCfcLabelViews([{
       version: 1,
-      entries: view.entries.flatMap(({ path, label }) =>
-        path.length === 0 && label.confidentiality !== undefined
-          ? [{ path: [], label: { confidentiality: label.confidentiality } }]
-          : []
-      ),
+      entries: view.entries.flatMap(({ path, label }) => {
+        const restriction = path.length === 0
+          ? confidentialityOnly(label)
+          : undefined;
+        return restriction === undefined
+          ? []
+          : [{ path: [], label: restriction }];
+      }),
     }]),
     cfcLabelViewOriginSpaces(view),
   );
