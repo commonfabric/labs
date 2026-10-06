@@ -385,9 +385,10 @@ tools. A run's workspace and artifacts go under `--work-root`, which defaults to
 
 A run's sandbox is the one the harness selects.
 `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`; with none named, a
-Mac runs each run on its native runtime, from the cfc-vm store, and a run fails
-with the harness's refusal where that store is not set up, while every other
-platform runs Docker. On Docker, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+Mac runs each run on its native runtime, from the cfc-vm store, while every
+other platform runs Docker. The runner derives that selection as it starts, and
+where the harness would refuse its runs, a Mac whose store is not set up among
+them, it exits with the harness's refusal before it connects. On Docker, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
 Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the
 prompt-slot role `context`, and the run returns its structured result through

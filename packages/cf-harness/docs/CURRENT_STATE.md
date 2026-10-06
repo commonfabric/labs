@@ -156,10 +156,12 @@ selected: by `--sandbox-runtime docker` or `CF_HARNESS_SANDBOX_RUNTIME=docker`
 on the batch CLI, and by the variable alone on the entrypoints that take no
 selection flag. `cf agent` runs the batch CLI with an argument list it writes
 itself, so its operator can pass no flag, and it asks for the variable alone
-too. The Loom local host's own refusal names the flag and the variable on its
-batch lane and the variable alone on its interactive lane. Through the batch
-lane a refusal is a host failure carrying the message, and through the
-interactive lane a chat-protocol `internal_error` carrying it.
+too. `cf agent runner` derives the selection once as it starts, through
+`selectCfHarnessCliSandboxRuntime()`, and exits with the refusal where each of
+its runs would get it. The Loom local host's own refusal names the flag and the
+variable on its batch lane and the variable alone on its interactive lane.
+Through the batch lane a refusal is a host failure carrying the message, and
+through the interactive lane a chat-protocol `internal_error` carrying it.
 
 `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
 the batch CLI, which the batch lane of the Loom local host also hands its
@@ -446,7 +448,11 @@ session cap included, and leaves it open when it ends.
 
 Three files decide how the direct driver's sandbox is built and labeled: the CFC
 policy, the rootfs, and the `runsc` binary. Each is refused when it lies inside
-a writable mount of the run, where the sandbox could rewrite it.
+a writable mount of the run, where the sandbox could rewrite it. For the native
+runtime macOS defaulted to, whose three files nobody named, the refusal adds
+that no runtime is named, where the store is, and that Docker is selected with
+`CF_HARNESS_SANDBOX_RUNTIME=docker`. A run whose workspace is the home directory
+gets it, since the default store is under the home.
 
 Each of the three is resolved once, when the configuration is resolved, to the
 path the filesystem leads to, and that path is both what is compared with the

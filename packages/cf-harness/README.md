@@ -1091,7 +1091,8 @@ A run on the native default is a run on the direct driver, with everything the
 rest of this section says of that driver. Two of its differences stop or change
 a run that works on Docker. A workspace or a writable host mount that holds the
 store or the policy is refused, since the sandbox could rewrite them, so a run
-whose workspace is the home directory names Docker or another workspace. And
+whose workspace is the home directory names Docker or another workspace; the
+refusal says that the runtime was the default and how Docker is selected. And
 `host.docker.internal` reaches only the host ports the launch forwards into the
 VM.
 
@@ -3861,9 +3862,12 @@ outputs, run state, and CFC policy traces.
 
 On Docker Desktop for macOS, use the host path for `cf-harness` and the
 `/host_mnt/...` projection for Docker's runtime args. The gVisor
-`docker-desktop-cfc-setup` helper defaults to:
+`docker-desktop-cfc-setup` helper defaults to the two directories below. The
+first line names the Docker driver, which macOS does not default to and whose
+directories its default refuses:
 
 ```bash
+export CF_HARNESS_SANDBOX_RUNTIME=docker
 export CF_HARNESS_RUNSC_CFC_RESULT_DIR="$HOME/.local/share/runsc-cfc/cfc-results"
 export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR="$HOME/.local/share/runsc-cfc/cfc-invocations"
 ```

@@ -159,10 +159,13 @@ The conditional live integration exercises ACL genesis, the visitor WRITE grant,
 a real home queue, the agent runner, a scripted model response, and per-reader
 result visibility against a disposable `dev-local` toolshed:
 
-Set `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+The run's sandbox is Docker. Set `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` to the host directories registered
 for `runsc-cfc` in `docker info`. Strict CFC runs refuse to start without both
-transports; the paths must match the runtime registration.
+transports; the paths must match the runtime registration. The test names Docker
+for its runs unless `CF_HARNESS_SANDBOX_RUNTIME` already names a runtime, since
+a Mac runs its native runtime where none is named and that runtime refuses the
+two directories.
 
 ```bash
 AGENT_DEMO_API_URL=http://localhost:8432 \
