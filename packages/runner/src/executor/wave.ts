@@ -1465,7 +1465,11 @@ export class WaveAccumulator
             "(serving-loop.md §3d, RULED 2026-08-05)",
         );
       }
-      const emptySettlement = assembly.spaces.length === 0 && localAcceptance
+      // A contribution with no replica writes still has its settlement wait
+      // on the wave when it carries a publication obligation or an
+      // access-list change, either of which the wave can withdraw.
+      const emptySettlement = assembly.spaces.length === 0 &&
+          (localAcceptance || spaceAccessChanges.length > 0)
         ? Promise.withResolvers<Result<Unit, StorageTransactionRejected>>()
         : undefined;
       if (emptySettlement !== undefined) {
