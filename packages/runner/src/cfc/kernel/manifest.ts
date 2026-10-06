@@ -21,12 +21,15 @@
  *
  * `deno task check-cfc-correspondence` holds this table to the snapshot
  * beside it and to the kernel directory: a row must name a function the
- * snapshot has; a row that is `exact` or `adapted` must name a kernel file
- * exporting that function under a matching header; a `missing` row must name
- * a function the kernel does not yet export. The check also reports a
- * function the snapshot defines in a section some row names that neither a
- * row nor {@link COMPANIONS} accounts for, so the specification adding a
- * function beside a critical one is a decision this table has to record.
+ * snapshot has, in a section {@link CRITICAL_SECTIONS} lists; a row that is
+ * `exact` or `adapted` must name a kernel file exporting that function under
+ * a matching header; a `missing` row must name a function the kernel does
+ * not yet export. The check also reports a function the snapshot defines in
+ * a critical section that neither a row nor {@link COMPANIONS} accounts for,
+ * so the specification adding a function beside a critical one is a decision
+ * this table has to record. A companion may be exported from the kernel
+ * without a row of its own, under a `@spec` header for its own block, since
+ * the critical function it serves is written over it.
  *
  * `docs/development/cfc-spec-correspondence.md` holds the procedure that
  * turns a row from `missing` to one of the other two.
@@ -129,6 +132,29 @@ const STORE = "08-12-store-label-monotonicity.md";
 const WRITE_AUTHORITY = "08-15-write-authority.md";
 
 const PREPARE = "cfc/prepare.ts";
+
+/**
+ * The sections whose pseudocode a reactive runtime executes, by chapter file.
+ * Every function the snapshot defines in one of these is a row or a
+ * companion, and every row names one of these. The list is independent of
+ * the rows so that removing a section's last row leaves the section in the
+ * inventory, where the check reports its functions as undecided.
+ */
+export const CRITICAL_SECTIONS: readonly { file: string; section: string }[] = [
+  { file: CORE, section: "3.1.4" },
+  { file: CORE, section: "3.1.7" },
+  { file: LABELS, section: "4.3.4" },
+  { file: LABELS, section: "4.4.5" },
+  { file: LABELS, section: "4.6.4.1" },
+  { file: PROPAGATION, section: "8.9.2" },
+  { file: PROPAGATION, section: "8.9.3" },
+  { file: BOUNDARIES, section: "8.10.1.1" },
+  { file: BOUNDARIES, section: "8.10.2" },
+  { file: BOUNDARIES, section: "8.10.3" },
+  { file: BOUNDARIES, section: "8.10.4" },
+  { file: STORE, section: "8.12.1" },
+  { file: WRITE_AUTHORITY, section: "8.15.6" },
+];
 
 /**
  * Every critical function, grouped by the chapter that states it, in the

@@ -74,6 +74,7 @@ const input = (overrides: Partial<CheckInput>): CheckInput => ({
   snapshot,
   manifest: [atomLeRow, cnfRow],
   companions: [],
+  criticalSections: [{ file: STORE, section: "8.12.1" }],
   kernelFiles: [atomLeSource],
   citationFiles: [],
   exemptions: [],
@@ -116,11 +117,12 @@ describe("check-cfc-correspondence", () => {
             "08-12-store-label-monotonicity.md §8.12.1 defines " +
             "`isMoreRestrictiveCNF`, which is neither a row nor a " +
             "companion; decide which it is",
-            "08-12-store-label-monotonicity.md §8.12.4 defines `canWrite`, " +
-            "which is neither a row nor a companion; decide which it is",
             "the row for `isMoreRestrictiveCNF` names " +
             "08-12-store-label-monotonicity.md §8.12.4, where the snapshot " +
             "defines no such function",
+            "the row for `isMoreRestrictiveCNF` names " +
+            "08-12-store-label-monotonicity.md §8.12.4, which " +
+            "CRITICAL_SECTIONS does not list",
           ]);
       });
 
@@ -157,6 +159,47 @@ describe("check-cfc-correspondence", () => {
           "row and a companion",
           "the companion `ghost` names 08-12-store-label-monotonicity.md " +
           "§8.12.1, where the snapshot defines no such function",
+        ]);
+      });
+
+      it("reports a row whose section `CRITICAL_SECTIONS` does not list", () => {
+        const row: ManifestRow = {
+          ...cnfRow,
+          section: "8.12.4",
+          name: "canWrite",
+        };
+        expect(messages(collectFindings(input({ manifest: [atomLeRow, row] }))))
+          .toEqual([
+            "08-12-store-label-monotonicity.md §8.12.1 defines " +
+            "`isMoreRestrictiveCNF`, which is neither a row nor a " +
+            "companion; decide which it is",
+            "the row for `canWrite` names 08-12-store-label-monotonicity.md " +
+            "§8.12.4, which CRITICAL_SECTIONS does not list",
+          ]);
+      });
+
+      it("reports the functions of a critical section that has lost its last row", () => {
+        expect(
+          messages(
+            collectFindings(
+              input({
+                manifest: [],
+                kernelFiles: [],
+                criticalSections: [
+                  { file: STORE, section: "8.12.1" },
+                  { file: STORE, section: "8.12.4" },
+                ],
+              }),
+            ),
+          ),
+        ).toEqual([
+          "08-12-store-label-monotonicity.md §8.12.1 defines `atomLe`, " +
+          "which is neither a row nor a companion; decide which it is",
+          "08-12-store-label-monotonicity.md §8.12.1 defines " +
+          "`isMoreRestrictiveCNF`, which is neither a row nor a companion; " +
+          "decide which it is",
+          "08-12-store-label-monotonicity.md §8.12.4 defines `canWrite`, " +
+          "which is neither a row nor a companion; decide which it is",
         ]);
       });
 
@@ -224,7 +267,98 @@ export const isMoreRestrictiveCNF = (a: unknown, b: unknown): boolean =>
           "08-12-store-label-monotonicity.md §8.12.1 defines " +
           "`isMoreRestrictiveCNF`, which is neither a row nor a " +
           "companion; decide which it is",
-          "exports `isMoreRestrictiveCNF()`, which no manifest row names",
+          "exports `isMoreRestrictiveCNF()` for " +
+          "08-12-store-label-monotonicity.md §8.12.1, which no manifest row " +
+          "or companion names",
+        ]);
+      });
+
+      it("accepts a companion exported under a header for its own block", () => {
+        const file = kernelFile(
+          atomLeSource.text + `
+/** @spec ${STORE} §8.12.1 isMoreRestrictiveCNF sha256:${HASH_A} */
+export const isMoreRestrictiveCNF = (a: unknown, b: unknown): boolean =>
+  a === b;
+`,
+        );
+        const companion: Companion = {
+          file: STORE,
+          section: "8.12.1",
+          name: "isMoreRestrictiveCNF",
+          note: "helper",
+        };
+        expect(
+          collectFindings(
+            input({
+              manifest: [atomLeRow],
+              companions: [companion],
+              kernelFiles: [file],
+            }),
+          ),
+        ).toEqual([]);
+      });
+
+      it("matches a kernel export to the row of the section its header names, not by name alone", () => {
+        const twoSections: SpecSnapshot = {
+          ...snapshot,
+          sections: [...snapshot.sections, "4.4.5"],
+          functions: [
+            ...snapshot.functions,
+            {
+              file: "04-label-representation.md",
+              section: "4.4.5",
+              name: "atomLe",
+              sha256: HASH_B,
+            },
+          ],
+        };
+        const otherRow: ManifestRow = {
+          ...atomLeRow,
+          file: "04-label-representation.md",
+          section: "4.4.5",
+          kernelFile: "exchange.ts",
+        };
+        const exchange: SourceFile = {
+          path: `${KERNEL_DIR}exchange.ts`,
+          text: `
+/** @spec 04-label-representation.md §4.4.5 atomLe sha256:${HASH_B} */
+export function atomLe(a: unknown, b: unknown): boolean {
+  return a !== b;
+}
+`,
+        };
+        const sections = [
+          { file: STORE, section: "8.12.1" },
+          { file: "04-label-representation.md", section: "4.4.5" },
+        ];
+        expect(
+          collectFindings(
+            input({
+              snapshot: twoSections,
+              manifest: [atomLeRow, cnfRow, otherRow],
+              kernelFiles: [atomLeSource, exchange],
+              criticalSections: sections,
+            }),
+          ),
+        ).toEqual([]);
+        // Swapping the two kernel files' homes is reported against the
+        // header's section, not against the shared name.
+        const swapped: ManifestRow = { ...otherRow, kernelFile: "label.ts" };
+        expect(
+          messages(
+            collectFindings(
+              input({
+                snapshot: twoSections,
+                manifest: [atomLeRow, cnfRow, swapped],
+                kernelFiles: [atomLeSource, exchange],
+                criticalSections: sections,
+              }),
+            ),
+          ),
+        ).toEqual([
+          "the row for `atomLe` names packages/runner/src/cfc/kernel/label.ts, " +
+          "and packages/runner/src/cfc/kernel/exchange.ts is where it is " +
+          "exported",
         ]);
       });
     });
@@ -267,11 +401,31 @@ export function atomLe(a: unknown, b: unknown): boolean {
         expect(messages(collectFindings(input({ kernelFiles: [file] }))))
           .toEqual([
             "the row for `atomLe` names 08-12-store-label-monotonicity.md " +
-            "§8.12.1, and its header names " +
+            "§8.12.1, and the header of the `atomLe()` " +
+            "packages/runner/src/cfc/kernel/store-labels.ts exports names " +
             "08-12-store-label-monotonicity.md §8.12.4",
+            "exports `atomLe()` for 08-12-store-label-monotonicity.md " +
+            "§8.12.4, which no manifest row or companion names",
             "`atomLe()` names 08-12-store-label-monotonicity.md §8.12.4, " +
             "where the snapshot defines no such function",
           ]);
+      });
+
+      it("reads a wrapped header and one exported through an `export { … }` list", () => {
+        const file = kernelFile(`
+/**
+ * Whether \`proposed\` is at least as restrictive as \`current\`.
+ *
+ * @spec ${STORE} §8.12.1
+ *   atomLe sha256:${HASH_A}
+ */
+function le(proposed: unknown, current: unknown): boolean {
+  return proposed === current;
+}
+
+export { le as atomLe };
+`);
+        expect(collectFindings(input({ kernelFiles: [file] }))).toEqual([]);
       });
 
       it("reports a header written for another function", () => {
@@ -337,6 +491,15 @@ export function atomLe(a: unknown, b: unknown): boolean {
               "transaction, reads no dial and calls no hook",
             ],
           ]);
+      });
+
+      it("ignores an import whose every binding is marked `type` inline", () => {
+        const file = kernelFile(
+          `import { type Tx, type Meta } from "../../storage/interface.ts";\n` +
+            `export { type Row } from "../types.ts";\n` +
+            atomLeSource.text,
+        );
+        expect(collectFindings(input({ kernelFiles: [file] }))).toEqual([]);
       });
 
       it("reports a value import reaching outside the kernel", () => {
@@ -491,8 +654,8 @@ export function atomLe(a: unknown, b: unknown): boolean {
         );
         expect(messages(collectFindings(input({ markerFiles: [file] }))))
           .toEqual([
-            "4 `SPEC-PENDING` markers exceed the budget of 3; land a ruling " +
-            "before adding another",
+            "4 `SPEC-PENDING` markers across the governed files exceed the " +
+            "budget of 3; land a ruling before adding another",
           ]);
       });
     });
@@ -517,8 +680,16 @@ export function atomLe(a: unknown, b: unknown): boolean {
         "export const five: (a: number) => number = (a) => a;",
         "",
         "export const notAFunction = { a: 1 };",
+        "export const EMPTY = ([] as const);",
+        "export const WRAPPED = (compute());",
         "export type Alias = string;",
-        "function internal(): void {}",
+        "/** Six. */",
+        "function six({ a = (1) }: { a?: number }): number {",
+        "  return a;",
+        "}",
+        "const seven = async (): Promise<void> => {};",
+        "const notExported = () => 1;",
+        "export { six, seven as sevenAlias, type Alias };",
       ].join("\n");
       expect(
         exportedFunctions(source).map(({ name, comment }) => [name, comment]),
@@ -528,6 +699,8 @@ export function atomLe(a: unknown, b: unknown): boolean {
         ["three", null],
         ["four", null],
         ["five", null],
+        ["six", " Six. "],
+        ["sevenAlias", null],
       ]);
     });
   });
@@ -549,6 +722,9 @@ export function atomLe(a: unknown, b: unknown): boolean {
         `export type { J } from "./j.ts";`,
         `const k = await import("./k.ts");`,
         `export { l };`,
+        `import { type M, type N } from "./m.ts";`,
+        `export { type O } from "./o.ts";`,
+        `import { type P, q } from "./p.ts";`,
       ].join("\n");
       expect(valueImports(source).map(({ specifier }) => specifier)).toEqual([
         "./a.ts",
@@ -560,6 +736,7 @@ export function atomLe(a: unknown, b: unknown): boolean {
         "./h.ts",
         "./i.ts",
         "./k.ts",
+        "./p.ts",
       ]);
     });
   });

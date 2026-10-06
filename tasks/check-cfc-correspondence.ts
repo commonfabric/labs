@@ -28,8 +28,9 @@
  *    recorded in {@link EXEMPTIONS}, naming the file, the citation and why;
  *    an entry whose file no longer writes its citation is reported too.
  * 4. **`SPEC-PENDING` markers stay under budget and name their ruling.** At
- *    most {@link SPEC_PENDING_BUDGET} markers across `packages/`, each on a
- *    line naming a `commonfabric/specs` pull request.
+ *    most {@link SPEC_PENDING_BUDGET} markers across the files the CFC rule
+ *    governs, {@link GOVERNED_SOURCE}, each on a line naming a
+ *    `commonfabric/specs` pull request.
  *
  * What it does not check: that a kernel function's body matches its block,
  * which is equivalence the hash makes reviewable and review decides; that a
@@ -47,6 +48,7 @@ import { dirname, fromFileUrl } from "@std/path";
 import {
   type Companion,
   COMPANIONS,
+  CRITICAL_SECTIONS,
   MANIFEST,
   type ManifestRow,
 } from "@commonfabric/runner/cfc/kernel/manifest";
@@ -83,8 +85,30 @@ export const KERNEL_SHARED_MODULES: ReadonlySet<string> = new Set([
   "@commonfabric/api/cfc",
 ]);
 
-/** The most `SPEC-PENDING` markers the tree may hold at once. */
+/** The most `SPEC-PENDING` markers the governed files may hold at once. */
 export const SPEC_PENDING_BUDGET = 3;
+
+/**
+ * The source files the CFC rule in `.claude/rules/cfc.md` governs, which is
+ * where a `SPEC-PENDING` marker may sit: the runner's CFC sources and their
+ * tests, the render boundaries in `html`, and the harness's CFC modules. The
+ * two lists are kept in step by hand.
+ */
+export const GOVERNED_SOURCE: readonly RegExp[] = [
+  /^packages\/runner\/src\/cfc\/.*\.tsx?$/,
+  /^packages\/runner\/src\/cfc\.ts$/,
+  /^packages\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
+  /^packages\/runner\/test\/cfc\/.*\.tsx?$/,
+  /^packages\/html\/src\/worker\/(?:reconciler|display-fit)\.ts$/,
+  /^packages\/cf-harness\/src\/cfc-[^/]*\.ts$/,
+  /^packages\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
+  /^packages\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
+];
+
+/** Whether `path` is one the CFC rule governs. */
+export function isGovernedSource(path: string): boolean {
+  return GOVERNED_SOURCE.some((pattern) => pattern.test(path));
+}
 
 /** The pull request a marker has to name. */
 const SPECS_PULL_REQUEST =
@@ -135,6 +159,9 @@ export interface CheckInput {
   manifest: readonly ManifestRow[];
   companions: readonly Companion[];
 
+  /** The sections whose every function is a row or a companion. */
+  criticalSections: readonly { file: string; section: string }[];
+
   /** Every TypeScript file under the kernel directory. */
   kernelFiles: readonly SourceFile[];
 
@@ -142,7 +169,7 @@ export interface CheckInput {
   citationFiles: readonly SourceFile[];
   exemptions: readonly Exemption[];
 
-  /** Every file under `packages/` a marker may sit in. */
+  /** Every governed file a marker may sit in. */
   markerFiles: readonly SourceFile[];
   budget: number;
 }
@@ -189,47 +216,96 @@ export interface ExportedFunction {
 
 /**
  * An exported function declaration at the start of a line: `export function`,
- * `export async function`, or an `export const` initialized to an arrow
- * function, with or without `async`.
+ * `export async function`, or an `export const` whose initializer is an arrow
+ * function, with or without `async`. A parameter list may nest parentheses
+ * one deep, and a return type may sit between it and the `=>`; a `const`
+ * whose initializer merely opens with a parenthesis, such as a cast, is not a
+ * function.
  */
 const EXPORTED_FUNCTION =
-  /^export\s+(?:async\s+)?function\s*\*?\s+([A-Za-z_$][\w$]*)|^export\s+const\s+([A-Za-z_$][\w$]*)(?::[^\n]*?)?\s*=\s*(?:async\s*)?(?:\(|[A-Za-z_$][\w$]*\s*=>)/gm;
+  /^export\s+(?:async\s+)?function\s*\*?\s+([A-Za-z_$][\w$]*)|^export\s+const\s+([A-Za-z_$][\w$]*)(?::[^\n]*?)?\s*=\s*(?:async\s*)?(?:\((?:[^()]|\([^()]*\))*\)(?:\s*:[^=\n]*?)?|[A-Za-z_$][\w$]*)\s*=>/gm;
+
+/**
+ * An `export { … }` list with no `from` clause, which exports declarations
+ * of this module under their own or another name.
+ */
+const EXPORT_LIST = /^export\s*\{([^}]*)\}\s*;?[ \t]*$/gm;
+
+/** The doc comment ending directly above offset `at` in `source`, or `null`. */
+function docCommentAbove(source: string, at: number): string | null {
+  const before = source.slice(0, at).replace(/\s+$/, "");
+  if (!before.endsWith("*/")) return null;
+  const open = before.lastIndexOf("/**");
+  return open === -1 ? null : before.slice(open + 3, before.length - 2);
+}
 
 /**
  * Every function `source` exports, each with the doc comment that ends on the
- * line above its declaration. This recognizes the two declaration shapes
- * `EXPORTED_FUNCTION` states and nothing else, so a function exported through
- * an `export { name }` list, or a `const` whose arrow sits behind a cast, is
- * not seen; a kernel file writes its functions as plain exported
- * declarations.
+ * line above its declaration. Two shapes are seen: the declarations
+ * `EXPORTED_FUNCTION` states, and a name in an `export { … }` list whose
+ * declaration in this file is a `function` or an arrow `const`, under the
+ * name the list exports it as. A `const` whose arrow sits behind a cast, or
+ * a name re-exported from another module, is not seen.
  */
 export function exportedFunctions(source: string): ExportedFunction[] {
   const found: ExportedFunction[] = [];
   for (const match of source.matchAll(EXPORTED_FUNCTION)) {
     const name = match[1] ?? match[2];
-    const before = source.slice(0, match.index).replace(/\s+$/, "");
-    let comment: string | null = null;
-    if (before.endsWith("*/")) {
-      const open = before.lastIndexOf("/**");
-      if (open !== -1) comment = before.slice(open + 3, before.length - 2);
-    }
-    found.push({ name, comment, at: match.index });
+    found.push({
+      name,
+      comment: docCommentAbove(source, match.index),
+      at: match.index,
+    });
   }
-  return found;
+  for (const list of source.matchAll(EXPORT_LIST)) {
+    for (const entry of list[1].split(",")) {
+      const binding =
+        /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/
+          .exec(entry);
+      if (binding === null || /^\s*type\s/.test(entry)) continue;
+      const [, local, alias] = binding;
+      const declaration = new RegExp(
+        `^(?:async\\s+)?function\\s*\\*?\\s+${local}\\b|^const\\s+${local}\\b(?:[^\\n]*?)=\\s*(?:async\\s*)?(?:\\((?:[^()]|\\([^()]*\\))*\\)(?:\\s*:[^=\\n]*?)?|[A-Za-z_$][\\w$]*)\\s*=>`,
+        "m",
+      ).exec(source);
+      if (declaration === null) continue;
+      found.push({
+        name: alias ?? local,
+        comment: docCommentAbove(source, declaration.index),
+        at: declaration.index,
+      });
+    }
+  }
+  return found.sort((a, b) => a.at - b.at);
 }
 
 /**
  * The three ways a module reaches another for its value: an `import`
- * declaration that is not `import type`, bare imports included; an `export`
- * list or `export *` with a `from` clause that is not `export type`; and an
- * `import(...)` expression, wherever it sits. An `export { type X } from`
- * list is read as a value re-export, which errs toward reporting.
+ * declaration that is not `import type` and whose bindings are not all
+ * marked `type` inline, bare imports included; an `export` list or
+ * `export *` with a `from` clause, under the same two conditions; and an
+ * `import(...)` expression, wherever it sits. Each pattern captures the
+ * bindings clause, where there is one, and then the specifier.
  */
 const VALUE_IMPORTS = [
-  /^import\s+(?!type\s)(?:[^"']*?\s+from\s+)?["']([^"'\n]+)["']/gm,
-  /^export\s+(?!type\s)(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm,
-  /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g,
+  /^import\s+(?!type\s)(?:([^"']*?)\s+from\s+)?["']([^"'\n]+)["']/gm,
+  /^export\s+(?!type\s)(\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm,
+  /\bimport\s*\(()\s*["']([^"'\n]+)["']\s*\)/g,
 ];
+
+/**
+ * Whether a bindings clause is a braces list every one of whose bindings
+ * carries an inline `type`, which TypeScript erases whole.
+ */
+function allBindingsTyped(clause: string | undefined): boolean {
+  if (clause === undefined) return false;
+  const list = /^\{([^}]*)\}$/.exec(clause.trim());
+  if (list === null) return false;
+  const bindings = list[1].split(",").map((b) => b.trim()).filter((b) =>
+    b !== ""
+  );
+  return bindings.length > 0 && bindings.every((b) => /^type\s/.test(b));
+}
 
 /** Every specifier a file reaches for its value, with where, in file order. */
 export function valueImports(
@@ -238,7 +314,8 @@ export function valueImports(
   const found: { specifier: string; at: number }[] = [];
   for (const pattern of VALUE_IMPORTS) {
     for (const match of source.matchAll(pattern)) {
-      found.push({ specifier: match[1], at: match.index });
+      if (allBindingsTyped(match[1])) continue;
+      found.push({ specifier: match[2], at: match.index });
     }
   }
   return found.sort((a, b) => a.at - b.at);
@@ -253,11 +330,24 @@ function staysInKernel(specifier: string): boolean {
 // The check
 //
 
-/** The header rule over one kernel file, against the snapshot. */
+/** One function the kernel exports, by its header. */
+interface KernelExport {
+  /** Repository-relative path of the exporting file. */
+  file: string;
+
+  header: SpecHeader;
+}
+
+/**
+ * The header rule over one kernel file, against the snapshot. `seen` is
+ * keyed by the header's chapter file, section and name, so that two
+ * functions sharing a name in different sections are two exports and the
+ * same block exported twice is a finding.
+ */
 function kernelFileFindings(
   file: SourceFile,
   byKey: ReadonlyMap<string, SpecSnapshot["functions"][number]>,
-  seen: Map<string, { file: string; header: SpecHeader }>,
+  seen: Map<string, KernelExport>,
 ): Finding[] {
   const findings: Finding[] = [];
   for (const { specifier, at } of valueImports(file.text)) {
@@ -312,7 +402,7 @@ function kernelFileFindings(
           `${header.file} §${header.section} and update the header`,
       });
     }
-    const elsewhere = seen.get(name);
+    const elsewhere = seen.get(functionKey(header));
     if (elsewhere !== undefined) {
       findings.push({
         file: file.path,
@@ -322,7 +412,7 @@ function kernelFileFindings(
       });
       continue;
     }
-    seen.set(name, { file: file.path, header });
+    seen.set(functionKey(header), { file: file.path, header });
   }
   return findings;
 }
@@ -338,17 +428,23 @@ export function collectFindings(input: CheckInput): Finding[] {
   const sections = new Set(input.snapshot.sections);
 
   // The kernel directory: headers against the snapshot, and imports.
-  const exported = new Map<string, { file: string; header: SpecHeader }>();
+  const exported = new Map<string, KernelExport>();
   for (const file of input.kernelFiles) {
     for (const finding of kernelFileFindings(file, byKey, exported)) {
       findings.push(finding);
     }
   }
+  const exportedByName = new Map<string, KernelExport[]>();
+  for (const entry of exported.values()) {
+    const held = exportedByName.get(entry.header.name) ?? [];
+    held.push(entry);
+    exportedByName.set(entry.header.name, held);
+  }
 
   // The manifest against the snapshot and the kernel.
   const manifestPath = `${KERNEL_DIR}manifest.ts`;
+  const critical = new Set(input.criticalSections.map(sectionKey));
   const rowKeys = new Set<string>();
-  const rowSections = new Set<string>();
   for (const row of input.manifest) {
     const key = functionKey(row);
     if (rowKeys.has(key)) {
@@ -358,7 +454,13 @@ export function collectFindings(input: CheckInput): Finding[] {
       });
     }
     rowKeys.add(key);
-    rowSections.add(sectionKey(row));
+    if (!critical.has(sectionKey(row))) {
+      findings.push({
+        file: manifestPath,
+        message: `the row for \`${row.name}\` names ${row.file} ` +
+          `§${row.section}, which CRITICAL_SECTIONS does not list`,
+      });
+    }
     const recorded = byKey.get(key);
     if (recorded === undefined) {
       findings.push({
@@ -368,7 +470,7 @@ export function collectFindings(input: CheckInput): Finding[] {
       });
       continue;
     }
-    const kernel = exported.get(row.name);
+    const kernel = exported.get(key);
     if (row.relation === "missing") {
       if (kernel !== undefined) {
         findings.push({
@@ -381,23 +483,22 @@ export function collectFindings(input: CheckInput): Finding[] {
     }
     const expectedFile = `${KERNEL_DIR}${row.kernelFile}`;
     if (kernel === undefined) {
+      const sameName = exportedByName.get(row.name) ?? [];
       findings.push({
         file: manifestPath,
-        message: `the row for \`${row.name}\` names ${expectedFile}, which ` +
-          "exports no such function",
+        message: sameName.length === 0
+          ? `the row for \`${row.name}\` names ${expectedFile}, which ` +
+            "exports no such function"
+          : `the row for \`${row.name}\` names ${row.file} ` +
+            `§${row.section}, and the header of the \`${row.name}()\` ` +
+            `${sameName[0].file} exports names ${sameName[0].header.file} ` +
+            `§${sameName[0].header.section}`,
       });
     } else if (kernel.file !== expectedFile) {
       findings.push({
         file: manifestPath,
         message: `the row for \`${row.name}\` names ${expectedFile}, and ` +
           `${kernel.file} is where it is exported`,
-      });
-    } else if (functionKey(kernel.header) !== key) {
-      findings.push({
-        file: manifestPath,
-        message: `the row for \`${row.name}\` names ${row.file} ` +
-          `§${row.section}, and its header names ${kernel.header.file} ` +
-          `§${kernel.header.section}`,
       });
     }
   }
@@ -422,7 +523,7 @@ export function collectFindings(input: CheckInput): Finding[] {
   }
   for (const entry of input.snapshot.functions) {
     const key = functionKey(entry);
-    if (!rowSections.has(sectionKey(entry))) continue;
+    if (!critical.has(sectionKey(entry))) continue;
     if (rowKeys.has(key) || companionKeys.has(key)) continue;
     findings.push({
       file: manifestPath,
@@ -430,11 +531,12 @@ export function collectFindings(input: CheckInput): Finding[] {
         "which is neither a row nor a companion; decide which it is",
     });
   }
-  for (const [name, { file }] of exported) {
-    if (input.manifest.some((row) => row.name === name)) continue;
+  for (const [key, { file, header }] of exported) {
+    if (rowKeys.has(key) || companionKeys.has(key)) continue;
     findings.push({
       file,
-      message: `exports \`${name}()\`, which no manifest row names`,
+      message: `exports \`${header.name}()\` for ${header.file} ` +
+        `§${header.section}, which no manifest row or companion names`,
     });
   }
 
@@ -498,9 +600,10 @@ export function collectFindings(input: CheckInput): Finding[] {
   }
   if (markers > input.budget) {
     findings.push({
-      file: "packages/",
-      message: `${markers} \`SPEC-PENDING\` markers exceed the budget of ` +
-        `${input.budget}; land a ruling before adding another`,
+      file: "packages/runner/src/cfc/",
+      message: `${markers} \`SPEC-PENDING\` markers across the governed ` +
+        `files exceed the budget of ${input.budget}; land a ruling before ` +
+        "adding another",
     });
   }
 
@@ -513,9 +616,6 @@ export function collectFindings(input: CheckInput): Finding[] {
 
 /** A TypeScript or TSX source file. */
 const SOURCE = /\.tsx?$/;
-
-/** A file a `SPEC-PENDING` marker could sit in. */
-const MARKER_HOST = /\.(?:[cm]?[jt]sx?|md)$/;
 
 /** Reads the files the check covers from the tree at `root`. */
 export async function readInput(root: string): Promise<CheckInput> {
@@ -537,7 +637,7 @@ export async function readInput(root: string): Promise<CheckInput> {
     ) {
       citationFiles.push(await read(path));
     }
-    if (path.startsWith("packages/") && MARKER_HOST.test(path)) {
+    if (isGovernedSource(path)) {
       markerFiles.push(await read(path));
     }
   }
@@ -547,6 +647,7 @@ export async function readInput(root: string): Promise<CheckInput> {
     ) as SpecSnapshot,
     manifest: MANIFEST,
     companions: COMPANIONS,
+    criticalSections: CRITICAL_SECTIONS,
     kernelFiles,
     citationFiles,
     exemptions: EXEMPTIONS,

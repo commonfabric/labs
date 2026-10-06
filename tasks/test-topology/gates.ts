@@ -128,14 +128,27 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     kind: "gate",
     run: ["task", "check-cfc-correspondence"],
     // The CFC sources whose citations and kernel headers it reads, the
-    // snapshot and manifest under the kernel directory, and the task
-    // holding the exemptions. The `SPEC-PENDING` scan runs over all of
-    // `packages/`, which no declaration this narrow can name, so a marker
-    // added elsewhere reaches the gate on what it is worth.
+    // snapshot and manifest under the kernel directory, the other files
+    // the CFC rule governs, which its `SPEC-PENDING` scan reads, the task
+    // holding the exemptions, and the two modules it reads the tree and
+    // the snapshot's shape through. The runner's top-level `cfc*.test.ts`
+    // files are governed too, and this vocabulary has no file glob to name
+    // them by, so a marker added to one reaches the gate on what it is
+    // worth.
     reachedBy: [
+      "packages/cf-harness/src/cfc-label-disclosure.ts",
+      "packages/cf-harness/src/cfc-label-shape.ts",
+      "packages/cf-harness/src/cfc-posture.ts",
+      "packages/cf-harness/src/contracts/",
+      "packages/cf-harness/src/sandbox/runsc-cfc-result.ts",
+      "packages/html/src/worker/display-fit.ts",
+      "packages/html/src/worker/reconciler.ts",
       "packages/runner/src/cfc.ts",
       "packages/runner/src/cfc/",
+      "packages/runner/test/cfc/",
+      "tasks/cfc-spec-snapshot.ts",
       "tasks/check-cfc-correspondence.ts",
+      "tasks/repository-files.ts",
     ],
   },
   {
