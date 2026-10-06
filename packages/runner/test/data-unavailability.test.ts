@@ -1742,6 +1742,92 @@ export default pattern((input: { request: AsyncResult<{ field: string }> }) => {
     });
   }
 
+  for (
+    const [name, body] of [
+      [
+        "property chain",
+        `return { value: computed(() => { const nested = resultOf(computed(() => input.request)).nested; return nested.field; }) };`,
+      ],
+      [
+        "static element chain",
+        `return { value: computed(() => { const nested = resultOf(computed(() => input.request))["nested"]; return nested.field; }) };`,
+      ],
+      [
+        "multi-segment chain",
+        `return { value: computed(() => { const selected = resultOf(computed(() => input.request)).nested.field; return selected; }) };`,
+      ],
+      [
+        "nested lift chain",
+        `return { value: computed(() => lift(() => { const nested = resultOf(computed(() => input.request)).nested; return nested.field; })({})) };`,
+      ],
+    ]
+  ) {
+    it(`updates and preserves availability through an inline producer projection with a ${name}`, async () => {
+      const setup = runtime.edit();
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import { type AsyncResult, computed, lift, pattern, resultOf } from "commonfabric";
+export default pattern((input: { request: AsyncResult<{ nested: { field: string } }> }) => {
+  ${body}
+});`,
+        }],
+      }, { space, tx: setup });
+      const result = runtime.getCell<{ value: unknown }>(
+        space,
+        `inline-projection-${name}`,
+      );
+      runtime.run(setup, compiled, {
+        request: { nested: { field: "initial" } },
+      }, result);
+      runtime.prepareTxForCommit(setup);
+      expect((await setup.commit().settled).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      try {
+        await result.pull();
+        expect(result.key("value").get()).toBe("initial");
+        const input = result.getArgumentCell()!.key("request");
+        const update = runtime.edit();
+        input.withTx(update).key("nested").key("field").set("updated");
+        expect((await update.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(result.key("value").get()).toBe("updated");
+
+        for (
+          const marker of [
+            UNAVAILABLE_PENDING,
+            UNAVAILABLE_SYNCING,
+            unavailableError("projection source offline", "network"),
+          ]
+        ) {
+          const unavailable = runtime.edit();
+          input.withTx(unavailable).setRaw(marker);
+          expect((await unavailable.commit().settled).error).toBeUndefined();
+          await result.pull();
+          await runtime.idle();
+          const observed = expectUnavailable(
+            result.key("value").get(),
+            marker.reason,
+          );
+          expect(observed.errorKind).toBe(marker.errorKind);
+          expect(observed.errorMessage).toBe(marker.errorMessage);
+        }
+
+        const recovery = runtime.edit();
+        input.withTx(recovery).set({ nested: { field: "recovered" } });
+        expect((await recovery.commit().settled).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(result.key("value").get()).toBe("recovered");
+      } finally {
+        cancel();
+      }
+    });
+  }
+
   for (const parentPath of [[], ["bundle"]]) {
     it(`propagates unavailable ancestors of a linked rows input at ${JSON.stringify(parentPath)}`, async () => {
       const setup = runtime.edit();

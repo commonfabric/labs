@@ -116,6 +116,12 @@ export class DomApplicator {
   /** Children tracking: parentId → Set<childId> for O(n) descendant cleanup */
   readonly #nodeChildren = new Map<number, Set<number>>();
 
+  /** Pending source nodes and the element each source currently protects. */
+  readonly #pendingSources = new Map<number, HTMLElement | undefined>();
+
+  /** Each protected element retains pending state until its last source clears. */
+  readonly #pendingOwners = new Map<HTMLElement, Set<number>>();
+
   readonly #document: Document;
   readonly #onEvent: (message: DomEventMessage) => void;
   readonly #runtimeClient?: RuntimeClient;
@@ -262,6 +268,10 @@ export class DomApplicator {
     const nodeCount = this.#nodes.size;
     const listenerCount = this.#eventListeners.size;
 
+    for (const nodeId of this.#pendingSources.keys()) {
+      this.#setPendingSource(nodeId, false);
+    }
+
     // Remove all event listeners (skip container)
     for (const [nodeId, listeners] of this.#eventListeners) {
       if (nodeId === CONTAINER_NODE_ID) continue;
@@ -353,13 +363,12 @@ export class DomApplicator {
   }
 
   #setProp(nodeId: number, key: string, value: unknown): void {
-    const node = this.#nodes.get(nodeId);
-    if (!isElementNode(node)) return;
-
     if (key === PENDING_RENDER_ATTRIBUTE) {
-      setPendingRenderState(node, value === true);
+      this.#setPendingSource(nodeId, value === true);
       return;
     }
+    const node = this.#nodes.get(nodeId);
+    if (!isElementNode(node)) return;
     applyPendingRenderAuthoredAttributeUpdate(node, key, () => {
       // Use the configured property setter (defaults to setPropDefault)
       this.#setPropHandler(node, key, value);
@@ -367,13 +376,12 @@ export class DomApplicator {
   }
 
   #removeProp(nodeId: number, key: string): void {
-    const node = this.#nodes.get(nodeId);
-    if (!isElementNode(node)) return;
-
     if (key === PENDING_RENDER_ATTRIBUTE) {
-      setPendingRenderState(node, false);
+      this.#setPendingSource(nodeId, false);
       return;
     }
+    const node = this.#nodes.get(nodeId);
+    if (!isElementNode(node)) return;
     applyPendingRenderAuthoredAttributeUpdate(node, key, () => {
       if (key.startsWith("on") && key.length > 2) {
         this.#removeEvent(nodeId, key.slice(2).toLowerCase());
@@ -387,6 +395,45 @@ export class DomApplicator {
         this.#unsetProp(node, key);
       }
     });
+  }
+
+  /** Protects an element or a retained text node's authored parent element. */
+  #setPendingSource(nodeId: number, pending: boolean): void {
+    const node = this.#nodes.get(nodeId);
+    let target: HTMLElement | undefined;
+    if (pending) {
+      if (isElementNode(node)) target = node;
+      else if (isTextNode(node)) {
+        const parentId = this.#nodeParents.get(nodeId);
+        if (parentId !== undefined && parentId !== CONTAINER_NODE_ID) {
+          const parent = this.#nodes.get(parentId);
+          if (isElementNode(parent)) target = parent;
+        }
+      } else return;
+    }
+    const previous = this.#pendingSources.get(nodeId);
+    if (pending && this.#pendingSources.has(nodeId) && previous === target) {
+      return;
+    }
+    if (previous !== undefined) {
+      const owners = this.#pendingOwners.get(previous);
+      owners?.delete(nodeId);
+      if (owners?.size === 0) {
+        this.#pendingOwners.delete(previous);
+        setPendingRenderState(previous, false);
+      }
+    }
+    this.#pendingSources.delete(nodeId);
+    if (!pending) return;
+    this.#pendingSources.set(nodeId, target);
+    if (target === undefined) return;
+    let owners = this.#pendingOwners.get(target);
+    if (!owners) {
+      owners = new Set();
+      this.#pendingOwners.set(target, owners);
+      setPendingRenderState(target, true);
+    }
+    owners.add(nodeId);
   }
 
   /**
@@ -604,6 +651,9 @@ export class DomApplicator {
     } else {
       parent.appendChild(child);
     }
+    if (this.#pendingSources.has(childId)) {
+      this.#setPendingSource(childId, true);
+    }
     return true;
   }
 
@@ -661,6 +711,9 @@ export class DomApplicator {
     const removedNodeIds = new Set([nodeId]);
     this.#collectDescendantNodeIds(nodeId, removedNodeIds);
     this.#discardPendingForNodeIds(removedNodeIds);
+    for (const removedId of removedNodeIds) {
+      this.#setPendingSource(removedId, false);
+    }
     if (!node) return;
 
     logger.timeStart("remove-node", String(nodeId));

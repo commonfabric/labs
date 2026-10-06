@@ -1781,6 +1781,13 @@ Primary behaviors:
 - `resultOf(...)` preserves its operand's representation: a projection of an
   already materialized callback capture remains plain, while a projection of
   a local reactive producer remains opaque and receives `.key(...)` lowering
+- static property and element chains in variable initializers directly on
+  `resultOf(...)` of an inline reactive producer are normalized through the
+  destructuring path before
+  opaque-root discovery, including inside nested computed/lift callbacks.
+  The producer is evaluated once; projections of materialized captures remain
+  ordinary value reads (`runner/test/data-unavailability.test.ts` and
+  `ts-transformers/test/inline-producer-projection.test.ts`)
 - capture canonicalization preserves optional property and element chains on
   a `resultOf(...)` source, including continuation segments after a nullish
   short-circuit point

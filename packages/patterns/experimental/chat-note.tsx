@@ -272,6 +272,8 @@ const handleGenerate = handler<
     isGenerating: Writable<boolean>;
     mentionable: any;
     beforeAIInsert: Writable<string>;
+    beforeGeneration: Writable<string>;
+    generationDraft: Writable<string>;
   }
 >((_event, state) => {
   const currentContent = state.content.get();
@@ -302,6 +304,8 @@ const handleGenerate = handler<
     ? "---\n## AI\n"
     : "\n---\n## AI\n";
   const newContent = currentContent + separator;
+  state.beforeGeneration.set(currentContent);
+  state.generationDraft.set(newContent);
   state.content.set(newContent);
 
   // Save the prefix for streaming display
@@ -383,6 +387,8 @@ const ChatNote = pattern<Input, Output>(
 
     // Track content before AI insertion point for streaming display
     const beforeAIInsert = new Writable<string>("");
+    const beforeGeneration = new Writable<string>("");
+    const generationDraft = new Writable<string>("");
 
     // Watch for LLM streaming partial updates
     // Side-effect-only reactive computation: tracks its reactive reads
@@ -391,8 +397,13 @@ const ChatNote = pattern<Input, Output>(
       const generating = isGenerating.get();
       const partial = llmPartial;
       const prefix = beforeAIInsert.get();
-      if (generating && partial && prefix) {
-        content.set(prefix + partial);
+      if (
+        generating && partial && prefix &&
+        content.get() === generationDraft.get()
+      ) {
+        const draft = prefix + partial;
+        content.set(draft);
+        generationDraft.set(draft);
       }
     });
 
@@ -402,26 +413,32 @@ const ChatNote = pattern<Input, Output>(
       const generating = isGenerating.get();
       const pending = isPending(llmResponse);
       const result = llmResult;
-      // A terminal stream error must release the local generation latch. The
-      // request inputs are cleared as well so a later Generate action creates
-      // a fresh request instead of remaining attached to the failed one.
+      // A failed generation restores only the content it still owns, leaving
+      // concurrent edits intact. Clearing its inputs allows a fresh request.
       if (hasError(llmResponse)) {
         if (generating) {
+          if (content.get() === generationDraft.get()) {
+            content.set(beforeGeneration.get());
+          }
           isGenerating.set(false);
           llmMessages.set([]);
           beforeAIInsert.set("");
+          beforeGeneration.set("");
+          generationDraft.set("");
         }
         return;
       }
       // When complete, finalize with result and closing separator
       if (!pending && result && generating) {
         const prefix = beforeAIInsert.get();
-        if (prefix) {
+        if (prefix && content.get() === generationDraft.get()) {
           content.set(prefix + result + "\n---\n");
         }
         isGenerating.set(false);
         llmMessages.set([]);
         beforeAIInsert.set("");
+        beforeGeneration.set("");
+        generationDraft.set("");
       }
     });
 
@@ -574,6 +591,8 @@ const ChatNote = pattern<Input, Output>(
                   isGenerating,
                   mentionable,
                   beforeAIInsert,
+                  beforeGeneration,
+                  generationDraft,
                 })}
                 disabled={!canGenerate}
                 style={{
@@ -621,6 +640,8 @@ const ChatNote = pattern<Input, Output>(
               isGenerating,
               mentionable,
               beforeAIInsert,
+              beforeGeneration,
+              generationDraft,
             })}
           />
           {/* Keyboard shortcut: Ctrl+Enter to generate (Windows/Linux) */}
@@ -635,6 +656,8 @@ const ChatNote = pattern<Input, Output>(
               isGenerating,
               mentionable,
               beforeAIInsert,
+              beforeGeneration,
+              generationDraft,
             })}
           />
 

@@ -707,10 +707,13 @@ renderer owns those semantics; the enclosing `cf-render` owns their visual
 treatment in its static shadow-root stylesheet. It dims the subtree using the
 inherited `--cf-render-pending-opacity` and `--cf-render-pending-filter`
 component properties, so a theme host can refine the presentation without
-runtime style injection or inline-style mutation. A bare text node is retained
-but has no interactive surface or element on which to install the visual
-treatment. The marker is never stringified as `{}` and is not reported as
-invalid VDOM.
+runtime style injection or inline-style mutation. Nested pending sources receive
+one visual treatment per rendered branch. A retained text node protects its
+authored parent element, keeping a control with a pending direct text label
+inert. The parent remains pending until every text and element source
+protecting it recovers or is removed. Text rendered directly into the host
+container is retained without marking that unrelated container. The marker is
+never stringified as `{}` and is not reported as invalid VDOM.
 
 `error`, `syncing`, and `schemaMismatch` do not retain prior content. They
 contribute no visible content unless the authored expression explicitly

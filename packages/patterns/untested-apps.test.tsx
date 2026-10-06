@@ -11,10 +11,9 @@
  * section exists to produce a runtime error on purpose, so a passing test
  * cannot contain it.
  *
- * Every one finds its data through wishes rather than through inputs, so in an
- * empty space each has to come up with an empty view rather than fail. This
- * builds each one, checks the name it goes under, and reads its rendered tree,
- * which is what runs the derived expressions inside it.
+ * This builds each app, checks its name, and reads its available controls in
+ * an empty space. The row-label demo also exposes the SQLite refusal that
+ * protects a query without column provenance; that error is not empty data.
  */
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import ActivityLog from "./activity-log/activity-log.tsx";
@@ -83,7 +82,9 @@ export default pattern(() => {
 
   const assert_cfc_demos_render = assert(() =>
     textContent(promptInjectionDemo[UI]).length > 0 &&
-    textContent(rowLabelRecords[UI]).length > 0
+    rowLabelRecords[UI].name === "cf-screen" &&
+    textContent(rowLabelRecords[UI].props?.title) ===
+      "Patient Records — composed labels"
   );
 
   // The repro exists because a tree came back blank, so a tree with text in
@@ -101,6 +102,7 @@ export default pattern(() => {
       { assertion: assert_scoped_group_chat_renders },
       { assertion: assert_shared_profile_roster_renders },
       { assertion: assert_tools_render },
+      { render: rowLabelRecords[UI] },
       { assertion: assert_cfc_demos_render },
       { assertion: assert_repro_renders },
     ],
