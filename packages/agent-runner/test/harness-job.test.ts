@@ -7,9 +7,14 @@ import type {
   HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
-import { type HarnessJobSpec, runHarnessJob } from "../src/harness-job.ts";
+import {
+  type HarnessJobSpec,
+  runHarnessJob,
+  selectHarnessJobSandboxRuntime,
+} from "../src/harness-job.ts";
 
 /** The space a fabric job names. */
 const SPACE = "did:key:z6MkgUiiZvP3qYQqr1NWyS2uCpny8dejAvyuBZh2PAVACs97";
@@ -467,5 +472,53 @@ describe("runHarnessJob()", () => {
 
       expect(result.outcome).toBe("failed");
     });
+  });
+});
+
+describe("selectHarnessJobSandboxRuntime()", () => {
+  it("takes the runtime the environment names, on any platform", async () => {
+    const selection = await selectHarnessJobSandboxRuntime({
+      platform: "darwin",
+      env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+    });
+
+    expect(selection.sandboxRuntimeChoice).toEqual({
+      runtime: "docker",
+      source: "environment",
+    });
+  });
+
+  it("takes Docker by default off macOS", async () => {
+    const selection = await selectHarnessJobSandboxRuntime({
+      platform: "linux",
+      env: {},
+    });
+
+    expect(selection.sandboxRuntimeChoice).toEqual({
+      runtime: "docker",
+      source: "default",
+      platform: "linux",
+    });
+  });
+
+  it("refuses, as every job would be refused, on a Mac whose native runtime is not set up", async () => {
+    // By its real path: a store reached through a link is refused for that
+    // before what it lacks is looked at.
+    const home = await Deno.realPath(
+      await Deno.makeTempDir({ prefix: "harness-job-home-" }),
+    );
+    try {
+      const refusal = await selectHarnessJobSandboxRuntime({
+        platform: "darwin",
+        env: { HOME: home },
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(HarnessControlError);
+      expect(String(refusal)).toMatch(
+        /the native `runsc` runtime, and it is not set up at /,
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
   });
 });
