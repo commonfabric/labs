@@ -45,7 +45,7 @@ async function cleanup(
   _storageManager: ReturnType<typeof StorageManager.emulate>,
   tx: IExtendedStorageTransaction,
 ) {
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.dispose();
 }
 
@@ -913,7 +913,7 @@ Deno.bench({
       const tx = runtime.edit();
       const cell = runtime.getCell<any>(space, "bench-multi-tx", undefined, tx);
       cell.set({ value: i, data: `test-${i}` });
-      await tx.commit();
+      await tx.commit().settled;
     }
 
     await runtime.dispose();

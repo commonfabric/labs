@@ -190,7 +190,7 @@ describe("Memory v2 lazy session creation", () => {
     });
     expect(sessionCreates).toBe(0);
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result).toEqual({ ok: {} });
     expect(sessionCreates).toBe(1);
     expect(commits).toBe(1);
@@ -215,7 +215,7 @@ describe("Memory v2 lazy session creation", () => {
             type,
             path: [],
           }, { value: { count: 2 } });
-          reentrantCommit = nestedTx.commit();
+          reentrantCommit = nestedTx.commit().settled;
         }
         return Promise.resolve({
           client: { close: () => Promise.resolve() } as never,
@@ -245,7 +245,7 @@ describe("Memory v2 lazy session creation", () => {
       path: [],
     }, { value: { count: 1 } });
 
-    expect(await tx.commit()).toEqual({ ok: {} });
+    expect(await tx.commit().settled).toEqual({ ok: {} });
     expect(await reentrantCommit).toEqual({ ok: {} });
     expect(sessionCreates).toBe(1);
     expect(commits).toBe(2);
@@ -294,7 +294,7 @@ describe("Memory v2 lazy session creation", () => {
     }, {
       value: { count: 1 },
     });
-    const first = await firstTx.commit();
+    const first = await firstTx.commit().settled;
     expect(first.error).toBeDefined();
 
     const secondTx = storage.edit();
@@ -306,7 +306,7 @@ describe("Memory v2 lazy session creation", () => {
     }, {
       value: { count: 2 },
     });
-    const second = await secondTx.commit();
+    const second = await secondTx.commit().settled;
 
     expect(second).toEqual({ ok: {} });
     expect(sessionCreates).toBe(2);
@@ -489,7 +489,7 @@ describe("Memory v2 lazy emulated server creation", () => {
     });
     expect(serverCreates).toBe(0);
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result).toEqual({ ok: {} });
     expect(serverCreates).toBe(1);
 

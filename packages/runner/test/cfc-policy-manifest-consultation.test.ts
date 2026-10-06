@@ -95,7 +95,7 @@ const seedSecretSource = async (runtime: Runtime, name: string) => {
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 const persistenceArtifact = (moduleIdentity: string) =>
@@ -165,7 +165,7 @@ const runTaintedManifestPersistence = async (
     state: "absent",
   });
   expect(tx.prepareCfc()).not.toBe("");
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
   return { tx, derivedId: derived.getAsNormalizedFullLink().id };
 };
 
@@ -324,7 +324,7 @@ describe("module-policy manifest consultation", () => {
         state: "absent",
       });
       install.prepareCfc();
-      expect((await install.commit()).ok).toBeDefined();
+      expect((await install.commit().settled).ok).toBeDefined();
 
       const scan = runtime.edit();
       runtime.getCell(signer.did(), "manifest-scan-probe", undefined, scan)
@@ -385,7 +385,7 @@ describe("module-policy manifest consultation", () => {
           path: ["value"],
         }, { forged: true }).ok,
       ).toBeDefined();
-      expect((await tamper.commit()).ok).toBeDefined();
+      expect((await tamper.commit().settled).ok).toBeDefined();
       const invalid = coldRuntime.edit();
       expect(
         coldRuntime.resolveCfcPolicyManifest(
@@ -440,7 +440,7 @@ describe("module-policy manifest consultation", () => {
         type: "application/json",
         path: ["value"],
       }, value as never);
-      expect((await raw.commit()).ok).toBeDefined();
+      expect((await raw.commit().settled).ok).toBeDefined();
     };
 
     try {

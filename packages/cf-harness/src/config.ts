@@ -3,6 +3,10 @@ import {
   validateLoomAuthoringConfig,
 } from "./loom-authoring.ts";
 import {
+  type HarnessLoomCommandsConfig,
+  validateLoomCommandsConfig,
+} from "./loom-commands.ts";
+import {
   type HarnessLoomRetrievalConfig,
   validateLoomRetrievalConfig,
 } from "./loom-retrieval.ts";
@@ -263,6 +267,9 @@ interface HarnessCommonConfig {
   /** Explicit host retrieval backing; never inferred from a model input. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
+  /** Explicit host command broker; never inferred from a model input. */
+  loomCommands?: HarnessLoomCommandsConfig;
+
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
   sandbox?: DockerRunscSandboxConfig;
@@ -341,6 +348,9 @@ export interface ResolveHarnessConfigOptions {
 
   /** Explicit host retrieval backing; never inferred from a model input. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /** Explicit host command broker; never inferred from a model input. */
+  loomCommands?: HarnessLoomCommandsConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -710,6 +720,9 @@ export const resolveHarnessConfig = (
   if (options.loomRetrieval !== undefined) {
     validateLoomRetrievalConfig(options.loomRetrieval);
   }
+  if (options.loomCommands !== undefined) {
+    validateLoomCommandsConfig(options.loomCommands);
+  }
   const modelProvider = options.modelProvider ?? "openai-compatible-gateway";
   if (
     options.credentialOwner !== undefined &&
@@ -811,6 +824,9 @@ export const resolveHarnessConfig = (
       : {}),
     ...(options.loomRetrieval !== undefined
       ? { loomRetrieval: structuredClone(options.loomRetrieval) }
+      : {}),
+    ...(options.loomCommands !== undefined
+      ? { loomCommands: structuredClone(options.loomCommands) }
       : {}),
     ...(options.patternIndex !== undefined
       ? { patternIndex: options.patternIndex }

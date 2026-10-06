@@ -63,7 +63,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
           },
         ],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const { container, options } = makeContainer();
       const render = renderInProcess(container, vdom, options);
@@ -89,7 +89,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
         props: {},
         children: [label],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const { container, options } = makeContainer();
       const render = renderInProcess(container, vdom, options);
@@ -99,7 +99,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
 
       const update = runtime.edit();
       label.withTx(update).set("second");
-      await update.commit();
+      await update.commit().settled;
       await runtime.idle();
       render.flush();
       assertEquals(container.innerHTML, "<div>second</div>");
@@ -116,7 +116,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
         props: { style: { backgroundColor: "red", marginTop: 10 } },
         children: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const { container, options } = makeContainer();
       const render = renderInProcess(container, vdom, options);
@@ -139,7 +139,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
         props: {},
         children: ["gone soon"],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const { container, options } = makeContainer();
       const render = renderInProcess(container, vdom, options);
@@ -167,7 +167,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
         props: {},
         children: [text],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const { container, options } = makeContainer();
       const applied: string[] = [];
@@ -182,7 +182,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
 
       const update = runtime.edit();
       text.withTx(update).set("two");
-      await update.commit();
+      await update.commit().settled;
       await runtime.idle();
       render.flush();
       assertEquals(applied[applied.length - 1], "<div>two</div>");
@@ -213,7 +213,7 @@ Deno.test("in-process render - reports a bound prop without a runtime client", a
         props: { $value: value },
         children: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const { container, options } = makeContainer();
       const render = renderInProcess(container, vdom, options);

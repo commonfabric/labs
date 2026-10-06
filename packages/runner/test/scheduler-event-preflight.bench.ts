@@ -98,7 +98,7 @@ async function setupBroadGraph(
     fanCells.push(cell);
   }
 
-  await tx.commit();
+  await tx.commit().settled;
 
   const sharedWriter: Action = (actionTx) => {
     shared.withTx(actionTx).send((source.withTx(actionTx).get() ?? 0) + 1);
@@ -207,7 +207,7 @@ Deno.bench(
 
         const updateTx = graph.env.runtime.edit();
         graph.source.withTx(updateTx).send(2);
-        await updateTx.commit();
+        await updateTx.commit().settled;
 
         resetMeasuredTiming();
         graph.env.runtime.scheduler.queueEvent(
@@ -253,7 +253,7 @@ Deno.bench(
           eventStreams.push(eventStream);
           resultCells.push(result);
         }
-        await setupTx.commit();
+        await setupTx.commit().settled;
 
         for (let i = 0; i < EVENTS_PER_ROUND; i++) {
           const eventStream = eventStreams[i];
@@ -341,7 +341,7 @@ Deno.bench(
           cell.set({ payload: { value: i } });
           shallowReadCells.push(cell);
         }
-        await tx.commit();
+        await tx.commit().settled;
 
         for (const [index, cell] of deepReadCells.entries()) {
           const writer: Action = (actionTx) => {

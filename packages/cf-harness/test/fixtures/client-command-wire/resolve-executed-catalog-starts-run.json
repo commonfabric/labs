@@ -1,0 +1,55 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-0",
+  "settlement": {
+    "status": "executed",
+    "catalog": {
+      "entries": [
+        {
+          "command": "pattern.deploy",
+          "summary": "Deploy a pattern file and show it on this loom.",
+          "scope": "loom",
+          "executes": "loom",
+          "effect": "mutation",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "startsRun": true
+        },
+        {
+          "command": "command.run-outcome",
+          "summary": "Read how a command's run stands: pending, deployed or failed.",
+          "scope": "global",
+          "executes": "loom",
+          "effect": "read",
+          "approval": "automatic",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "run_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

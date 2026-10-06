@@ -184,7 +184,7 @@ describe("Phase 5 cross-space serving", () => {
     {
       const tx = bobRuntime.edit();
       bobInput.withTx(tx).set({ n: 1 });
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeUndefined();
     }
     await bobRuntime.storageManager.synced();
@@ -223,7 +223,7 @@ describe("Phase 5 cross-space serving", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, foreignArgument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -262,7 +262,7 @@ describe("Phase 5 cross-space serving", () => {
       {
         const tx = bobRuntime.edit();
         bobInput.withTx(tx).set({ n: 2 });
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error).toBeUndefined();
       }
       await waitForCellValue(
@@ -550,7 +550,7 @@ describe("Phase 5 cross-space serving", () => {
       });
       tx.enableMultiSpaceWrites?.([pSpace, homeSpace]);
       foreignCell.withTx(tx).set({ value: 41 });
-      expect((await tx.commit()).error?.message ?? "").toContain(
+      expect((await tx.commit().settled).error?.message ?? "").toContain(
         "holds no structural write grant",
       );
       expect(host!.stats().foreignWriteRefusals).toBe(refusalsBefore + 1);
@@ -567,7 +567,7 @@ describe("Phase 5 cross-space serving", () => {
         kind: "bookkeeping",
       });
       homeProbe.withTx(probeTx).set({ value: 7 });
-      expect((await probeTx.commit()).error).toBeUndefined();
+      expect((await probeTx.commit().settled).error).toBeUndefined();
       const homeEngine = await server.engineForSpace(homeSpace);
       const probeId = homeProbe.getAsNormalizedFullLink().id;
       await awaitAdmitted(
@@ -639,7 +639,7 @@ describe("Phase 5 cross-space serving", () => {
       tx.enableMultiSpaceWrites?.([pSpace, homeSpace]);
       foreignCell.withTx(tx).set({ value: 31 });
       homeCell.withTx(tx).set({ value: 32 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const pEngine = await server.engineForSpace(pSpace);
       const provisionedId = foreignCell.getAsNormalizedFullLink().id;
@@ -977,7 +977,7 @@ describe("Phase 5 cross-space serving", () => {
       // never a raw entries write into a second space's writer, which
       // the one-tx-one-space rule refuses (protocol.md §2b).
       servingStream.withTx(tx).send({ hello: "across" });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       // The outbox delivers the append into the FOREIGN stream's
       // sidecar, firedAt stamped from the CARRIED actor (LT5: the
@@ -1113,7 +1113,7 @@ describe("Phase 5 cross-space serving", () => {
       {
         const tx = bobRuntime.edit();
         doc.withTx(tx).set({ n: 1 });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await bobRuntime.storageManager.synced();
       const docId = doc.getAsNormalizedFullLink().id;
@@ -1198,7 +1198,7 @@ describe("Phase 5 cross-space serving", () => {
       {
         const tx = bobRuntime.edit();
         doc.withTx(tx).set({ n: 2 });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await bobRuntime.storageManager.synced();
       expect(
@@ -1299,7 +1299,7 @@ describe("Phase 5 cross-space serving", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -1319,7 +1319,7 @@ describe("Phase 5 cross-space serving", () => {
       const tx = clientRuntime.edit();
       clientRuntime.getCell<{ n: number }>(homeSpace, "f1b-arg", undefined, tx)
         .set({ n: 1 });
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeUndefined();
     }
     const clientResult = clientRuntime.getCell<{ total: number }>(
@@ -1369,7 +1369,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         badTx,
       ).set({ value: 1 });
-      const badCommit = await badTx.commit();
+      const badCommit = await badTx.commit().settled;
       // Accepted into the wave (the gate admits it) — the failure is
       // decided at the commit step's engine resolution.
       expect(badCommit.error).toBeUndefined();
@@ -1385,7 +1385,7 @@ describe("Phase 5 cross-space serving", () => {
           undefined,
           tx,
         ).set({ n: 2 });
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error).toBeUndefined();
       }
       await waitForCellValue(
@@ -1530,7 +1530,7 @@ describe("Phase 5 cross-space serving", () => {
       (homeCell as Cell<Record<string, unknown>>).key("defaultPattern").set(
         defaultCell as never,
       );
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeUndefined();
       await r.storageManager.synced();
       await r.dispose();
@@ -1601,7 +1601,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         seedTx,
       );
-      const seedCommitted = await seedTx.commit();
+      const seedCommitted = await seedTx.commit().settled;
       expect(seedCommitted.error).toBeUndefined();
 
       const sent: {
@@ -1642,7 +1642,7 @@ describe("Phase 5 cross-space serving", () => {
         const state = sent[0].state;
         const sidecar = state.key(UI as never).key("props").key("$cell")
           .resolveAsCell();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error).toBeUndefined();
         return sidecar;
       };
@@ -1750,7 +1750,7 @@ describe("Phase 5 cross-space serving", () => {
       (homeCell as Cell<Record<string, unknown>>).key("defaultPattern").set(
         defaultCell as never,
       );
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeUndefined();
       await r.storageManager.synced();
       await r.dispose();
@@ -1822,7 +1822,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         seedTx,
       );
-      const seedCommitted = await seedTx.commit();
+      const seedCommitted = await seedTx.commit().settled;
       expect(seedCommitted.error).toBeUndefined();
 
       // The run-supply seam: every scheduler run's stamp (its demanded
@@ -1831,7 +1831,7 @@ describe("Phase 5 cross-space serving", () => {
       const stamped: ServerRunInfo[] = [];
       const resolverQueries: string[][] = [];
       serving.installSealDestination(
-        { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit() },
+        { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled },
         {
           runStamper: (tx, info) => {
             stamped.push(info);
@@ -1882,7 +1882,7 @@ describe("Phase 5 cross-space serving", () => {
         expect(sent.length).toBe(1);
         const sidecar = sent[0].state.key(UI as never).key("props").key("$cell")
           .resolveAsCell();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error).toBeUndefined();
         return sidecar;
       };
@@ -2085,7 +2085,7 @@ export default pattern<
     const seed = clientRuntime.edit();
     argument.withTx(seed).set({ links: [] });
     clientRuntime.run(seed, compiled, argument, result);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     await clientManager.synced();
     host = newHost();
 
@@ -2235,7 +2235,7 @@ export default pattern<
     const seed = clientRuntime.edit();
     argument.withTx(seed).set({ links: [] });
     clientRuntime.run(seed, compiled, argument, result);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     await clientManager.synced();
     host = newHost();
 

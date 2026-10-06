@@ -1239,10 +1239,11 @@ export class Engine extends EventTarget {
             patternCoverage,
             builderSourceSites,
             // The transformer-level twin of `storedSource` above: pattern
-            // shape gates (opaque reserved result keys) demote to warnings
-            // here, so a rule added after these bytes were admitted cannot
-            // brick their reload. The identity check below already
-            // guarantees this compile reconstructs rather than admits.
+            // shape gates (opaque reserved result keys, `unknown` result
+            // fields) demote to warnings here, so a rule added after these
+            // bytes were admitted cannot brick their reload. The identity
+            // check below already guarantees this compile reconstructs
+            // rather than admits.
             storedSource: true,
             moduleIdentities: identityByPath,
             // Names on this path are already stored-shaped (no `/<id>`

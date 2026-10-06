@@ -101,7 +101,7 @@ const seedLabelMap = async (
       labelMap: { version: 1, entries },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 // Like `seedLabelMap`, with one label at `path`.
@@ -147,7 +147,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
             );
             sink.set({ out: matches ? 42 : "unendorsed" });
             tx.prepareCfc();
-            const result = await tx.commit();
+            const result = await tx.commit().settled;
             if (matches) {
               expect(result.ok).toBeDefined();
               const read = runtime.edit();
@@ -211,7 +211,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
           sink.set({ out: "authored value" });
           setCfcImplementationIdentity(tx, undefined);
           tx.prepareCfc();
-          const result = await tx.commit();
+          const result = await tx.commit().settled;
           if (builtin) {
             expect(result.ok).toBeDefined();
             const read = runtime.edit();
@@ -272,7 +272,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
         );
         sink.set({ out: 42 });
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const read = runtime.edit();
         try {
@@ -306,7 +306,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: "unendorsed" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed",
       );
@@ -351,7 +351,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       sink.set({ out: source });
       setCfcImplementationIdentity(tx, undefined);
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -418,7 +418,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       }, tx);
       sink.set({ out: link });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -477,7 +477,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
           "loop",
         ]);
         tx.prepareCfc();
-        const error = (await tx.commit()).error;
+        const error = (await tx.commit().settled).error;
         if (storedReader) {
           expect(error).toBeUndefined();
         } else {
@@ -546,7 +546,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       }, tx);
       sink.set({ out: link });
       tx.prepareCfc();
-      const message = (await tx.commit()).error?.message;
+      const message = (await tx.commit().settled).error?.message;
       expect(message).toContain("write floor failed at /out/approved");
     } finally {
       await runtime.dispose();
@@ -575,7 +575,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: "unendorsed" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed",
       );
@@ -598,7 +598,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: "unendorsed" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -619,7 +619,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: "unendorsed" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
       expect(
         tx.getCfcState().diagnostics.some((d) =>
@@ -645,7 +645,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: "endorsed" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -700,7 +700,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
         const sink = runtime.getCell(signer.did(), id, schema, tx);
         sink.set({ admins: [{ subject: "alice", displayName: "Alice" }] });
         tx.prepareCfc();
-        return String((await tx.commit()).error?.message ?? "");
+        return String((await tx.commit().settled).error?.message ?? "");
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -734,7 +734,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       const sink = runtime.getCell(signer.did(), "wf-min-sink", schema, tx);
       sink.set({ out: "endorsed-plus" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -770,7 +770,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       first.set({ out: src as unknown as string });
       seedTx.prepareCfc();
-      expect((await seedTx.commit()).ok).toBeDefined();
+      expect((await seedTx.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const sink = runtime.getCell(
@@ -781,7 +781,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: "new" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -814,7 +814,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       const sink = runtime.getCell(signer.did(), "wf-forged-sink", schema, tx);
       sink.set({ out: "forged" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed",
       );
@@ -848,7 +848,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: src as unknown as string });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -879,7 +879,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: src as unknown as string });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed",
       );
@@ -913,7 +913,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ pub: "visible", out: "unendorsed" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       // The floor field still rejects; the confidentiality-only field is inert.
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed at /out",
@@ -951,7 +951,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ items: ["unendorsed"] });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       // The wildcard floor is skipped by verifyWriteFloor (v1 scope), so no
       // write-floor rejection.
       expect(
@@ -988,7 +988,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: src as unknown as string });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(result.error?.message).toContain("write floor failed at /out");
     } finally {
@@ -1040,7 +1040,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: src as unknown as { secret: string } });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed at /out/secret",
       );
@@ -1118,7 +1118,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: source as unknown as { secret: string } });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed at /out/secret",
       );
@@ -1189,7 +1189,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: source as unknown as { secret: string } });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed at /out/secret",
       );
@@ -1239,7 +1239,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       sink.set({ out: src as unknown as { secret: string } });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -1288,7 +1288,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       runtime.getCell(signer.did(), "wf-mixed-unrelated", undefined, tx)
         .set("elsewhere");
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed at /out",
       );
@@ -1326,13 +1326,13 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       );
       seeded.set({ out: "endorsed" });
       seedTx.prepareCfc();
-      expect((await seedTx.commit()).ok).toBeDefined();
+      expect((await seedTx.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const sink = runtime.getCell(signer.did(), "wf-delete-sink", schema, tx);
       sink.set({});
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -1357,7 +1357,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       // Re-asserting enforce is fine.
       tx.setCfcWriteFloorMode("enforce");
       expect(tx.getCfcState().writeFloorMode).toBe("enforce");
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -1384,7 +1384,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       const sink = runtime.getCell(signer.did(), "wf-sibling-sink", schema, tx);
       sink.set({ note: "b" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();

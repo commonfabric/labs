@@ -99,7 +99,7 @@ async function report(): Promise<void> {
           ),
         );
         runtime.prepareTxForCommit(tx);
-        if ((await tx.commit()).error) {
+        if ((await tx.commit().settled).error) {
           throw new Error("Initialization commit failed");
         }
         cancel = result.sink(() => {});
@@ -121,7 +121,7 @@ async function report(): Promise<void> {
           if (phase === "unread title") {
             cells[size - 1].withTx(edit).key("title").set("Updated");
           } else cells[size - 1].withTx(edit).key("amount").set(size);
-          if ((await edit.commit()).error) {
+          if ((await edit.commit().settled).error) {
             throw new Error("Edit commit failed");
           }
           await runtime.idle();

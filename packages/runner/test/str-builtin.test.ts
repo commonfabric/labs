@@ -74,7 +74,7 @@ describe("str builtin", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, compiled, {}, resultCell) as any;
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
     return { compiled, result };
   };
@@ -100,7 +100,7 @@ describe("str builtin", () => {
 
       const writeTx = runtime.edit();
       result.withTx(writeTx).key("who").set("fabric");
-      await writeTx.commit();
+      await writeTx.commit().settled;
       await runtime.idle();
       await result.pull();
       expect(result.key("greeting").get()).toBe("Hello, fabric!");
@@ -245,7 +245,7 @@ describe("str builtin", () => {
       );
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, compiled, {}, resultCell1) as any;
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
       expect(r1.key("greeting").get()).toBe("Hello, world!");
 
@@ -261,7 +261,7 @@ describe("str builtin", () => {
         undefined,
         tx2,
       );
-      await tx2.commit();
+      await tx2.commit().settled;
       await resultCell2.sync();
       expect(await rt2.start(resultCell2)).toBe(true);
       await resultCell2.pull();

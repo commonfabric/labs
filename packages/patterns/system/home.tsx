@@ -23,6 +23,17 @@ import FabriChatManager, {
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
 import {
+  changeSharedSpaceMembership,
+  readSharedSpaceCatalog,
+  registerSharedSpace,
+  type SharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+  type SharedSpaceMembershipChange,
+  type SharedSpaceMembershipResult,
+  type SharedSpaceRegistration,
+  type SharedSpaceRegistrationResult,
+} from "./shared-space-catalog.ts";
+import {
   type CreateProfileEvent,
   seedProfileName,
   submitProfileCreation,
@@ -98,6 +109,15 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
+  sharedSpaceCatalog: SharedSpaceCatalog;
+  registerSharedSpace: Stream<
+    SharedSpaceRegistration,
+    SharedSpaceRegistrationResult
+  >;
+  changeSharedSpaceMembership: Stream<
+    SharedSpaceMembershipChange,
+    SharedSpaceMembershipResult
+  >;
   createProfile: Stream<CreateProfileEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
@@ -253,6 +273,10 @@ const Home = pattern(
     const favorites = new Writable<Favorite[]>([]).for("favorites");
     const journal = new Writable<JournalEntry[]>([]).for("journal");
     const spaces = new Writable<SpaceEntry[]>([]).for("spaces");
+    const catalog = new Writable<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }).for("sharedSpaceCatalog");
     const defaultAppUrl = new Writable("").for("defaultAppUrl");
     // NOTE(CT-1628): the `as any` casts around the profile cells below are
     // required because the CFC wrapper types (TrustedProfile*) don't yet compose
@@ -437,7 +461,11 @@ const Home = pattern(
       agentQueue,
       chatManager,
 
+      sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
+
       // Exported handlers
+      registerSharedSpace: registerSharedSpace({ catalog }),
+      changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

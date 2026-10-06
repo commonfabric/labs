@@ -3,11 +3,26 @@ import { hashOf } from "@commonfabric/data-model";
 import type { Module } from "../builder/types.ts";
 import type { HarnessedFunction } from "../harness/types.ts";
 import { getVerifiedProvenance } from "../harness/verified-provenance.ts";
+import { registeredBuiltinRef } from "../module.ts";
 import type { ImplementationIdentity } from "./types.ts";
 import { normalizeIdentitySource } from "./writer-claim-correspondence.ts";
 
 /**
  * Resolve the policy-facing implementation identity for a module invocation.
+ *
+ * `kind: "builtin"` is proven EXCLUSIVELY by registry membership: the module
+ * object is one a `ModuleRegistry` handed out (`registeredBuiltinRef` in
+ * module.ts). A builtin identity is read as proof of which builtin wrote a
+ * value by:
+ *   - the custody seal's `TransformedBy` witness (cfc/custody-seal.ts);
+ *   - reviewed snapshot copies (cfc/share-snapshot.ts);
+ *   - the builtin-name arm of `writeAuthorizedBy` (cfc/prepare.ts);
+ *   - `gateRuntimeMintedIntegrity`, under which a builtin's writes keep
+ *     runtime-minted atoms (cfc/prepare.ts).
+ * So it never comes from a member the module carries. A module that arrives
+ * as data — a stored graph or an op pattern's plain graph run as-is, whose
+ * module may carry any `debugName` — resolves as what it is: verified when its
+ * function has provenance, otherwise nothing.
  *
  * `kind: "verified"` is proven EXCLUSIVELY by the function object's
  * content-addressed provenance (harness/verified-provenance.ts): an entry
@@ -25,14 +40,14 @@ export const resolvePolicyFacingImplementationIdentity = (
     implementation?: HarnessedFunction;
   } = {},
 ): ImplementationIdentity | undefined => {
-  const debugName = (module as { debugName?: string }).debugName;
-  if (typeof debugName !== "string" || debugName.length === 0) {
+  const builtinId = registeredBuiltinRef(module);
+  if (builtinId === undefined) {
     return resolveProvenanceImplementationIdentity(options.implementation);
   }
 
   return {
     kind: "builtin",
-    builtinId: debugName,
+    builtinId,
   };
 };
 

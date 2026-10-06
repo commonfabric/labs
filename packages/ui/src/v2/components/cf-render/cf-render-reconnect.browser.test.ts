@@ -40,9 +40,9 @@ function fixture(linked = false, firstMountReply?: Promise<void>) {
     const watcher = createMockCellHandle<CellHandle>(target);
     watcher.sync = () => Promise.resolve(target);
     const subscribe = watcher.subscribe.bind(watcher);
-    watcher.subscribe = (callback) => {
+    watcher.subscribe = (callback, options) => {
       subscriptions++;
-      const cancel = subscribe(callback);
+      const cancel = subscribe(callback, options);
       return () => {
         subscriptions--;
         cancel();

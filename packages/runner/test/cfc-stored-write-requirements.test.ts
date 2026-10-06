@@ -91,7 +91,7 @@ describe("stored write requirements", () => {
   ) => {
     const tx = runtime.edit();
     runtime.getCell(space, id, schema, tx).set(value as never);
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   // A write through a cell that declares no schema, whose write-policy input
@@ -104,7 +104,7 @@ describe("stored write requirements", () => {
   ) => {
     const tx = runtime.edit();
     runtime.getCell(space, id, undefined, tx).key(key).set(value as never);
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   // Writes `value` at `keys` of `id` from a handler that runs for one trusted
@@ -425,7 +425,7 @@ describe("stored write requirements", () => {
         });
         runtime.getCell(space, id, declared, tx).key(...seedPath as [])
           .set(value as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       return declared;
     };
@@ -461,7 +461,7 @@ describe("stored write requirements", () => {
               } as JSONSchema,
             ).key(written.at(-1)! as never);
             field.set("overwritten" as never);
-            const result = await tx.commit();
+            const result = await tx.commit().settled;
 
             expect(refusalOf(result)).toContain(REFUSALS[claim]);
             expect(read(stored.get())).toBe("seeded");
@@ -545,7 +545,7 @@ describe("stored write requirements", () => {
       runtime.getCell(space, id, undefined, tx).key("box").set(
         { pin: "unclicked", other: "o3" } as never,
       );
-      expect(refusalOf(await tx.commit())).toContain(
+      expect(refusalOf(await tx.commit().settled)).toContain(
         "missing trusted-event policy input",
       );
     });
@@ -605,7 +605,7 @@ describe("stored write requirements", () => {
             properties: { other: schema },
           } as JSONSchema,
         ).key("other" as never).set("sibling" as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       expect(runtime.getCell(space, id, declared).get()).toEqual({
         parent: { child: "seeded" },
@@ -650,7 +650,7 @@ describe("stored write requirements", () => {
         builtinId: BUILTIN_WRITER,
       });
       runtime.getCell(space, id, STORED, tx).set(SEED as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     it("commits a labeled writer pushing an object into an array beside the claimed path", async () => {
@@ -671,7 +671,7 @@ describe("stored write requirements", () => {
           },
         },
       }, tx).key("spots").push({ label: "level 2" } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(runtime.getCell(space, "push-beside-claim", STORED).get())
         .toMatchObject({
           admins: { list: ["alice"] },
@@ -690,7 +690,9 @@ describe("stored write requirements", () => {
       const cell = runtime.getCell(space, "no-op-beside-write", undefined, tx);
       cell.key("admins").set({ list: ["alice"] } as never);
       cell.key("other").set("changed" as never);
-      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      expect(refusalOf(await tx.commit().settled)).toContain(
+        "writeAuthorizedBy",
+      );
       expect(runtime.getCell(space, "no-op-beside-write", STORED).get())
         .toMatchObject({ other: "o" });
     });
@@ -770,7 +772,7 @@ describe("stored write requirements", () => {
           target = target.key(key as never) as typeof target;
         }
         target.set(value as never);
-        expect(refusalOf(await tx.commit())).toContain(
+        expect(refusalOf(await tx.commit().settled)).toContain(
           "missing trusted-event policy input",
         );
         expect(
@@ -811,7 +813,7 @@ describe("stored write requirements", () => {
       setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       runtime.getCell(space, id, schema, tx).set(value as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     const ATTEMPTS = [
@@ -850,7 +852,9 @@ describe("stored write requirements", () => {
             target = target.key(key as never) as typeof target;
           }
           target.set(value as never);
-          expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+          expect(refusalOf(await tx.commit().settled)).toContain(
+            "writeAuthorizedBy",
+          );
           expect(runtime.getCell(space, id, STORED).get()).toEqual(SEED);
         });
       }
@@ -880,7 +884,7 @@ describe("stored write requirements", () => {
           tx,
         )
           .key("frozen").key("digest" as never).set("e" as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(runtime.getCell(space, id, STORED).get()).toMatchObject({
           frozen: { digest: "e" },
         });
@@ -907,7 +911,9 @@ describe("stored write requirements", () => {
         ...cell.getAsNormalizedFullLink(),
         path: ["frozen", "note"],
       }, "evil" as never);
-      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      expect(refusalOf(await tx.commit().settled)).toContain(
+        "writeAuthorizedBy",
+      );
       expect(runtime.getCell(space, id, STORED).get()).toEqual(SEED);
     });
 
@@ -942,7 +948,7 @@ describe("stored write requirements", () => {
         runtime.getCell(space, "item-named-writer", undefined, tx)
           .key("items").key(0 as never).key("name" as never)
           .set("b" as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(runtime.getCell(space, "item-named-writer", ITEMS).get())
           .toEqual({ items: [{ name: "b" }] });
       });
@@ -962,7 +968,9 @@ describe("stored write requirements", () => {
         runtime.getCell(space, "item-other-writer", undefined, tx)
           .key("items").key(0 as never).key("name" as never)
           .set("evil" as never);
-        expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+        expect(refusalOf(await tx.commit().settled)).toContain(
+          "writeAuthorizedBy",
+        );
         expect(runtime.getCell(space, "item-other-writer", ITEMS).get())
           .toEqual(ITEMS_SEED);
       });
@@ -977,7 +985,7 @@ describe("stored write requirements", () => {
       setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       runtime.getCell(space, "named-writer-under-root", undefined, tx).key("a")
         .set(3 as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(runtime.getCell(space, "named-writer-under-root", root).get())
         .toEqual({ a: 3, b: 2 });
     });
@@ -994,7 +1002,9 @@ describe("stored write requirements", () => {
         await seed(runtime, id, root as JSONSchema, { a: 1 });
         const tx = runtime.edit();
         runtime.getCell(space, id, undefined, tx).set(5 as never);
-        expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+        expect(refusalOf(await tx.commit().settled)).toContain(
+          "writeAuthorizedBy",
+        );
         expect(runtime.getCell(space, id, root as JSONSchema).get()).toEqual({
           a: 1,
         });
@@ -1020,7 +1030,7 @@ describe("stored write requirements", () => {
       setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: WRITER });
       runtime.getCell(space, id, schema, tx).set(value as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     const writeResult = (
@@ -1044,7 +1054,7 @@ describe("stored write requirements", () => {
       const tx = runtime.edit();
       runtime.getCell(space, "metadata-beside-items", schema, tx).set([]);
       writeResult(runtime, tx, "metadata-beside-items");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
 
     it("commits beside a claim on a value key named `result`", async () => {
@@ -1064,7 +1074,7 @@ describe("stored write requirements", () => {
       runtime.getCell(space, "metadata-beside-key", schema, tx).key("other")
         .set("changed");
       writeResult(runtime, tx, "metadata-beside-key");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(runtime.getCell(space, "metadata-beside-key", schema).get())
         .toEqual({ result: "r", other: "changed" });
     });
@@ -1080,7 +1090,9 @@ describe("stored write requirements", () => {
       runtime.getCell(space, "metadata-and-key", schema, tx).key("result")
         .set("mallory");
       writeResult(runtime, tx, "metadata-and-key");
-      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      expect(refusalOf(await tx.commit().settled)).toContain(
+        "writeAuthorizedBy",
+      );
     });
   });
 
@@ -1155,7 +1167,7 @@ describe("stored write requirements", () => {
       {
         const tx = runtime.edit();
         profile.withTx(tx).set({ avatar: "a" } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const tx = runtime.edit();
       setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
@@ -1174,7 +1186,7 @@ describe("stored write requirements", () => {
       const seeded = value(raw ? profile.getAsLink() : profile);
       if (raw) holder.setRaw(seeded as never);
       else holder.set(seeded as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return seeded;
     };
 
@@ -1202,7 +1214,7 @@ describe("stored write requirements", () => {
       const next = { ...value, other: "changed" };
       if (raw) holder.setRaw(next as never);
       else holder.set(next as never);
-      return await tx.commit();
+      return await tx.commit().settled;
     };
 
     it("follows a new release's claims beneath a linked profile", async () => {
@@ -1242,7 +1254,7 @@ describe("stored write requirements", () => {
         runtime.getCell(space, "own-claim-profile", profileDocument, tx).set(
           { avatar: "a" } as never,
         );
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = runtime.edit();
@@ -1258,7 +1270,7 @@ describe("stored write requirements", () => {
           tx,
         )
           .set({ profile, profiles: [profile], other: "o" } as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const value = { profile, profiles: [profile], other: "o" };
       expect(
@@ -1274,7 +1286,7 @@ describe("stored write requirements", () => {
       });
       runtime.getCell(space, "own-claim-profile", undefined, tx).key("avatar")
         .set("evil" as never);
-      expect(refusalOf(await tx.commit())).toContain(
+      expect(refusalOf(await tx.commit().settled)).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /avatar",
       );
       expect(runtime.getCell(space, "own-claim-profile").get()).toEqual({
@@ -1353,7 +1365,7 @@ describe("stored write requirements", () => {
       });
       runtime.getCell(space, "absent-guarded", undefined, tx).key("profile")
         .set({ avatar: "inline" } as never);
-      expect(refusalOf(await tx.commit())).toContain(
+      expect(refusalOf(await tx.commit().settled)).toContain(
         "writeAuthorizedBy failed at /profile",
       );
 
@@ -1370,7 +1382,7 @@ describe("stored write requirements", () => {
       });
       runtime.getCell(space, "absent-guarded", undefined, picker)
         .key("profile").setRaw({ avatar: "inline" } as never);
-      expect(refusalOf(await picker.commit())).toContain(
+      expect(refusalOf(await picker.commit().settled)).toContain(
         "at /profile/avatar",
       );
     });
@@ -1421,7 +1433,7 @@ describe("stored write requirements", () => {
         profiles: (value.profiles as unknown[]).map(link),
         other: "changed",
       } as never);
-      expect(refusalOf(await tx.commit())).toContain(
+      expect(refusalOf(await tx.commit().settled)).toContain(
         "drops the stored writeAuthorizedBy",
       );
     });
@@ -1496,7 +1508,7 @@ describe("stored write requirements", () => {
         runtime.getCell(space, "recursive-release", NODE, tx).set(
           SEED as never,
         );
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const tx = runtime.edit();
       setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
@@ -1508,7 +1520,7 @@ describe("stored write requirements", () => {
       const cell = runtime.getCell(space, "recursive-release", NODE, tx);
       cell.key("next").setRaw({ label: "c", next: null } as never);
       cell.setRaw({ label: "a", next: { label: "d", next: null } } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
   });
 
@@ -1559,7 +1571,7 @@ describe("stored write requirements", () => {
       });
       const tx = runtime.edit();
       cell.withTx(tx).set({ avatar: id } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell;
     };
 
@@ -1577,7 +1589,7 @@ describe("stored write requirements", () => {
         builtinId: builtinIds[0],
       });
       write(tx);
-      return await tx.commit();
+      return await tx.commit().settled;
     };
 
     const holder = (
@@ -1595,7 +1607,7 @@ describe("stored write requirements", () => {
       setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       setCfcImplementationIdentity(tx, { kind: "builtin", builtinId: SEEDER });
       holder(runtime, id, tx).set(value as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     it("lets the position's named writer point it at another profile", async () => {
@@ -1733,7 +1745,7 @@ describe("stored write requirements", () => {
       } as JSONSchema, tx).setRaw(
         { profile: { avatar: "z" }, profiles: [] } as never,
       );
-      expect(refusalOf(await tx.commit())).toContain("/profile/avatar");
+      expect(refusalOf(await tx.commit().settled)).toContain("/profile/avatar");
     });
 
     it("judges each item of a list of links on its own previous and new value", async () => {

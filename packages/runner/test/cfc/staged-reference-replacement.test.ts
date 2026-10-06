@@ -39,7 +39,7 @@ describe("staged-reference-replacement", () => {
       type: "object",
       ifc: { integrity: ["new-proof"], confidentiality: ["new-secret"] },
     }, tx).set({ text: "replacement" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   });
 
   afterEach(async () => {
@@ -63,7 +63,9 @@ describe("staged-reference-replacement", () => {
     recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
       "slot",
     ]);
-    expect((await tx.commit()).error?.message).toContain("requiredIntegrity");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "requiredIntegrity",
+    );
   });
 
   it("rejects a public inline replacement after consuming a confidential source", async () => {
@@ -73,7 +75,7 @@ describe("staged-reference-replacement", () => {
     const holder = runtime.getCell(space, "holder", { type: "object" }, tx);
     holder.set({ slot: source });
     holder.setRaw({ slot: consumed });
-    expect((await tx.commit()).error?.message).toContain("writer-fit");
+    expect((await tx.commit().settled).error?.message).toContain("writer-fit");
   });
 
   it("refuses stale integrity at a floor in the replacement transaction", async () => {
@@ -89,7 +91,9 @@ describe("staged-reference-replacement", () => {
     recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
       "slot",
     ]);
-    expect((await tx.commit()).error?.message).toContain("requiredIntegrity");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "requiredIntegrity",
+    );
   });
 
   for (const labeled of [false, true]) {
@@ -113,7 +117,7 @@ describe("staged-reference-replacement", () => {
           input.kind === "link-write"
         ),
       ).toHaveLength(labeled ? 2 : 1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(holder.withTx(runtime.readTx()).key("slot").key("text").get())
         .toBe("replacement");
 
@@ -130,7 +134,7 @@ describe("staged-reference-replacement", () => {
       recordReferencedArgumentFields(consume, sink.getAsNormalizedFullLink(), [
         "slot",
       ]);
-      expect((await consume.commit()).error?.message).toContain(
+      expect((await consume.commit().settled).error?.message).toContain(
         "requiredIntegrity",
       );
       const labels = readStoredCfcMetadata(
@@ -164,7 +168,7 @@ describe("staged-reference-replacement", () => {
           replacement === "inline" ? { slot: { text: "inline" } } : {},
         );
       }
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(holder.withTx(runtime.readTx()).get()).toEqual(
         replacement === "ancestor"
           ? { container: { slot: { text: "inline" } } }
@@ -234,7 +238,7 @@ describe("staged-reference-replacement", () => {
       ) {
         stage();
       }
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(holder.withTx(runtime.readTx()).key("argument").key("text").get())
         .toBe("endorsed");
       for (const cell of [wrapper, holder]) {
@@ -270,7 +274,7 @@ describe("staged-reference-replacement", () => {
       recordReferencedArgumentFields(consume, sink.getAsNormalizedFullLink(), [
         "slot",
       ]);
-      expect((await consume.commit()).error).toBeUndefined();
+      expect((await consume.commit().settled).error).toBeUndefined();
       expect(sink.withTx(runtime.readTx()).key("slot").key("text").get())
         .toBe("endorsed");
     });
@@ -324,7 +328,7 @@ describe("staged-reference-replacement", () => {
       for (
         const stage of order === "bottom-up" ? stages : stages.toReversed()
       ) stage();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       for (const cell of [wrapper, holder]) {
         const entries = readStoredCfcMetadata(
           runtime.readTx(),
@@ -360,7 +364,7 @@ describe("staged-reference-replacement", () => {
               "slot",
             ],
           );
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           const tx = runtime.edit();
           const holder = runtime.getCell(space, "holder", {
             type: "object",
@@ -404,7 +408,7 @@ describe("staged-reference-replacement", () => {
           ) {
             stage();
           }
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           expect(
             holder.withTx(runtime.readTx()).key("argument").key("slot").key(
               "text",
@@ -450,7 +454,7 @@ describe("staged-reference-replacement", () => {
               "slot",
             ],
           );
-          expect((await consume.commit()).error?.message).toContain(
+          expect((await consume.commit().settled).error?.message).toContain(
             "requiredIntegrity",
           );
         });
@@ -481,7 +485,7 @@ describe("staged-reference-replacement", () => {
       recordReferencedArgumentFields(seed, wrapper.getAsNormalizedFullLink(), [
         "slot",
       ]);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
       const holder = runtime.getCell(space, "holder", {
         type: "object",
@@ -506,7 +510,7 @@ describe("staged-reference-replacement", () => {
       for (
         const stage of order === "bottom-up" ? stages : stages.toReversed()
       ) stage();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       for (const cell of [wrapper, holder]) {
         const entries = readStoredCfcMetadata(
           runtime.readTx(),
@@ -536,7 +540,7 @@ describe("staged-reference-replacement", () => {
     recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
       "slot",
     ]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const consume = runtime.edit();
     const sink = runtime.getCell(space, "sink", {
       type: "object",
@@ -550,7 +554,7 @@ describe("staged-reference-replacement", () => {
     recordReferencedArgumentFields(consume, sink.getAsNormalizedFullLink(), [
       "slot",
     ]);
-    expect((await consume.commit()).error).toBeUndefined();
+    expect((await consume.commit().settled).error).toBeUndefined();
     expect(sink.withTx(runtime.readTx()).key("slot").key("text").get()).toBe(
       "replacement",
     );
@@ -569,7 +573,7 @@ describe("staged-reference-replacement", () => {
       endorsed: { text: "endorsed" },
       plain: { text: "replacement" },
     });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     const holder = runtime.getCell(space, "holder", { type: "object" }, tx);
     holder.set({ slot: source.withTx(tx).key("endorsed") });
@@ -577,7 +581,7 @@ describe("staged-reference-replacement", () => {
     recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
       "slot",
     ]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const entries =
       readStoredCfcMetadata(runtime.readTx(), holder.getAsNormalizedFullLink())
         ?.labelMap.entries ?? [];
@@ -609,7 +613,7 @@ describe("staged-reference-replacement", () => {
     const holder = runtime.getCell(space, "holder", { type: "object" }, tx);
     holder.set({ slot: link });
     holder.set({ slot: runtime.getCell(space, "replacement", undefined, tx) });
-    expect((await tx.commit()).error?.message).toContain(
+    expect((await tx.commit().settled).error?.message).toContain(
       "Link CurrentPrincipal confidentiality requires a concrete stored reader",
     );
   });

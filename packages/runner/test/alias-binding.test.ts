@@ -149,7 +149,7 @@ describe("alias-binding", () => {
         tx,
       );
       inputCell.set({ input: 21, output: 0 });
-      await tx.commit();
+      await tx.commit().settled;
 
       const resultCell = runtime.getCell(
         space,

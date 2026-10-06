@@ -48,7 +48,7 @@ describe("a completed storage transaction", () => {
       cell.withTx(tx).get();
       expect(reactivityLogOf(tx).writes.length).toBeGreaterThan(0);
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       const completed = reactivityLogOf(tx);
@@ -74,7 +74,7 @@ describe("a completed storage transaction", () => {
       );
       const seed = runtime.edit();
       cell.withTx(seed).set({ value: 0 });
-      await seed.commit();
+      await seed.commit().settled;
 
       // Two transactions read and write the same document. The second one is
       // rejected: the document moved underneath it.
@@ -85,8 +85,8 @@ describe("a completed storage transaction", () => {
       cell.withTx(second).get();
       cell.withTx(second).set({ value: 2 });
 
-      expect((await first.commit()).error).toBeUndefined();
-      const rejected = await second.commit();
+      expect((await first.commit().settled).error).toBeUndefined();
+      const rejected = await second.commit().settled;
       expect(rejected.error?.name).toBe("StorageTransactionInconsistent");
 
       const completed = reactivityLogOf(second);

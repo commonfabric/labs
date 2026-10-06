@@ -20,6 +20,7 @@ export {
   type LabelFieldClassificationEntry,
   type LabelFieldRepresentationClass,
 } from "./label-field-classification.ts";
+export { InvalidIfcLabelError, parseIfcLabel } from "./label-parser.ts";
 export {
   type CfcFieldCommitment,
   commitCfcFieldValue,
@@ -65,6 +66,7 @@ export type {
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcPrepareState,
+  CfcRecordAddress,
   CfcSandboxDiagnostic,
   CfcSandboxExitCodeObservation,
   CfcSandboxJsonValue,
@@ -144,6 +146,7 @@ export {
   canonicalizePreparedDigestInput,
   canonicalizeWritePolicyInput,
   cfcDereferenceTracesEqual,
+  cfcRecordPath,
   logicalPathToPointer,
   preparedDigestFor,
 } from "./canonical.ts";
@@ -254,7 +257,6 @@ export {
   CFC_PREFIX_PROVENANCE_MAX_WRITES,
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
-  flowReadExcluded,
   gatedSinkRequestExists,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,
@@ -366,7 +368,15 @@ export {
   type CfcReadCeilingOptions,
   type CfcReadOnExceed,
 } from "./read-ceiling.ts";
-export { markRendererTrustedEvent } from "./ui-contract.ts";
+export {
+  markRendererTrustedEvent,
+  type ReviewedActionProvenance,
+  reviewedActionProvenance,
+} from "./ui-contract.ts";
+export {
+  type HostGestureProvenance,
+  hostGestureProvenance,
+} from "./host-review.ts";
 export {
   cfcObjectSchemaIsClosed,
   INJECTION_SAFE_ATOM,

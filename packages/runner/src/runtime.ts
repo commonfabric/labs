@@ -2111,8 +2111,8 @@ export class Runtime {
    *
    * Each entry carries the pattern run it belongs to, as the address key of the
    * run's result cell — the `parentCell` every raw builtin is handed. Entries
-   * with no owner belong to no single run: the scheduler's commit promises,
-   * which are the barrier that a fire-and-forget builtin's outbox flush has
+   * with no owner belong to no single run: the scheduler's post-commit effect
+   * promises, which are the barrier that a fire-and-forget builtin's outbox flush has
    * registered its own work. `settledFor()` waits for those as well as the
    * run's own, because that handoff is how the run's work first becomes
    * visible.
@@ -2194,9 +2194,9 @@ export class Runtime {
   /**
    * Register an in-flight async builtin operation so `settled()` waits for it
    * instead of racing the post-commit flush. The scheduler registers an
-   * effect-bearing commit's promise here (a race-free barrier — the flush runs
-   * inside that commit), and the fire-and-forget builtins register their
-   * network/LLM promise. Normalized to always resolve (failures are settled, not
+   * effect-bearing commit's `postCommitEffectsSettled()` promise here,
+   * covering the flush's handoff to the builtin's own work. Fire-and-forget
+   * builtins register their network/LLM promise. Normalized to always resolve (failures are settled, not
    * thrown) and auto-removed once it settles, so a rejecting promise is safe and
    * never leaks.
    *
@@ -2341,9 +2341,9 @@ export class Runtime {
    * Clean up resources and cancel all operations.
    *
    * NOTE: This does not wait for in-flight transactions to settle.
-   * Any unawaited tx.commit() calls will be canceled when
+   * Commits whose receipt.settled remains pending will be canceled when
    * storageManager.close() tears down storage sessions. Callers
-   * should await all pending commits before calling dispose().
+   * should await pending receipts' .settled before calling dispose().
    *
    * `closeStorage: false` leaves the storage manager OPEN for a caller that
    * OWNS it and is still using it — a second runtime sharing the same store, or
@@ -3204,12 +3204,12 @@ export class Runtime {
         throw error;
       }
       const commit = preparation === undefined
-        ? tx.commit()
+        ? tx.commit().settled
         : preparation.then(() => {
           if (signal.aborted && tx.status().status === "ready") {
             tx.abort(signal.reason);
           }
-          return tx.commit();
+          return tx.commit().settled;
         });
       return commit.then(async ({ error }) => {
         if (error) {

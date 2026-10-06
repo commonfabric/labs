@@ -8,29 +8,18 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { FabricInstance, FabricValue } from "@";
 import { UnknownValue } from "@/codec-common";
-import {
-  BaseFabricInstance,
-  DEEP_CLONE_CORE,
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-  SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases";
 import { fabricInstanceClassesByName } from "@/fabric-instances";
+import { fabricPrimitiveClassesByName } from "@/fabric-primitives";
 import {
-  FabricKeyPair,
-  fabricPrimitiveClassesByName,
-} from "@/fabric-primitives";
-import {
-  fabricValueOfFvj1DescriptorForTestingOnly,
+  descriptorOfForTestingOnly,
+  fabricValueOfDescriptorForTestingOnly,
   FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY,
   type Fvj1ConformanceCase,
   fvj1ConformanceFixtureTextForTestingOnly,
   fvj1DecodeOutcomeOfForTestingOnly,
-  type Fvj1Descriptor,
-  fvj1DescriptorOfForTestingOnly,
   fvj1EncodeOutcomeOfForTestingOnly,
+  type ValueDescriptor,
 } from "@/for-testing-only.ts";
 
 const FIXTURE_URL = new URL(
@@ -51,57 +40,30 @@ const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
 interface FixtureEntry {
   readonly name: string;
   readonly encode?: {
-    readonly value: Fvj1Descriptor;
+    readonly value: ValueDescriptor;
     readonly text?: string;
     readonly refused?: string;
   };
   readonly decode?: {
     readonly text: string;
-    readonly value?: Fvj1Descriptor;
+    readonly value?: ValueDescriptor;
     readonly refused?: string;
   };
   readonly divergence?: {
-    readonly encode?: Fvj1Descriptor;
-    readonly decode?: Fvj1Descriptor;
+    readonly encode?: ValueDescriptor;
+    readonly decode?: ValueDescriptor;
   };
-}
-
-/** A `FabricInstance` of a class neither class table names. */
-class OtherInstance extends BaseFabricInstance {
-  //
-  // Unreached stubs
-  //
-  // Describing an instance reads none of these.
-  //
-
-  [DEEP_FREEZE](_subFreeze: (value: FabricValue) => FabricValue): FabricValue {
-    throw new Error("not implemented");
-  }
-
-  [IS_DEEP_FROZEN](
-    _subIsDeepFrozen: (value: FabricValue) => boolean,
-  ): boolean {
-    throw new Error("not implemented");
-  }
-
-  protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
-    throw new Error("not implemented");
-  }
-
-  protected [SHALLOW_UNFROZEN_CLONE](): FabricInstance {
-    return new OtherInstance();
-  }
 }
 
 /** Returns the outcome part of a fixture block: what follows from its input. */
 function outcomeOf(
   block: {
-    readonly value?: Fvj1Descriptor;
+    readonly value?: ValueDescriptor;
     readonly text?: string;
     readonly refused?: string;
   },
   outcomeKey: "text" | "value",
-): Fvj1Descriptor {
+): ValueDescriptor {
   return (block.refused === undefined)
     ? { [outcomeKey]: block[outcomeKey] ?? null }
     : { refused: block.refused };
@@ -125,7 +87,7 @@ describe("fvj1-conformance", () => {
   it("records for each encode what the codec does with the value described", () => {
     for (const { name, encode, divergence } of entries) {
       if (encode === undefined) continue;
-      const value = fabricValueOfFvj1DescriptorForTestingOnly(encode.value);
+      const value = fabricValueOfDescriptorForTestingOnly(encode.value);
       expect({ name, outcome: fvj1EncodeOutcomeOfForTestingOnly(value) })
         .toEqual({
           name,
@@ -148,19 +110,9 @@ describe("fvj1-conformance", () => {
   it("holds descriptors that each describe the value they make", () => {
     for (const { name, encode } of entries) {
       if (encode === undefined) continue;
-      const value = fabricValueOfFvj1DescriptorForTestingOnly(encode.value);
-      expect({ name, descriptor: fvj1DescriptorOfForTestingOnly(value) })
+      const value = fabricValueOfDescriptorForTestingOnly(encode.value);
+      expect({ name, descriptor: descriptorOfForTestingOnly(value) })
         .toEqual({ name, descriptor: encode.value });
-    }
-  });
-
-  it("throws given an array descriptor holding a hole run below one", () => {
-    for (const count of [0, -1]) {
-      expect(() =>
-        fabricValueOfFvj1DescriptorForTestingOnly({
-          array: [1, { hole: count }],
-        })
-      ).toThrow("Not a hole count");
     }
   });
 
@@ -245,74 +197,6 @@ describe("fvj1-conformance", () => {
       expect(() => fvj1EncodeOutcomeOfForTestingOnly(faulty)).toThrow(
         TypeError,
       );
-    });
-  });
-
-  describe("fabricValueOfFvj1DescriptorForTestingOnly()", () => {
-    it("throws given a descriptor the notation does not define", () => {
-      const cases: ReadonlyArray<readonly [Fvj1Descriptor, string]> = [
-        [{ number: "Infinity" }, "Not a special number"],
-        [{ nonesuch: 1 }, "Not a descriptor kind"],
-        [{ a: 1, b: 2 }, "Not a single-key object"],
-        [{}, "Not a single-key object"],
-        [[1], "Not an object"],
-        [{ bigint: { text: "1" } }, "Not a string descriptor"],
-        [{ utf16: ["a"] }, "Not a code unit"],
-        [{ Bytes: "ZZ" }, "Not lowercase hexadecimal bytes"],
-        [{ array: 1 }, "Not a list"],
-        [{ record: [["a"]] }, "Not a pair"],
-        [{ record: [["a", 1, 2]] }, "Not a pair"],
-        [{ Hash: 1 }, "Not an object"],
-        [{ Hash: { tag: "fid1" } }, "No field `hash`"],
-        [{ Unavailable: { reason: "gone" } }, "Not an unavailable reason"],
-        [
-          { Unavailable: { reason: "error", errorKind: "nonesuch" } },
-          "Not an error kind",
-        ],
-        [{ Link: 1 }, "A link's payload must be a record."],
-        [{ array: [{ hole: "1" }] }, "Not a hole count"],
-      ];
-      for (const [descriptor, message] of cases) {
-        expect(() => fabricValueOfFvj1DescriptorForTestingOnly(descriptor))
-          .toThrow(message);
-      }
-    });
-
-    it("returns a value of each descriptor kind that describes back to it", () => {
-      const descriptors: readonly Fvj1Descriptor[] = [
-        { unregisteredSymbol: null },
-        { KeyPair: { algorithm: "A", publicKey: "01", privateKey: "02" } },
-        { Unavailable: { reason: "error", errorKind: "network" } },
-        {
-          Unavailable: {
-            reason: "error",
-            errorKind: "general",
-            errorMessage: "boom",
-          },
-        },
-        { Map: [["a", 1]] },
-        { Set: [1, { bigint: "2" }] },
-      ];
-      for (const descriptor of descriptors) {
-        const value = fabricValueOfFvj1DescriptorForTestingOnly(descriptor);
-        expect(fvj1DescriptorOfForTestingOnly(value)).toEqual(descriptor);
-      }
-    });
-  });
-
-  describe("fvj1DescriptorOfForTestingOnly()", () => {
-    it("throws given a key pair holding `CryptoKey` handles", async () => {
-      const pair = await crypto.subtle.generateKey("Ed25519", false, [
-        "sign",
-        "verify",
-      ]);
-      expect(() => fvj1DescriptorOfForTestingOnly(new FabricKeyPair(pair)))
-        .toThrow("No descriptor for a key pair holding `CryptoKey` handles.");
-    });
-
-    it("throws given an instance of a class no table names", () => {
-      expect(() => fvj1DescriptorOfForTestingOnly(new OtherInstance()))
-        .toThrow("No descriptor for a value of an unknown class.");
     });
   });
 });

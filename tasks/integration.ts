@@ -19,6 +19,7 @@
 import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
 import ports from "@commonfabric/ports" with { type: "json" };
+import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
 import {
   FragmentWriter,
   markUnitsBegan,
@@ -205,12 +206,7 @@ function getCfCommand(rootDir: string): string[] {
   return [
     "deno",
     "run",
-    "--allow-net",
-    "--allow-ffi",
-    "--allow-read",
-    "--allow-write",
-    "--allow-env",
-    "--allow-run",
+    ...CF_PERMISSION_FLAGS,
     path.join(rootDir, "packages/cli/mod.ts"),
   ];
 }

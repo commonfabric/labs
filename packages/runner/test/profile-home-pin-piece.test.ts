@@ -82,7 +82,7 @@ describe("profile-home addPiece (followable piece card)", () => {
         resultCell,
       );
       rt.prepareTxForCommit(tx);
-      const commit = await tx.commit();
+      const commit = await tx.commit().settled;
       expect(commit.error).toBeUndefined();
       await result.pull();
 
@@ -99,7 +99,7 @@ describe("profile-home addPiece (followable piece card)", () => {
       // an enforcing rung refuses a relevant transaction that arrives
       // unprepared.
       rt.prepareTxForCommit(tx2);
-      const commit2 = await tx2.commit();
+      const commit2 = await tx2.commit().settled;
       expect(commit2.error).toBeUndefined();
       await result.pull();
       await rt.idle();

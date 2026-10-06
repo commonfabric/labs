@@ -62,7 +62,7 @@ Deno.test("memory v2 transactions use the native commit hook when available", as
     }, { value: { count: 1 } });
     assert(writeResult.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -131,7 +131,7 @@ Deno.test("memory v2 transactions emit patch drafts for safe object-path writes"
       path: [],
     }, { value: { profile: { name: "Ada", title: "Dr" } } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -145,7 +145,7 @@ Deno.test("memory v2 transactions emit patch drafts for safe object-path writes"
     }, "Grace");
     assert(writeResult.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -184,7 +184,7 @@ Deno.test("memory v2 transactions emit set drafts for leaf writes into new docum
     ]);
     assert(batchWrite?.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -212,7 +212,7 @@ Deno.test("memory v2 transactions emit add and remove patch drafts for safe obje
       path: [],
     }, { value: { profile: { name: "Ada", title: "Dr" } } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -225,7 +225,7 @@ Deno.test("memory v2 transactions emit add and remove patch drafts for safe obje
       path: ["value", "profile", "subtitle"],
     }, "Analyst");
     assert(addWrite.ok);
-    const addCommit = await addTx.commit();
+    const addCommit = await addTx.commit().settled;
     assert(addCommit.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -258,7 +258,7 @@ Deno.test("memory v2 transactions emit add and remove patch drafts for safe obje
       { delete: true },
     );
     assert(removeWrite.ok);
-    const removeCommit = await removeTx.commit();
+    const removeCommit = await removeTx.commit().settled;
     assert(removeCommit.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -290,7 +290,7 @@ Deno.test("memory v2 transactions emit index patch drafts for dense array elemen
       path: [],
     }, { value: { tags: ["one", "two"] } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -304,7 +304,7 @@ Deno.test("memory v2 transactions emit index patch drafts for dense array elemen
     }, "zero");
     assert(writeResult.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -337,7 +337,7 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array appen
       path: [],
     }, { value: { tags: ["one", "two"] } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -351,7 +351,7 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array appen
     }, "three");
     assert(writeResult.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -386,7 +386,7 @@ Deno.test("memory v2 transactions drop same-tx add-then-remove paths from patch 
       path: [],
     }, { value: { profile: { name: "Ada" } } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -418,7 +418,7 @@ Deno.test("memory v2 transactions drop same-tx add-then-remove paths from patch 
     }, "Grace");
     assert(renameWrite.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -489,7 +489,7 @@ Deno.test("memory v2 transactions elide transient nested patches from composed h
       tx,
     );
     const result = runtime.run(tx, patternFactory, {}, resultCell);
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
 
     const cancelSink = result.sink(() => {});
@@ -555,7 +555,7 @@ Deno.test("memory v2 transactions preserve the original previousValue across rep
       path: [],
     }, { value: { count: 0 } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     const tx = storage.edit();
@@ -602,7 +602,7 @@ Deno.test("memory v2 writeBatch keeps fine-grained patches and original previous
       path: [],
     }, { value: { profile: { name: "Ada", title: "Dr" } } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -663,7 +663,7 @@ Deno.test("memory v2 writeBatch keeps fine-grained patches and original previous
       },
     ]);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -705,7 +705,7 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array lengt
       path: [],
     }, { value: { tags: ["one", "two"] } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -719,7 +719,7 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array lengt
     }, 1);
     assert(writeResult.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -754,7 +754,7 @@ Deno.test("memory v2 writeBatch combines dense array element and length writes i
       path: [],
     }, { value: { tags: ["one", "two"] } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -782,7 +782,7 @@ Deno.test("memory v2 writeBatch combines dense array element and length writes i
     ]);
     assert(batchResult?.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -830,7 +830,7 @@ Deno.test("memory v2 array splice drafts elide descendant patches for newly adde
       },
     });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -907,7 +907,7 @@ Deno.test("memory v2 array splice drafts elide descendant patches for newly adde
     ]);
     assert(batchResult?.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts.length, 1);
     assertEquals(drafts[0].operations.length, 1);
@@ -959,7 +959,7 @@ Deno.test("memory v2 transactions fall back to array replacement when filling sp
       path: [],
     }, { value: { tags: sparse } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -973,7 +973,7 @@ Deno.test("memory v2 transactions fall back to array replacement when filling sp
     }, "two");
     assert(writeResult.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -1006,7 +1006,7 @@ Deno.test("memory v2 transactions collapse overlapping object-path writes into a
       path: [],
     }, { value: { profile: { name: "Ada", title: "Dr" } } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -1027,7 +1027,7 @@ Deno.test("memory v2 transactions collapse overlapping object-path writes into a
     }, "Professor");
     assert(secondWrite.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -1060,7 +1060,7 @@ Deno.test("memory v2 transactions keep materialized-parent writes as fine-graine
       path: [],
     }, { value: { count: 1 } });
     assert(seedWrite.ok);
-    const seedCommit = await seed.commit();
+    const seedCommit = await seed.commit().settled;
     assert(seedCommit.ok);
 
     drafts.length = 0;
@@ -1088,7 +1088,7 @@ Deno.test("memory v2 transactions keep materialized-parent writes as fine-graine
     ]);
     assert(batchWrite?.ok);
 
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.ok);
     assertEquals(drafts, [{
       operations: [{
@@ -1153,7 +1153,7 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
   const writeItems = async (value: FabricValue): Promise<void> => {
     const tx = storage.edit();
     assert(tx.write({ space, id, type, path: ["value", "items"] }, value).ok);
-    assert((await tx.commit()).ok);
+    assert((await tx.commit().settled).ok);
   };
 
   // Set `base`, then diff to `next` (exactly how cell.set / cell.push /
@@ -1187,7 +1187,7 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
         value: { items: ["seed"] },
       }).ok,
     );
-    assert((await seed.commit()).ok);
+    assert((await seed.commit().settled).ok);
 
     const seen = new Set<string>();
     const record = (ops: string[]) => ops.forEach((op) => seen.add(op));
@@ -1228,7 +1228,7 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
     assert(
       inPlace.write({ space, id, type, path: ["value", "items", "0"] }, "Z").ok,
     );
-    assert((await inPlace.commit()).ok);
+    assert((await inPlace.commit().settled).ok);
     const inPlacePatches = patchesInDrafts();
     assertEquals(offendingOps(inPlacePatches), []);
     record(inPlacePatches.map((patch) => patch.op));
@@ -1239,7 +1239,7 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
       growAtIndex.write({ space, id, type, path: ["value", "items", "2"] }, "c")
         .ok,
     );
-    assert((await growAtIndex.commit()).ok);
+    assert((await growAtIndex.commit().settled).ok);
     const growPatches = patchesInDrafts();
     assertEquals(offendingOps(growPatches), []);
     record(growPatches.map((patch) => patch.op));

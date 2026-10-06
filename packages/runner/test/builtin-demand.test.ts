@@ -55,7 +55,7 @@ describe("builtin demand", () => {
 
   afterEach(async () => {
     LLMClient.prototype.sendRequest = originalSendRequest;
-    if (tx.status().status === "ready") await tx.commit();
+    if (tx.status().status === "ready") await tx.commit().settled;
     await runtime.settled();
     await runtime.dispose();
     await storageManager.close();
@@ -76,14 +76,14 @@ describe("builtin demand", () => {
 
     it("issues no request while nothing reads its result", async () => {
       start();
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.settled();
       expect(requests).toBe(0);
     });
 
     it("issues the request once a reader demands its result", async () => {
       const result = start();
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.settled();
       const settled = await waitForLlmSettled<string>(runtime, result);
       expect(settled.result).toBe("answered");
@@ -108,7 +108,7 @@ describe("builtin demand", () => {
         tx,
       );
       const root = runtime.run(tx, Root, {}, rootCell);
-      await tx.commit();
+      await tx.commit().settled;
       await root.pull();
 
       root.key("ask").send({});

@@ -124,15 +124,33 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // generator stopped dropping a scope wrapper reached through an alias. The
     // recorded contracts carry no scope at all; the argument now caps the
     // handle at `user`, which every record the `agent` builtin creates meets.
+    // These two baselines also predate `INVALID_RESULT` in the run's error
+    // taxonomy, and the proof blames both paths in one finding, so this entry
+    // names both; `agent-run-invalid-result-error-code-break.md` records the
+    // second.
     pattern: "system/agent-run.tsx",
     baselines: [
       "20260920T164352Z-nTSuqgfjRzkwXIgf",
       "20260920T170445Z-TMoN6scQaXVlTvPW",
     ],
-    paths: ["argument.run"],
+    paths: ["argument.run", "result.run.errorCode"],
     reason:
       "the run argument's scope moved onto the handle as a user cap, which the recorded unscoped contracts read as a changed asCell entry; the linked records are user-scoped documents the cap admits",
     record: "docs/history/agent-run-record-handle-scope-break.md",
+  },
+  {
+    // A run's error taxonomy gained `INVALID_RESULT`, a value no recorded
+    // reader of the result has seen. Every reader shows the code as text. The
+    // entry above covers the two earlier baselines, whose finding also blames
+    // `argument.run`.
+    pattern: "system/agent-run.tsx",
+    baselines: [
+      "20260922T054240Z-8--YFk9i7OyiTc6X",
+    ],
+    paths: ["result.run.errorCode"],
+    reason:
+      "a run's errorCode gained INVALID_RESULT for a completed model loop whose result fails its schema; no stored record holds it until a runner reports one, and every reader shows the code as text",
+    record: "docs/history/agent-run-invalid-result-error-code-break.md",
   },
   {
     // The same ruling seen from the profile itself: the proof names the
@@ -1003,5 +1021,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "the picker's defaultProfile argument is home's slot holding the default's link under `profile`, rather than the link",
     record: "docs/history/home-default-profile-slot-break.md",
+  },
+  {
+    // A manager's room link gained `messages.count` and `messages.newestAt`.
+    // The recorded link left every field but `about` open, so a stored
+    // request outcome's room link admitted any `messages`; the candidate
+    // types it. A link is always to a room output, whose `messages.count` is
+    // a number, so no stored outcome reads differently.
+    pattern: "fabrichat/manager.tsx",
+    baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
+    paths: ["argument.requests.*"],
+    reason:
+      "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits",
+    record: "docs/history/fabrichat-room-link-messages-break.md",
   },
 ];

@@ -154,7 +154,7 @@ describe("deliverOpenPath() on compiled patterns", () => {
       runtime.getCell(space, cause, compiled.resultSchema, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancel = result.sink(() => {});
     await runtime.idle();
     const client = { [$conn]: () => connection } as unknown as RuntimeClient;

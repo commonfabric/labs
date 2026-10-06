@@ -8,7 +8,7 @@ import {
   type CurrentPrincipal,
   currentPrincipal,
   handler,
-  principalOf,
+  principalsOf,
   type RepresentsCurrentUser,
   Writable,
   type WriteAuthorizedBy,
@@ -157,12 +157,13 @@ function adderFields(
 }
 
 /**
- * Returns the principal attested on `panel`'s `addedBy` field, or `undefined`
- * when that field's label names no single one. Other fields can have their
- * own authors without changing who added the occurrence.
+ * Returns the principals attested on `panel`'s `addedBy` field: none for a
+ * field no stamp names, and `undefined` when a claim there is in a form a
+ * runtime does not mint. Other fields can have their own authors without
+ * changing who added the occurrence.
  */
-function attestedAdder(panel: Writable<Panel>): string | undefined {
-  return principalOf(panel.key("addedBy"), "authored-by");
+function attestedAdders(panel: Writable<Panel>): string[] | undefined {
+  return principalsOf(panel.key("addedBy"), "authored-by");
 }
 
 /** A copy of `source` that keeps its target and title and takes a new adder. */
@@ -261,12 +262,14 @@ export const admitPanel = handler<
       );
     }
     // Nor is one whose attested adder is another principal, for the same
-    // reason. The principal admitting it may link an occurrence attested to
-    // them, and one that names its adder only by claim.
-    const attested = attestedAdder(panel);
-    if (attested !== undefined && attested !== currentPrincipal()) {
+    // reason, nor one whose label contests its adder or names it in a form
+    // no runtime mints. The principal admitting it may link an occurrence
+    // attested to them alone, and one that names its adder only by claim.
+    const adders = attestedAdders(panel);
+    const actor = currentPrincipal();
+    if (adders === undefined || adders.some((adder) => adder !== actor)) {
       throw new Error(
-        "A panel another principal added cannot be linked; add a copy of it with `as` instead",
+        "A panel another principal added, or whose adder its label contests, cannot be linked; add a copy of it with `as` instead",
       );
     }
     panels.set(withInserted(list, index, panel));

@@ -98,7 +98,7 @@ describe("deriveSelectedValue()", () => {
       initialName: "Ada",
     }, resultCell);
     writer.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     // Each write below goes through the handler its field names as its
     // writer, which is the only writer the stored claim admits.

@@ -51,23 +51,23 @@ describe("nested array terminal chains", () => {
         ),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cancel = result.sink(() => {});
       expect(await result.pull()).toEqual({ matches: [[2]] });
 
       const changeGroup = runtime.edit();
       inputs.withTx(changeGroup).key("groups").set(["water"]);
-      expect((await changeGroup.commit()).error).toBeUndefined();
+      expect((await changeGroup.commit().settled).error).toBeUndefined();
       expect(await result.pull()).toEqual({ matches: [[0]] });
 
       const changeRows = runtime.edit();
       inputs.withTx(changeRows).key("rows").set(["water"]);
-      expect((await changeRows.commit()).error).toBeUndefined();
+      expect((await changeRows.commit().settled).error).toBeUndefined();
       expect(await result.pull()).toEqual({ matches: [[1]] });
 
       const clearRows = runtime.edit();
       inputs.withTx(clearRows).key("rows").set([]);
-      expect((await clearRows.commit()).error).toBeUndefined();
+      expect((await clearRows.commit().settled).error).toBeUndefined();
       expect(await result.pull()).toEqual({ matches: [[]] });
       expect(errors).toEqual([]);
     } finally {

@@ -59,6 +59,7 @@ import {
 import { readPieceSourceState } from "../src/ops/piece-origin.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("piece pull materialization");
 
@@ -6877,11 +6878,12 @@ describe("piece pull materialization", () => {
           if (interceptNextCommit) {
             interceptNextCommit = false;
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              return await originalCommit();
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                return await originalCommit().settled;
+              })());
           }
           return result;
         }, maxRetries)) as typeof runtime.editWithRetry;
@@ -6935,11 +6937,12 @@ describe("piece pull materialization", () => {
           if (interceptNextCommit) {
             interceptNextCommit = false;
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              return await originalCommit();
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                return await originalCommit().settled;
+              })());
           }
           return result;
         }, maxRetries)) as typeof runtime.editWithRetry;
@@ -7064,11 +7067,12 @@ describe("piece pull materialization", () => {
           if (interceptNextCommit) {
             interceptNextCommit = false;
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              return await originalCommit();
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                return await originalCommit().settled;
+              })());
           }
           return result;
         }, maxRetries)) as typeof runtime.editWithRetry;
@@ -7867,7 +7871,7 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       "session",
     );
     scoped.set("writer-only");
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
     expect(commit.error).toBeUndefined();
 
     const piece = await writerPieces.runPersistent(
@@ -7942,7 +7946,7 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       "session",
     );
     target.set({ field: "secret" });
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
     expect(commit.error).toBeUndefined();
 
     const piece = await writerPieces.runPersistent(
@@ -8014,7 +8018,7 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       label: "hello",
       inner: { plain: "visible", scoped },
     } as never);
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
     expect(commit.error).toBeUndefined();
 
     const piece = await writerPieces.runPersistent(

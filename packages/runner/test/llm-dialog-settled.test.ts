@@ -58,7 +58,7 @@ describe("runtime.settled() and llmDialog", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();

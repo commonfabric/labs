@@ -42,15 +42,20 @@ return { [UI]: <div>{wishResult.result}</div> };
 
 ### Results wait for loading documents
 
-Wish waits for the backing documents of its discovery collections and of the
-favorite and mentionable candidates before selecting a result. This loading
-behavior applies to every hashtag Wish. Pending document loads leave any
-existing state untouched; a cold Wish with no existing state publishes none
-until loading settles. A favorite whose piece document is confirmed absent is
-excluded from matches; its bookmark remains in the home collection. UI loading
+Wish waits for the backing documents of its discovery collections and candidates
+before selecting a result. This loading behavior applies to every hashtag Wish.
+Pending document loads leave any existing state untouched; a cold Wish with no
+existing state publishes none until loading settles. A favorite, mentionable, or
+profile element whose piece document is confirmed absent is excluded from
+matches; its entry remains in the discovery collection. Failed favorite,
+mentionable, and profile element loads are skipped when another readable match
+remains. This includes current-space and explicit-DID mentionable searches. If
+no readable match remains and a candidate load failed, Wish reports the load
+error. The legacy
+`#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
-collection produces a no-match error; a failed document load produces a load
-error.
+collection produces a no-match error. A failed discovery-collection load, or a
+candidate load failure with no readable match, produces a load error.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
@@ -289,7 +294,10 @@ These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
 `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
 `#chatManager`, and the `#profile*` targets, which require a signed-in user and
-resolve from that user's home space.
+resolve from that user's home space. `#chatManager` reports an error, naming
+the remedies, when the home pattern holds no chat manager: a system home
+pattern set up before its source had one gains it when the home space is next
+opened, and a custom one holds it only if it says so.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |

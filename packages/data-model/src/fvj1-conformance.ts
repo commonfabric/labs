@@ -7,7 +7,7 @@
  * Each case is a value or a text, and the fixture records what this package's
  * default JSON codec does with it: the exact text a value encodes to, and the
  * value a text decodes to, or the refusal. Values are written in the
- * descriptor notation that `test/fixtures/fvj1-conformance.md` defines, which
+ * descriptor notation that `test/fixtures/value-descriptors.md` defines, which
  * says everything about a value that the format carries and nothing about how
  * the format carries it.
  *
@@ -24,51 +24,37 @@
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { FabricValue } from "@/interface.ts";
-import {
-  ProblematicStateError,
-  ProblematicValue,
-  UnknownValue,
-} from "@/codec-common";
+import { ProblematicStateError } from "@/codec-common";
 import { JsonCodecEngine } from "@/codec-json";
 import {
   FabricError,
   type FabricInstanceClassesByName,
   FabricLink,
-  FabricMap,
-  FabricSet,
 } from "@/fabric-instances";
 import {
   FabricBytes,
-  FabricDurationDay,
-  FabricDurationNsec,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricKeyPair,
   type FabricPrimitiveClassesByName,
   FabricRegExp,
   FabricUnavailable,
-  UNAVAILABLE_ERROR_KINDS,
-  UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import { fabricFromJsonValue, jsonFromFabricValue } from "./codecs.ts";
+import {
+  assertDistinctCaseNames,
+  type ClassCaseNotes,
+  classCasesOf,
+  descriptorOf,
+  type ExampleMakers,
+  fabricValueOfDescriptor,
+  fixtureTextOf,
+  sparseArrayOf,
+  STUB_CODEC_EXCLUSION,
+  type ValueDescriptor,
+} from "./conformance-fixtures.ts";
 
 //
 // Types
 //
-
-/**
- * A value in the descriptor notation `test/fixtures/fvj1-conformance.md`
- * defines. It is JSON, so that any language can read it.
- */
-export type Fvj1Descriptor =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly Fvj1Descriptor[]
-  | { readonly [key: string]: Fvj1Descriptor };
 
 /**
  * Why a decode is refused: the text lacks the `fvj1:` prefix, what follows
@@ -84,7 +70,7 @@ export type Fvj1EncodeOutcome =
 
 /** What decoding one text does: returns this value, or is refused. */
 export type Fvj1DecodeOutcome =
-  | { readonly value: Fvj1Descriptor }
+  | { readonly value: ValueDescriptor }
   | { readonly refused: Fvj1DecodeRefusal };
 
 /**
@@ -111,19 +97,6 @@ export type Fvj1ConformanceCase =
     | { readonly make: () => FabricValue }
     | { readonly text: string }
   );
-
-/** Makers of examples of each class in one of the class tables. */
-type ExampleMakers<ClassesByName> = {
-  readonly [Name in keyof ClassesByName]: readonly (() => FabricValue)[];
-};
-
-/**
- * What a class's examples need beyond their makers: the spec section, or a
- * note saying why the class's examples are not cases.
- */
-type ClassCaseNotes =
-  | { readonly section: string }
-  | { readonly excluded: string };
 
 //
 // The cases
@@ -160,10 +133,6 @@ const SECTION_UNKNOWN = "3-json-encoding.md section 8";
 const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
-
-/** Why the classes whose codecs are stubs have no cases. */
-const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
-  "`FabricInstance` support (1-fabric-values.md sections 1.4.3 and 1.4.4).";
 
 /** Note shared by the cases with a key this implementation reserves. */
 const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
@@ -663,21 +632,6 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
 ];
 
-/**
- * Returns an array of length `length` holding `entries`, each an index and the
- * value there, and a hole at every other index.
- */
-function sparseArrayOf(
-  length: number,
-  entries: readonly (readonly [number, FabricValue])[],
-): FabricValue[] {
-  const result: FabricValue[] = new Array(length);
-  for (const [index, value] of entries) {
-    result[index] = value;
-  }
-  return result;
-}
-
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
   readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
@@ -717,29 +671,6 @@ const INSTANCE_CLASS_NOTES: {
   UnknownValue: { section: SECTION_UNKNOWN },
 };
 
-/**
- * Returns one case for each maker in `makers`, named for its class and its
- * place among that class's makers.
- */
-function classCasesOf<Name extends string>(
-  makers: { readonly [N in Name]: readonly (() => FabricValue)[] },
-  notes: { readonly [N in Name]: ClassCaseNotes },
-): Fvj1ConformanceCase[] {
-  const cases: Fvj1ConformanceCase[] = [];
-  for (const name in notes) {
-    const classNotes = notes[name];
-    if ("excluded" in classNotes) continue;
-    makers[name].forEach((make, index) => {
-      cases.push({
-        name: `${name}, example ${index + 1}`,
-        section: classNotes.section,
-        make,
-      });
-    });
-  }
-  return cases;
-}
-
 //
 // The fixture
 //
@@ -763,17 +694,8 @@ const FIXTURE_ABOUT = "Generated by `deno task regenerate-fvj1-conformance` " +
 export function fvj1ConformanceFixtureText(
   cases: readonly Fvj1ConformanceCase[],
 ): string {
-  const names = new Set<string>();
-  const lines = cases.map((conformanceCase) => {
-    if (names.has(conformanceCase.name)) {
-      throw new Error(`Two cases are named ${conformanceCase.name}.`);
-    }
-    names.add(conformanceCase.name);
-    return asciiJsonOf(fixtureEntryOf(conformanceCase));
-  });
-
-  return `{\n  "about": ${asciiJsonOf(FIXTURE_ABOUT)},\n  "cases": [\n    ` +
-    `${lines.join(",\n    ")}\n  ]\n}\n`;
+  assertDistinctCaseNames(cases);
+  return fixtureTextOf(FIXTURE_ABOUT, cases.map(fixtureEntryOf));
 }
 
 /**
@@ -814,7 +736,7 @@ export function fvj1DecodeOutcomeOf(text: string): Fvj1DecodeOutcome {
       refused: decodeRefusalOf(text),
     });
   }
-  return { value: fvj1DescriptorOf(decoded) };
+  return { value: descriptorOf(decoded) };
 }
 
 /**
@@ -835,14 +757,14 @@ function refusalOrRethrow<Refusal>(
 /** Returns the fixture entry for one case. */
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
-): Record<string, Fvj1Descriptor> {
+): Record<string, ValueDescriptor> {
   const { name, section, divergence } = conformanceCase;
-  const entry: Record<string, Fvj1Descriptor> = { name, section };
-  const implementation: Record<string, Fvj1Descriptor> = {};
+  const entry: Record<string, ValueDescriptor> = { name, section };
+  const implementation: Record<string, ValueDescriptor> = {};
 
   if ("make" in conformanceCase) {
     const value = conformanceCase.make();
-    const described = fvj1DescriptorOf(value);
+    const described = descriptorOf(value);
     const encoded = fvj1EncodeOutcomeOf(value);
     const plainText = plainJsonTextOf(value);
     if (divergence !== undefined && plainText === undefined) {
@@ -894,7 +816,7 @@ function fixtureEntryOf(
       // fixture states rather than the one this decode happened to return.
       entry.encode = {
         value: specDecoded.value,
-        ...fvj1EncodeOutcomeOf(fabricValueOfFvj1Descriptor(specDecoded.value)),
+        ...fvj1EncodeOutcomeOf(fabricValueOfDescriptor(specDecoded.value)),
       };
     }
   }
@@ -981,614 +903,4 @@ function isSameOutcome(
   b: Fvj1EncodeOutcome | Fvj1DecodeOutcome,
 ): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
-}
-
-/** Returns the JSON text of `value`, with every non-ASCII code unit escaped. */
-function asciiJsonOf(value: Fvj1Descriptor): string {
-  return JSON.stringify(value).replace(
-    /[\u007f-\uffff]/g,
-    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
-//
-// Descriptors
-//
-
-/**
- * Returns the descriptor of `value`, in the notation
- * `test/fixtures/fvj1-conformance.md` defines.
- *
- * @throws If `value` is a key pair holding `CryptoKey` handles rather than
- *   key material, which no descriptor can write down.
- */
-export function fvj1DescriptorOf(value: FabricValue): Fvj1Descriptor {
-  switch (typeof value) {
-    case "undefined": {
-      return { undefined: null };
-    }
-    case "boolean": {
-      return value;
-    }
-    case "string": {
-      return stringDescriptorOf(value);
-    }
-    case "bigint": {
-      return { bigint: value.toString() };
-    }
-    case "symbol": {
-      const key = Symbol.keyFor(value);
-      return (key === undefined)
-        ? {
-          unregisteredSymbol: (value.description === undefined)
-            ? null
-            : stringDescriptorOf(value.description),
-        }
-        : { symbol: stringDescriptorOf(key) };
-    }
-    case "number": {
-      if (Number.isFinite(value) && !Object.is(value, -0)) {
-        return value;
-      }
-      const special = SPECIAL_NUMBER_NAMES.find(([, number]) =>
-        Object.is(number, value)
-      );
-      return { number: (special === undefined) ? "NaN" : special[0] };
-    }
-  }
-
-  if (value === null) {
-    return null;
-  } else if (isFabricArray(value)) {
-    return { array: arrayEntriesOf(value) };
-  } else if (isFabricPlainObject(value)) {
-    return { record: recordEntriesOf(value) };
-  }
-
-  for (const notation of Object.values(CLASS_NOTATIONS)) {
-    const described = notation.describe(value);
-    if (described !== undefined) {
-      return described;
-    }
-  }
-  throw new Error("No descriptor for a value of an unknown class.");
-}
-
-/**
- * Returns the value `descriptor` describes. The inverse of
- * {@link fvj1DescriptorOf}: the descriptor of the result is `descriptor`.
- *
- * @throws If `descriptor` is not one the notation defines.
- */
-export function fabricValueOfFvj1Descriptor(
-  descriptor: Fvj1Descriptor,
-): FabricValue {
-  if (
-    descriptor === null || typeof descriptor === "boolean" ||
-    typeof descriptor === "number" || typeof descriptor === "string"
-  ) {
-    return descriptor;
-  }
-
-  const [kind, payload] = soleEntryOf(descriptor);
-  switch (kind) {
-    case "undefined": {
-      return undefined;
-    }
-    case "number": {
-      const found = SPECIAL_NUMBER_NAMES.find(([name]) => name === payload);
-      if (found === undefined) {
-        throw new Error(`Not a special number: ${JSON.stringify(payload)}`);
-      }
-      return found[1];
-    }
-    case "utf16": {
-      return stringOf(descriptor);
-    }
-    case "bigint": {
-      return BigInt(stringOf(payload));
-    }
-    case "symbol": {
-      return Symbol.for(stringOf(payload));
-    }
-    case "unregisteredSymbol": {
-      return (payload === null) ? Symbol() : Symbol(stringOf(payload));
-    }
-    case "array": {
-      return arrayOf(payload);
-    }
-    case "record": {
-      return Object.fromEntries(
-        listOf(payload).map((pair) => {
-          const [key, value] = pairOf(pair);
-          return [stringOf(key), fabricValueOfFvj1Descriptor(value)];
-        }),
-      );
-    }
-  }
-
-  for (const notation of Object.values(CLASS_NOTATIONS)) {
-    if (notation.key === kind) {
-      return notation.make(payload);
-    }
-  }
-  throw new Error(`Not a descriptor kind: ${kind}`);
-}
-
-/** The special numbers, under the names their descriptors use. */
-const SPECIAL_NUMBER_NAMES: readonly (readonly [string, number])[] = [
-  ["-0", -0],
-  ["NaN", NaN],
-  ["+Infinity", Infinity],
-  ["-Infinity", -Infinity],
-];
-
-/**
- * How one class's instances are described, and made back from a descriptor.
- * `cls` is there for its type, which ties the entry to the class it is keyed
- * under in {@link CLASS_NOTATIONS}.
- */
-interface ClassNotation<Class> {
-  readonly cls: Class;
-  readonly key: string;
-  /** The descriptor of `value`, or `undefined` if it is not of this class. */
-  readonly describe: (value: FabricValue) => Fvj1Descriptor | undefined;
-  readonly make: (payload: Fvj1Descriptor) => FabricValue;
-}
-
-/**
- * Returns the notation for instances of `cls`, under the descriptor key `key`.
- * `describe` returns the payload a descriptor holds under that key, and `make`
- * returns the instance a payload describes.
- */
-function notate<Class extends abstract new (...args: never) => object>(
-  cls: Class,
-  key: string,
-  describe: (value: InstanceType<Class>) => Fvj1Descriptor,
-  make: (payload: Fvj1Descriptor) => InstanceType<Class>,
-): ClassNotation<Class> {
-  return {
-    cls,
-    key,
-    describe: (value) =>
-      isInstanceOf(cls, value) ? { [key]: describe(value) } : undefined,
-    make,
-  };
-}
-
-/** Indicates whether `value` is an instance of `cls`. */
-function isInstanceOf<Class extends abstract new (...args: never) => object>(
-  cls: Class,
-  value: unknown,
-): value is InstanceType<Class> {
-  return value instanceof cls;
-}
-
-/**
- * The notation for every concrete class, keyed the way the two class tables
- * key the classes. Its type is what holds it complete.
- */
-const CLASS_NOTATIONS:
-  & {
-    readonly [Name in keyof FabricPrimitiveClassesByName]: ClassNotation<
-      FabricPrimitiveClassesByName[Name]
-    >;
-  }
-  & {
-    readonly [Name in keyof FabricInstanceClassesByName]: ClassNotation<
-      FabricInstanceClassesByName[Name]
-    >;
-  } = {
-    FabricBytes: notate(
-      FabricBytes,
-      "Bytes",
-      (value) => hexOf(value.slice()),
-      (payload) => new FabricBytes(bytesOf(payload)),
-    ),
-    FabricDurationDay: notate(
-      FabricDurationDay,
-      "DurationDay",
-      (value) => value.value.toString(),
-      (payload) => new FabricDurationDay(BigInt(stringOf(payload))),
-    ),
-    FabricDurationNsec: notate(
-      FabricDurationNsec,
-      "DurationNsec",
-      (value) => value.value.toString(),
-      (payload) => new FabricDurationNsec(BigInt(stringOf(payload))),
-    ),
-    FabricEpochDay: notate(
-      FabricEpochDay,
-      "EpochDay",
-      (value) => value.value.toString(),
-      (payload) => new FabricEpochDay(BigInt(stringOf(payload))),
-    ),
-    FabricEpochNsec: notate(
-      FabricEpochNsec,
-      "EpochNsec",
-      (value) => value.value.toString(),
-      (payload) => new FabricEpochNsec(BigInt(stringOf(payload))),
-    ),
-    FabricHash: notate(
-      FabricHash,
-      "Hash",
-      (value) => ({
-        tag: stringDescriptorOf(value.tag),
-        hash: hexOf(value.bytes),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricHash(
-          bytesOf(fieldOf(fields, "hash")),
-          stringOf(fieldOf(fields, "tag")),
-        );
-      },
-    ),
-    FabricKeyPair: notate(
-      FabricKeyPair,
-      "KeyPair",
-      (value) => {
-        if (!value.hasMaterial) {
-          throw new Error(
-            "No descriptor for a key pair holding `CryptoKey` handles.",
-          );
-        }
-        return {
-          algorithm: stringDescriptorOf(value.algorithm),
-          publicKey: hexOf(value.publicKeyBytes.slice()),
-          privateKey: hexOf(value.privateKeyBytes.slice()),
-        };
-      },
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricKeyPair(
-          stringOf(fieldOf(fields, "algorithm")),
-          bytesOf(fieldOf(fields, "publicKey")),
-          bytesOf(fieldOf(fields, "privateKey")),
-        );
-      },
-    ),
-    FabricRegExp: notate(
-      FabricRegExp,
-      "RegExp",
-      (value) => ({
-        flavor: stringDescriptorOf(value.flavor),
-        source: stringDescriptorOf(value.source),
-        flags: stringDescriptorOf(value.flags),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricRegExp(
-          stringOf(fieldOf(fields, "flavor")),
-          stringOf(fieldOf(fields, "source")),
-          stringOf(fieldOf(fields, "flags")),
-        );
-      },
-    ),
-    FabricUnavailable: notate(
-      FabricUnavailable,
-      "Unavailable",
-      (value) => ({
-        reason: value.reason,
-        ...(value.errorKind === null ? {} : { errorKind: value.errorKind }),
-        ...(value.rawErrorMessage === null
-          ? {}
-          : { errorMessage: stringDescriptorOf(value.rawErrorMessage) }),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        const reasonName = stringOf(fieldOf(fields, "reason"));
-        const reason = Object.values(UNAVAILABLE_REASONS).find((r) =>
-          r === reasonName
-        );
-        if (reason === undefined) {
-          throw new Error(`Not an unavailable reason: ${reasonName}`);
-        }
-        const kindName = fields.errorKind;
-        const errorKind = (kindName === undefined)
-          ? null
-          : Object.values(UNAVAILABLE_ERROR_KINDS).find((k) =>
-            k === stringOf(kindName)
-          );
-        if (errorKind === undefined) {
-          throw new Error(`Not an error kind: ${JSON.stringify(kindName)}`);
-        }
-        const message = fields.errorMessage;
-        return new FabricUnavailable(
-          reason,
-          errorKind,
-          (message === undefined) ? null : stringOf(message),
-        );
-      },
-    ),
-    FabricError: notate(
-      FabricError,
-      "Error",
-      (value) => ({
-        type: stringDescriptorOf(value.type),
-        name: stringDescriptorOf(value.name),
-        message: stringDescriptorOf(value.message),
-        ...(value.stack === undefined
-          ? {}
-          : { stack: stringDescriptorOf(value.stack) }),
-        ...(value.cause === undefined
-          ? {}
-          : { cause: fvj1DescriptorOf(value.cause) }),
-        extras: [...value.extraEntries()]
-          .sort(([a], [b]) => utf8Compare(a, b))
-          .map(([key, extra]) => [
-            stringDescriptorOf(key),
-            fvj1DescriptorOf(extra),
-          ]),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        const { stack, cause } = fields;
-        return new FabricError({
-          type: stringOf(fieldOf(fields, "type")),
-          name: stringOf(fieldOf(fields, "name")),
-          message: stringOf(fieldOf(fields, "message")),
-          stack: (stack === undefined) ? undefined : stringOf(stack),
-          cause: (cause === undefined)
-            ? undefined
-            : fabricValueOfFvj1Descriptor(cause),
-          extras: listOf(fieldOf(fields, "extras")).map((pair) => {
-            const [key, extra] = pairOf(pair);
-            return [stringOf(key), fabricValueOfFvj1Descriptor(extra)] as const;
-          }),
-        });
-      },
-    ),
-    FabricLink: notate(
-      FabricLink,
-      "Link",
-      (value) => fvj1DescriptorOf(value.payload),
-      (payload) => {
-        const linkPayload = fabricValueOfFvj1Descriptor(payload);
-        if (!isFabricPlainObject(linkPayload)) {
-          throw new Error("A link's payload must be a record.");
-        }
-        return new FabricLink(linkPayload);
-      },
-    ),
-    FabricMap: notate(
-      FabricMap,
-      "Map",
-      (value) =>
-        [...value.map].map(([key, entry]) => [
-          fvj1DescriptorOf(key),
-          fvj1DescriptorOf(entry),
-        ]),
-      (payload) =>
-        new FabricMap(
-          new Map(
-            listOf(payload).map((pair) => {
-              const [key, entry] = pairOf(pair);
-              return [
-                fabricValueOfFvj1Descriptor(key),
-                fabricValueOfFvj1Descriptor(entry),
-              ];
-            }),
-          ),
-        ),
-    ),
-    FabricSet: notate(
-      FabricSet,
-      "Set",
-      (value) => [...value.set].map(fvj1DescriptorOf),
-      (payload) =>
-        new FabricSet(
-          new Set(listOf(payload).map(fabricValueOfFvj1Descriptor)),
-        ),
-    ),
-    ProblematicValue: notate(
-      ProblematicValue,
-      "Problematic",
-      (value) => ({
-        tag: stringDescriptorOf(value.wireTypeTag),
-        state: fvj1DescriptorOf(value.state),
-        error: stringDescriptorOf(value.error),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new ProblematicValue(
-          stringOf(fieldOf(fields, "tag")),
-          fabricValueOfFvj1Descriptor(fieldOf(fields, "state")),
-          stringOf(fieldOf(fields, "error")),
-        );
-      },
-    ),
-    UnknownValue: notate(
-      UnknownValue,
-      "Unknown",
-      (value) => ({
-        tag: value.wireTypeTag,
-        state: fvj1DescriptorOf(value.state),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new UnknownValue(
-          stringOf(fieldOf(fields, "tag")),
-          fabricValueOfFvj1Descriptor(fieldOf(fields, "state")),
-        );
-      },
-    ),
-  };
-
-/**
- * Returns the descriptor of a string: the string itself when it is well
- * formed, and its UTF-16 code units when it holds a lone surrogate, which not
- * every JSON reader keeps.
- */
-function stringDescriptorOf(value: string): Fvj1Descriptor {
-  return value.isWellFormed()
-    ? value
-    : { utf16: Array.from(value, (_, i) => value.charCodeAt(i)) };
-}
-
-/** Returns the entries of an array's descriptor, holes as maximal runs. */
-function arrayEntriesOf(value: readonly FabricValue[]): Fvj1Descriptor[] {
-  const entries: Fvj1Descriptor[] = [];
-  let index = 0;
-  while (index < value.length) {
-    if (index in value) {
-      entries.push(fvj1DescriptorOf(value[index]));
-      index++;
-    } else {
-      let count = 0;
-      for (; index < value.length && !(index in value); index++) {
-        count++;
-      }
-      entries.push({ hole: count });
-    }
-  }
-  return entries;
-}
-
-/** Returns the entries of a record's descriptor, in UTF-8 order of key. */
-function recordEntriesOf(
-  value: { readonly [key: string]: FabricValue },
-): Fvj1Descriptor[] {
-  return Object.keys(value).sort(utf8Compare).map((key) => [
-    stringDescriptorOf(key),
-    fvj1DescriptorOf(value[key]),
-  ]);
-}
-
-/** Returns the array an array descriptor's payload describes. */
-function arrayOf(payload: Fvj1Descriptor): FabricValue[] {
-  const result: FabricValue[] = [];
-  let index = 0;
-  for (const entry of listOf(payload)) {
-    const hole = holeCountOf(entry);
-    if (hole === undefined) {
-      result[index] = fabricValueOfFvj1Descriptor(entry);
-      index++;
-    } else {
-      index += hole;
-    }
-  }
-  result.length = index;
-  return result;
-}
-
-/**
- * Returns the count of a `hole` entry, or `undefined` for any other entry.
- *
- * @throws If a `hole` entry's count is not an integer of at least one, the
- *   least run the wire format writes.
- */
-function holeCountOf(entry: Fvj1Descriptor): number | undefined {
-  if (entry === null || typeof entry !== "object" || isList(entry)) {
-    return undefined;
-  }
-  const [kind, count] = soleEntryOf(entry);
-  if (kind !== "hole") {
-    return undefined;
-  } else if (
-    !(typeof count === "number" && Number.isSafeInteger(count) && count >= 1)
-  ) {
-    throw new Error(`Not a hole count: ${JSON.stringify(count)}`);
-  }
-  return count;
-}
-
-/** Returns the string a string descriptor describes. */
-function stringOf(descriptor: Fvj1Descriptor): string {
-  if (typeof descriptor === "string") {
-    return descriptor;
-  }
-  const [kind, units] = soleEntryOf(fieldsOf(descriptor));
-  if (kind !== "utf16") {
-    throw new Error(`Not a string descriptor: ${JSON.stringify(descriptor)}`);
-  }
-  return listOf(units).map((unit) => {
-    if (typeof unit !== "number") {
-      throw new Error(`Not a code unit: ${JSON.stringify(unit)}`);
-    }
-    return String.fromCharCode(unit);
-  }).join("");
-}
-
-/** Returns the bytes a lowercase hexadecimal string describes. */
-function bytesOf(descriptor: Fvj1Descriptor): Uint8Array {
-  const hex = stringOf(descriptor);
-  if (!/^(?:[0-9a-f]{2})*$/.test(hex)) {
-    throw new Error(`Not lowercase hexadecimal bytes: ${hex}`);
-  }
-  return Uint8Array.from(
-    { length: hex.length / 2 },
-    (_, i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16),
-  );
-}
-
-/** Returns `bytes` as lowercase hexadecimal. */
-function hexOf(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/** Returns `descriptor` as a list, throwing if it is not one. */
-function listOf(descriptor: Fvj1Descriptor): readonly Fvj1Descriptor[] {
-  if (!isList(descriptor)) {
-    throw new Error(`Not a list: ${JSON.stringify(descriptor)}`);
-  }
-  return descriptor;
-}
-
-/**
- * Indicates whether `descriptor` is a list. `Array.isArray()` narrows to a
- * mutable array, which leaves a read-only one in the other branch.
- */
-function isList(
-  descriptor: Fvj1Descriptor,
-): descriptor is readonly Fvj1Descriptor[] {
-  return Array.isArray(descriptor);
-}
-
-/** Returns `descriptor` as a two-element list, throwing if it is not one. */
-function pairOf(
-  descriptor: Fvj1Descriptor,
-): readonly [Fvj1Descriptor, Fvj1Descriptor] {
-  const [first, second, ...rest] = listOf(descriptor);
-  if (first === undefined || second === undefined || rest.length > 0) {
-    throw new Error(`Not a pair: ${JSON.stringify(descriptor)}`);
-  }
-  return [first, second];
-}
-
-/** Returns `descriptor` as a JSON object, throwing if it is not one. */
-function fieldsOf(
-  descriptor: Fvj1Descriptor,
-): { readonly [key: string]: Fvj1Descriptor } {
-  if (
-    descriptor === null || typeof descriptor !== "object" || isList(descriptor)
-  ) {
-    throw new Error(`Not an object: ${JSON.stringify(descriptor)}`);
-  }
-  return descriptor;
-}
-
-/** Returns the field `key` of `fields`, throwing if it is absent. */
-function fieldOf(
-  fields: { readonly [key: string]: Fvj1Descriptor },
-  key: string,
-): Fvj1Descriptor {
-  const field = fields[key];
-  if (field === undefined) {
-    throw new Error(`No field \`${key}\` in ${JSON.stringify(fields)}`);
-  }
-  return field;
-}
-
-/** Returns the one key and value of `descriptor`, throwing unless one. */
-function soleEntryOf(
-  descriptor: Fvj1Descriptor,
-): readonly [string, Fvj1Descriptor] {
-  const entries = Object.entries(fieldsOf(descriptor));
-  const [entry] = entries;
-  if (entry === undefined || entries.length > 1) {
-    throw new Error(`Not a single-key object: ${JSON.stringify(descriptor)}`);
-  }
-  return entry;
 }

@@ -172,7 +172,7 @@ describe("protected-binding-builtins", () => {
     );
     const result = runtime.run(tx, compiled, {}, output);
     runtime.prepareTxForCommit(tx);
-    const setupError = (await tx.commit()).error?.message;
+    const setupError = (await tx.commit().settled).error?.message;
     const cancel = result.sink(() => {});
     await runtime.idle();
     result.key("add").send({ add: "a" });

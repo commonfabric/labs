@@ -88,7 +88,7 @@ describe("sqlite shared read ceiling", () => {
       sql: "INSERT INTO shared (to_addr, body) VALUES (?, ?), (?, ?)",
       params: ["", "mine", "bob@example.test", "private message"],
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const aggregateTx = writer.edit();
     aggregateTx.recordSqliteWrite!(signer.did(), {
       op: "sqlite",
@@ -96,7 +96,7 @@ describe("sqlite shared read ceiling", () => {
       sql: "INSERT INTO shared (to_addr, body) VALUES (?, ?), (?, ?)",
       params: ["", "mine", "bob@example.test", "private message"],
     });
-    expect((await aggregateTx.commit()).error).toBeUndefined();
+    expect((await aggregateTx.commit().settled).error).toBeUndefined();
   });
 
   afterEach(async () => {
@@ -137,7 +137,7 @@ describe("sqlite shared read ceiling", () => {
       tx,
     );
     const result = runtime.run(tx, pattern, {}, cell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancel = result.key("pending").sink(() => {});
     try {
       await runtime.idle();
@@ -191,7 +191,7 @@ describe("sqlite shared read ceiling", () => {
     );
     expect(confidentiality).toContain(signer.did());
     expect(confidentiality).not.toContain(BOB);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   });
 
   it("refreshes a labeled shared result without observing its previous rows", async () => {
@@ -221,7 +221,7 @@ describe("sqlite shared read ceiling", () => {
         tx,
       ),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancel = result.key("pending").sink(() => {});
     try {
       await runtime.settled();
@@ -236,7 +236,7 @@ describe("sqlite shared read ceiling", () => {
         params: ["carol@example.test"],
       });
       tick.withTx(refresh).set(1);
-      expect((await refresh.commit()).error).toBeUndefined();
+      expect((await refresh.commit().settled).error).toBeUndefined();
       await runtime.settled();
       expect(errors).toEqual([]);
       expect(result.key("error").get()).toBeUndefined();
@@ -324,7 +324,7 @@ describe("sqlite shared read ceiling", () => {
       sql: "INSERT INTO messages (authors) VALUES (?)",
       params: ["a@example.test b@example.test"],
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const result = await run(reader([BOB]), "SELECT authors FROM messages", {
       db: ruleDb,
     });

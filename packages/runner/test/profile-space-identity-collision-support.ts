@@ -85,13 +85,13 @@ export async function createProfileSpace(
     // deno-lint-ignore no-explicit-any
     const r = rt.run(tx1, parent as any, {}, resultCell);
     rt.prepareTxForCommit(tx1);
-    const commit1 = await tx1.commit();
+    const commit1 = await tx1.commit().settled;
     expect(commit1.error).toBeUndefined();
     await r.pull();
 
     const tx2 = rt.edit();
     r.withTx(tx2).key("createProfile").send({ name });
-    const commit2 = await tx2.commit();
+    const commit2 = await tx2.commit().settled;
     expect(commit2.error).toBeUndefined();
     await r.pull();
     await rt.idle();

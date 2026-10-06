@@ -4265,6 +4265,23 @@ export declare function principalOf(
 ): DID | undefined;
 
 /**
+ * Returns every principal that the label on `target`'s value attests with a
+ * claim of `kind`, where `principalOf()` returns only a single one: so a
+ * caller can tell a label that attests no principal from one that attests
+ * several, and refuse the second while admitting the first.
+ *
+ * `[]` means the label attests none. A non-empty array lists the DIDs it
+ * attests, in the order they first appear. `undefined` means a claim there is
+ * in some other form, from which no principal can be read, or that `target` is
+ * `undefined`. The claims are read where, and as, `principalOf()` reads them,
+ * it can be called where `principalOf()` can, and it throws where that does.
+ */
+export declare function principalsOf(
+  target: AnyCell<unknown> | undefined,
+  kind: PrincipalClaimKind,
+): DID[] | undefined;
+
+/**
  * Returns the event key of the event the running handler handles: a string
  * naming that one event, as its actor sent it to its stream. Every run of the
  * same event returns the same key, including a retry and the serving runtime's
