@@ -105,7 +105,7 @@ const INBOX_PATTERN = [
 ].join("\n");
 
 /** `payload` as an event the renderer marked as a trusted gesture. */
-function gesture(payload: Record<string, unknown>): Record<string, unknown> {
+function gesture<T extends Record<string, unknown>>(payload: T): T {
   const event = {
     ...payload,
     provenance: {
@@ -522,7 +522,8 @@ describe("executor-space-access-change", () => {
                 actor: bobSigner.did(),
               }]]]),
             );
-            serving.getCellFromLink(notesLink).withTx(tx).push("probed");
+            serving.getCellFromLink<string[]>(notesLink).withTx(tx)
+              .push("probed");
           },
           {
             space: room,
