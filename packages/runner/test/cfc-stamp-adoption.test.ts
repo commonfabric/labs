@@ -90,7 +90,7 @@ describe("adopting an unstamped writer claim", () => {
         type: "object",
         ifc: { confidentiality: ["owner-clause"] },
       }, tx).set({ name: "n", other: "o" } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const tx = runtime.edit();
     trust(tx);
@@ -98,7 +98,7 @@ describe("adopting an unstamped writer claim", () => {
     applyCfcPolicyToExistingValue(
       runtime.getCell(space, id, schemaWith(claim(AGED_FILE)), tx),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(storedNameClaim(runtime, id)).toEqual(claim(AGED_FILE));
     return runtime;
   };
@@ -171,7 +171,7 @@ describe("adopting an unstamped writer claim", () => {
       "release-adopts",
       claim(RELEASE_FILE, PROFILE_MODULE),
     );
-    expect((await release.commit()).error).toBeUndefined();
+    expect((await release.commit().settled).error).toBeUndefined();
     expect(storedNameClaim(runtime, "release-adopts")).toEqual(
       claim(RELEASE_FILE, PROFILE_MODULE),
     );
@@ -190,7 +190,7 @@ describe("adopting an unstamped writer claim", () => {
       schemaWith(claim(RELEASE_FILE, PROFILE_MODULE)),
       write,
     ).key("name").set("renamed" as never);
-    expect((await write.commit()).error).toBeUndefined();
+    expect((await write.commit().settled).error).toBeUndefined();
   });
 
   it("refuses, in a release, a stamp from a module outside its program", async () => {
@@ -206,7 +206,7 @@ describe("adopting an unstamped writer claim", () => {
       "release-foreign",
       claim(RELEASE_FILE, "foreign-module"),
     );
-    expect(refusalOf(await release.commit())).toContain(
+    expect(refusalOf(await release.commit().settled)).toContain(
       "writeAuthorizedBy must remain stable at /name",
     );
     expect(storedNameClaim(runtime, "release-foreign")).toEqual(
@@ -236,7 +236,7 @@ describe("adopting an unstamped writer claim", () => {
       "forged-program",
       claim(RELEASE_FILE, PROFILE_MODULE),
     );
-    expect(refusalOf(await tx.commit())).toContain(
+    expect(refusalOf(await tx.commit().settled)).toContain(
       "writeAuthorizedBy must remain stable at /name",
     );
   });
@@ -263,7 +263,7 @@ describe("adopting an unstamped writer claim", () => {
       trust(tx);
       if (identity !== undefined) setCfcImplementationIdentity(tx, identity);
       writeOtherUnder(runtime, tx, id, claim(RELEASE_FILE, PROFILE_MODULE));
-      expect(refusalOf(await tx.commit())).toContain(
+      expect(refusalOf(await tx.commit().settled)).toContain(
         "writeAuthorizedBy must remain stable at /name",
       );
       expect(storedNameClaim(runtime, id)).toEqual(claim(AGED_FILE));
@@ -313,7 +313,7 @@ describe("adopting an unstamped writer claim", () => {
       "other-export",
       claim(RELEASE_FILE, PROFILE_MODULE),
     );
-    expect(refusalOf(await tx.commit())).toContain(
+    expect(refusalOf(await tx.commit().settled)).toContain(
       "writeAuthorizedBy must remain stable at /name",
     );
     expect(storedNameClaim(runtime, "other-export")).toEqual(
@@ -337,7 +337,7 @@ describe("adopting an unstamped writer claim", () => {
       "own-stamp",
       claim(RELEASE_FILE, PROFILE_MODULE),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(storedNameClaim(runtime, "own-stamp")).toEqual(
       claim(RELEASE_FILE, PROFILE_MODULE),
     );

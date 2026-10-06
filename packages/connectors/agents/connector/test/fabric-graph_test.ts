@@ -25,6 +25,7 @@ import {
   readStableCellGraphValue,
 } from "../src/fabric-graph.ts";
 import { stableFabricValue } from "../src/stable-fabric-value.ts";
+import { createTransactionCommitReceipt } from "../../../../runner/src/storage/commit-receipt.ts";
 
 // `pushStableCellGraph` sets its writer identity through the runtime's
 // setter, which accepts only a transaction the runtime created. These
@@ -226,7 +227,7 @@ Deno.test("stable graph writes refuse populated unprotected cells", async () => 
     confidentialSeed.setRawUntyped({ exposed: "confidential" });
     confidentialSeed.applyCfcSchemaToExistingValue();
     seed.prepareCfc();
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
 
     await assertRejects(
@@ -463,7 +464,7 @@ Deno.test("stable graph field writes preserve document metadata", async () => {
     // commit paths do: a document-root write is CFC-relevant, and an
     // enforcing rung refuses a relevant transaction that arrives unprepared.
     runtime.prepareTxForCommit(metadataTx);
-    const metadataCommit = await metadataTx.commit();
+    const metadataCommit = await metadataTx.commit().settled;
     if (metadataCommit.error) throw metadataCommit.error;
 
     await pushStableCellGraph(connection, [{
@@ -551,7 +552,7 @@ Deno.test("stable graph hydrates the owner-schema cell before writing", async ()
       writeOrThrow: () => {},
       prepareCfc: () => {},
       abort: () => ({ ok: {} }),
-      commit: () => Promise.resolve({ ok: {} }),
+      commit: () => createTransactionCommitReceipt(Promise.resolve({ ok: {} })),
     });
 
     await pushStableCellGraph(
@@ -597,7 +598,7 @@ Deno.test("stable graph writes await one commit", async () => {
       commit: () => {
         commitCount++;
         commitStarted.resolve();
-        return commitResult.promise;
+        return createTransactionCommitReceipt(commitResult.promise);
       },
     });
     const connection = {
@@ -645,7 +646,9 @@ Deno.test("stable graph writes surface a commit failure without retrying", async
             abort: () => ({ ok: {} }),
             commit: () => {
               commitCount++;
-              return Promise.resolve({ error: commitError });
+              return createTransactionCommitReceipt(
+                Promise.resolve({ error: commitError }),
+              );
             },
           }),
       },

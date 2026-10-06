@@ -382,6 +382,9 @@ export interface RunCfHarnessCliDependencies {
   cwd?: string;
   env?: Record<string, string | undefined>;
 
+  /** Current host job identity, passed only to brokered command processes. */
+  commandJobId?: string;
+
   /** Trusted, fixed binding supplied only by the dedicated local Loom host. */
   loomLocalHostBinding?: LoomLocalHostBinding;
 
@@ -841,7 +844,8 @@ const parseModelProvider = (
     ? input
     : undefined;
 
-const parseBuiltinToolId = (
+/** Parses a tool name accepted by the cf-harness CLI, including aliases. */
+export const parseCfHarnessCliToolId = (
   input: string,
 ): BuiltinToolId | undefined =>
   input === "query_docs"
@@ -860,7 +864,7 @@ const parseBuiltinToolIds = (
   if (values.length === 0) {
     return undefined;
   }
-  const parsed = values.map((value) => parseBuiltinToolId(value));
+  const parsed = values.map((value) => parseCfHarnessCliToolId(value));
   if (parsed.some((value) => value === undefined)) {
     throw new Error(
       `allowed tools must be one or more of ${CLI_PARENT_TOOL_IDS.join(", ")}`,
@@ -1348,6 +1352,7 @@ export const parseCfHarnessCliArgs = async (
     | "readTextFile"
     | "pathExists"
     | "sandboxHomeDir"
+    | "commandJobId"
     | "providerSettingsStore"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
@@ -1741,6 +1746,7 @@ export const parseCfHarnessCliArgs = async (
       ? args["loom-commands-config"]
       : env.CF_HARNESS_LOOM_COMMANDS_CONFIG,
     readTextFile,
+    deps.commandJobId,
   );
   const inputCells = parseInputCells(
     args["input-cell"] as string | readonly string[] | undefined,
@@ -2366,6 +2372,10 @@ const appendStructuredResultInstructions = (
     `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
+    "",
+    "Result schema (JSON):",
+    JSON.stringify(structuredResult.schema),
   );
 };
 

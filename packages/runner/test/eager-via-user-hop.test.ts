@@ -58,7 +58,7 @@ Deno.test("flag ON: a space→session narrowing writes the chained space→user�
     );
     cell.set({ draft: { text: "hello" } } as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const baseLink = cell.key("draft").getAsNormalizedFullLink();
@@ -111,7 +111,7 @@ Deno.test("flag OFF: the same narrowing keeps today's ONE hop (space slot links 
     );
     cell.set({ draft: { text: "hello" } } as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const baseLink = cell.key("draft").getAsNormalizedFullLink();
@@ -157,7 +157,7 @@ Deno.test("flag ON: an OMITTED session-scoped property gets the chained eager re
     // redirect chain with no content write.
     cell.set({ title: "hello" } as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const baseLink = cell.key("draft").getAsNormalizedFullLink();
@@ -220,13 +220,13 @@ Deno.test("flag ON: a pattern run whose output scope is DISCOVERED session-narro
       const tx = runtime.edit();
       argument.withTx(tx).set({ draft: "narrow me" });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
     }
     const cancel = result.sink(() => {});
     await runtime.idle();
@@ -307,7 +307,7 @@ Deno.test("flag ON: rewriting a parent that omits an ALREADY-materialized sessio
     );
     cell.set({ title: "first" } as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     // The chain is materialized. Rewrite the parent, again omitting the
@@ -335,7 +335,7 @@ Deno.test("flag ON: rewriting a parent that omits an ALREADY-materialized sessio
       "a parent rewrite omitting a materialized scoped property must " +
         "not re-write its redirect chain",
     );
-    await tx2.commit();
+    await tx2.commit().settled;
     await runtime.idle();
 
     // And the chain still stands.

@@ -68,7 +68,7 @@ describe("cfc-meta-seam-write-policy", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     return { storageManager, runtime, cause, id };
   };
@@ -88,7 +88,7 @@ describe("cfc-meta-seam-write-policy", () => {
       // Prepared (not invalidated): the prepare pass recorded no reasons at
       // all for the meta writes.
       expect(tx.getCfcState().prepare.status).toBe("prepared");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(
         tx.getCfcState().diagnostics.filter((d) =>
@@ -117,7 +117,7 @@ describe("cfc-meta-seam-write-policy", () => {
         path: ["value", "slug"],
       }, "user-slug");
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
         "missing schema write-policy input",
@@ -165,7 +165,7 @@ describe("cfc-meta-seam-write-policy", () => {
           },
         },
       });
-      expect((await seedSecret.commit()).ok).toBeDefined();
+      expect((await seedSecret.commit().settled).ok).toBeDefined();
 
       const sinkCause = "cfc-meta-seam-sink";
       const sinkId = runtime.getCell(signer.did(), sinkCause)
@@ -177,7 +177,7 @@ describe("cfc-meta-seam-write-policy", () => {
         id: sinkId,
         path: [],
       }, { value: { plain: "public" } });
-      expect((await seedSink.commit()).ok).toBeDefined();
+      expect((await seedSink.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const secret = tx.readOrThrow({
@@ -190,7 +190,7 @@ describe("cfc-meta-seam-write-policy", () => {
       await sink.sync();
       sink.setMetaRaw("slug", secret as string, rawMetaWriteAuthorization);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const replica = storageManager.open(signer.did()).replica as unknown as {
         getDocument(id: string): {

@@ -60,7 +60,7 @@ describe("CFC unsupported ifc claims fail closed", () => {
 
         const digest = tx.prepareCfc();
         expect(digest).toBe("");
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           `unsupported trust-sensitive claim ${claimKey}`,
         );

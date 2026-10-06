@@ -163,7 +163,7 @@ describe("collection-index", () => {
         ),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const bucket = collectionKeyBucket({ kind: "string", value: "A" });
       const observed: unknown[] = [];
       cancel = result.key("index").key("buckets").key(bucket).sink((value) => {
@@ -174,12 +174,12 @@ describe("collection-index", () => {
       tx = runtime.edit();
       elements.withTx(tx).set([second, first]);
       list.withTx(tx).set([secondKey, firstKey]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual([{ title: "Second" }]);
       tx = runtime.edit();
       firstKey.withTx(tx).key("value").set("A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual(
         expect.arrayContaining([{ title: "First" }, { title: "Second" }]),
@@ -188,31 +188,31 @@ describe("collection-index", () => {
       tx = runtime.edit();
       elements.withTx(tx).set([first]);
       list.withTx(tx).set([firstKey]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual([{ title: "First" }]);
       tx = runtime.edit();
       first.withTx(tx).key("title").set("Changed");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual([{ title: "Changed" }]);
       tx = runtime.edit();
       elements.withTx(tx).set([]);
       list.withTx(tx).set([]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toBeUndefined();
       expect(await result.key("index").key("keys").pull()).toEqual([]);
       tx = runtime.edit();
       elements.withTx(tx).set([first]);
       list.withTx(tx).set([firstKey]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(observed.at(-1)).toEqual([{ title: "Changed" }]);
       for (const nextMode of ["key", "group"] as const) {
         tx = runtime.edit();
         mode.withTx(tx).set(nextMode);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(observed.at(-1)).toEqual(
           nextMode === "key" ? { title: "Changed" } : [{ title: "Changed" }],
@@ -221,20 +221,20 @@ describe("collection-index", () => {
         for (const missing of [list, elements]) {
           tx = runtime.edit();
           missing.withTx(tx).asSchema(true).set(undefined);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await runtime.idle();
           expect(observed.at(-1)).toBeUndefined();
           expect(await result.key("index").key("keys").pull()).toEqual([]);
           tx = runtime.edit();
           firstKey.withTx(tx).key("value").set("B");
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await runtime.idle();
           expect(await result.key("index").key("keys").pull()).toEqual([]);
           tx = runtime.edit();
           firstKey.withTx(tx).key("value").set("A");
           list.withTx(tx).set([firstKey]);
           elements.withTx(tx).set([first]);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await runtime.idle();
           expect(observed.at(-1)).toEqual(
             nextMode === "key" ? { title: "Changed" } : [{ title: "Changed" }],
@@ -306,7 +306,7 @@ describe("collection-index", () => {
         >(signer.did(), "compiled-result", compiled.resultSchema, tx),
       );
       first.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const bucket = collectionKeyBucket({ kind: "string", value: "A" });
       const cancel = result.key("index").key("buckets").key(bucket).sink(
         () => {},
@@ -324,7 +324,7 @@ describe("collection-index", () => {
       legacyIndex.setRawUntyped(
         cloneWithoutValueAtPath(descriptor, ["keyEntries"]),
       );
-      expect((await legacyEdit.commit()).error).toBeUndefined();
+      expect((await legacyEdit.commit().settled).error).toBeUndefined();
       await storages[0].synced();
       cancel();
       first.runner.stop(result);
@@ -379,7 +379,7 @@ describe("collection-index", () => {
         title: "Second",
         category: "A",
       }]);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
       await second.idle();
       expect(await restored.key("index").key("buckets").key(bucket).pull())
         .toEqual([{ title: "Second", category: "A" }]);

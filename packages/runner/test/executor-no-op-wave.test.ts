@@ -159,7 +159,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -220,7 +220,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 6 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await waitForCellValue<number>(
       clientRuntime,
@@ -244,7 +244,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 9 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const noopInputSeq = maxAuthoredSeq(engine);
     expect(noopInputSeq).toBeGreaterThan(settledFirst - 1);
@@ -290,7 +290,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
       await kick.sync();
       const tx = clientRuntime.edit();
       kick.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await settleServing(engine, clientRuntime, space);
     expect(derivedSeqs(engine).length).toBeLessThanOrEqual(before + 1);
@@ -332,7 +332,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 6 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await waitForCellValue<number>(
       clientRuntime,
@@ -344,7 +344,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 9 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // The trigger the saturating arm shares: the second input re-runs
     // the derivation — here the recompute DIFFERS, so a fresh derived

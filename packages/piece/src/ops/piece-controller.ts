@@ -183,7 +183,7 @@ async function snapshotCloneData(
     pinCloneSnapshotCells(tx, snapshotCells.values());
     cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw commitFailure(error);
     return { input, internals };
   } catch (error) {
@@ -217,7 +217,7 @@ async function restoreCloneInternals(
     }
     cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw commitFailure(error);
   } catch (error) {
     if (!commitStarted) tx.abort(error);

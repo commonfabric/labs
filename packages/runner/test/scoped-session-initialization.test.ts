@@ -97,10 +97,10 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const clear = runtime.edit();
     user.withTx(clear).set({});
-    expect((await clear.commit()).error).toBeUndefined();
+    expect((await clear.commit().settled).error).toBeUndefined();
     return { raw, user };
   }
 
@@ -130,7 +130,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(
       parseLink(user.key("count").getRaw({ lastNode: "top" }), user)?.scope,
     )
@@ -138,7 +138,7 @@ describe("scoped-session-initialization", () => {
     expect(raw.key("count").getRaw({ lastNode: "top" })).toEqual(marked);
     const write = runtime.edit();
     raw.withTx(write).key("count").set(7);
-    expect((await write.commit()).error).toBeUndefined();
+    expect((await write.commit().settled).error).toBeUndefined();
     expect(
       runtime.getCell(space, "inputs", undefined, undefined, "session").key(
         "count",
@@ -151,7 +151,7 @@ describe("scoped-session-initialization", () => {
     const { raw, user } = await missingContinuation();
     const replace = runtime.edit();
     raw.withTx(replace).key("count").set(user.key("count"));
-    expect((await replace.commit()).error).toBeUndefined();
+    expect((await replace.commit().settled).error).toBeUndefined();
     expect(
       Object.hasOwn(
         linkRefPayload(
@@ -176,7 +176,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(user.key("count").getRaw({ lastNode: "top" })).toBeUndefined();
     expect(
       raw.asSchema(schema).key("count").get()!.getAsNormalizedFullLink().scope,
@@ -194,7 +194,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     )).toEqual([]);
-    expect((await local.commit()).error).toBeUndefined();
+    expect((await local.commit().settled).error).toBeUndefined();
     expect(user.getRaw()).toEqual({});
 
     setServerExecutionConfig(true);
@@ -210,7 +210,7 @@ describe("scoped-session-initialization", () => {
       path: ["count"],
       scope: "user",
     }]);
-    expect((await served.commit()).error).toBeUndefined();
+    expect((await served.commit().settled).error).toBeUndefined();
   });
 
   for (const value of [7, undefined, []]) {
@@ -219,7 +219,7 @@ describe("scoped-session-initialization", () => {
       await raw.sync();
       const seed = runtime.edit();
       raw.withTx(seed).set(value);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
       expect(scopedArgumentInitializationTargets(
         runtime,
@@ -233,7 +233,7 @@ describe("scoped-session-initialization", () => {
         raw.getAsNormalizedFullLink(),
         schema,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(raw.getRaw()).toEqual(value);
     });
   }
@@ -254,7 +254,7 @@ describe("scoped-session-initialization", () => {
     const replace = runtime.edit();
     raw.withTx(replace).set({ count: 7 });
     user.withTx(replace).set({});
-    expect((await replace.commit()).error).toBeUndefined();
+    expect((await replace.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     expect(scopedArgumentInitializationTargets(
       runtime,
@@ -268,7 +268,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(raw.getRaw()).toEqual({ count: 7 });
     expect(user.getRaw()).toEqual({});
   });
@@ -277,7 +277,7 @@ describe("scoped-session-initialization", () => {
     const { raw, user } = await missingContinuation();
     const replace = runtime.edit();
     raw.withTx(replace).set(user);
-    expect((await replace.commit()).error).toBeUndefined();
+    expect((await replace.commit().settled).error).toBeUndefined();
     const reference = raw.getRaw({ lastNode: "top" });
     const tx = runtime.edit();
     const cappedArgument = raw.asSchema({ type: "object", scope: "space" })
@@ -289,7 +289,7 @@ describe("scoped-session-initialization", () => {
       schema,
     )).toEqual([]);
     initializeScopedArgumentSlots(runtime, tx, cappedArgument, schema);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(raw.getRaw({ lastNode: "top" })).toEqual(reference);
     expect(user.getRaw()).toEqual({});
 
@@ -300,7 +300,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await allowed.commit()).error).toBeUndefined();
+    expect((await allowed.commit().settled).error).toBeUndefined();
     expect(raw.getRaw({ lastNode: "top" })).toEqual(reference);
     expect(parseLink(user.key("count").getRaw({ lastNode: "top" }), user))
       .toMatchObject({
@@ -323,7 +323,7 @@ describe("scoped-session-initialization", () => {
     const replace = runtime.edit();
     target.withTx(replace).set({});
     user.withTx(replace).set(target);
-    expect((await replace.commit()).error).toBeUndefined();
+    expect((await replace.commit().settled).error).toBeUndefined();
     const reference = user.getRaw({ lastNode: "top" });
     const tx = runtime.edit();
     initializeScopedArgumentSlots(
@@ -332,14 +332,14 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(user.getRaw({ lastNode: "top" })).toEqual(reference);
     expect(target.getRaw()).toEqual({});
     const handle = raw.asSchema(schema).key("count").get()!;
     expect(handle.getAsNormalizedFullLink().scope).toBe("user");
     const write = runtime.edit();
     handle.withTx(write).set(9);
-    expect((await write.commit()).error).toBeUndefined();
+    expect((await write.commit().settled).error).toBeUndefined();
     expect(target.key("count").get()).toBe(9);
   });
 
@@ -347,10 +347,10 @@ describe("scoped-session-initialization", () => {
     const { raw, user } = await missingContinuation();
     const replace = runtime.edit();
     raw.withTx(replace).key("count").set(user.key("count"));
-    expect((await replace.commit()).error).toBeUndefined();
+    expect((await replace.commit().settled).error).toBeUndefined();
     const write = runtime.edit();
     raw.asSchema(schema).withTx(write).key("count").set(5);
-    expect((await write.commit()).error).toBeUndefined();
+    expect((await write.commit().settled).error).toBeUndefined();
     expect(
       linkRefPayload(storedLink(raw.key("count").getRaw({ lastNode: "top" }))),
     )
@@ -371,7 +371,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(
       linkRefPayload(storedLink(raw.key("count").getRaw({ lastNode: "top" }))),
     ).toMatchObject({ scopeInitialization: "session" });
@@ -410,7 +410,7 @@ describe("scoped-session-initialization", () => {
       raw.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(raw.key("count").getRaw({ lastNode: "top" })).toEqual(marked);
     expect(foreign.key("count").getRaw({ lastNode: "top" })).toBeUndefined();
   });
@@ -439,7 +439,7 @@ describe("scoped-session-initialization", () => {
       copy.getAsNormalizedFullLink(),
       schema,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(copy.key("count").resolveAsCell().getAsNormalizedFullLink())
       .toMatchObject({
         id: copy.getAsNormalizedFullLink().id,
@@ -460,7 +460,7 @@ describe("scoped-session-initialization", () => {
         user.withTx(seed).set({
           count: value === "reference" ? reference : value,
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const before = user.key("count").getRaw({ lastNode: "top" });
         const tx = runtime.edit();
         initializeScopedArgumentSlots(
@@ -469,7 +469,7 @@ describe("scoped-session-initialization", () => {
           raw.getAsNormalizedFullLink(),
           schema,
         );
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(user.key("count").getRaw({ lastNode: "top" })).toEqual(before);
         expect(Object.hasOwn(user.getRaw()!, "count")).toBe(true);
         expect(
@@ -481,7 +481,7 @@ describe("scoped-session-initialization", () => {
         } else {
           raw.asSchema(schema).withTx(write).key("count").get()!.set(9);
         }
-        expect((await write.commit()).error).toBeUndefined();
+        expect((await write.commit().settled).error).toBeUndefined();
         if (value === "reference") {
           expect(raw.key("count").get()).toBe(9);
           expect(user.key("count").getRaw({ lastNode: "top" })).toEqual(before);
@@ -500,7 +500,7 @@ describe("scoped-session-initialization", () => {
       const replace = runtime.edit();
       if (!declared) raw.withTx(replace).set({});
       user.asSchema<unknown>(undefined).withTx(replace).set(undefined);
-      expect((await replace.commit()).error).toBeUndefined();
+      expect((await replace.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
       initializeScopedArgumentSlots(
         runtime,
@@ -508,7 +508,7 @@ describe("scoped-session-initialization", () => {
         raw.getAsNormalizedFullLink(),
         schema,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(user.getRaw()).toBeUndefined();
     });
   }
@@ -540,7 +540,7 @@ describe("scoped-session-initialization", () => {
         raw.getAsNormalizedFullLink(),
         schema,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(
         parseLink(user.key("count").getRaw({ lastNode: "top" }), user)?.scope,
       ).toBe("session");
@@ -567,7 +567,7 @@ describe("scoped-session-initialization", () => {
       },
     }));
     tx.prepareCfc();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const persisted = linkRefPayload(
       storedLink(raw.key("count").getRaw({ lastNode: "top" })),
     );
@@ -708,8 +708,8 @@ describe("scoped-session-initialization", () => {
     );
     const replace = runtime.edit();
     raw.withTx(replace).key("count").set(user.key("count"));
-    expect((await replace.commit()).error).toBeUndefined();
-    expect((await initialize.commit()).error?.name).toBe(
+    expect((await replace.commit().settled).error).toBeUndefined();
+    expect((await initialize.commit().settled).error?.name).toBe(
       "StorageTransactionInconsistent",
     );
     expect(user.key("count").getRaw({ lastNode: "top" })).toBeUndefined();

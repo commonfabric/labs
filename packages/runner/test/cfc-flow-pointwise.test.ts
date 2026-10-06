@@ -66,7 +66,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -139,7 +139,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       mappedRef = (values as any).mapWithPattern(
@@ -164,7 +164,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -179,7 +179,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       items: { asCell: ["cell"] },
     }, grow).set([el0Again, el1]);
     grow.prepareCfc();
-    expect((await grow.commit()).ok).toBeDefined();
+    expect((await grow.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -209,7 +209,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       const out = runtime!.getCell(space, cause, undefined, ptx);
       out.set({ copied: value.doubled });
       ptx.prepareCfc();
-      expect((await ptx.commit()).ok).toBeDefined();
+      expect((await ptx.commit().settled).ok).toBeDefined();
       return derivedConfidentiality(out.getAsNormalizedFullLink().id);
     };
 
@@ -271,7 +271,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0, el1]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       filteredRef = (values as any).filterWithPattern(
@@ -296,7 +296,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -312,7 +312,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     const out = runtime.getCell(space, "memb-probe", undefined, ptx);
     out.set({ count: keptLength });
     ptx.prepareCfc();
-    expect((await ptx.commit()).ok).toBeDefined();
+    expect((await ptx.commit().settled).ok).toBeDefined();
     const probeConf = derivedConfidentiality(
       out.getAsNormalizedFullLink().id,
     );
@@ -368,7 +368,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0, el1]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       filteredRef = (values as any).filterWithPattern(
@@ -393,7 +393,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -407,7 +407,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     const out = runtime.getCell(space, "shape-probe", undefined, ptx);
     out.set({ count: keptCells.length });
     ptx.prepareCfc();
-    expect((await ptx.commit()).ok).toBeDefined();
+    expect((await ptx.commit().settled).ok).toBeDefined();
     const probeConf = derivedConfidentiality(
       out.getAsNormalizedFullLink().id,
     );
@@ -461,7 +461,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0, el1]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       filteredRef = (values as any).filterWithPattern(
@@ -486,7 +486,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -499,7 +499,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     const out = runtime.getCell(space, "empty-probe", undefined, ptx);
     out.set({ count: keptCells.length });
     ptx.prepareCfc();
-    expect((await ptx.commit()).ok).toBeDefined();
+    expect((await ptx.commit().settled).ok).toBeDefined();
     const probeConf = derivedConfidentiality(
       out.getAsNormalizedFullLink().id,
     );
@@ -556,7 +556,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0, el1]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       filteredRef = (values as any).filterWithPattern(
@@ -582,7 +582,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -638,7 +638,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0, el1]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       filteredRef = (values as any).filterWithPattern(
@@ -658,7 +658,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -679,7 +679,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     lc.set([el0, el1, el2]);
     gtx.prepareCfc();
-    expect((await gtx.commit()).ok).toBeDefined();
+    expect((await gtx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -736,7 +736,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([el0, el1]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       flattenedRef = (values as any).flatMapWithPattern(
@@ -756,7 +756,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -812,7 +812,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     listCell.set([d0]);
     setup.prepareCfc();
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const collectionPattern = pattern<{ values: unknown[] }>(({ values }) => {
       const kept = (values as unknown as {
@@ -834,7 +834,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       resultCell,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 
@@ -866,7 +866,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     );
     lc.set([d1]);
     stx.prepareCfc();
-    expect((await stx.commit()).ok).toBeDefined();
+    expect((await stx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.idle();
 

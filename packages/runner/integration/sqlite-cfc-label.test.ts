@@ -120,7 +120,7 @@ async function runTest(base: URL) {
         labelView: view,
         logicalPath: [],
       });
-      await dtx.commit();
+      await dtx.commit().settled;
       if (!conf.some((a) => a === "secret-body")) {
         throw new Error(
           `result row did not inherit the column confidentiality; got ${

@@ -713,7 +713,9 @@ Deno.test("a READ member can cold-start a shared piece without persisting its sc
 
     const denied = viewer.edit();
     reached.key("draft").withTx(denied).set({ title: "unauthorized" });
-    expect((await denied.commit()).error?.name).toBe("AuthorizationError");
+    expect((await denied.commit().settled).error?.name).toBe(
+      "AuthorizationError",
+    );
     expect(original.key("title").get()).toBe("Already loaded update");
   } finally {
     await viewer.dispose({ closeStorage: false });

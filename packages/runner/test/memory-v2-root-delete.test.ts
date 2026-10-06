@@ -28,7 +28,7 @@ Deno.test("memory v2 root deletes stay undefined through sink and get", async ()
     );
 
     cell.set({ name: "Alice" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const seen: unknown[] = [];
@@ -39,7 +39,7 @@ Deno.test("memory v2 root deletes stay undefined through sink and get", async ()
     await runtime.idle();
 
     cell.withTx(tx).set(undefined as unknown as { name: string });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -48,7 +48,7 @@ Deno.test("memory v2 root deletes stay undefined through sink and get", async ()
 
     cancel();
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }
@@ -81,17 +81,17 @@ Deno.test("memory v2 source-backed cells clear to undefined", async () => {
 
     setResultCell(child, parent);
     child.set({ name: "Alice" });
-    await tx.commit();
+    await tx.commit().settled;
 
     tx = runtime.edit();
     child.withTx(tx).set(undefined as unknown as { name: string });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     assertEquals(child.get(), undefined);
     assertEquals(await child.pull(), undefined);
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }

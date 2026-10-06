@@ -136,7 +136,7 @@ describe("CFC declared observation classes (C5)", () => {
     const cell = rt.getCell(space, "dobs-doc", guarded.schema, tx);
     cell.set({ rows: ["a", "b"] });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const id = cell.getAsNormalizedFullLink().id;
     const declared = entriesOf(id).find((e) =>
@@ -163,7 +163,7 @@ describe("CFC declared observation classes (C5)", () => {
       { count: 2 },
     );
     countTx.prepareCfc();
-    expect((await countTx.commit()).ok).toBeDefined();
+    expect((await countTx.commit().settled).ok).toBeDefined();
     expect(
       entriesOf(countOutId).filter((e) => e.origin === "derived"),
     ).toEqual([]);
@@ -184,7 +184,7 @@ describe("CFC declared observation classes (C5)", () => {
       { copied: true },
     );
     valueTx.prepareCfc();
-    expect((await valueTx.commit()).ok).toBeDefined();
+    expect((await valueTx.commit().settled).ok).toBeDefined();
     expect(
       entriesOf(valueOutId).find((e) => e.origin === "derived")?.label
         .confidentiality,
@@ -214,7 +214,7 @@ describe("CFC declared observation classes (C5)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
       return id;
     })();
 
@@ -236,7 +236,7 @@ describe("CFC declared observation classes (C5)", () => {
     const out = rt.getCell(space, "dobs-shape-out", guarded.schema, tx);
     out.set({ created: true });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const outId = out.getAsNormalizedFullLink().id;
     const entries = entriesOf(outId);
@@ -281,7 +281,7 @@ describe("CFC declared observation classes (C5)", () => {
     const cell = rt.getCell(space, "dobs-invalid-doc", guarded.schema, tx);
     cell.set({ rows: ["a"] });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const id = cell.getAsNormalizedFullLink().id;
     const declared = entriesOf(id).find((e) =>
@@ -305,7 +305,7 @@ describe("CFC declared observation classes (C5)", () => {
       { count: 1 },
     );
     countTx.prepareCfc();
-    expect((await countTx.commit()).ok).toBeDefined();
+    expect((await countTx.commit().settled).ok).toBeDefined();
     expect(
       entriesOf(outId).find((e) => e.origin === "derived")?.label
         .confidentiality,

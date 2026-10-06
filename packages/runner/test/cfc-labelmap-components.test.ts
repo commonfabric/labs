@@ -61,7 +61,7 @@ describe("CFC labelMap component origins", () => {
       );
       cell.set({ secret: "hello" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
       const entry = replicaEntries(storageManager, persistedId).find((e) =>
@@ -102,7 +102,7 @@ describe("CFC labelMap component origins", () => {
       );
       seedCell.set({ secret: "v1" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Re-write the labeled path through the same schema: the recomputed
       // labelMap is identical, so persistence must be a no-op — reactive
@@ -126,7 +126,7 @@ describe("CFC labelMap component origins", () => {
           write.address.id === persistedId && write.address.path[0] === "cfc"
         );
       expect(cfcWrites).toEqual([]);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -153,7 +153,7 @@ describe("CFC labelMap component origins", () => {
       );
       source.set({ title: "pointed-at" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const linkedSource = runtime.getCell(
@@ -170,7 +170,7 @@ describe("CFC labelMap component origins", () => {
       );
       holder.set(linkedSource);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = holder.getAsNormalizedFullLink().id;
       const entry = replicaEntries(storageManager, persistedId).find((e) =>
@@ -221,7 +221,7 @@ describe("CFC labelMap component origins", () => {
       );
       cell.set({ pair: ["hush", 7] });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
       const entries = replicaEntries(storageManager, persistedId);
@@ -277,7 +277,7 @@ describe("CFC labelMap component origins", () => {
       );
       cell.set({ pair: ["hush", 7] });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
       const entries = replicaEntries(storageManager, persistedId);

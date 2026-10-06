@@ -87,7 +87,7 @@ describe("scheduler v2 cutover fixtures", () => {
     left.set(10);
     right.set(20);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -122,19 +122,19 @@ describe("scheduler v2 cutover fixtures", () => {
     expect(runs).toBe(1);
 
     condition.withTx(tx).send(false);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     expect(await output.pull()).toBe(20);
     expect(runs).toBe(2);
 
     left.withTx(tx).send(11);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     expect(await output.pull()).toBe(20);
     expect(runs).toBe(2);
 
     right.withTx(tx).send(21);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     expect(await output.pull()).toBe(21);
     expect(runs).toBe(3);
@@ -148,7 +148,7 @@ describe("scheduler v2 cutover fixtures", () => {
       tx,
     );
     item.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const samples: number[] = [];
@@ -209,7 +209,7 @@ describe("scheduler v2 cutover fixtures", () => {
     );
     source.set(0);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computeRuns = 0;
@@ -256,7 +256,7 @@ describe("scheduler v2 cutover fixtures", () => {
 
       for (const value of [1, 2, 3]) {
         source.withTx(tx).send(value);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await runtime.scheduler.idle();
       }
@@ -285,7 +285,7 @@ describe("scheduler v2 cutover fixtures", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const outputAddress = toMemorySpaceAddress(
@@ -351,7 +351,7 @@ describe("scheduler v2 cutover fixtures", () => {
     );
     source.set(0);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectRuns = 0;
@@ -394,7 +394,7 @@ describe("scheduler v2 cutover fixtures", () => {
 
       for (const [index, value] of [1, 2, 3].entries()) {
         source.withTx(tx).send(value);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await runtime.scheduler.idle();
         expect(output.get()).toBe(value * 10);
@@ -435,7 +435,7 @@ describe("scheduler v2 cutover fixtures", () => {
     cycleB.set(0);
     unrelatedSource.set(7);
     unrelatedOutput.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCountA = 0;
@@ -571,7 +571,7 @@ describe("scheduler v2 cutover fixtures", () => {
     trigger.set(0);
     childSource.set(1);
     childOutput.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childARuns = 0;
@@ -637,7 +637,7 @@ describe("scheduler v2 cutover fixtures", () => {
 
       childBValues.length = 0;
       childSource.withTx(tx).send(2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
 
@@ -672,7 +672,7 @@ describe("scheduler v2 cutover fixtures", () => {
     trigger.set(0);
     source.set(3);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childRuns = 0;
@@ -748,7 +748,7 @@ describe("scheduler v2 cutover fixtures", () => {
     trigger.set(0);
     source.set(3);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childRuns = 0;
@@ -796,7 +796,7 @@ describe("scheduler v2 cutover fixtures", () => {
       expect(output.get()).toBe(30);
 
       source.withTx(tx).send(4);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
 
@@ -823,7 +823,7 @@ describe("scheduler v2 cutover fixtures", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -849,7 +849,7 @@ describe("scheduler v2 cutover fixtures", () => {
     );
 
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
 
@@ -872,7 +872,7 @@ describe("scheduler v2 cutover fixtures", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -902,7 +902,7 @@ describe("scheduler v2 cutover fixtures", () => {
       expect(runs).toBe(0);
 
       source.withTx(tx).send(2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
 
@@ -936,7 +936,7 @@ describe("scheduler v2 cutover fixtures", () => {
     parentlessSource.set(1);
     stickySource.set(1);
     parentTrigger.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const parentlessAddress = toMemorySpaceAddress(
@@ -1116,7 +1116,7 @@ describe("scheduler v2 cutover fixtures", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const sourceAddress = toMemorySpaceAddress(
       source.getAsNormalizedFullLink(),
@@ -1484,7 +1484,7 @@ describe("scheduler v2 cutover fixtures", () => {
       cell.set(0);
       cells.push(cell);
     }
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const cancels: Array<() => void> = [];
@@ -1540,7 +1540,7 @@ describe("scheduler v2 cutover fixtures", () => {
       runtime.telemetry.addEventListener("telemetry", onTelemetry);
       try {
         cells[0].withTx(tx).send(5);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await runtime.scheduler.idle();
       } finally {

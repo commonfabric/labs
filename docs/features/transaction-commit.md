@@ -1,22 +1,25 @@
 # Transaction commit stages
 
 A transaction stages writes until the caller starts its commit. Calling
-`tx.startCommit()` starts preparation and storage work and returns a
+`tx.commit()` starts preparation and storage work and returns a
 `TransactionCommitReceipt` synchronously. The receipt has two promises:
 
 | Stage | What it establishes |
 | --- | --- |
 | `verdict` | The commit's fate: accepted, rejected, or refused locally |
-| `settled` | The default commit completion: subscription coverage or rejection repair, commit callbacks, and inline post-commit effects |
+| `settled` | Completion after subscription coverage or rejection repair, commit callbacks, and inline post-commit effects |
 
-The receipt is not a promise. A caller selects the stage its next operation
-requires. Both stages return a `Result`: expected refusal is carried in
+The receipt requires explicit stage selection. Awaiting it rejects with a
+stage-selection error, including in untyped code. Promise collections assimilate
+it as a rejection and apply their own rejection rules. This misuse does not
+cancel the commit attempt; its stages remain observable. Both stages return a
+`Result`: expected refusal is carried in
 `.error`; internal exceptions can reject the promises.
 Internal exceptions are reported even when neither stage is observed. Backends
 without a separate verdict signal resolve `verdict` with settlement.
 
 For an ordinary valid single-space transaction, the local replica receives the
-optimistic writes before `startCommit()` returns. Local computation and
+optimistic writes before `commit()` returns. Local computation and
 rendering can use that state while confirmation remains pending. A local
 refusal can prevent those writes from applying; a later server refusal can
 withdraw them. An available value does not establish persistence.
@@ -25,7 +28,10 @@ Multi-space transactions start each space in sequence and can partially
 succeed. Returning the receipt does not establish that every space has applied
 locally. With server execution, a seal destination can accept a contribution
 into a wave or speculation overlay. Its verdict follows that destination's
-contract; the wave's later durable disposition is separate.
+contract; the wave's later durable disposition is separate. A seal destination
+that forwards an ordinary store commit preserves the store receipt's early
+verdict and later coverage or repair. A one-stage contribution seal supplies
+acceptance on both receipt stages.
 
 ## Choosing a completion stage
 
@@ -42,11 +48,23 @@ install a lazy producer that the pull then computes, and includes the writes
 that computation produces. The barrier also covers pending pattern work.
 `RuntimeClient.idle()` crosses the same barrier without adding a cell demand.
 Hosts use pending-write notifications to guard teardown independently of reads.
-Bridge `initialize()` keeps that demand through the commit-aware barrier before
-atomically selecting an existing value or storing the default. It can therefore
-initialize a cell whose producer is being installed without replacing the value
-that producer supplies. This barrier is runtime-wide: an unrelated pending
-commit can delay initialization, including iframe bootstrap.
+Bridge `initialize()` first demands the cell's producers and required loads. It
+can return an existing backing value while unrelated commits remain pending,
+including commits from a running pattern in another space. Every document
+consumed to build the returned value, including redirect and linked-value
+targets, must be free of pending local writes. The returned value is the snapshot
+selected by that transaction; later writes can still change it.
+Later branches of a multi-space commit become pending local writes only when
+they start in their replica. Before such a branch starts, initialization can
+return this stored snapshot; the branch can subsequently change the cell.
+
+For an absent or optimistic backing value, or an inconclusive read, initialization
+keeps demand active through the full commit-aware barrier before atomically
+selecting a value or storing the default. That lets a pending commit or conflict
+repair install a producer without initialization replacing the value it supplies.
+This fallback is runtime-wide: unrelated pending work can delay a first-use
+default, including iframe bootstrap. Read failures defer to this barrier only
+when recorded reads show a pending local write; other failures propagate.
 
 Observe `receipt.verdict` when the next step requires knowing the commit's
 fate. Use `receipt.settled` when a retry needs the repaired read basis, when a
@@ -66,19 +84,23 @@ declare const tx: IExtendedStorageTransaction;
 declare const cell: Cell<number>;
 
 cell.withTx(tx).set(7);
-const receipt = tx.startCommit();
+const receipt = tx.commit();
 const localValue = cell.get();
 
 const result = await receipt.verdict;
 if (result.error) throw new Error(result.error.message);
 ```
 
-`tx.commit()` is the promise-returning completion convenience and selects
-settlement by default.
-Its `resolveAt: "verdict"` option selects the earlier fate signal; it leaves
-commit callbacks, pending-commit registration, repair, and effects on their
-own timelines. `startCommit()` exposes both stages of the same attempt and
-accepts no stage-selection options.
+Both raw storage transactions and extended runtime transactions expose the
+same `commit()` receipt. TypeScript rejects awaiting the receipt itself; select
+`.verdict` or `.settled` explicitly. Promise collections also need stage
+selection, such as `Promise.all(receipts.map((receipt) => receipt.settled))`.
+
+`commit({ holdSyncedUntilCovered: false })` lets controlled-staleness fixtures
+observe accepted writes without holding replica `synced()` for coverage.
+This option changes the synchronization hold independently of the observed
+stage. The receipt's settlement and the runtime's pending-commit barrier still
+wait for coverage or rejection repair. The default keeps the coverage hold.
 
 Each receipt belongs to its own invocation. Starting a second commit on a
 transaction that is already pending or complete returns that invocation's
