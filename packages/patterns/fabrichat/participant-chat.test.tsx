@@ -10,6 +10,7 @@ import {
   type AddIntegrity,
   assert,
   currentPrincipal,
+  equals,
   handler,
   multiUserTest,
   pattern,
@@ -117,6 +118,15 @@ const chatCounterpart = (chip: unknown): unknown =>
       "data-counterpart",
     ),
   );
+
+// The stream a chip's chat control sends its click to.
+const chatTarget = (chip: unknown): object | undefined => {
+  const target = propValue(
+    findNodeByProp(chip, "data-ui-action", CHAT_START_ACTION),
+    "onClick",
+  );
+  return typeof target === "object" && target !== null ? target : undefined;
+};
 
 // How a manager shows its user's chat address, and the address it offers to
 // copy.
@@ -259,7 +269,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           setup.aliceDid.get() !== "" &&
-          chatCounterpart(aliceChip[UI]) === setup.aliceDid.get()
+          chatCounterpart(aliceChip[UI]) === setup.aliceDid.get() &&
+          equals(chatTarget(aliceChip[UI]), manager.openDirect)
         ),
       },
       {
