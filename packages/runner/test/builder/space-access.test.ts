@@ -270,6 +270,43 @@ describe("spaceAccess()", () => {
       }
     });
 
+    it("returns another principal's level when asked for one, by the list alone", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+
+      const runtime = clientRuntime(alice);
+      await syncAcl(runtime);
+      const target = runtime.getCell<unknown>(space, "space-access here");
+      const ask = (
+        principal: unknown,
+        kind: "lift" | "handler" = "handler",
+      ) => {
+        const tx = runtime.edit();
+        const frame = pushFrame({ runtime, tx, space, frameKind: kind });
+        try {
+          return { level: spaceAccess(target, principal as never), tx };
+        } finally {
+          popFrame(frame);
+        }
+      };
+      expect(ask(bob.did()).level).toBe("WRITE");
+      expect(ask(carol.did()).level).toBe("READ");
+      expect(ask(dave.did()).level).toBe("none");
+      expect(ask(alice.did()).level).toBe("OWNER");
+      // The answer does not depend on who asks, so a computation asking
+      // about a named principal keeps its scope.
+      const asked = ask(bob.did(), "lift");
+      expect(asked.level).toBe("WRITE");
+      expect(asked.tx.getNarrowestReadScope()).not.toBe("user");
+      for (const principal of ["*", "bob", 42, null]) {
+        expect(() => ask(principal)).toThrow("takes a principal's DID");
+      }
+    });
+
     it("returns the `*` entry's level to a principal the list does not name, and a named entry over it", async () => {
       const setAcl = await aclWriter();
       await setAcl({

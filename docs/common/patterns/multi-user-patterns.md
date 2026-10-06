@@ -434,6 +434,8 @@ const inviteBaker = handler<
   document's. `principalOf(field, kind, { followLink: false })` reads the
   field's: who wrote the link, where the default reads whom the linked
   document represents.
+- `spaceAccess(target, principal)` returns another principal's level, so a
+  handler can tell whether the principal a label names is still a member.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 

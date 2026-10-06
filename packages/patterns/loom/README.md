@@ -125,21 +125,26 @@ is retried. `removePanel` removes only one occurrence and its presentation
 references. `removePiece` unregisters every occurrence of the specified complete
 piece link. Neither operation deletes the target.
 
-Only the principal who added an occurrence removes it. `removePanel` reads the
-adder from the runtime's stamps on the occurrence's own fields, with
-`principalsOf` and `followLink: false`: `authored-by` at `addedBy`, whatever the
-field holds, and `represents-principal` at `addedByProfile`, which names whoever
-acted under the profile rather than the profile's owner. It removes an
-occurrence those stamps attest to the principal the event acts for alone, and
-one they attest to nobody: an occurrence with no adder, or one that holds its
-adder only as its writer's claim in `addedBy`, which protects nothing. It
-refuses one attested to another principal, to more than one, or by a claim in a
-form no runtime mints; nobody removes those last two through the root. An
+Only the principal who added an occurrence removes it, unless they have left.
+`removePanel` reads the adder from the runtime's stamps on the occurrence's own
+fields, with `principalsOf` and `followLink: false`: `authored-by` at `addedBy`,
+whatever the field holds, and `represents-principal` at `addedByProfile`, which
+names whoever acted under the profile rather than the profile's owner. It
+removes an occurrence those stamps attest to the principal the event acts for
+alone. It removes one they attest to nobody whose contribution the rule could
+keep: an occurrence with no adder, one that holds its adder only as its writer's
+claim in `addedBy`, and one whose stamps name more than one principal or hold a
+claim in a form no runtime mints. It refuses one attested to another principal,
+with one exception: an OWNER of the Loom's space, by `spaceAccess`, removes an
+occurrence whose attested adder the space's access list grants nothing, by
+`spaceAccess(panel, adder)`, so that what a participant who has left added can
+be cleared up. A list the replica has not read admits no such removal. An
 occurrence that is not in the Loom is left alone without a check. `removePiece`
 applies the same check to every occurrence of the piece and removes all of them
 or none, so a piece that another principal also registered is unregistered one
 occurrence at a time, with `removePanel`. The root's Remove button sends
-`removePanel`, so it is refused on an occurrence someone else added.
+`removePanel`, so it is refused on an occurrence someone else, still in the
+Loom, added.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be

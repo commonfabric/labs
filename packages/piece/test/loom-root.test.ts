@@ -675,7 +675,7 @@ describe("loom-root", () => {
     ]);
   });
 
-  it("removes an occurrence only for the principal its label attests as its adder, or one no label attests", async () => {
+  it("removes an occurrence for the principal its label attests as its adder, for anyone when it attests nobody, and for an OWNER when the adder has left", async () => {
     const space = pieces.getSpace();
     const output = root.asSchema(rootSchema);
     const addPanel = await output.key("addPanel").pull();
@@ -761,6 +761,19 @@ describe("loom-root", () => {
       (await output.key("panels").pull()).some((panel) =>
         panel.resolveAsCell().equals(cell)
       );
+    /** Replaces the space's access list, as a member's replica would read it. */
+    const setAcl = async (acl: Record<string, string>) => {
+      const tx = runtime.edit();
+      seedStoredEnvelope(
+        tx,
+        { space, scope: "space", id: `of:${space}` as never, path: [] },
+        { value: acl } as never,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
+    // The caller owns the space; the foreign signer is a WRITE member; the
+    // profile owner is nobody there.
+    await setAcl({ [signer.did()]: "OWNER", [foreignSigner.did()]: "WRITE" });
 
     // The caller's own profile, linked on an occurrence another principal
     // added under it: the stamp on the field names who acted.
@@ -774,7 +787,6 @@ describe("loom-root", () => {
       at([], by(signer.did())),
     ]);
     const others = "Only the principal who added a panel can remove it";
-    const contested = "whose label contests who added it";
     const refusals: [string, unknown, unknown[], string][] = [
       ["stamped-other", url("stamped-other"), [
         at(["addedBy"], by(foreignSigner.did())),
@@ -795,16 +807,6 @@ describe("loom-root", () => {
         [at(["addedBy"], by(foreignSigner.did()))],
         others,
       ],
-      ["two-adders", url("two-adders"), [
-        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
-      ], contested],
-      ["both-fields", url("both-fields"), [
-        at(["addedBy"], by(signer.did())),
-        at(["addedByProfile"], represents(foreignSigner.did())),
-      ], contested],
-      ["misspelled", url("misspelled"), [
-        at(["addedBy"], `authored-by:${signer.did()}`),
-      ], contested],
     ];
     for (const [cause, value, entries, message] of refusals) {
       const cell = await linked(cause, value, entries);
@@ -826,6 +828,22 @@ describe("loom-root", () => {
         ...url("linked-addedby-own"),
         addedBy: didCell.getAsLink(),
       }, [at(["addedBy"], by(signer.did()))]],
+      // A label that settles on no single adder protects nobody: any writer
+      // removes the occurrence.
+      ["two-adders", url("two-adders"), [
+        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
+      ]],
+      ["both-fields", url("both-fields"), [
+        at(["addedBy"], by(signer.did())),
+        at(["addedByProfile"], represents(foreignSigner.did())),
+      ]],
+      ["misspelled", url("misspelled"), [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+      ]],
+      // An OWNER removes what a participant who has left added.
+      ["stamped-departed", url("stamped-departed"), [
+        at(["addedBy"], by(profileOwner.did())),
+      ]],
     ];
     for (const [cause, value, entries] of removals) {
       const cell = await linked(cause, value, entries);
@@ -866,6 +884,25 @@ describe("loom-root", () => {
     expect(await refusedWith(removePiece, { piece }, "unregister", others))
       .toBe(true);
     expect([await holds(mine), await holds(theirs)]).toEqual([true, true]);
+
+    // A WRITE member does not clear up after one who has left: only an OWNER.
+    const departed = await linked("departed-again", url("departed-again"), [
+      at(["addedBy"], by(profileOwner.did())),
+    ]);
+    await setAcl({
+      [thirdOwner.did()]: "OWNER",
+      [signer.did()]: "WRITE",
+      [foreignSigner.did()]: "WRITE",
+    });
+    expect(
+      await refusedWith(
+        removePanel,
+        { panel: departed },
+        "rm-as-writer",
+        others,
+      ),
+    ).toBe(true);
+    expect(await holds(departed)).toBe(true);
   });
 
   it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {

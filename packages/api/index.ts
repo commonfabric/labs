@@ -4004,11 +4004,17 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
  * the event's actor. Calling it in a pattern body throws, since a pattern
  * body builds one graph for every viewer: wrap it in `computed()` instead.
  *
+ * With `principal`, a DID, it returns that principal's level instead, by the
+ * access list alone, so a handler can tell whether the principal a label
+ * names still belongs to the space. The answer then does not depend on who
+ * is asking. A `principal` that is not a well-formed DID throws.
+ *
  * It names no principal, and tells a member only what a member can already
  * read, since any member can read the whole access list.
  */
 export type SpaceAccessFunction = (
   target: AnyCell<unknown> | undefined,
+  principal?: DID,
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;

@@ -1,4 +1,6 @@
 import type { SpaceAccessLevel } from "@commonfabric/api";
+import { debugStr } from "@commonfabric/data-model";
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
@@ -41,16 +43,22 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * a handler it is the event's actor. In a pattern body it throws, since a
  * pattern body builds one graph for every viewer.
  *
+ * With `principal`, a DID, the answer is that principal's level instead, by
+ * the access list alone: whether the memory server has refused this runtime
+ * the space says nothing about another principal, and the answer does not
+ * depend on who asks, so a computation's scope is left as it is.
+ *
  * The level names no principal, and tells a member only what a member can
  * already read, since any member can read the whole access list.
  *
  * @throws If called outside a handler or a reactive computation, with no
- *   `target`, or with a `target` that is neither a cell nor `undefined`.
+ *   `target`, with a `target` that is neither a cell nor `undefined`, or with
+ *   a `principal` that is neither a well-formed DID nor `undefined`.
  */
 export function spaceAccess(
   // Optional here, though the declared API requires it, so that the runtime
   // check below has a case to catch from untyped callers.
-  ...args: [target?: unknown]
+  ...args: [target?: unknown, principal?: unknown]
 ): SpaceAccessLevel | undefined {
   const frame = topFrame();
   const kind = frame?.frameKind;
@@ -69,10 +77,18 @@ export function spaceAccess(
       "`spaceAccess()` requires a `target`: a cell in the space to ask about.",
     );
   }
-  const [target] = args;
+  const [target, asked] = args;
+  if (asked !== undefined && !isWellFormedDID(asked)) {
+    throw new Error(
+      "`spaceAccess(target, principal)` takes a principal's DID; " +
+        debugStr`got $quote${asked}.`,
+    );
+  }
 
   let principal: string | undefined;
-  if (kind === "lift") {
+  if (asked !== undefined) {
+    principal = asked;
+  } else if (kind === "lift") {
     // The answer depends on who is asking, so the computation's value is a
     // per-user one whatever the principal turns out to be. This goes first so
     // that no return below skips it.
@@ -91,6 +107,7 @@ export function spaceAccess(
     spaceOfTarget(target, "spaceAccess(target)"),
     principal,
     kind === "lift",
+    asked === undefined,
   );
 }
 
@@ -124,7 +141,9 @@ export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
  * Helper for {@link spaceAccess}, which returns `principal`'s access to
  * `space`, reading the space's access list through `tx`. With `reactive`, a
  * change to whether the memory server admits this runtime to `space` runs the
- * executing action again.
+ * executing action again. `own` says whether `principal` is the one the
+ * calling code runs for, whose session this runtime's may be; the session
+ * says nothing about any other principal.
  */
 function accessLevel(
   runtime: Runtime,
@@ -132,13 +151,14 @@ function accessLevel(
   space: MemorySpace,
   principal: string | undefined,
   reactive: boolean,
+  own: boolean,
 ): SpaceAccessLevel | undefined {
   if (principal === undefined) return undefined;
 
   // A serving runtime reads every space as that space's owner, so what the
   // memory server thinks of its own session says nothing about the principal
   // whose level it returns. Only a client's session is that principal's.
-  const sessionIsPrincipal = !runtime.servingPosture;
+  const sessionIsPrincipal = own && !runtime.servingPosture;
   const action = runtime.scheduler.executingAction;
   if (sessionIsPrincipal && reactive && action !== null) {
     runtime.spaceAccessWatch.rerunOnChange(space, action);
