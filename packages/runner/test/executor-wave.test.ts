@@ -99,6 +99,7 @@ import {
 } from "../src/executor/effect-completion.ts";
 import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("executor wave test");
@@ -834,18 +835,20 @@ describe("stage D seal-into-wave", () => {
       expect((await other.commit().settled).error).toBeUndefined();
       runtime.clearSealDestination();
       const settlement = waveSettlementOf(tx)!;
-      // A settlement already resolved runs its reaction first.
-      const before = await Promise.race([
-        settlement.then(() => "settled"),
-        Promise.resolve("pending"),
-      ]);
+      let settledBeforeCommit = false;
+      settlement.then(() => {
+        settledBeforeCommit = true;
+      });
+      // A settlement that needed no wave would have resolved by the end of
+      // this turn.
+      await flushMicrotasks();
       const committed: string[] = [];
 
       const outcome = await wave.commitWave(
         accessSink(lease.holder, { admitted: true, seq: 7 }, committed),
       );
 
-      expect(before).toBe("pending");
+      expect(settledBeforeCommit).toBe(false);
       expect(committed).toEqual(["event-consequence:e-change-only"]);
       expect(outcome.dispositions).toEqual([
         { kind: "committed" },
