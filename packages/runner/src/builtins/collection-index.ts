@@ -1,5 +1,6 @@
 /** Owns per-occurrence reactive index maintenance and reconciles membership. */
 
+import { hashStringOf } from "@commonfabric/data-model";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 
 import { createNodeFactory } from "../builder/module.ts";
@@ -9,7 +10,6 @@ import type { AddCancel } from "../cancel.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
-import { snapshotQueryResult } from "../query-result-proxy.ts";
 import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
@@ -281,6 +281,17 @@ function createCollectionIndexInstance(
       });
       const occurrences = listElementKeys(elements);
       const neededOccurrences = new Set(occurrences.values());
+      const neededAssignments = new Set(
+        [...neededOccurrences].map(hashStringOf),
+      );
+      // A late member write from another session can restore an occurrence
+      // after source reconciliation. Observe assignment keys so that arrival
+      // reconciles against the current source even when the source is unchanged.
+      // Bucket changes and source payloads remain the member actions' concern.
+      const assignmentIds = tx.runWithAmbientReadMeta(
+        machineryRead,
+        () => Object.keys(state.key("assignments").get() ?? {}),
+      );
       tx.runWithAmbientReadMeta(
         { ...ignoreReadForScheduling, ...machineryRead },
         () => {
@@ -303,10 +314,10 @@ function createCollectionIndexInstance(
               occupied: {},
             });
           }
-          const assignments = snapshotQueryResult(
-            state.key("assignments").get(),
-          );
-          for (const assignment of Object.values(assignments)) {
+          for (const id of assignmentIds) {
+            // Retained occurrences need no bookkeeping content read.
+            if (neededAssignments.has(id)) continue;
+            const assignment = state.key("assignments").key(id).get();
             if (assignment && !neededOccurrences.has(assignment.occurrence)) {
               maintainCollectionIndexMembership(
                 tx,

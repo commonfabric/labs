@@ -20,34 +20,45 @@ avoids throwaway work.
 
 ## Where the runner stands
 
-The runner soundly implements the **flat "ceiling + required-integrity" fragment**
-of CFC, and enforces all 8 of its own commit-gate invariants (relevant⇒prepared,
-digest-invalidation, verifier-read exclusion, fail-closed on missing
-schema/metadata/unsupported claim, commit-gated side effects, fresh-retry, system-
-controlled metadata, coarse `classification` summary). Its remit — the reactive
-commit boundary — is well covered.
+[`cfc-conformance-statement.md`](./cfc-conformance-statement.md) is the
+statement of what this runtime implements against the specification and in
+which direction each known gap errs; read it before this list, which is the
+backlog behind it. The theme that organizes the backlog: the runtime holds a
+label as `IFCLabel` in
+[`label-view-core.ts`](../../packages/runner/src/cfc/label-view-core.ts), joins by
+union and matches against static allow-lists, where the spec's algebra is CNF
+clauses, exchange-rule evaluation, pattern matching, trust closure and
+observation-class refinement. Most of the distance is fail-closed (the runtime
+over-restricts); the edges that are soundness holes are called out below.
 
-**The organizing theme.** The runtime represents a label as a *flat set* —
-`IFCLabel = { confidentiality?: unknown[]; integrity?: unknown[] }`
-([`label-view-core.ts:5`](../../packages/runner/src/cfc/label-view-core.ts)) — with
-union join and exact-`deepEqual` matching against static allow-lists
-([`prepare.ts:2481`,`:2497`](../../packages/runner/src/cfc/prepare.ts)). The spec's
-algebra is **CNF clauses (AND-of-ORs) + exchange-rule evaluation + pattern-matching
-+ trust-closure + observation-class refinement**. Almost every big gap below is a
-facet of that one representational distance. Most of the flat model's narrowness is
-*fail-closed* (it over-restricts — safe), but a few edges are genuine soundness
-holes, called out explicitly.
+The epic bodies below were written on 2026-07-01, before Epics A to E and H shipped, and several of their claims about the runner (that it has no exchange-rule machinery, that `cfcFlowLabels` defaults to `off`, that `cfcTriggerReadGating` is `false`) are no longer true. Where a body and the conformance statement disagree, the statement is current; re-deriving the bodies against it is a stage 2 follow-up of the correspondence plan.
 
-**Default posture.** The commit gate is on by default: the Runtime constructor
-defaults `cfcEnforcementMode` to `enforce-strict`
-([`runtime.ts:495`](../../packages/runner/src/runtime.ts)), as does lib-shell's
-`createRuntimeClientOptions` — the types-level
-`DEFAULT_CFC_ENFORCEMENT_MODE = "disabled"`
-([`types.ts:42`](../../packages/runner/src/cfc/types.ts)) is only the
-bare-transaction fallback. Flow labels persist and the render confidentiality
-ceiling is built by default, so the one reject the strict rung adds — the
-writer-fit misfit — is exercised in deployment rather than dormant. A host that
-wants less states it.
+## Conformance statement follow-ups
+
+Each item the conformance statement marks "not established" is a question a
+test or a code reading settles, listed here so it has a tracker. The section
+numbers are the statement's.
+
+1. §1: whether every write to a labeled document by a path other than `Cell`
+   and `data-updating.ts` is marked relevant under `cfcFlowLabels: off`.
+2. §2: whether a module load lands a source read in a handler's journal; the
+   write-set residual by observer level; whether pattern code can read the
+   SQLite `requestHash` untyped; a test that verifier reads stay freshness
+   dependencies.
+3. §3: whether a declared covering `ifc` entry at a reference slot reaches the
+   dereferencing transaction's flow join; whether non-`followRef`
+   derived-selection entries exist at slots; the remaining §18.7 rows at every
+   boundary.
+4. §4: whether the release-gate composition under a witnessed guard
+   under-taints.
+5. §5: whether write floor, policy evaluation and label-metadata protection
+   each passed through `observe` in deployment; a check refusing
+   `enforce-strict` with flow labels below `persist`.
+6. §6: a test that a skipped envelope produces no version advance and no
+   replication.
+7. §7: whether every non-scheduler entry point carries its gating reads.
+8. §8: whether an explicit `undefined` write at a recorded deleted path counts
+   as a re-creation, and so whether the un-minted join under-taints.
 
 ---
 
@@ -241,60 +252,32 @@ collaborative-doc model as a downgraded/future area. Ref: §14.4.8, §3.1.6.
 
 ## Epic H — Enforcement & flow activation (smaller than the engines, high leverage)
 
-**Size: medium. Mostly flipping defaults onto conforming states — do early.**
+**Size: medium. The default flip has landed; what remains is the last rungs.**
 
-Not new machinery so much as turning the system on:
+Not new machinery so much as turning the system on. Every CFC enforcement dial now
+defaults to its strictest sound rung through `RUNTIME_CFC_DIAL_DEFAULTS`
+([`posture-report.ts`](../../packages/runner/src/cfc/posture-report.ts)):
+`enforce-strict`, `cfcFlowLabels: persist`, the write floor, trigger-read
+gating, policy evaluation and label-metadata protection all on. A host dials
+an environment back only by naming a lower rung. What remains:
 
-- **Flow-labels `off` outside the presets → inv-9 partial.** The router-attack
-  flow-taint (§10's own worked example) is stamped where the shell runs
-  ([`lib-shell/src/runtime.ts`](../../packages/lib-shell/src/runtime.ts) defaults
-  `cfcFlowLabels` to `persist`) and on toolshed, whose `productionServer`
-  preset pins it to `persist`. The bare `Runtime` default is `off`, so a host
-  that builds a `Runtime` without a preset runs without it. Move that default
-  through `observe` to `persist`. `cfcTriggerReadGating` is `false` in every host on the
-  same footing — turning it on joins the §8.9.2 trigger reads to both
-  enforcement gates, the sink-request ceiling and the
-  `requiredIntegrity` input gate
-  ([`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`),
-  which closes the direct trigger channel; multi-hop closure follows once flow
-  persists (SC-3).
-- **`enforce-strict` default deployment states.** The effective deployment
-  default is `enforce-strict` (Runtime + lib-shell; the types-level `disabled`
-  is the bare-transaction fallback). The strict rung carries one differentiated
-  reject: the SC-18b writer-fit misfit. The per-transaction flow join landing on
-  a written document must fit that document's declared store policy; under
-  strict a misfit rejects the commit, and under every mode below it persists the
-  measurement and flags a diagnostic. One seam answers a misfit by declaring
-  rather than rejecting: a document the runtime is setting a piece up in
-  takes the §8.12.5 route-2 upgrade, declaring a policy that covers the join
-  in the same transaction that writes it. Implemented in
-  `prepareBoundaryCommit`
-  ([`prepare.ts`](../../packages/runner/src/cfc/prepare.ts)), contract in
-  [`cfc-enforcement-matrix.md`](./cfc-enforcement-matrix.md) §4, asserted under
-  both modes in
-  [`cfc-writer-fit.test.ts`](../../packages/runner/test/cfc-writer-fit.test.ts).
-  What remains is picking the conforming default deployment states from that
-  matrix's §3 progression and moving the shipped hosts onto them. A piece's
-  RUNNING graph is not on that seam: a lift or handler writing in a later
-  transaction records no setup marker, so its target — commonly a `computed:`
-  document — measures against its own ceiling, and strict refuses those
-  writes until they have a route of their own. Strict
-  presupposes `cfcFlowLabels: persist`: §18.6.3's conformance matrix marks
-  `enforce-strict` without `persist` non-conforming, and the writer-fit
-  measurement exists only where the flow join is stamped. §18.6.3 also puts the
-  standard-profile display ceiling (§8.10.6) on the strict rung, where the
-  runner has it as a host-passed option the enforcement ladder does not reach —
-  so a deployment that moves to strict does not thereby get it.
-- **Display-ceiling "shell flip."** The render ceiling is built, fail-closed and
-  §15.2-shaped: `User` and `PersonalSpace` fit the acting user by exact match,
-  and a `Space(...)` clause resolves through a verified `HasRole` reader fact
-  under the standard display exchange rule
-  ([`render-ceiling.ts`](../../packages/runner/src/cfc/render-ceiling.ts)), which
-  the worker backend threads into the reconciler whenever a ceiling is in force
-  ([`runtime-processor.ts`](../../packages/runtime-client/backends/runtime-processor.ts)).
-  What remains is the flip: the shell builds that ceiling only behind its
-  `cfcRenderCeiling` flag, which defaults off, so nothing renders under a ceiling
-  today. (SC-16; §8.10.6.) Render-boundary *composition + text integrity* itself
+- **Declared monotonicity at `enforce`.** The dial defaults to `observe`
+  because per-principal `addIntegrity` mints (an `AuthoredByCurrentUser`
+  claim resolving to whichever principal is acting) are
+  non-monotone declared updates by construction. Moving those mints to a
+  `derived` component lets the default reach `enforce`; the `observe`
+  diagnostic measures that migration.
+- **Default sink ceiling.** `cfcSinkMaxConfidentiality` declares none in the
+  core preset; only the `MAX_ENFORCEMENT_CFC_OPTIONS` bundle sets one.
+- **Display ceiling unconditional.** The render ceiling
+  ([`render-ceiling.ts`](../../packages/runner/src/cfc/render-ceiling.ts)) is
+  on by default in the shell, threaded into the reconciler by the worker
+  backend
+  ([`runtime-processor.ts`](../../packages/runtime-client/src/backends/runtime-processor.ts)),
+  with a per-profile `cfcRenderCeiling(false)` opt-out. It is still a
+  host-passed option the enforcement ladder does not reach, though §18.6.3
+  puts it on the strict rung; graduating it removes the opt-out. (SC-16;
+  §8.10.6.) Render-boundary *composition + text integrity* itself
   is owned by `packages/html` (see Out of scope).
 
 ---
@@ -334,23 +317,18 @@ Each is bounded and mostly independent. Several are fail-safe today.
 - **§6.5 intent-consumption / attempt-cell contract.** Commit-point single-use
   intent consumption + bounded-retry attempt-cell ledger (`attemptCellId`/
   `consumedCellId`). This is runner-remit even though the rest of the Ch.6 refiner
-  chain is not. [Reviewed intents](./cfc-reviewed-intent.md) mint the
-  single-use record a consumer claims attempts against (`idempotencyKey`, `exp`,
-  `maxAttempts`); whether the ledger itself belongs to the runner or to the
-  consumer is an open question there.
+  chain is not.
 - **A builtin's attribution needs a labeled read.** `TransformedBy` is minted
   only over a nonempty flow join, so a builtin's transaction that reads nothing
   labeled writes nothing stamped. Host operations work around it: the custody
-  seal reads an anchor it wrote, and a reviewed intent reads its own receipt,
-  which is why the receipt is written before the record. A way for a builtin
-  to stamp what it writes without a read would remove the workaround and the
-  ordering it forces. ([Reviewed intents](./cfc-reviewed-intent.md#attribution-and-documents-written-once),
-  [sealed custody](./cfc-custody-seal.md#attribution).)
+  seal reads an anchor it wrote first. A way for a builtin to stamp what it
+  writes without a read would remove the workaround and the ordering it
+  forces. ([Sealed custody](./cfc-custody-seal.md#attribution).)
 - **Write-once documents.** Nothing makes a document immutable after its first
-  write. A builtin's record stays as written only because its address is
+  write. A builtin's document stays as written only because its address is
   unpredictable and its writer claim refuses other writers; a claim governs
-  its own location and not those below it, so the record repeats it on every
-  member and stores nested values as one leaf string. Create-only marks are
+  its own location and not those below it, so such a document repeats it on
+  every member and stores nested values as one leaf string. Create-only marks are
   enforced only under `experimental.commitPreconditions`. A write-once
   primitive would state the property directly; the custody seal raises the
   same question for which instance a room shows
@@ -430,14 +408,14 @@ Epic A (CNF clauses)  ──┬──►  Epic B (exchange-rule evaluator)  ─�
 
 Epic C (observation classes)   — independent, start any time
 Epic D (write/agent integrity) — independent (D1 wants B's matcher); highest security urgency
-Epic H activation (flip defaults onto conforming states) — cheap, high leverage
+Epic H activation (defaults flipped; last rungs remain) — cheap, high leverage
 Epic F (range-scoped integrity) — last of the big epics; most speculative
 ```
 
 Rule of thumb: **A unlocks the most** (B, most of E, and 3–4 Tier-2 items).
 **D is the most urgent for security** (live soundness holes) and is largely
 independent. **H is the cheapest leverage** — it depends on nothing above it,
-and the hosts below the shell enforce little by default today. Everything in
+and its default flip has landed; only its last rungs remain. Everything in
 Tier 3 is spec-writing, not runner code.
 
 ## Provenance

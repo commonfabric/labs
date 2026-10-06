@@ -10,6 +10,18 @@
 import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
+import {
+  AgentRunner,
+  type AgentRunnerEntry,
+  type AgentRunnerOptions,
+} from "@commonfabric/agent-runner";
+import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
+import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
+import {
+  type LocalJobsConfig,
+  type LocalJobsService,
+  startLocalJobs,
+} from "@commonfabric/agent-runner/local-jobs/service";
 import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
@@ -17,15 +29,9 @@ import {
   AGENT_RUN_STATES,
   agentQueueIndexCell,
 } from "@commonfabric/runner/agent-run";
+import { getAcl } from "../lib/acl.ts";
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
 
-import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
-import { selectHarnessJobSandboxRuntime } from "../lib/harness-job.ts";
-import {
-  type LocalJobsConfig,
-  type LocalJobsService,
-  startLocalJobs,
-} from "../lib/local-jobs/service.ts";
 import {
   type AgentRunInspection,
   cancelAgentRun,
@@ -34,11 +40,6 @@ import {
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
-import {
-  AgentRunner,
-  type AgentRunnerEntry,
-  type AgentRunnerOptions,
-} from "../lib/agent-runner.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
@@ -343,6 +344,8 @@ export async function startAgentRunner(
         requester: home,
         workRoot: config.workRoot,
         allowedTools: config.tools,
+        readSpaceAcl: (host, space) =>
+          getAcl({ apiUrl: host, space, identity: identityPath }),
         ...(config.loomRetrievalConfigPath !== undefined
           ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
           : {}),
@@ -469,9 +472,9 @@ export function resolveLocalJobsConfig(
 
 /**
  * Runs a runner until the process is asked to stop. With local jobs, they
- * are served first; the Fabric lane then starts unless `--local-only` says
- * not to, and a Fabric lane that fails to start leaves the local jobs
- * served rather than stopping the runner.
+ * are served first; a local startup failure falls back to the Fabric lane,
+ * and a Fabric startup failure leaves the local jobs served.
+ * With `--local-only`, a local startup failure is fatal.
  */
 export async function agentRunnerAction(
   options: AgentRunnerCommandOptions,
@@ -488,10 +491,18 @@ export async function agentRunnerAction(
       : error;
   });
   if (localConfig === undefined) return await runFabricLane(options, deps);
-  const local = await (deps.startLocal ?? startLocalJobs)(
-    localConfig,
-    deps.report,
-  );
+  let local: Pick<LocalJobsService, "setFabricLane" | "stop">;
+  try {
+    local = await (deps.startLocal ?? startLocalJobs)(localConfig, deps.report);
+  } catch (error) {
+    if (options.localOnly) throw error;
+    deps.report(
+      `agent runner: the local lane did not start, continuing with the Fabric lane: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return await runFabricLane(options, deps);
+  }
   let fabric: { stop(): Promise<void> } | undefined;
   try {
     if (options.localOnly) {

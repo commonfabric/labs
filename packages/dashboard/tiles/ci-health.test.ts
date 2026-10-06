@@ -58,6 +58,9 @@ interface WorkflowSpec {
   // When the workflow's file last changed on the default branch. A file that
   // changed long before any of its runs leaves every verdict standing.
   fileChangedMinutesAgo?: number;
+  // How many of the newest runs a filtered list leaves out, the way GitHub's
+  // lagging index for filtered lists does.
+  laggingRuns?: number;
 }
 
 interface RunSpec {
@@ -231,6 +234,7 @@ async function withGitHub(
         conclusion: completed ? run.conclusion : null,
         run_attempt: run.attempt ?? 1,
         event: run.event ?? "push",
+        head_branch: run.branch ?? "main",
         head_sha: "sha",
         display_title: workflow.name,
         created_at: new Date(T0 - createdAgo * 60_000).toISOString(),
@@ -266,18 +270,26 @@ async function withGitHub(
       const workflow = (repo.workflows ?? []).find((candidate) =>
         workflowId(runs[1], candidate.file) === Number(runs[2])
       )!;
+      // An unfiltered list carries every run, whatever it ran for. GitHub
+      // filters on a branch, a status, or a conclusion before it pages.
       const branch = url.searchParams.get("branch");
-      // GitHub filters on a status or a conclusion before it pages.
       const wanted = url.searchParams.get("status");
       const page = Number(url.searchParams.get("page") ?? 1);
       const perPage = Number(url.searchParams.get("per_page") ?? 30);
       return Promise.resolve(Response.json({
         workflow_runs: (workflow.runs ?? [])
           .map((run, index) => ({ run, index }))
-          .filter(({ run }) => (run.branch ?? "main") === branch)
+          .filter(({ run }) =>
+            branch === null || (run.branch ?? "main") === branch
+          )
           .filter(({ run }) =>
             wanted === null || (run.status ?? "completed") === wanted ||
             run.conclusion === wanted
+          )
+          .slice(
+            branch === null && wanted === null
+              ? 0
+              : workflow.laggingRuns ?? 0,
           )
           // A page holds as many runs as it was asked for, newest first.
           .slice((page - 1) * perPage, page * perPage)
@@ -306,10 +318,12 @@ const pond = (runs: RunSpec[]): RepoSpec => ({
   name: "pond",
   workflows: [{ name: "Nightly", file: "nightly.yml", runs }],
 });
+// The pages of pond's unfiltered run list read so far. Each reading also reads
+// the list filtered to the default branch, which these leave out.
 const pondPages = (wire: Wire) =>
   wire.calls.filter((call) =>
     call.startsWith(`/repos/${ORG}/pond/actions/workflows/`) &&
-    call.includes("/runs?")
+    call.includes("/runs?") && !call.includes("branch=")
   ).length;
 
 const standingOrg = (
@@ -864,7 +878,7 @@ Deno.test("ci: a verdict found far back is not read again on the next collection
   });
 });
 
-Deno.test("ci: a job that could not be read reads its runs afresh", async () => {
+Deno.test("ci: a job that could not be read is judged again once its runs can be read", async () => {
   const runs: RunSpec[] = [
     ...Array.from({ length: 25 }, (_, index): RunSpec => ({
       conclusion: "skipped",
@@ -883,12 +897,12 @@ Deno.test("ci: a job that could not be read reads its runs afresh", async () => 
     assertEquals((await collectSwept(tile)).value, "1 unreadable");
     assertEquals(pondPages(wire), 3);
 
-    // Nothing settled survives the failed read, so the pass is found again
-    // the way the first sweep found it.
+    // The runs read before the failed read are still held, so the next sweep
+    // reads only the top of the list to reach them.
     delete nightly.runsStatus;
     wire.sweepAgain();
     assertEquals((await collectSwept(tile)).value, "passing");
-    assertEquals(pondPages(wire), 5);
+    assertEquals(pondPages(wire), 4);
   });
 });
 
@@ -1098,6 +1112,31 @@ Deno.test("ci: the page links a job to its run in progress, and not to one queue
   );
 });
 
+Deno.test("ci: a pass that GitHub's lagging filtered list leaves out still decides the job", async () => {
+  // The list filtered to the default branch is weeks behind: its newest run
+  // is the failure the pass replaced.
+  await withGitHub(
+    standingOrg(green, green, [{
+      name: "pond",
+      workflows: [{
+        name: "Go",
+        file: "go.yml",
+        laggingRuns: 1,
+        runs: [
+          { conclusion: "success", minutesAgo: 7 * 24 * 60 },
+          { conclusion: "failure", minutesAgo: 19 * 24 * 60 },
+        ],
+      }],
+    }]),
+    async () => {
+      const view = await collectSwept(createCiHealth());
+
+      assertEquals(view.status, "good");
+      assertEquals(view.value, "passing");
+    },
+  );
+});
+
 Deno.test("ci: a fork's pull request from a branch named main does not crowd out the job's runs", async () => {
   // Twenty-five runs a pull request started fill more than the first page;
   // the job's own failure is behind them.
@@ -1114,11 +1153,11 @@ Deno.test("ci: a fork's pull request from a branch named main does not crowd out
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.value, "pond failing");
-      assertEquals(pondPages(wire), 2, "the second page holds the job's run");
+      assertEquals(pondPages(wire), 2, "a fuller page holds the job's run");
       assert(
         wire.calls.some((call) =>
           call.startsWith(`/repos/${ORG}/pond/actions/workflows/`) &&
-          call.endsWith("&page=2")
+          call.endsWith("per_page=100&page=1")
         ),
       );
     },

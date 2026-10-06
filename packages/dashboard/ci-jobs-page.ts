@@ -23,6 +23,7 @@ import {
   humanDuration,
   STATUS_DOT,
   STATUS_RANK,
+  worstStatus,
 } from "./tile-render-values.ts";
 import { statusDotRules } from "./status-dot.ts";
 import type { Status } from "./types.ts";
@@ -55,14 +56,52 @@ export interface Job {
   runningHref?: string;
 }
 
+/** A repository's own name, without the owner, as a `Job` names it. */
+export function shortName(repo: string): string {
+  return repo.slice(repo.indexOf("/") + 1);
+}
+
 /** What one collection of the ci tile saw. */
 export interface CiJobs {
   jobs: readonly Job[];
-  repoCount: number;
+  // Every repository the collection read, by its own name without the owner.
+  repos: readonly string[];
   // Repositories whose workflow listing could not be read at all, so nothing
   // is known about the jobs behind them.
   unreadableRepos: readonly string[];
   collectedAt: number;
+}
+
+/**
+ * Every job in `collected`, and an orange row for each repository whose
+ * workflows could not be listed, which stands for the jobs behind it that
+ * nobody can see.
+ */
+export function ciJobRows({ jobs, unreadableRepos }: CiJobs): Job[] {
+  return [
+    ...jobs,
+    ...unreadableRepos.map((repo): Job => ({
+      repo: shortName(repo),
+      workflow: "workflows",
+      path: "",
+      pinned: false,
+      status: "warn",
+      failing: false,
+      result: "unreadable",
+      href: `https://github.com/${repo}/actions`,
+    })),
+  ];
+}
+
+/**
+ * The color of the ci tile and of its page: the worst among the rows with a
+ * verdict, or gray when no row has one.
+ */
+export function ciJobsStatus(collected: CiJobs): Status {
+  const judged = ciJobRows(collected).filter((row) => row.status !== "unknown");
+  return judged.length === 0
+    ? "unknown"
+    : worstStatus(judged.map((row) => row.status));
 }
 
 const STYLES = `
@@ -101,7 +140,7 @@ const STYLES = `
   @media(max-width:760px){.at{display:none}}`;
 
 /** An ISO 8601 time cut to the minute, which is the precision a reader wants. */
-function minutePrecision(at: number): string {
+export function minutePrecision(at: number): string {
   return `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
@@ -364,7 +403,7 @@ function summary(collected: CiJobs): string {
   const facts: Array<[string, string]> = [
     // The same count the tile's header carries: the jobs it speaks for.
     ["jobs", String(collected.jobs.length - count("unknown"))],
-    ["repositories", String(collected.repoCount)],
+    ["repositories", String(collected.repos.length)],
     ["passing", String(count("good"))],
     ["failing", String(failing)],
     ["unreadable", String(unreadable)],
@@ -383,13 +422,18 @@ function summary(collected: CiJobs): string {
   }</dl>`;
 }
 
-function content(head: string, body: string): LivePageContent {
+function content(
+  head: string,
+  body: string,
+  status?: Status,
+): LivePageContent {
   return {
     title: "CI jobs",
     styles: STYLES,
     head,
     body,
     script: CI_JOBS_SCRIPT,
+    status,
   };
 }
 
@@ -448,5 +492,6 @@ export function ciJobsPage(
   <div class="scroll"><table data-sortable>${jobHead()}<tbody>${rows}</tbody></table></div>
   ${unjudged}
   ${unreadable}`,
+    ciJobsStatus(collected),
   );
 }

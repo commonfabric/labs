@@ -651,7 +651,20 @@ function factoryFromPattern<T, R>(
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
     spaceGrants?: InSpaceGrants,
+    spaceRoot?: true,
   ): PatternFactory<T, R> => {
+    if (spaceRoot) {
+      // The runner places a result at the reserved root address only in the
+      // space scope; any other scope would put it somewhere else.
+      const resultScope = schemaCellScope(pattern.resultSchema) ??
+        defaultScope;
+      if (resultScope !== undefined && resultScope !== "space") {
+        throw new Error(
+          "inSpace() makes a pattern the root of a space only when its " +
+            `result is space-scoped, and this one is \`${resultScope}\`-scoped`,
+        );
+      }
+    }
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
         const module: Module & toEncodableForm & toJSON = {
@@ -670,11 +683,13 @@ function factoryFromPattern<T, R>(
           const targetSpace = resolveInSpaceTargetSpace(
             defaultSpace,
             spaceGrants,
+            spaceRoot,
             frame,
           );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
+            if (spaceRoot) module.targetSpaceRoot = true;
           }
         }
         const node: NodeRef = {
@@ -708,28 +723,51 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
+      const derived = makePatternFactory(
+        scope,
+        defaultSpace,
+        spaceGrants,
+        spaceRoot,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
     factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
-      // Pattern code is not trusted to keep to the type: a created space's
-      // only owner is the identity the run acts for.
-      for (
-        const [principal, capability] of Object.entries(options?.grants ?? {})
-      ) {
-        if (capability !== "READ" && capability !== "WRITE") {
+      // Pattern code is not trusted to keep to the type, nor to leave the
+      // grants alone once they are checked, so what is checked and kept is a
+      // copy. `*` is refused OWNER because a space anyone owns is anyone's to
+      // take from the identity the run acts for.
+      const grants: InSpaceGrants | undefined = options?.grants === undefined
+        ? undefined
+        : { ...options.grants };
+      for (const [principal, capability] of Object.entries(grants ?? {})) {
+        if (
+          capability !== "READ" && capability !== "WRITE" &&
+          capability !== "OWNER"
+        ) {
           throw new Error(
-            `inSpace() grants READ or WRITE only, not ${
-              JSON.stringify(capability)
-            } to ${JSON.stringify(principal)}`,
+            debugStr`inSpace() grants READ, WRITE, or OWNER only, not ` +
+              debugStr`$quote${capability} to $quote${principal}`,
           );
         }
+        if (capability === "OWNER" && !isDID(principal)) {
+          throw new Error(
+            debugStr`inSpace() grants OWNER only to a principal DID, not ` +
+              debugStr`to $quote${principal}`,
+          );
+        }
+      }
+      if (options?.root && (isDID(space) || isCell(space))) {
+        throw new Error(
+          "inSpace() makes a pattern the root only of a space it creates, " +
+            "and a DID or a cell names a space that exists",
+        );
       }
       const derived = makePatternFactory(
         defaultScope,
         space ?? "",
-        options?.grants,
+        grants,
+        options?.root ? true : undefined,
       );
       noteDerivedCopy(derived, factory);
       return derived;
@@ -1133,8 +1171,8 @@ function assignComputedCellKinds(
  *   returned; the runner resolves pending names after the run and re-runs the
  *   handler or action (RetryImmediately), at which point the target resolves
  *   synchronously. The first call to name a space in a run is the one whose
- *   grants create it: a later call naming it reads the record that call
- *   writes, as it would read the record of an earlier run.
+ *   grants and `root` create it: a later call naming it reads the record that
+ *   call writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
@@ -1143,6 +1181,7 @@ function assignComputedCellKinds(
 function resolveInSpaceTargetSpace(
   space: unknown,
   grants: InSpaceGrants | undefined,
+  root: true | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1166,12 +1205,18 @@ function resolveInSpaceTargetSpace(
     name,
     tx,
     grants,
+    root,
   );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
   const pending = frame!.pendingSpaceNames ??= new Map();
-  if (!pending.has(name)) pending.set(name, grants);
+  if (!pending.has(name)) {
+    pending.set(name, {
+      ...(grants !== undefined ? { grants } : {}),
+      ...(root ? { root } : {}),
+    });
+  }
   return undefined;
 }
 

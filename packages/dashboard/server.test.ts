@@ -34,7 +34,7 @@ import {
   PORT,
 } from "./config.ts";
 import { TILES } from "./registry.ts";
-import { github, STALE_RUNS_ERROR } from "./lib.ts";
+import { github } from "./lib.ts";
 import {
   type Ctx,
   type Run,
@@ -558,7 +558,7 @@ boardTest("a stale source log names its active GitHub operation", async () => {
     runs: () => sourceCtx.runsFor(source),
     async runsFor() {
       const body = await github<{ workflow_runs: Run[] }>(
-        "repos/test/github-diagnostic/actions/runs?branch=main",
+        "repos/test/github-diagnostic/actions/runs/1",
       );
       return body.workflow_runs;
     },
@@ -576,7 +576,7 @@ boardTest("a stale source log names its active GitHub operation", async () => {
     assertStringIncludes(errors[0], "active run sources test/github-diagnostic ci.yml");
     assertStringIncludes(
       errors[0],
-      "repos/test/github-diagnostic/actions/runs?branch=main (requesting GitHub, 60000 ms)",
+      "repos/test/github-diagnostic/actions/runs/1 (requesting GitHub, 60000 ms)",
     );
   } finally {
     response.resolve(Response.json({ workflow_runs: [] }));
@@ -585,7 +585,7 @@ boardTest("a stale source log names its active GitHub operation", async () => {
       assertEquals(warnings.length, 1);
       assertStringIncludes(
         warnings[0],
-        "for repos/test/github-diagnostic/actions/runs?branch=main completed slowly after 60000 ms",
+        "for repos/test/github-diagnostic/actions/runs/1 completed slowly after 60000 ms",
       );
     } finally {
       Date.now = realNow;
@@ -1437,8 +1437,8 @@ boardTest("a tile still being collected when its source is due stays on the sour
   assertEquals(labsFetches, 3);
 });
 
-boardTest("a run source whose run list is out of date keeps its last good snapshot", async () => {
-  const source = runSource("test/lagging-source", "ci.yml", "main");
+boardTest("a run source whose fetch fails keeps its last good snapshot until a later fetch succeeds", async () => {
+  const source = runSource("test/failing-source", "ci.yml", "main");
   let fetched = () => Promise.resolve([sourceRun(3, "current run")]);
   const sourceCtx: Ctx = {
     runs: () => sourceCtx.runsFor(source),
@@ -1453,14 +1453,14 @@ boardTest("a run source whose run list is out of date keeps its last good snapsh
     await tick([tile], sourceCtx);
     assertStringIncludes(tileHtml("ci"), "current run");
 
-    fetched = () => Promise.reject(new Error(STALE_RUNS_ERROR));
+    fetched = () => Promise.reject(new Error("GitHub API failed: HTTP 502"));
     await tick([tile], sourceCtx);
     const held = tileHtml("ci");
     assert(held.startsWith(`unknown"`));
     assertStringIncludes(held, "current run");
-    assertStringIncludes(held, "lagging-source run list out of date");
+    assertStringIncludes(held, "failing-source temporarily unavailable");
     assertEquals(errors, [
-      `run source test/lagging-source ci.yml main failed: ${STALE_RUNS_ERROR}`,
+      "run source test/failing-source ci.yml main failed: GitHub API failed: HTTP 502",
     ]);
 
     fetched = () => Promise.resolve([sourceRun(2, "newer run")]);
@@ -1468,7 +1468,7 @@ boardTest("a run source whose run list is out of date keeps its last good snapsh
     const recovered = tileHtml("ci");
     assert(recovered.startsWith(`good"`));
     assertStringIncludes(recovered, "newer run");
-    assert(!recovered.includes("out of date"), recovered);
+    assert(!recovered.includes("unavailable"), recovered);
   } finally {
     console.error = realError;
   }
@@ -1877,6 +1877,28 @@ boardTest("sse: the CI jobs page is live", async () => {
   await reader.cancel();
 });
 
+boardTest("sse: a repository's page is live and follows the tiles' views", async () => {
+  const res = await handle(
+    req(`/events?page=${encodeURIComponent("/repos?name=labs")}`),
+  );
+  assertEquals(res.headers.get("content-type"), "text/event-stream");
+  const reader = res.body!.getReader();
+  assertEquals(await chunk(reader), ": connected\n\n");
+  const opened = await chunk(reader);
+  assertStringIncludes(opened, "event: page\n");
+  assertStringIncludes(opened, "labs ci trust");
+  assertStringIncludes(opened, "not collected yet");
+  assertStringIncludes(opened, "The runs have not been read yet.");
+
+  await tick([fake("labs ci trust", () => ({ status: "good", value: "97.5%" }))]);
+  await serveTick(() => {});
+  assertStringIncludes(await chunk(reader), "event: ping\n");
+  const updated = await chunk(reader);
+  assertStringIncludes(updated, "event: page\n");
+  assertStringIncludes(updated, "97.5%");
+  await reader.cancel();
+});
+
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {
   const gantt = await handle(req("/bench?view=gantt&repo=loom"));
   assertEquals(gantt.status, 200);
@@ -1893,6 +1915,10 @@ boardTest("routes: a tile's drill-down path wins over the page; anything else is
     await commitGantt.text(),
     `<title>CI Gantt · ${sha.slice(0, 7)}</title>`,
   );
+
+  const repos = await handle(req("/repos"));
+  assertEquals(repos.status, 200);
+  assertStringIncludes(await repos.text(), "<title>Repositories</title>");
 
   const fallback = await handle(req("/not-a-route"));
   assertEquals(fallback.status, 200);

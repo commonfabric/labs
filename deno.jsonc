@@ -1,5 +1,6 @@
 {
   "workspace": [
+    "./packages/agent-runner",
     "./packages/api",
     "./packages/piece",
     "./packages/cli",
@@ -74,6 +75,10 @@
     "fix-pattern-tiers": "deno run --allow-read --allow-write ./tasks/check-pattern-tiers.ts --write",
     "check-skill-facts": "deno run --allow-read --allow-run=git ./tasks/check-skill-facts.ts",
     "check-address-examples": "deno run --allow-read --allow-run=git ./tasks/check-address-examples.ts",
+    "check-cfc-correspondence": "deno run --allow-read --allow-run=git ./tasks/check-cfc-correspondence.ts",
+    // Reads a specs checkout through git at a named revision and writes the
+    // snapshot the gate above reads; the public build never runs it.
+    "cfc-spec-snapshot": "deno run --allow-read --allow-write=packages/runner/src/cfc/kernel --allow-run=git --allow-env=CF_SPECS_DIR,HOME ./tasks/cfc-spec-snapshot.ts",
     "check-verb-session-sync": "deno run --allow-read ./tasks/check-verb-session-sync.ts",
     // Building the CLI's command tree is what this walks, and mounting it
     // resolves the whole CLI — including the SQLite library `cf inspect`
@@ -186,6 +191,7 @@
       "packages/cli/test/fixtures/view-language/",
       // Generated, and its bytes are compared with what generates it.
       "packages/data-model/test/fixtures/fvj1-conformance.json",
+      "packages/data-model/test/fixtures/hash-conformance.json",
       "packages/ui/src/v2/components/cf-chart/cf-chart.ts",
       "packages/ui/src/v2/components/cf-chart/lib/axes.ts",
       "packages/ui/src/v2/components/cf-chart/lib/render.ts",

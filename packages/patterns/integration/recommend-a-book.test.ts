@@ -22,6 +22,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { hostGestureProvenance } from "../../runner/src/cfc/host-review.ts";
 import {
   commitSnapshotShare,
   prepareSnapshotShare,
@@ -89,11 +90,7 @@ function binding(props: Cell<unknown>, name: string): Cell<unknown> {
 function shareClick() {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "ShareSnapshot" },
-    },
+    provenance: hostGestureProvenance("ShareSnapshot"),
   };
   markRendererTrustedEvent(event);
   return event;

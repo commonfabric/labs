@@ -100,6 +100,7 @@ import {
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
+  hostGestureProvenance,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
@@ -150,6 +151,7 @@ import {
   postContextualRuntimeError,
   runtimeErrorPost,
 } from "./runtime-error.ts";
+import { SpaceAccessRetries } from "./space-access-retries.ts";
 import {
   assertFabricLoggerFlags,
   createCellRef,
@@ -743,9 +745,15 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
-/** Connects render boundaries to authoritative access verdict changes. */
+/**
+ * Connects render boundaries to authoritative access verdict changes. Given
+ * `retries`, the provider retries a refused space through it, and reports
+ * where its retries stand: a subscriber hears each retry of a refused space
+ * start and settle.
+ */
 export function renderSpaceAccessProviderFor(
   runtime: Pick<Runtime, "storageManager">,
+  retries?: SpaceAccessRetries,
 ): SpaceAccessProvider {
   const storage = runtime.storageManager;
   return {
@@ -754,9 +762,32 @@ export function renderSpaceAccessProviderFor(
       const changed = (changedSpace: MemorySpace) => {
         if (changedSpace === space) onChange();
       };
-      return storage.subscribeSpaceAccessChange?.(changed) ??
+      const cancelAccess = storage.subscribeSpaceAccessChange?.(changed) ??
         storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
+      // A retry changes what a refused space's placeholder shows, and
+      // nothing a space that stands renders.
+      const cancelRetries = retries?.subscribe((retried) => {
+        if (storage.spaceAccessError?.(retried) !== undefined) {
+          changed(retried);
+        }
+      });
+      return () => {
+        cancelAccess();
+        cancelRetries?.();
+      };
     },
+    ...(retries !== undefined && {
+      retries: {
+        retry: (space: string) => {
+          // A render boundary has nowhere to report a failure, and the person
+          // can ask again.
+          retries.retry(space as MemorySpace).catch((error) => {
+            console.warn(`Retrying access to space ${space} failed:`, error);
+          });
+        },
+        state: (space: string) => retries.state(space as MemorySpace),
+      },
+    }),
   };
 }
 
@@ -908,6 +939,7 @@ export class RuntimeProcessor {
   #awaitedHealth = false;
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
+  #privateInboxEnsured: Promise<void> | undefined;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -1005,6 +1037,14 @@ export class RuntimeProcessor {
    */
   #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
+
+  /**
+   * The retries of refused spaces in flight, which the render boundaries'
+   * retry controls and `handleRetrySpaceAccess()` share.
+   */
+  readonly #spaceAccessRetries = new SpaceAccessRetries((space) =>
+    this.#runtime.retrySpaceAccess(space)
+  );
 
   private constructor(
     runtime: Runtime,
@@ -1287,6 +1327,7 @@ export class RuntimeProcessor {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
         this.#profilePreloadCancel = undefined;
@@ -1540,6 +1581,27 @@ export class RuntimeProcessor {
     });
   }
 
+  /**
+   * Classifies whether recorded reads depend on pending local writes.
+   * Missing read observations retain the full initialization barrier.
+   */
+  #initializationReadState(
+    tx: IExtendedStorageTransaction,
+  ): "confirmed" | "pending" | "unknown" {
+    const reads = tx.tx.getReadActivities?.();
+    if (reads === undefined) return "unknown";
+    for (const read of reads) {
+      if (
+        this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
+          read.id,
+          read.scope,
+          tx.tx.scopeKeyIdentity,
+        )
+      ) return "pending";
+    }
+    return "confirmed";
+  }
+
   /** Atomically stores a default only while the target has no backing value. */
   async handleCellInitialize(
     request: CellInitializeRequest,
@@ -1548,9 +1610,42 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
-    // A pending commit can install the producer of an apparently absent
-    // value. Keep it demanded through settlement before choosing a default.
-    await getCell(this.#runtime, request.cell).pull({ awaitDurability: true });
+    const target = getCell(this.#runtime, request.cell);
+    const readinessFailure = await target.pull().then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+    // Projection can discover reads beyond the initial pull. editWithRetry
+    // reconciles documents read as absent and re-runs this probe when those
+    // documents turn out to exist.
+    const existing = await this.#runtime.editWithRetry((tx) => {
+      const cell = target.withTx(tx);
+      try {
+        const value = (
+            cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+            cell.get() === undefined
+          )
+          ? undefined
+          : this.#hostReadGate.read(cell);
+        const state = this.#initializationReadState(tx);
+        if (readinessFailure !== undefined && state !== "pending") {
+          throw readinessFailure.error;
+        }
+        return state === "confirmed" ? value : undefined;
+      } catch (error) {
+        // Only a recorded pending write justifies retrying a failed read
+        // after repair. Other readiness and projection failures propagate.
+        if (this.#initializationReadState(tx) !== "pending") throw error;
+        return undefined;
+      }
+    });
+    if (existing.error) throw new Error(existing.error.message);
+    if (existing.ok !== undefined) return existing.ok;
+
+    // A pending commit or its retry can install a producer for an absent
+    // value. Keep demand active through the full barrier before storing a
+    // default, including after an optimistic backing value is withdrawn.
+    await target.pull({ awaitDurability: true });
     let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
@@ -2174,11 +2269,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: "ShareSnapshot" },
-      },
+      provenance: hostGestureProvenance("ShareSnapshot"),
     };
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
@@ -2254,11 +2345,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: CUSTODY_SEAL_GESTURE },
-      },
+      provenance: hostGestureProvenance(CUSTODY_SEAL_GESTURE),
     };
     markRendererTrustedEvent(event);
     // A client that detaches at any point before the entry's transaction is
@@ -2536,7 +2623,8 @@ export class RuntimeProcessor {
   /**
    * Ensures the user's Home pattern is running and returns its result cell.
    * The first time in this worker, it also adopts the Home space list's
-   * name-only entries (see `PiecesController.adoptLegacySpaces`).
+   * name-only entries (see `PiecesController.adoptLegacySpaces`), and has Home
+   * ensure the user's private inbox (see `PiecesController.ensurePrivateInbox`).
    */
   async #ensureHomePattern(): Promise<Cell<unknown>> {
     const homeCC = this.#homeController();
@@ -2550,6 +2638,13 @@ export class RuntimeProcessor {
       console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
     });
     await this.#legacySpacesAdopted;
+    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
+      (error) => {
+        this.#privateInboxEnsured = undefined;
+        console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
+      },
+    );
+    await this.#privateInboxEnsured;
     return home;
   }
 
@@ -3185,11 +3280,13 @@ export class RuntimeProcessor {
     };
   }
 
-  /** Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. */
-  async handleRetrySpaceAccess(
-    request: RetrySpaceAccessRequest,
-  ): Promise<void> {
-    await this.#runtime.retrySpaceAccess(request.space);
+  /**
+   * Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. A
+   * request for a space whose retry is still in flight shares that retry
+   * rather than asking again.
+   */
+  handleRetrySpaceAccess(request: RetrySpaceAccessRequest): Promise<void> {
+    return this.#spaceAccessRetries.retry(request.space);
   }
 
   async handleCreateSpace(
@@ -3739,7 +3836,10 @@ export class RuntimeProcessor {
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
-      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
+      spaceAccess: renderSpaceAccessProviderFor(
+        this.#runtime,
+        this.#spaceAccessRetries,
+      ),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's

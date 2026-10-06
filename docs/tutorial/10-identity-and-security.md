@@ -104,7 +104,7 @@ configured service DID) writes a valid ACL with at least one concrete OWNER, and
 that genesis is the only thing the space identity may do as the space. Creating
 a space (`cf space create`, the Home pattern's Spaces tab, or
 `Runtime.createSpace()`) generates a random key, uses it once to write the
-genesis ACL — the creator as the only OWNER, plus any grants the creator chose —
+genesis ACL — the creator as an OWNER, plus any grants the creator chose —
 and drops it. Opening a space never creates one, except a user's Home space: it
 uses the user's own identity for both roles and is born private on its first
 open by claiming `{ [space]: "OWNER" }`.

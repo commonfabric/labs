@@ -102,12 +102,13 @@ for measured transactions, exclusions, and settlement behavior.
 `--cfc-enforcement-mode <disabled|observe|enforce-explicit|enforce-strict>`.
 `derive` is an alias for the runtime's `observe` flow mode: compute the join
 without persisting derived labels. `--cfc-shell-posture` selects
-`enforce-explicit` and `persist`, the shell's two CFC dial defaults. It
-conflicts with either individual dial, in either argument order. The shorthand
-changes these two dials only; it does not simulate the browser or enable every
-CFC gate. An omitted dial retains the pattern-test preset (enforcement
-`enforce-explicit`, flow labels `off`). Every runtime prints its resolved
-posture, including each multi-user participant. Programmatic callers use
+`enforce-explicit` and `persist`, which is laxer than the shell's current
+`enforce-strict` posture. It conflicts with either individual dial, in either
+argument order. The shorthand changes these two dials only; it does not simulate
+the browser or enable every CFC gate. An omitted dial retains the pattern-test
+preset, which inherits the runtime defaults (enforcement `enforce-strict`, flow
+labels `persist`). Every runtime prints its resolved posture, including each
+multi-user participant. Programmatic callers use
 `TestRunnerOptions.cfcFlowLabels` with the runtime names `off`, `observe`, or
 `persist`.
 
@@ -1317,7 +1318,9 @@ With `--local-jobs-socket` and `--local-job-profiles`, the runner also runs
 local jobs: work a local caller hands it directly, which never enters the
 fabric. It serves them first and on its own, so they run whether or not the
 Fabric lane starts; a Fabric lane that fails to start is reported and leaves the
-local jobs served. With `--local-only` there is no Fabric lane.
+local jobs served. A local lane that fails to start is reported with its reason,
+and the Fabric lane still starts. With `--local-only` there is no Fabric lane,
+and a local startup failure stops the runner.
 
 The service exclusively locks both its socket and store for its lifetime. An
 active listener is refused; a socket whose listener is gone is reclaimed.

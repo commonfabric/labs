@@ -3511,8 +3511,10 @@ export function combineSchemaForLink(
       schemaWithProperties(adopted, { default: parentDefault }),
     );
   }
-  const linkDefault = isObjectOrArray(linkSchema)
-    ? linkSchema.default
+  // The link's declaration is read in structural form, so a default behind a
+  // content-addressed reference is inherited as an inline one is.
+  const linkDefault = isObjectNotArray(linkSchema)
+    ? resolveExternalRootRefForStructure(linkSchema).default
     : undefined;
   if (linkDefault === undefined) {
     return parentSchema;
@@ -5978,6 +5980,23 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // since we can't follow all the write-redirect links.
         return fail(TRAVERSE_FAILURES.undefinedLink);
       } else {
+        // The selector combined the link's schema in at the hop, so its
+        // `default` is the nearest declaration for the value at the target,
+        // and an absent target reads as that default here as it does where a
+        // read enters at the target itself. A default standing in for a
+        // document the replica lacks is noted, so a view refuses to publish
+        // it.
+        const resolved = isObjectOrArray(redirSelector.schema) &&
+            "$ref" in redirSelector.schema
+          ? resolveSchemaRefsCanonical(redirSelector.schema)
+          : redirSelector.schema;
+        const defaultValue = resolved === undefined
+          ? undefined
+          : this.#applyDefault(redirDoc, resolved);
+        if (defaultValue !== undefined) {
+          this.#noteDefaultOnAbsentValue(redirDoc);
+          return { ok: defaultValue };
+        }
         return this.#isValidType(redirSelector.schema, "undefined")
           ? { ok: this.#traversePrimitive(redirDoc, redirSelector.schema) }
           : fail(TRAVERSE_FAILURES.undefinedLink);

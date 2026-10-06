@@ -76,6 +76,9 @@ requires, and
 is the procedure for changing either. The change list below is closed to new
 entries; a new gap is filed as a specs pull request.
 
+- [CFC conformance statement](cfc-conformance-statement.md) — this runtime's
+  answer to the specification's §18.6.4 checklist, with every known
+  non-conformance and its direction
 - [CFC commit preparation](cfc-commit-preparation.md)
 - [Content-addressed CFC labels](content-addressed-cfc-labels.md)
 - [CFC enforcement mode matrix](cfc-enforcement-matrix.md)
@@ -87,7 +90,6 @@ entries; a new gap is filed as a specs pull request.
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
 - [Sealed custody](cfc-custody-seal.md)
-- [Reviewed intents](cfc-reviewed-intent.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)

@@ -49,9 +49,10 @@ first.
 
 The vocabulary:
 
-- **Critical function.** A function the specification states as pseudocode and
-  the Lean development mechanizes: the rows of the "Pseudocode Coverage Matrix"
-  in `cfc/formal/FORMALIZATION.md` that a reactive runtime executes.
+- **Critical function.** A function the specification states as pseudocode
+  that this runtime executes. The set is the manifest's rows; where the
+  "Pseudocode Coverage Matrix" in `cfc/formal/FORMALIZATION.md` has a row for
+  one, that row names its Lean source.
 - **Kernel.** The runtime's copies of the critical functions, grouped by spec
   chapter, each opening with a header naming its chapter file, section,
   pseudocode name, and the hash of the block it was derived from. A kernel
@@ -63,9 +64,17 @@ The vocabulary:
   interprets the result for this runtime: retry against terminal verdict,
   diagnostics, dial posture, persistence. `prepare.ts` is the boundary
   adapter.
-- **Pin.** The specs commit a kernel function was derived from. Until the
-  committed snapshot the plan describes exists, the pin is the specs `main`
-  head at the time of the change, named in the pull request.
+- **Pin.** The specs commit the snapshot at
+  `packages/runner/src/cfc/kernel/spec-snapshot.json` records in its
+  `specsCommit` field, which is the commit every kernel header's hash and
+  every `§` citation is checked against. `deno task cfc-spec-snapshot`
+  regenerates the snapshot from a specs checkout (`CF_SPECS_DIR`, or
+  `~/src/specs/cfc`) at a revision (`--rev`, default `HEAD`), reading the
+  chapters through git so a working tree on another branch cannot leak in.
+  The snapshot holds the commit, every section number of the numbered
+  chapters, and for every function a pseudocode block of chapters 03 through
+  08-*, 10, 17 and 18 defines its chapter file, section, name and the SHA-256
+  of the block; it holds no spec text.
 - **Ruling.** A specs pull request that settles a question the specification
   did not answer, in the form `cfc/13-11-decisions.md` uses: the question, why
   it is open, the options, the proposed text, who ruled, who reviewed.
@@ -262,11 +271,57 @@ it. The procedure still applies; what changes is who completes which step.
 
 ## What checks what
 
-Today the procedure is held by review. The plan adds, in order: a committed
-snapshot of the specification's structure (commit, section numbers, function
-names, one hash per pseudocode block, no prose) that labs CI checks kernel
-headers and citations against; a specs-side job that clones labs and runs the
-same check from the specification's side, so a ruling that moves a block turns
-red there until labs re-derives; and a conformance statement answering §18.6.4
-for this runtime. Each is described in the plan, and this document changes
-when one lands.
+`deno task check-cfc-correspondence` runs in CI as a repository gate and fails
+on four things, each read against the committed snapshot:
+
+- A manifest row in `packages/runner/src/cfc/kernel/manifest.ts` naming a
+  function the snapshot does not define in the section the row says, or a
+  section `CRITICAL_SECTIONS` does not list; a function the snapshot defines
+  in a critical section that is neither a row nor a recorded companion; a row
+  marked `exact` or `adapted` whose kernel file does not export the function
+  under a `@spec` header for the row's section; a row marked `missing` whose
+  function the kernel does export; or a kernel export whose header names a
+  block that is neither a row nor a companion.
+- A function exported from a file under `packages/runner/src/cfc/kernel/`
+  with no `@spec` header, with a header whose hash is not the snapshot's for
+  that function, or in a file whose value imports reach past the kernel.
+  Type-only imports are erased before anything runs and are not held to that;
+  a constant a kernel function needs is declared inside the kernel, since the
+  packages that hold such constants also export behavior. The manifest and the
+  header module are the ledger: they carry no header and are held to the
+  import rule.
+- A `§` citation in `packages/runner/src/cfc.ts` or under
+  `packages/runner/src/cfc/` naming a section number the snapshot does not
+  list. A citation written on purpose to something else, such as a section
+  of a labs document, is recorded in `EXEMPTIONS` in
+  `tasks/check-cfc-correspondence.ts` with the file, the citation and the
+  reason, and an entry whose file stopped writing its citation fails too.
+  The check resolves numbers, not meaning: a citation that lands on another
+  existing section after a renumbering passes, and the second number of a
+  range written without its own `§` is not read.
+- More than three `SPEC-PENDING` markers across the files the CFC rule
+  governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
+  sources and their tests, the render boundaries `reconciler.ts` and
+  `display-fit.ts` in `packages/html`, and the harness's `cfc-*.ts`,
+  `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`; or one on a line
+  naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker
+  outside those files is not counted, and the rule does not reach there.
+
+The header a kernel function carries is one `@spec` tag in its doc comment,
+`@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
+`packages/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
+for that function, so a specs change to the block fails the check once the
+snapshot is regenerated, and a header naming a block the specification no
+longer has fails the same way.
+
+Two things the plan describes are not in place. The specs-side job that
+clones labs and runs this check from the specification's side does not exist
+yet, so a specs change goes unnoticed here until someone regenerates the
+snapshot. And the kernel directory holds only the ledger: every manifest row
+reads `missing`, and the header and import rules are exercised by the
+check's unit test rather than by the tree.
+
+The conformance statement the specification asks for is
+[`../specs/cfc-conformance-statement.md`](../specs/cfc-conformance-statement.md),
+pinned to the snapshot's commit and changed whenever the behavior it
+describes changes.

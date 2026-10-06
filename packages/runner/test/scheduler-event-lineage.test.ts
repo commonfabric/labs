@@ -1,3 +1,4 @@
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { cellTx, sendEvent } from "../src/cell.ts";
 import {
@@ -549,6 +550,223 @@ describe("scheduler event lineage", () => {
       gate.fail();
       gate.restore();
     }
+  });
+
+  describe("follow-ups of an origin attempt that throws `RetryImmediately`", () => {
+    // The scheduler aborts such an attempt and, unless the event opted out of
+    // retrying, runs the handler again, which sends its follow-ups again
+    // under its own transaction. The aborted attempt's follow-ups drop either
+    // way (scheduler-v2 §7.6, item 3); what these cases pin is how loudly.
+
+    /**
+     * Runs an origin handler whose follow-ups go to a second stream, with
+     * `console.warn` captured. `origin` is handed the attempt number and a
+     * function sending one follow-up under that attempt's transaction.
+     * Returns how many attempts ran, the follow-up payloads delivered, and
+     * the warnings reporting a dropped event.
+     */
+    async function runOrigin(
+      label: string,
+      retries: boolean,
+      origin: (
+        attempt: number,
+        sendFollowUp: (payload: number) => void,
+      ) => void,
+    ): Promise<{
+      originAttempts: number;
+      delivered: readonly unknown[];
+      dropWarnings: string[];
+    }> {
+      const streamA = runtime.getCell<unknown>(
+        space,
+        `${label} stream a`,
+        { asCell: ["stream"] },
+        tx,
+      );
+      const streamB = runtime.getCell<unknown>(
+        space,
+        `${label} stream b`,
+        { asCell: ["stream"] },
+        tx,
+      );
+      const payloads = runtime.getCell<unknown[]>(
+        space,
+        `${label} payloads`,
+        undefined,
+        tx,
+      );
+      payloads.set([]);
+      await tx.commit().settled;
+      tx = runtime.edit();
+
+      let originAttempts = 0;
+      const handlerA: EventHandler = (handlerTx) => {
+        originAttempts++;
+        origin(originAttempts, (payload) => {
+          runtime.scheduler.queueEvent(
+            streamB.getAsNormalizedFullLink(),
+            payload,
+            undefined,
+            undefined,
+            false,
+            { originTx: handlerTx },
+          );
+        });
+      };
+      const handlerB: EventHandler = (handlerTx, event: unknown) => {
+        const current = payloads.withTx(handlerTx).get();
+        payloads.withTx(handlerTx).set([...current, event]);
+      };
+      runtime.scheduler.addEventHandler(
+        handlerA,
+        streamA.getAsNormalizedFullLink(),
+      );
+      runtime.scheduler.addEventHandler(
+        handlerB,
+        streamB.getAsNormalizedFullLink(),
+      );
+
+      const warnings: string[] = [];
+      const warn = stub(console, "warn", (...args: unknown[]) => {
+        warnings.push(args.map(String).join(" "));
+      });
+      try {
+        runtime.scheduler.queueEvent(
+          streamA.getAsNormalizedFullLink(),
+          {},
+          retries,
+        );
+        await waitForSchedulerCondition(
+          runtime,
+          () => originAttempts >= (retries ? 2 : 1),
+          "origin did not run",
+        );
+        await runtime.idle();
+      } finally {
+        warn.restore();
+      }
+
+      return {
+        originAttempts,
+        delivered: payloads.get(),
+        dropWarnings: warnings.filter((line) => line.includes("Event dropped")),
+      };
+    }
+
+    it("drops the aborted attempt's follow-up without a warning, and delivers the re-run's once", async () => {
+      const result = await runOrigin(
+        "lineage rerun resend",
+        true,
+        (attempt, sendFollowUp) => {
+          sendFollowUp(attempt);
+          if (attempt === 1) throw new RetryImmediately();
+        },
+      );
+
+      expect(result.originAttempts).toBe(2);
+      expect(result.delivered).toEqual([2]);
+      expect(result.dropWarnings).toEqual([]);
+    });
+
+    it("drops the aborted attempt's follow-up without a warning when the re-run sends none", async () => {
+      const result = await runOrigin(
+        "lineage rerun no resend",
+        true,
+        (attempt, sendFollowUp) => {
+          if (attempt === 1) {
+            sendFollowUp(attempt);
+            throw new RetryImmediately();
+          }
+        },
+      );
+
+      expect(result.originAttempts).toBe(2);
+      expect(result.delivered).toEqual([]);
+      expect(result.dropWarnings).toEqual([]);
+    });
+
+    it("warns of the dropped follow-up when the event opted out of retrying", async () => {
+      const result = await runOrigin(
+        "lineage rerun opted out",
+        false,
+        (attempt, sendFollowUp) => {
+          sendFollowUp(attempt);
+          throw new RetryImmediately();
+        },
+      );
+
+      expect(result.originAttempts).toBe(1);
+      expect(result.delivered).toEqual([]);
+      expect(result.dropWarnings).toHaveLength(1);
+      expect(result.dropWarnings[0]).toContain(
+        "speculative origin failed before",
+      );
+    });
+  });
+
+  it("warns of a follow-up dropped because its origin attempt aborted itself", async () => {
+    const streamA = runtime.getCell<unknown>(
+      space,
+      "lineage self-abort warning stream a",
+      { asCell: ["stream"] },
+      tx,
+    );
+    const streamB = runtime.getCell<unknown>(
+      space,
+      "lineage self-abort warning stream b",
+      { asCell: ["stream"] },
+      tx,
+    );
+    await tx.commit().settled;
+    tx = runtime.edit();
+
+    let originAttempts = 0;
+    let followUpAttempts = 0;
+    runtime.scheduler.addEventHandler(
+      (handlerTx) => {
+        originAttempts++;
+        runtime.scheduler.queueEvent(
+          streamB.getAsNormalizedFullLink(),
+          originAttempts,
+          undefined,
+          undefined,
+          false,
+          { originTx: handlerTx },
+        );
+        handlerTx.abort("force lineage permanent failure");
+      },
+      streamA.getAsNormalizedFullLink(),
+    );
+    runtime.scheduler.addEventHandler(
+      () => {
+        followUpAttempts++;
+      },
+      streamB.getAsNormalizedFullLink(),
+    );
+
+    const warnings: string[] = [];
+    const warn = stub(console, "warn", (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    });
+    try {
+      runtime.scheduler.queueEvent(streamA.getAsNormalizedFullLink(), {});
+      await waitForSchedulerCondition(
+        runtime,
+        () => originAttempts >= 1,
+        "origin did not run",
+      );
+      await runtime.idle();
+    } finally {
+      warn.restore();
+    }
+
+    const dropWarnings = warnings.filter((line) =>
+      line.includes("Event dropped")
+    );
+    expect(originAttempts).toBe(1);
+    expect(followUpAttempts).toBe(0);
+    expect(dropWarnings).toHaveLength(1);
+    expect(dropWarnings[0]).toContain("speculative origin failed before");
   });
 
   it("treats read-only origin transactions as settled", async () => {

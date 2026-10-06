@@ -53,7 +53,7 @@ const JOBS: Job[] = [
 
 const collected: CiJobs = {
   jobs: JOBS,
-  repoCount: 4,
+  repos: ["zed", "amp", "loom", "bay"],
   unreadableRepos: [],
   collectedAt: NOW,
 };

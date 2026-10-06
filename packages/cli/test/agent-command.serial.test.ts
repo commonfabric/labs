@@ -9,6 +9,7 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { ValidationError } from "@cliffy/command";
 
+import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { type Cell, Runtime } from "@commonfabric/runner";
@@ -29,7 +30,6 @@ import {
   resolveRunnerTools,
   startAgentRunner,
 } from "../commands/agent.ts";
-import { selectHarnessJobSandboxRuntime } from "../lib/harness-job.ts";
 import { withEnv } from "./utils.ts";
 
 const DID = "did:key:z6MkTestRequester";
