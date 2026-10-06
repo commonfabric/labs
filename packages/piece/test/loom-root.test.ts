@@ -767,6 +767,12 @@ describe("loom-root", () => {
     const ownProfile = await stored("own-profile", { name: "Mine" }, [
       at([], represents(signer.did())),
     ]);
+    // A DID stored in its own document, labeled as the caller's writing, for
+    // an `addedBy` that links it: the stamp on the field is read, the label
+    // on the document the link leads to is not.
+    const didCell = await stored("did-cell", signer.did(), [
+      at([], by(signer.did())),
+    ]);
     const others = "Only the principal who added a panel can remove it";
     const contested = "whose label contests who added it";
     const refusals: [string, unknown, unknown[], string][] = [
@@ -780,6 +786,15 @@ describe("loom-root", () => {
         at(["addedByProfile"], represents(foreignSigner.did())),
         { ...at(["addedByProfile"], represents(signer.did())), origin: "link" },
       ], others],
+      [
+        "linked-addedby-other",
+        {
+          ...url("linked-addedby-other"),
+          addedBy: didCell.getAsLink(),
+        },
+        [at(["addedBy"], by(foreignSigner.did()))],
+        others,
+      ],
       ["two-adders", url("two-adders"), [
         at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
       ], contested],
@@ -807,6 +822,10 @@ describe("loom-root", () => {
         addedBy: foreignSigner.did(),
       }, []],
       ["unattributed", url("unattributed"), []],
+      ["linked-addedby-own", {
+        ...url("linked-addedby-own"),
+        addedBy: didCell.getAsLink(),
+      }, [at(["addedBy"], by(signer.did()))]],
     ];
     for (const [cause, value, entries] of removals) {
       const cell = await linked(cause, value, entries);

@@ -159,11 +159,15 @@ function adderFields(
 /**
  * Returns the principals attested on `panel`'s `addedBy` field: none for a
  * field no stamp names, and `undefined` when a claim there is in a form a
- * runtime does not mint. Other fields can have their own authors without
- * changing who added the occurrence.
+ * runtime does not mint. The stamp is the one on the field itself: a value
+ * link stored there leads to a document with a label of its own, which says
+ * nothing about who wrote the field. Other fields can have their own authors
+ * without changing who added the occurrence.
  */
 function attestedAdders(panel: Writable<Panel>): string[] | undefined {
-  return principalsOf(panel.key("addedBy"), "authored-by");
+  return principalsOf(panel.key("addedBy"), "authored-by", {
+    followLink: false,
+  });
 }
 
 /**

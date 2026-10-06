@@ -94,16 +94,17 @@ is longer than 195 characters, the bound every `addedBy` is held to, is refused.
 The actor is read from the panel document's stored label map as for
 `addedByProfile`: the `authored-by` atom of the entry whose path is exactly
 `["addedBy"]` and whose `origin` is not `"link"`. Patterns read the adder with
-`principalOf(panel.key("addedBy"), "authored-by")`, and every principal the
-field attests with `principalsOf`, which tells a contested field from an
-unattested one; authorship on another field, such as the panel's title, does not
-name the adder. `addPanel` without `as` links an occurrence a caller made as it
-is, and an `addedBy` it already holds is its writer's claim, which `addPanel`
-refuses unless it is a DID in W3C DID Core syntax of at most 195 characters. The
-label entry there, when the run that wrote the value minted one, names that
-writer rather than whomever the value names. So a reader takes the adder from
-the label, and from the value alone only where no entry exists. A panel with
-neither field names no adder.
+`principalOf(panel.key("addedBy"), "authored-by", { followLink: false })`, which
+reads the stamp on the field itself rather than the label of a document a link
+stored there leads to, and every principal the field attests with
+`principalsOf`, which tells a contested field from an unattested one; authorship
+on another field, such as the panel's title, does not name the adder. `addPanel`
+without `as` links an occurrence a caller made as it is, and an `addedBy` it
+already holds is its writer's claim, which `addPanel` refuses unless it is a DID
+in W3C DID Core syntax of at most 195 characters. The label entry there, when
+the run that wrote the value minted one, names that writer rather than whomever
+the value names. So a reader takes the adder from the label, and from the value
+alone only where no entry exists. A panel with neither field names no adder.
 
 The root's own Duplicate button acts under the session's `actingProfile` in
 `viewerState` when it holds one, and otherwise under the viewer's `#profile`;
@@ -126,19 +127,19 @@ piece link. Neither operation deletes the target.
 
 Only the principal who added an occurrence removes it. `removePanel` reads the
 adder from the runtime's stamps on the occurrence's own fields, with
-`principalsOf`: `authored-by` at `addedBy`, and `represents-principal` at
-`addedByProfile` read with `followLink: false`, which names whoever acted under
-the profile rather than the profile's owner. It removes an occurrence those
-stamps attest to the principal the event acts for alone, and one they attest to
-nobody: an occurrence with no adder, or one that holds its adder only as its
-writer's claim in `addedBy`, which protects nothing. It refuses one attested to
-another principal, to more than one, or by a claim in a form no runtime mints;
-nobody removes those last two through the root. An occurrence that is not in the
-Loom is left alone without a check. `removePiece` applies the same check to
-every occurrence of the piece and removes all of them or none, so a piece that
-another principal also registered is unregistered one occurrence at a time, with
-`removePanel`. The root's Remove button sends `removePanel`, so it is refused on
-an occurrence someone else added.
+`principalsOf` and `followLink: false`: `authored-by` at `addedBy`, whatever the
+field holds, and `represents-principal` at `addedByProfile`, which names whoever
+acted under the profile rather than the profile's owner. It removes an
+occurrence those stamps attest to the principal the event acts for alone, and
+one they attest to nobody: an occurrence with no adder, or one that holds its
+adder only as its writer's claim in `addedBy`, which protects nothing. It
+refuses one attested to another principal, to more than one, or by a claim in a
+form no runtime mints; nobody removes those last two through the root. An
+occurrence that is not in the Loom is left alone without a check. `removePiece`
+applies the same check to every occurrence of the piece and removes all of them
+or none, so a piece that another principal also registered is unregistered one
+occurrence at a time, with `removePanel`. The root's Remove button sends
+`removePanel`, so it is refused on an occurrence someone else added.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be
