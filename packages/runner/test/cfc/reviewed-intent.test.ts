@@ -34,6 +34,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { isAllowedAuthoredImportSpecifier } from "../../src/sandbox/runtime-module-policy.ts";
 import { getRuntimeModuleExports } from "../../src/sandbox/runtime-modules.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
 import { setCfcImplementationIdentity } from "../../src/storage/extended-storage-transaction.ts";
 
 const sender = await Identity.fromPassphrase("reviewed-intent-sender");
@@ -209,7 +210,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
     ifc: { confidentiality: [cfcAtom.user(home)] },
   } as never, publish);
   notes.set({ updated: 1 } as never);
-  expect((await publish.commit()).error).toBeUndefined();
+  expect((await publish.commit().settled).error).toBeUndefined();
 
   /** Writes an address book entry at `cause`, as `options.writer`. */
   const entry = async (
@@ -235,7 +236,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
       },
     } as never, tx);
     cell.set(address as never);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return cell.withTx(undefined);
   };
   const alice = await entry("contact-alice", "tel:+15550100", {
@@ -257,7 +258,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
     },
   } as never, compose);
   composer.set({ recipient: alice, outbox: null } as never);
-  expect((await compose.commit()).error).toBeUndefined();
+  expect((await compose.commit().settled).error).toBeUndefined();
   await storage.synced();
 
   const fixture = {
@@ -291,7 +292,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
         builtinId: CONSUMER_WRITER,
       });
       fixture.descriptor.withTx(tx).set(value as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     },
     async dispose() {
       await storage.synced();
@@ -518,7 +519,7 @@ describe("reviewed-intent", () => {
         schemaless(fixture.runtime, committed.record).withTx(tx).set(
           { operation: "send-message" } as never,
         );
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         expect(verified(committed.record).parameters.body)
@@ -583,12 +584,13 @@ describe("reviewed-intent", () => {
         runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
           const tx = edit(...args);
           const commit = tx.commit.bind(tx);
-          tx.commit = async () => {
-            const landed = await commit();
-            runtime.edit = edit;
-            Object.defineProperty(runtime, "cfcFlowLabels", { value: "off" });
-            return landed;
-          };
+          tx.commit = (options) =>
+            createTransactionCommitReceipt((async () => {
+              const landed = await commit(options).settled;
+              runtime.edit = edit;
+              Object.defineProperty(runtime, "cfcFlowLabels", { value: "off" });
+              return landed;
+            })());
           return tx;
         };
         await expect(
@@ -763,7 +765,7 @@ describe("reviewed-intent", () => {
             writeAuthorizedBy: [CONSUMER_WRITER],
           },
         } as never, tx).set(DESCRIPTOR as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await fixture.storage.synced();
         await expect(
           commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
@@ -780,7 +782,7 @@ describe("reviewed-intent", () => {
         const prepared = await prepareReviewedIntent(fixture.bindings());
         const tx = fixture.runtime.edit();
         fixture.recipient.withTx(tx).set(fixture.bob as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await expect(
           commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
         ).rejects.toThrow(/review is stale/);
@@ -822,7 +824,7 @@ describe("reviewed-intent", () => {
         alias.set(
           { slot: first.key("slot").getAsWriteRedirectLink() } as never,
         );
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const result = alias.withTx(undefined).key("slot") as Cell<unknown>;
         const prepared = await prepareReviewedIntent(
           fixture.bindings({ result }),
@@ -831,7 +833,7 @@ describe("reviewed-intent", () => {
         alias.withTx(retarget).key("slot").setRaw(
           second.key("slot").getAsWriteRedirectLink() as never,
         );
-        expect((await retarget.commit()).error).toBeUndefined();
+        expect((await retarget.commit().settled).error).toBeUndefined();
         await expect(
           commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
         ).rejects.toThrow(/review is stale/);
@@ -862,7 +864,7 @@ describe("reviewed-intent", () => {
         alias.set(
           { slot: first.key("slot").getAsWriteRedirectLink() } as never,
         );
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const result = alias.withTx(undefined).key("slot") as Cell<unknown>;
         const prepared = await prepareReviewedIntent(
           fixture.bindings({ result }),
@@ -873,18 +875,19 @@ describe("reviewed-intent", () => {
         runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
           const opened = edit(...args);
           const commit = opened.commit.bind(opened);
-          opened.commit = async () => {
-            const landed = await commit();
-            if (++commits === 2) {
-              runtime.edit = edit;
-              const retarget = edit();
-              alias.withTx(retarget).key("slot").setRaw(
-                second.key("slot").getAsWriteRedirectLink() as never,
-              );
-              expect((await retarget.commit()).error).toBeUndefined();
-            }
-            return landed;
-          };
+          opened.commit = (options) =>
+            createTransactionCommitReceipt((async () => {
+              const landed = await commit(options).settled;
+              if (++commits === 2) {
+                runtime.edit = edit;
+                const retarget = edit();
+                alias.withTx(retarget).key("slot").setRaw(
+                  second.key("slot").getAsWriteRedirectLink() as never,
+                );
+                expect((await retarget.commit().settled).error).toBeUndefined();
+              }
+              return landed;
+            })());
           return opened;
         };
         await expect(
@@ -909,11 +912,12 @@ describe("reviewed-intent", () => {
         runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
           const tx = edit(...args);
           const commit = tx.commit.bind(tx);
-          tx.commit = async () => {
-            runtime.edit = edit;
-            await changeAlice(fixture, "tel:+15550133");
-            return await commit();
-          };
+          tx.commit = (options) =>
+            createTransactionCommitReceipt((async () => {
+              runtime.edit = edit;
+              await changeAlice(fixture, "tel:+15550133");
+              return await commit(options).settled;
+            })());
           return tx;
         };
         await expect(
@@ -938,13 +942,14 @@ describe("reviewed-intent", () => {
         runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
           const tx = edit(...args);
           const commit = tx.commit.bind(tx);
-          tx.commit = async () => {
-            if (++commits === 2) {
-              runtime.edit = edit;
-              await changeAlice(fixture, "tel:+15550133");
-            }
-            return await commit();
-          };
+          tx.commit = (options) =>
+            createTransactionCommitReceipt((async () => {
+              if (++commits === 2) {
+                runtime.edit = edit;
+                await changeAlice(fixture, "tel:+15550133");
+              }
+              return await commit(options).settled;
+            })());
           return tx;
         };
         await expect(
@@ -1062,7 +1067,7 @@ describe("reviewed-intent", () => {
           ifc: { confidentiality: [cfcAtom.user(sender.did())] },
         } as never, imported);
         source.set("tel:+15550155" as never);
-        expect((await imported.commit()).error).toBeUndefined();
+        expect((await imported.commit().settled).error).toBeUndefined();
         const written = runtime.edit();
         setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
         source.withTx(written).get();
@@ -1073,7 +1078,7 @@ describe("reviewed-intent", () => {
           },
         } as never, written);
         carol.set("tel:+15550155" as never);
-        expect((await written.commit()).error).toBeUndefined();
+        expect((await written.commit().settled).error).toBeUndefined();
         const to = { parameters: { to: [carol.withTx(undefined)] } };
 
         const bare = await prepareReviewedIntent(fixture.bindings(to));
@@ -1167,7 +1172,7 @@ describe("reviewed-intent", () => {
           },
         } as never, declare);
         declared.set({ alice: "tel:+15550100" } as never);
-        expect((await declare.commit()).error).toBeUndefined();
+        expect((await declare.commit().settled).error).toBeUndefined();
         // The address book writes another whole book after a labeled read, so
         // the book's root carries the stamp the runtime derives, which covers
         // each entry.
@@ -1199,7 +1204,7 @@ describe("reviewed-intent", () => {
           schemaless(runtime, book).withTx(added).key("mallory" as never).set(
             "tel:+15550666" as never,
           );
-          expect((await added.commit()).error).toBeUndefined();
+          expect((await added.commit().settled).error).toBeUndefined();
         }
         // In a book a pattern made, the address book's stamp on one entry it
         // wrote does not cover the pattern's entry beside it.
@@ -1212,14 +1217,14 @@ describe("reviewed-intent", () => {
         schemaless(runtime, shared).withTx(written).key("alice" as never).set(
           "tel:+15550100" as never,
         );
-        expect((await written.commit()).error).toBeUndefined();
+        expect((await written.commit().settled).error).toBeUndefined();
         const own = runtime.edit();
         setCfcImplementationIdentity(own, PATTERN);
         fixture.bob.withTx(own).get();
         schemaless(runtime, shared).withTx(own).key("mallory" as never).set(
           "tel:+15550666" as never,
         );
-        expect((await own.commit()).error).toBeUndefined();
+        expect((await own.commit().settled).error).toBeUndefined();
         expect(
           shown(
             await prepareReviewedIntent(
@@ -1283,7 +1288,7 @@ describe("reviewed-intent", () => {
           noted,
         );
         notes.set({ updated: 1 } as never);
-        expect((await noted.commit()).error).toBeUndefined();
+        expect((await noted.commit().settled).error).toBeUndefined();
         const written = attacker.edit();
         setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
         notes.withTx(written).get();
@@ -1297,7 +1302,7 @@ describe("reviewed-intent", () => {
         planted.set(
           { name: "Alice (Mom)", address: "tel:+15550666" } as never,
         );
-        expect((await written.commit()).error).toBeUndefined();
+        expect((await written.commit().settled).error).toBeUndefined();
         await fixture.storage.synced();
         await expect(prepareReviewedIntent(
           fixture.bindings({
@@ -1367,7 +1372,7 @@ describe("reviewed-intent", () => {
           noted,
         );
         notes.set({ updated: 1 } as never);
-        expect((await noted.commit()).error).toBeUndefined();
+        expect((await noted.commit().settled).error).toBeUndefined();
         const written = book.edit();
         setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
         notes.withTx(written).get();
@@ -1378,7 +1383,7 @@ describe("reviewed-intent", () => {
           },
         } as never, written);
         entry.set("tel:+15550155" as never);
-        expect((await written.commit()).error).toBeUndefined();
+        expect((await written.commit().settled).error).toBeUndefined();
         await fixture.storage.synced();
         const prepared = await prepareReviewedIntent(fixture.bindings({
           parameters: {
@@ -1487,7 +1492,7 @@ describe("reviewed-intent", () => {
               },
             } as never, certify);
             certified.set({ checked: true } as never);
-            expect((await certify.commit()).error).toBeUndefined();
+            expect((await certify.commit().settled).error).toBeUndefined();
             source = certified.withTx(undefined);
           }
           const tx = runtime.edit();
@@ -1497,7 +1502,7 @@ describe("reviewed-intent", () => {
             ifc: { confidentiality: [cfcAtom.user(sender.did())] },
           } as never, tx);
           chosen.set("tel:+15550666" as never);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await expect(
             prepareReviewedIntent(
               fixture.bindings({
@@ -1540,7 +1545,7 @@ describe("reviewed-intent", () => {
           noted,
         );
         notes.set({ updated: 1 } as never);
-        expect((await noted.commit()).error).toBeUndefined();
+        expect((await noted.commit().settled).error).toBeUndefined();
         const tx = author.edit();
         setCfcImplementationIdentity(tx, ADDRESS_BOOK_WRITER);
         notes.withTx(tx).get();
@@ -1551,7 +1556,7 @@ describe("reviewed-intent", () => {
           },
         } as never, tx);
         foreign.set("tel:+15550144" as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await fixture.storage.synced();
         const link = foreign.getAsNormalizedFullLink();
         await expect(prepareReviewedIntent(
@@ -1639,7 +1644,7 @@ describe("reviewed-intent", () => {
           },
         } as never, tx);
         outbox.set({} as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await expect(prepareReviewedIntent(
           fixture.bindings({
             result: outbox.withTx(undefined).key("slot") as Cell<unknown>,
@@ -1921,7 +1926,7 @@ describe("reviewed-intent", () => {
           tx,
         );
         fixture.result.withTx(tx).set(lookalike as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         // The lookalike exists and stores the builtin as its only writer.
         expect(lookalike.withTx(undefined).getRaw()).toEqual(
           forged("Send the code") as never,
@@ -1929,7 +1934,7 @@ describe("reviewed-intent", () => {
         const overwrite = fixture.runtime.edit();
         setCfcImplementationIdentity(overwrite, PATTERN);
         lookalike.withTx(overwrite).set(forged("Other") as never);
-        expect((await overwrite.commit()).error?.message).toContain(
+        expect((await overwrite.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         for (const cell of [fixture.result, lookalike.withTx(undefined)]) {
@@ -1963,7 +1968,7 @@ describe("reviewed-intent", () => {
           ifc: { confidentiality: [cfcAtom.user(sender.did())] },
         }, tx);
         copy.set(genuine as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(copy.withTx(undefined).get()).toEqual(genuine as never);
         expect(() => verified(copy.withTx(undefined)))
           .toThrow(/not written by the reviewed-intent builtin/);
@@ -1991,7 +1996,7 @@ describe("reviewed-intent", () => {
           tx,
         );
         lookalike.set(forged("Send the code") as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(() => verified(lookalike.withTx(undefined)))
           .toThrow(/not written by the reviewed-intent builtin/);
       } finally {
@@ -2031,7 +2036,7 @@ describe("reviewed-intent", () => {
           labelMap: { version: 1, entries: [{ path: [], ...entry }] },
         },
       } as never);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell.withTx(undefined);
     };
 
@@ -2323,7 +2328,7 @@ describe("reviewed-intent", () => {
           const tx = fixture.runtime.edit();
           setCfcImplementationIdentity(tx, PATTERN);
           (target as Cell<unknown>).withTx(tx).set(value as never);
-          expect((await tx.commit()).error?.message).toContain(
+          expect((await tx.commit().settled).error?.message).toContain(
             "writeAuthorizedBy",
           );
         }

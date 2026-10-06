@@ -56,7 +56,7 @@ describe("generateObject outbox mechanism", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -278,7 +278,7 @@ describe("generateObject outbox mechanism", () => {
         required: ["title"],
       },
     });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
@@ -310,14 +310,14 @@ describe("generateObject outbox mechanism", () => {
         "generateObject retry regression",
       );
       action(rejectedTx);
-      const rejectedResult = await rejectedTx.commit();
+      const rejectedResult = await rejectedTx.commit().settled;
       expect(isCfcEnforcementRejection(rejectedResult.error)).toBe(true);
       await runtime.idle();
       expect(generateObjectCalls).toEqual([]);
 
       const retryTx = runtime.edit();
       action(retryTx);
-      const retryResult = await retryTx.commit();
+      const retryResult = await retryTx.commit().settled;
       expect(retryResult.ok).toBeDefined();
       await firstGenerateObject.promise;
       await waitForLlmSettled(runtime, resultCell);
@@ -382,7 +382,7 @@ describe("generateObject outbox mechanism", () => {
         },
       },
     });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
@@ -414,14 +414,14 @@ describe("generateObject outbox mechanism", () => {
         "generateObject tool retry regression",
       );
       action(rejectedTx);
-      const rejectedResult = await rejectedTx.commit();
+      const rejectedResult = await rejectedTx.commit().settled;
       expect(isCfcEnforcementRejection(rejectedResult.error)).toBe(true);
       await runtime.idle();
       expect(sendRequestCalls).toEqual([]);
 
       const retryTx = runtime.edit();
       action(retryTx);
-      const retryResult = await retryTx.commit();
+      const retryResult = await retryTx.commit().settled;
       expect(retryResult.ok).toBeDefined();
       await firstSendRequest.promise;
       await waitForLlmSettled(runtime, resultCell);

@@ -88,7 +88,7 @@ async function callVerb(
     const rootCell = runtime.getCell(space, "call-help-live", undefined, tx);
     const root = runtime.run(tx, compiled, {}, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await root.pull();
 
     // The piece surface the callable resolver walks, plus the pattern handle

@@ -105,7 +105,7 @@ describe("a builtin whose staged request is abandoned", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.dispose();
     await storageManager.close();
@@ -139,7 +139,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -183,7 +183,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -236,7 +236,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -268,7 +268,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -300,7 +300,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -328,7 +328,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     // A run derives these cells from its cache entry, and an abandoned
     // request has no following run to do it.
@@ -358,7 +358,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -397,7 +397,7 @@ describe("a builtin whose staged request is abandoned", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForError(result);
     await runtime.settled();
@@ -485,7 +485,7 @@ describe("a builtin whose staged request is abandoned", () => {
     // The run that sets the dialog up has to land: a refusal here would be the
     // caveat reaching the wrong transaction, and the wait below would then be
     // waiting on a handler that was never registered.
-    const setUp = await tx.commit();
+    const setUp = await tx.commit().settled;
     expect(setUp.error).toBeUndefined();
 
     const addMessage = await result.key("addMessage").pull();
@@ -545,7 +545,7 @@ describe("a builtin whose staged request is abandoned", () => {
 
     afterEach(async () => {
       resetMockMode();
-      await bundleTx.commit();
+      await bundleTx.commit().settled;
       await bundleRuntime.idle();
       await bundleRuntime.dispose();
       await bundleStorage.close();
@@ -587,7 +587,7 @@ describe("a builtin whose staged request is abandoned", () => {
         resultCell,
       );
       bundleRuntime.prepareTxForCommit(bundleTx);
-      await bundleTx.commit();
+      await bundleTx.commit().settled;
 
       const settled = await waitForCellValue<{ pending?: boolean }>(
         bundleRuntime,
@@ -642,7 +642,7 @@ describe("a builtin whose staged request is abandoned", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<{ pending?: boolean }>(
         runtime,
@@ -688,7 +688,7 @@ describe("a builtin whose staged request is abandoned", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<{ pending?: boolean }>(
         runtime,
@@ -757,7 +757,7 @@ describe("a builtin whose staged request is abandoned", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<{ pending?: boolean }>(
         runtime,
@@ -790,7 +790,7 @@ describe("a builtin whose staged request is abandoned", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<{ pending?: boolean }>(
         runtime,

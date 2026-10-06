@@ -577,7 +577,7 @@ describe("verb-emitted-address", () => {
         );
         const root = runtime.run(tx, compiled, {}, rootCell);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await root.pull();
 
         let patternLoads = 0;

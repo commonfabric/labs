@@ -52,7 +52,7 @@ async function runAndCollect(
     const tx = runtime.edit();
     const resultCell = runtime.getCell<unknown>(space, resultId, undefined, tx);
     const handle = runtime.run(tx, compiled, argument, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     for (let attempt = 0; attempt < 8; attempt++) {
       await handle.pull();
       await runtime.idle();

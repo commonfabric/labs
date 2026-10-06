@@ -58,7 +58,7 @@ describe("LLM builtin error surfacing", () => {
 
   afterEach(async () => {
     resetMockMode();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();

@@ -1515,6 +1515,7 @@ export class SchemaGenerator {
       typeNode: _,
       hintsNode: __,
       instantiatedAs: ___,
+      carriersRead: ____,
       ...unplaced
     } = context;
     const baseContext: GenerationContext = instantiatedAs
@@ -1595,15 +1596,23 @@ export class SchemaGenerator {
   }
 
   /**
-   * The labels `carrier`, a CFC metadata carrier an object holds as one of its
-   * members, attaches, each read in full, or `undefined` where any is not
-   * (`CommonFabricFormatter.labelsCarriedBy()`).
+   * `schema`, the schema of an object of `type`, with the labels `carrier`, a
+   * CFC metadata carrier the object holds as one of its members, attaches,
+   * each read in full, or `schema` alone where any is not
+   * (`CommonFabricFormatter.withLabelsCarriedBy()`).
    */
-  public labelsCarriedBy(
+  public withLabelsCarriedBy(
+    schema: MutableJSONSchema,
+    type: ts.Type,
     carrier: ts.Symbol,
     context: GenerationContext,
-  ): Record<string, unknown>[] | undefined {
-    return this.#commonFabricFormatter.labelsCarriedBy(carrier, context);
+  ): MutableJSONSchema {
+    return this.#commonFabricFormatter.withLabelsCarriedBy(
+      schema,
+      type,
+      carrier,
+      context,
+    );
   }
 
   /**

@@ -60,7 +60,7 @@ describe("multi-space write transactions", () => {
     expect(tx.readValueOrThrow(addr(spaceA, "of:multi-a"))).toEqual({ v: 1 });
     expect(tx.readValueOrThrow(addr(spaceB, "of:multi-b"))).toEqual({ v: 2 });
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
 
     // both spaces are durable in a fresh transaction
@@ -79,7 +79,7 @@ describe("multi-space write transactions", () => {
     tx.writeValueOrThrow(addr(spaceA, "of:order-a"), { v: 10 });
     tx.writeValueOrThrow(addr(spaceB, "of:order-b"), { v: 20 });
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
 
     const verify = runtime.edit();
@@ -96,7 +96,7 @@ describe("multi-space write transactions", () => {
     tx.enableMultiSpaceWrites?.();
     tx.writeValueOrThrow(addr(spaceA, "of:single"), { v: 7 });
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
 
     const verify = runtime.edit();
@@ -119,7 +119,7 @@ describe("multi-space write transactions", () => {
     };
     replicaB.commitNative = undefined;
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeDefined();
     expect(tx.status().status).not.toBe("pending");
   });
@@ -143,7 +143,7 @@ describe("multi-space write transactions", () => {
         },
       });
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     // The first per-space error is surfaced as the overall result.
     expect(result.error).toBeDefined();
 
@@ -173,7 +173,7 @@ describe("multi-space write transactions", () => {
         },
       });
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeDefined();
 
     // Space B (ordered after the failed space A) must not have been committed.

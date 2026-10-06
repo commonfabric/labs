@@ -115,7 +115,7 @@ async function runTest(base: URL) {
         labelView: view,
         logicalPath: [],
       });
-      await dtx.commit();
+      await dtx.commit().settled;
       if (!conf.some((a) => a === "secret-note")) {
         throw new Error(
           `note did not inherit confidentiality; got ${JSON.stringify(conf)}`,

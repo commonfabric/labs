@@ -177,7 +177,7 @@ describe("keyless op identity", () => {
     );
     const result = runtime.run(tx, factory, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
     expect(commit.error).toBeUndefined();
     const cancel = result.sink(() => {});
     await runtime.idle();

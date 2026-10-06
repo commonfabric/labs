@@ -33,7 +33,7 @@ describe("snapshotQueryResult()", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell<unknown>(space, cause, undefined, tx);
     tx.writeValueOrThrow(cell.getAsNormalizedFullLink(), { value });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return (cell.get() as { value: unknown }).value;
   }
 

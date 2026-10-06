@@ -156,17 +156,18 @@ states what that pass verifies and what it leaves to a fresh evaluation.
 
 ## 5. Transaction Contract
 
-The runner-facing transaction contract does not change.
-
-`IExtendedStorageTransaction.commit()` still has two phases:
-
-1. synchronous local apply
-2. asynchronous server resolution
+`IExtendedStorageTransaction.commit()` returns a receipt synchronously.
+Valid ordinary single-space writes apply locally before it returns;
+multi-space writes start each space in sequence. Callers select
+`receipt.verdict` for the attempt's fate or `receipt.settled` for coverage,
+rejection repair, callbacks, and inline post-commit effects. See
+[transaction commit](../../features/transaction-commit.md) for stage selection
+and promise assimilation.
 
 The storage-visible notification behavior must remain:
 
 - optimistic `"commit"` before the async round trip completes
-- `"revert"` synchronously before the promise resolves on conflict
+- `"revert"` synchronously before `receipt.settled` resolves on conflict
 - `"integrate"` for remote sync
 
 Path and document-boundary rules:

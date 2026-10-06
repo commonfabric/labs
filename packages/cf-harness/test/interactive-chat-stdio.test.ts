@@ -2261,12 +2261,14 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
       ...HARNESS_SUPPORTED_CLIENT_FEATURES,
     ],
   );
-  // This console serves typed commands, and its echo says so.
+  // This console serves typed commands and reads startsRun, and its echo
+  // says so.
   assertEquals(
     harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES).features,
     [
       "client_actions",
       "typed_commands",
+      "starts_run",
     ],
   );
 });

@@ -127,7 +127,7 @@ async function readDurableItemCount(
     // deno-lint-ignore no-explicit-any
     const handle = rt.run(tx, parent as any, {}, resultCell);
     rt.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     for (let i = 0; i < 8; i++) {
       await handle.pull();
       await rt.idle();
@@ -177,7 +177,7 @@ describe("mergeable append in a multi-space commit survives a transient storm", 
     // deno-lint-ignore no-explicit-any
     const handle = rt.run(tx, parent as any, {}, resultCell);
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await handle.pull();
     await rt.idle();
     await manager.synced();
@@ -219,7 +219,7 @@ describe("mergeable append in a multi-space commit survives a transient storm", 
     );
     const addTx = rt.edit();
     handle.withTx(addTx).key("addItem").send({ seed: "X" });
-    await addTx.commit();
+    await addTx.commit().settled;
     const commitMarker = await committed;
     await rt.idle();
     await manager.synced();
@@ -252,7 +252,7 @@ describe("mergeable append in a multi-space commit survives a transient storm", 
     // deno-lint-ignore no-explicit-any
     const handle = rt.run(tx, parent as any, {}, resultCell);
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await handle.pull();
     await rt.idle();
     await manager.synced();
@@ -295,7 +295,7 @@ describe("mergeable append in a multi-space commit survives a transient storm", 
     );
     const addTx = rt.edit();
     handle.withTx(addTx).key("addItem").send({ seed: "Y" });
-    await addTx.commit();
+    await addTx.commit().settled;
     await rejected;
     await rt.idle();
     await manager.synced();

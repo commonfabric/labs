@@ -38,7 +38,7 @@ describe("Runtime v2 read transaction fallback", () => {
         seed,
       );
       cell.set(42);
-      await seed.commit();
+      await seed.commit().settled;
 
       const baseline = editCalls;
       expect(cell.get()).toBe(42);
@@ -68,14 +68,14 @@ describe("Runtime v2 read transaction fallback", () => {
         seed,
       );
       cell.set(1);
-      await seed.commit();
+      await seed.commit().settled;
 
       const staleTx = runtime.edit();
       expect(cell.withTx(staleTx).get()).toBe(1);
 
       const update = runtime.edit();
       cell.withTx(update).set(2);
-      await update.commit();
+      await update.commit().settled;
       expect(cell.withTx(staleTx).get()).toBe(1);
 
       const freshTx = runtime.edit();
@@ -125,7 +125,7 @@ describe("Runtime v2 read transaction fallback", () => {
         seed,
       );
       cell.set(3);
-      await seed.commit();
+      await seed.commit().settled;
 
       const readTx1 = runtime.readTx();
       const readTx2 = runtime.readTx();
@@ -143,10 +143,12 @@ describe("Runtime v2 read transaction fallback", () => {
       )
         .toThrow(/runtime\.edit\(\)/);
       expect(() => readTx1.abort()).toThrow(/runtime\.edit\(\)/);
-      await expect(readTx1.commit()).resolves.toEqual({ ok: {} });
+      await expect(readTx1.commit().settled).resolves.toEqual({ ok: {} });
 
       const readTx3 = runtime.readTx();
-      await expect(readTx3.tx.commit()).rejects.toThrow(/runtime\.edit\(\)/);
+      await expect(readTx3.tx.commit().settled).rejects.toThrow(
+        /runtime\.edit\(\)/,
+      );
     } finally {
       await runtime.dispose();
     }

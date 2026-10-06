@@ -40,7 +40,7 @@ async function cellHolding(
   const tx = runtime.edit();
   const cell = runtime.getCell<unknown>(space, name, undefined, tx);
   cell.set(value);
-  await tx.commit();
+  await tx.commit().settled;
   return cell;
 }
 
@@ -51,7 +51,7 @@ async function setCell(
 ): Promise<void> {
   const tx = runtime.edit();
   cell.withTx(tx).set(value);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 const vnode = (name: string, props: unknown, children: unknown[]) => ({

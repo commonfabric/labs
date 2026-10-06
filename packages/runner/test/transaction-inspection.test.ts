@@ -211,7 +211,7 @@ describe("transaction inspection", () => {
         source: { "/": "origin" },
         meta: { updatedAt: "before" },
       });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       tx.read({
@@ -485,7 +485,7 @@ describe("transaction inspection", () => {
       seed.write({ space, scope: "space", id, path: [] }, {
         value: { count: 1 },
       });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       // A value-equal write is elided storage-wide (no write details, no
@@ -551,7 +551,7 @@ describe("transaction inspection", () => {
         id,
         path: [],
       }, { value: { count: 1 } });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       tx.write({
@@ -607,7 +607,7 @@ describe("transaction inspection", () => {
       seed.write({ space, scope: "space", id, path: [] }, {
         value: { count: 1 },
       });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       const address = {
@@ -685,7 +685,7 @@ describe("transaction inspection", () => {
       seed.write({ space, scope: "space", id, path: [] }, {
         value: { count: 1 },
       });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       tx.read({ space, scope: "space", id, path: ["value", "count"] });
@@ -715,7 +715,7 @@ describe("transaction inspection", () => {
         seed.write({ space, scope: "space", id, path: [] }, {
           value: { a: 1, b: 2 },
         });
-        await seed.commit();
+        await seed.commit().settled;
 
         const tx = storageManager.edit();
         tx.write({ space, scope: "space", id, path: ["value", "a"] }, 10);
@@ -776,7 +776,7 @@ describe("transaction inspection", () => {
         seed.write({ space, scope: "space", id, path: [] }, {
           value: { a: 1 },
         });
-        await seed.commit();
+        await seed.commit().settled;
 
         const tx = storageManager.edit();
         // 1st write: mutates `/value/a` in place (thaws the spine).
@@ -849,7 +849,7 @@ describe("transaction inspection", () => {
         id,
         path: [],
       }, { value: { count: 1 } });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       const extended = new ExtendedStorageTransaction(tx);
@@ -915,7 +915,7 @@ describe("transaction inspection", () => {
         id,
         path: [],
       }, { value: { count: 1 } });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       const extended = new ExtendedStorageTransaction(tx);
@@ -998,7 +998,7 @@ describe("transaction inspection", () => {
         id,
         path: [],
       }, { value: { tags: ["one", "two"] } });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       tx.write({
@@ -1054,7 +1054,7 @@ describe("transaction inspection", () => {
         id,
         path: [],
       }, { value: { tags: ["one", "two"] } });
-      await seed.commit();
+      await seed.commit().settled;
 
       const tx = storageManager.edit();
       tx.write({

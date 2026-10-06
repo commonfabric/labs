@@ -80,7 +80,7 @@ export default pattern<{ value: number }, { doubled: number }>(
     );
     const tx = runtime.edit();
     runtime.run(tx, program, { value: 3 }, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     demands.push(result.sink(() => {}));
     expect(await result.pull()).toEqual({ doubled: 6 });
     return result;
@@ -92,7 +92,7 @@ export default pattern<{ value: number }, { doubled: number }>(
     expect(argument).toBeDefined();
     const tx = runtime.edit();
     argument!.withTx(tx).key("value").set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
   }
 
@@ -118,7 +118,7 @@ export default pattern<{ value: number }, { doubled: number }>(
 
     const bobTx = runtime.edit();
     runtime.run(bobTx, program, { value: 3 }, result.withTx(bobTx));
-    expect((await bobTx.commit()).error).toBeUndefined();
+    expect((await bobTx.commit().settled).error).toBeUndefined();
     demands.push(result.sink(() => {}));
     expect(await result.pull()).toEqual({ doubled: 6 });
 
@@ -175,7 +175,7 @@ export default pattern<{ value: number }, { doubled: number }>(
         kind: "bookkeeping",
       });
       runtime.runner.clearInTransaction(new TransactionWrapper(tx), result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const settlement = waveSettlementOf(tx);
       expect(settlement).toBeDefined();
       expect(runtime.runner.cancels.size).toBe(1);
@@ -198,14 +198,14 @@ export default pattern<{ value: number }, { doubled: number }>(
     const argument = result.getArgumentCell()!;
     const tx = runtime.edit();
     runtime.runner.clearInTransaction(tx, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     expect(result.get()).toBeUndefined();
     expect(runtime.runner.cancels.size).toBe(0);
 
     const update = runtime.edit();
     argument.withTx(update).key("value").set(5);
-    expect((await update.commit()).error).toBeUndefined();
+    expect((await update.commit().settled).error).toBeUndefined();
     await runtime.idle();
     expect(result.get()).toBeUndefined();
     expect(runtime.runner.cancels.size).toBe(0);

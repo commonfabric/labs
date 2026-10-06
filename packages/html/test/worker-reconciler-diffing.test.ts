@@ -75,7 +75,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
           props: { id: "test-div", className: "initial" },
           children: ["Hello"],
         } as WorkerVNode);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         // Mount the cell
@@ -103,7 +103,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
           props: { id: "test-div", className: "updated" },
           children: ["Updated"],
         } as WorkerVNode);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         // Wait for reactivity to propagate
@@ -166,7 +166,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
           props: { id: "test" },
           children: [],
         } as WorkerVNode);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         // Mount the cell
@@ -181,7 +181,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
           props: { id: "test" },
           children: [],
         } as WorkerVNode);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await runtime.idle();
 
@@ -233,7 +233,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
           },
         ],
       } as WorkerVNode);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       // Mount
@@ -266,7 +266,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
           },
         ],
       } as WorkerVNode);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -335,7 +335,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
             row("last", []),
           ],
         } as WorkerVNode);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         const cancel = reconciler.mount(vnodeCell as Cell<WorkerVNode>);
@@ -356,7 +356,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
             ]),
           ],
         } as WorkerVNode);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await runtime.idle();
 
@@ -403,7 +403,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
         props: { id: "root-clear" },
         children: ["Hello"],
       } as WorkerVNode);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const cancel = reconciler.mount(vnodeCell as Cell<WorkerVNode>);
@@ -411,7 +411,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
       collector.clear();
 
       vnodeCell.withTx(tx).set(undefined as unknown as WorkerVNode);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -426,7 +426,7 @@ Deno.test("worker reconciler diffing - same tag updates in place", async (t) => 
       cancel();
     });
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   }

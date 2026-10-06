@@ -1622,7 +1622,7 @@ export class RuntimeProcessor {
       popFrame(frame);
     }
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.startCommit().settled;
+    const commit = tx.commit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "push");
   }
@@ -2009,13 +2009,13 @@ export class RuntimeProcessor {
     const cell = getCell(this.#runtime, request.cell);
     cell.withTx(tx).send(mapCellRefsToSigilLinks(request.event));
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.startCommit().settled;
+    const commit = tx.commit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "send");
   }
 
   #observeCellCommit(
-    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>,
+    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>["settled"],
     operation: "set" | "push" | "send",
   ): void {
     void commit.then(
@@ -2037,7 +2037,7 @@ export class RuntimeProcessor {
   }
 
   async #requireCellCommit(
-    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>,
+    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>["settled"],
   ): Promise<void> {
     const result = await commit;
     if (result.error) throw new Error(result.error.message);

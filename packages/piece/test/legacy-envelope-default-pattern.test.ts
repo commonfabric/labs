@@ -177,7 +177,7 @@ describe("piece layer over a legacy-envelope default pattern (CT-1838)", () => {
       writeTx,
     );
     runtime1.prepareTxForCommit(writeTx);
-    expect((await writeTx.commit()).error).toBeUndefined();
+    expect((await writeTx.commit().settled).error).toBeUndefined();
 
     // Cold-load it (heals via tolerance) — the loaded pattern carries the
     // LEGACY `{identity, symbol}` ref, so the piece created from it points

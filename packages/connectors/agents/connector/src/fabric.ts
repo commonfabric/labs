@@ -614,7 +614,7 @@ async function claimAgentFabricRoots(
     tx.abort(error);
     throw error;
   }
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error) {
     throw new Error(
       `could not claim agent connector storage: ${committed.error.message}`,
@@ -1692,7 +1692,7 @@ export class AgentFabricTarget implements CommandTarget {
       tx.abort(error);
       throw error;
     }
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) {
       throw new Error(
         `could not protect the ${label} command cell: ${result.error.message}`,
@@ -1741,7 +1741,7 @@ export class AgentFabricTarget implements CommandTarget {
       claim.abort(error);
       throw error;
     }
-    const claimed = await claim.commit();
+    const claimed = await claim.commit().settled;
     if (claimed.error) {
       throw new Error(
         `could not verify command receipt ownership: ${claimed.error.message}`,

@@ -107,7 +107,7 @@ describe("cfc-narrowed-capture-floor", () => {
     );
     runtime.run(tx, compiled, { secret: { a: "x", b: "y" } }, result);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await result.pull();
     await runtime.settled();
     await storageManager.synced();
