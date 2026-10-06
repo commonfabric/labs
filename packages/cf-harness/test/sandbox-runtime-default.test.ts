@@ -3051,15 +3051,25 @@ describe("sandbox-runtime-default", () => {
         { platform: "darwin" },
       );
 
+      const selected =
+        `selected: runsc (default on macOS: the native store at ${store})`;
+      const runtimeRow = () =>
+        health.snapshot().rows.find((row) => row.id === "sandbox.runtime");
+      // Before anything is checked, the row already says how the runtime
+      // was selected.
+      expect(runtimeRow()).toMatchObject({
+        value: "not checked",
+        detail: selected,
+      });
+
       await health.refresh();
 
-      expect(
-        health.snapshot().rows.find((row) => row.id === "sandbox.runtime"),
-      ).toMatchObject({
+      expect(runtimeRow()).toMatchObject({
         state: "failed",
         value: "configuration refused",
         reason: within(`runsc binary ${join(store, SHIM)}`, home) +
           unnamed(store),
+        detail: selected,
       });
     });
   });

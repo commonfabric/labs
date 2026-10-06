@@ -193,7 +193,8 @@ export const readConsolePolicy = (
  * path and `readPolicy` reads the policy; all three run synchronously, so an
  * observation holds no operation open. `selected` describes how the console
  * came to run on this driver, named or the platform's default, and is
- * carried in the runtime row's detail.
+ * carried in the runtime row's detail from before the first check, the row
+ * of a refused configuration included.
  */
 export const consoleRunscHealthProbe = (
   resolve: () => RunscSandboxConfig,
@@ -215,6 +216,10 @@ export const consoleRunscHealthProbe = (
     label: "Sandbox Runtime",
     value: "not checked",
     source,
+    // How the runtime was selected is known before anything is checked, and
+    // stays known where the configuration is refused, which is where an
+    // operator most needs to read it.
+    ...(selected !== undefined ? { detail: `selected: ${selected}` } : {}),
   }, {
     id: "sandbox.rootfs",
     group: "sandbox",
