@@ -275,6 +275,134 @@ describe("IntersectionFormatter", () => {
     });
   });
 
+  describe("properties several constituents declare", () => {
+    // A property two constituents declare has the intersection of the
+    // declared types as its type, and that type's schema as its own.
+
+    /** The schema of property `a` in the type `Result` that `code` declares. */
+    async function propertyA(code: string) {
+      const { type, checker } = await getTypeFromCode(code, "Result");
+      return asObjectSchema(transformer.generateSchema(type, checker))
+        .properties?.a;
+    }
+
+    it("returns the other declaration's schema beside `unknown`", async () => {
+      expect(
+        await propertyA(`type Result = { a: unknown } & { a: string };`),
+      ).toEqual({ type: "string" });
+    });
+
+    it("returns the same schema with the declarations in either order", async () => {
+      expect(
+        await propertyA(`type Result = { a: string } & { a: unknown };`),
+      ).toEqual({ type: "string" });
+    });
+
+    it("returns the union member another declaration narrows to", async () => {
+      expect(
+        await propertyA(
+          `type Result = { a: string | number } & { a: string };`,
+        ),
+      ).toEqual({ type: "string" });
+    });
+
+    it("returns the type every one of three declarations admits", async () => {
+      expect(
+        await propertyA(`
+          type Result =
+            & { a: unknown; b: number }
+            & { a: string }
+            & { a: string | boolean };
+        `),
+      ).toEqual({ type: "string" });
+    });
+
+    it("returns `false` for declarations whose types are disjoint", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { a: string } & { a: number };`,
+        "Result",
+      );
+      const schema = asObjectSchema(transformer.generateSchema(type, checker));
+
+      expect(schema.properties?.a).toBe(false);
+      expect(schema.required).toEqual(["a"]);
+    });
+
+    it("returns the merged members of object-typed declarations", async () => {
+      expect(
+        await propertyA(
+          `type Result = { a: { x: string } } & { a: { y: number } };`,
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "string" }, y: { type: "number" } },
+        required: ["x", "y"],
+      });
+    });
+
+    it("returns the array schema whose element type is the narrower", async () => {
+      expect(
+        await propertyA(`type Result = { a: unknown[] } & { a: string[] };`),
+      ).toEqual({ type: "array", items: { type: "string" } });
+    });
+
+    it("returns the literal both declarations admit", async () => {
+      expect(
+        await propertyA(
+          `type Result = { a: "x" | "y" } & { a: "y" | "z" };`,
+        ),
+      ).toEqual({ type: "string", enum: ["y"] });
+    });
+
+    it("returns the wrapper marker for a callable declaration beside a data declaration", async () => {
+      expect(
+        await propertyA(`
+          type Result = { a: () => Stream<string> } & { a: { x: string } };
+        `),
+      ).toEqual({ asCell: ["stream"] });
+    });
+
+    it("keeps the first declaration's description over a narrower declaration's", async () => {
+      expect(
+        await propertyA(`
+          interface Loose {
+            /** First doc */
+            a: unknown;
+          }
+          interface Tight {
+            /** Second doc */
+            a: string;
+          }
+          type Result = Loose & Tight;
+        `),
+      ).toEqual({
+        type: "string",
+        description: "First doc",
+        $comment:
+          "Conflicting docs across intersection constituents; using first",
+      });
+    });
+
+    it("keeps the narrower declaration's description when the first has none", async () => {
+      expect(
+        await propertyA(`
+          interface Loose {
+            a: unknown;
+          }
+          interface Tight {
+            /** Second doc #tagged */
+            a: string;
+          }
+          type Result = Loose & Tight;
+        `),
+      ).toEqual({
+        type: "string",
+        description: "Second doc #tagged",
+        tags: ["tagged"],
+      });
+    });
+  });
+
   describe("edge cases", () => {
     it("should handle multiple interfaces with overlapping properties", async () => {
       const code = `

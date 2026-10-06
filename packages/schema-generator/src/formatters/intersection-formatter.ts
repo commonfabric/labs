@@ -9,13 +9,107 @@ import ts from "typescript";
 import { attachDocTags, extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
-import { cloneSchemaDefinition, getNativeTypeSchema } from "../type-utils.ts";
+import {
+  cloneSchemaDefinition,
+  getNativeTypeSchema,
+  safeGetPropertyType,
+} from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
 import { isCfcCarrier } from "./common-fabric-formatter.ts";
+import { classifyCallableProperty } from "./object-formatter.ts";
 
 const logger = getLogger("schema-generator.intersection");
 const DOC_CONFLICT_COMMENT =
   "Conflicting docs across intersection constituents; using first";
+
+/** A part of an intersection that declares a property, and its schema there. */
+type PropertyDeclaration = {
+  readonly part: ts.Type;
+  readonly schema: MutableJSONSchema;
+};
+
+/** The keywords a declaration's JSDoc writes into its property's schema. */
+const DOC_KEYWORDS = ["description", "tags", "deprecated"] as const;
+
+/** The description a schema carries, if any. */
+function descriptionOf(schema: MutableJSONSchema): string | undefined {
+  return isObjectOrArray(schema) && typeof schema.description === "string"
+    ? schema.description
+    : undefined;
+}
+
+/**
+ * `value` with the documentation `documented` carries in place of its own:
+ * the description and the tags drawn from it, where `documented` has a
+ * description, and the deprecation mark, where it has one.
+ */
+function documentedAs(
+  value: MutableJSONSchemaObj,
+  documented: MutableJSONSchema,
+): MutableJSONSchemaObj {
+  if (!isObjectOrArray(documented)) return value;
+  const schema: Record<string, unknown> = { ...value };
+  if (typeof documented.description === "string") {
+    delete schema.tags;
+    schema.description = documented.description;
+    if (documented.tags !== undefined) schema.tags = documented.tags;
+  }
+  if (documented.deprecated !== undefined) {
+    schema.deprecated = documented.deprecated;
+  }
+  return schema as MutableJSONSchemaObj;
+}
+
+/**
+ * `schema` without the keywords its declaration's JSDoc writes, or `schema`
+ * itself where it carries none of them.
+ */
+export function withoutDocumentation(
+  schema: MutableJSONSchema,
+): MutableJSONSchema {
+  if (
+    !isObjectOrArray(schema) ||
+    !DOC_KEYWORDS.some((keyword) => keyword in schema)
+  ) {
+    return schema;
+  }
+  const { description: _, tags: __, deprecated: ___, ...rest } = schema;
+  return rest;
+}
+
+/**
+ * The schema of `key`, a property several constituents of an intersection
+ * declare with the schemas `declared`, in constituent order, given `value`,
+ * the schema of the property's type in the intersection — the intersection
+ * of the declared types — which may be one of `declared`. The first
+ * declaration's documentation replaces the value's own where it has any. A
+ * later declaration whose description differs from the first's is noted in
+ * a `$comment`, unless the value carries one.
+ */
+export function sharedPropertySchema(
+  key: string,
+  value: MutableJSONSchema,
+  declared: readonly MutableJSONSchema[],
+): MutableJSONSchema {
+  const [first, ...later] = declared;
+  const description = descriptionOf(first!);
+  const conflicting = description !== undefined &&
+    later.some((schema) => {
+      const other = descriptionOf(schema);
+      return other !== undefined && other !== description;
+    });
+  if (conflicting) {
+    logger.warn(
+      "schema-gen",
+      () => `Intersection doc conflict for '${key}'; using first`,
+    );
+  }
+  if (!isObjectOrArray(value)) return value;
+  const documented = value === first ? value : documentedAs(value, first!);
+  return conflicting && typeof documented.$comment !== "string"
+    ? { ...documented, $comment: DOC_CONFLICT_COMMENT }
+    : documented;
+}
 
 export class IntersectionFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
@@ -92,7 +186,7 @@ export class IntersectionFormatter implements TypeFormatter {
       return schema;
     }
 
-    const merged = this.#mergeIntersectionParts(partsToProcess, context);
+    const merged = this.#mergeIntersectionParts(partsToProcess, type, context);
     return this.#applyIntersectionDocs(merged);
   }
 
@@ -169,6 +263,7 @@ export class IntersectionFormatter implements TypeFormatter {
 
   #mergeIntersectionParts(
     parts: readonly ts.Type[],
+    intersection: ts.Type,
     context: GenerationContext,
   ): {
     schema: MutableJSONSchemaObj;
@@ -176,7 +271,7 @@ export class IntersectionFormatter implements TypeFormatter {
     documentedSources: string[];
     missingSources: string[];
   } {
-    const mergedProps: Record<string, MutableJSONSchema> = {};
+    const declarations = new Map<string, PropertyDeclaration[]>();
     const requiredSet = new Set<string>();
 
     const docTexts: string[] = [];
@@ -198,34 +293,9 @@ export class IntersectionFormatter implements TypeFormatter {
 
       if (objSchema.properties) {
         for (const [key, value] of Object.entries(objSchema.properties)) {
-          const existing = mergedProps[key];
-          if (existing) {
-            if (isObjectOrArray(existing) && isObjectOrArray(value)) {
-              const aDesc = typeof existing.description === "string"
-                ? existing.description as string
-                : undefined;
-              const bDesc = typeof value.description === "string"
-                ? value.description as string
-                : undefined;
-              if (aDesc && bDesc && aDesc !== bDesc) {
-                const priorComment = typeof existing.$comment === "string"
-                  ? existing.$comment as string
-                  : undefined;
-                (existing as Record<string, unknown>).$comment = priorComment ??
-                  DOC_CONFLICT_COMMENT;
-                logger.warn(
-                  "schema-gen",
-                  () => `Intersection doc conflict for '${key}'; using first`,
-                );
-              }
-            }
-            logger.debug(
-              "schema-gen",
-              () => `Intersection kept first definition for '${key}'`,
-            );
-            continue;
-          }
-          mergedProps[key] = value;
+          const declared = declarations.get(key);
+          if (declared) declared.push({ part, schema: value });
+          else declarations.set(key, [{ part, schema: value }]);
         }
       }
 
@@ -234,6 +304,13 @@ export class IntersectionFormatter implements TypeFormatter {
           if (typeof req === "string") requiredSet.add(req);
         }
       }
+    }
+
+    const mergedProps: Record<string, MutableJSONSchema> = {};
+    for (const [key, declared] of declarations) {
+      mergedProps[key] = declared.length === 1
+        ? declared[0]!.schema
+        : this.#sharedPropertySchema(key, declared, intersection, context);
     }
 
     const result: MutableJSONSchemaObj = {
@@ -246,6 +323,58 @@ export class IntersectionFormatter implements TypeFormatter {
     }
 
     return { schema: result, docTexts, documentedSources, missingSources };
+  }
+
+  /**
+   * The schema of `key`, a property several parts of `intersection` declare
+   * (`declared`, in part order): the schema of the type the checker gives the
+   * property, which is the intersection of the declared types, documented as
+   * `sharedPropertySchema()` says. Where one declaration's type is that
+   * type, or is assignable to every other declaration's and so holds just the
+   * values the intersection holds, the schema is that declaration's, read
+   * through the node it is written with; the first such declaration is
+   * taken. Any other type is formatted as the property's.
+   */
+  #sharedPropertySchema(
+    key: string,
+    declared: readonly PropertyDeclaration[],
+    intersection: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const checker = context.typeChecker;
+    const schemas = declared.map(({ schema }) => schema);
+    // A property one part declares is a property of the intersection.
+    const property = checker.getPropertyOfType(intersection, key)!;
+    const type = checker.getTypeOfSymbol(property);
+    const types = declared.map(({ part }) =>
+      checker.getTypeOfSymbol(checker.getPropertyOfType(part, key)!)
+    );
+    const own = types.indexOf(type);
+    const narrowest = own !== -1
+      ? own
+      : types.findIndex((candidate) =>
+        types.every((other) => checker.isTypeAssignableTo(candidate, other))
+      );
+    if (narrowest !== -1) {
+      return sharedPropertySchema(key, schemas[narrowest]!, schemas);
+    }
+
+    // Every declaration has a schema, so each is a data property or a
+    // callable returning a wrapper, and the intersection's call signatures,
+    // if it has any, are those callables'.
+    const valueType = safeGetPropertyType(property, intersection, checker);
+    const callable = classifyCallableProperty(
+      valueType,
+      checker,
+      context.boundTypeParameters,
+    );
+    return sharedPropertySchema(
+      key,
+      callable?.kind === "wrapper"
+        ? callable.schema
+        : this.#schemaGenerator.formatChildType(valueType, context),
+      schemas,
+    );
   }
 
   #isObjectSchema(
