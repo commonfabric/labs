@@ -28,6 +28,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import {
   ArrivalLog,
@@ -94,7 +95,7 @@ async function openHome(runtime: Runtime, create: boolean) {
     const tx = runtime.edit();
     root.withTx(tx).key("defaultPattern").set(result);
     runtime.run(tx, compiled, {}, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   } else {
     await result.sync();
     expect(await runtime.start(result)).toBe(true);
@@ -192,7 +193,7 @@ async function rejectInvocation<T>(
 function watchHandlingCommits(runtime: Runtime) {
   const outcomes = new ArrivalLog<{ eventId: string; value: unknown }>();
   const settlements = new ArrivalLog<
-    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>>
+    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>["settled"]>
   >();
   const edit = runtime.edit.bind(runtime);
   const wrapped = stub(runtime, "edit", (...args) => {
@@ -207,11 +208,17 @@ function watchHandlingCommits(runtime: Runtime) {
         value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
           .getRaw(),
       });
-      return (proceed() as ReturnType<IExtendedStorageTransaction["commit"]>)
-        .then((result) => {
+      const receipt = proceed() as ReturnType<
+        IExtendedStorageTransaction["commit"]
+      >;
+      return createTransactionCommitReceipt(
+        receipt.settled.then((result) => {
           settlements.record(result);
           return result;
-        });
+        }),
+        receipt.verdict,
+        receipt,
+      );
     });
     return tx;
   });
@@ -537,7 +544,7 @@ describe("Home shared-space catalog", () => {
             state,
           });
         }
-        expect((await tx.commit({ resolveAt: "verdict" })).error)
+        expect((await tx.commit().verdict).error)
           .toBeUndefined();
         expect(catalog.getRaw()).toEqual(before);
         using watch = watchHandlingCommits(runtime);
@@ -672,7 +679,7 @@ describe("Home shared-space catalog", () => {
           host: registration.host,
           kind: "fabrichat-room",
         });
-        expect((await tx.commit({ resolveAt: "verdict" })).error)
+        expect((await tx.commit().verdict).error)
           .toBeUndefined();
         expect(committed.entries).toHaveLength(0);
         expect(completed.entries).toHaveLength(0);
@@ -1166,7 +1173,7 @@ describe("Home shared-space catalog", () => {
         catalog.withTx(tx).key("entries", registration.space, "futureField")
           .set({ nested: [1, 2] });
         catalog.withTx(tx).key("futureField").set({ version: 2 });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const first = await home.key("sharedSpaceCatalog").pull();
         await invoke(runtime, home.key("changeSharedSpaceMembership"), {
           space: registration.space,
