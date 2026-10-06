@@ -4053,6 +4053,9 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : {
               getRaw: () => ({ $stream: true }),
+              // Home's `privateInbox` and `profiles`, as the inbox ensure
+              // reads them: no inbox held, and no profile advertising one.
+              asSchema: () => ({ pull: () => Promise.resolve(undefined) }),
               send: (event: unknown): void => {
                 sent.push({ stream: name, event });
                 if (name === "ensurePrivateInbox") onEnsurePrivateInbox();

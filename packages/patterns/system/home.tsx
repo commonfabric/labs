@@ -45,6 +45,7 @@ import ProfilePicker from "./profile-picker.tsx";
 import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
 import {
   ensurePrivateInbox,
+  type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
 } from "./private-inbox.tsx";
@@ -115,10 +116,11 @@ export type HomeOutput = {
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
   // The user's private inbox, where others deliver offers to them: the one a
-  // profile already pointed at when `ensurePrivateInbox` first ran, or else one
-  // it created. Each of their profiles that points at no inbox is pointed here;
-  // one that points at another inbox keeps it. Absent until
-  // `ensurePrivateInbox` runs.
+  // profile already pointed at when `ensurePrivateInbox` first ran, if the host
+  // vetted it, or else one it created. Each of their profiles that points at no
+  // inbox is pointed here; one that points at another inbox keeps it. Absent
+  // until `ensurePrivateInbox` runs, and while a profile advertises an inbox
+  // that failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
@@ -130,11 +132,11 @@ export type HomeOutput = {
     SharedSpaceMembershipResult
   >;
   createProfile: Stream<CreateProfileEvent>;
-  // Gives Home a private inbox if it holds none, adopting the one a profile
-  // already points at or else creating one, and points every profile that
-  // points at no inbox at it. The host sends it once per runtime worker, the
-  // first time the worker brings up Home.
-  ensurePrivateInbox: Stream<void>;
+  // Gives Home a private inbox if it holds none, adopting the one the host
+  // vetted from a profile's pointer, or creating one when no profile points at
+  // an inbox, and points every profile that points at no inbox at it. The host
+  // sends it once per runtime worker, the first time the worker brings up Home.
+  ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
     tags?: string[];

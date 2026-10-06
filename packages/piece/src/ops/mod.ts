@@ -78,6 +78,11 @@ export {
 } from "./bulk-survey.ts";
 export { PiecesController } from "./pieces-controller.ts";
 export {
+  ensurePrivateInboxOf,
+  type InboxAdoptionRefusal,
+  type PrivateInboxEnsure,
+} from "./private-inbox.ts";
+export {
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
   PieceController,

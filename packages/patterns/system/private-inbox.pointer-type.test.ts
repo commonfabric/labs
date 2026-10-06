@@ -5,9 +5,10 @@
  * another space: its sends are then refused, and, when the event drain
  * delivers it, so is its record that it handled the event. Read as a typed
  * link, the pointer joins no confidentiality. Every reader, Home's ensure
- * step choosing the inbox to adopt, Home's pointing step, the seed step that
- * points a profile once it is created, and a sender reading through
- * `profile-home.tsx`'s own types, therefore reads it as a typed link.
+ * step, both the profiles' pointers and the inbox the host names for it to
+ * adopt, Home's pointing step, the seed step that points a profile once it is
+ * created, and a sender reading through `profile-home.tsx`'s own types,
+ * therefore reads it as a typed link.
  *
  * The check is made by the type checker. A pointee that is `unknown` or `any`
  * fails to compile here under `deno task check`, and so does one naming a
@@ -21,7 +22,8 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell, NAME } from "commonfabric";
 import type {
-  advertisedInbox,
+  advertisesInbox,
+  EnsurePrivateInboxEvent,
   PointTarget,
   PrivateInboxOutput,
 } from "./private-inbox.tsx";
@@ -43,13 +45,17 @@ type ReachesOnlyTheName<Pointee> = unknown extends Pointee ? false
   ] extends [never] ? true
   : false;
 
-/** A profile as the ensure step reads it, choosing the inbox to adopt. */
-type AdoptingStepProfile = NonNullable<
-  NonNullable<Parameters<typeof advertisedInbox>[0]>[number]
+/** A profile as the ensure step reads it, deciding whether to create. */
+type EnsureStepProfile = NonNullable<
+  NonNullable<Parameters<typeof advertisesInbox>[0]>[number]
 >;
 
-const adoptingStepReachesOnlyTheName: ReachesOnlyTheName<
-  PointeeOf<NonNullable<AdoptingStepProfile["inbox"]>>
+const ensureStepReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<NonNullable<EnsureStepProfile["inbox"]>>
+> = true;
+
+const adoptedInboxReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<{ piece?: EnsurePrivateInboxEvent["adopt"] }>
 > = true;
 
 const pointingStepReachesOnlyTheName: ReachesOnlyTheName<
@@ -66,7 +72,11 @@ const seedStepReachesOnlyTheName: ReachesOnlyTheName<
 
 describe("private-inbox pointer type", () => {
   it("types the ensure step's pointer as a link naming only the inbox's name", () => {
-    expect(adoptingStepReachesOnlyTheName).toBe(true);
+    expect(ensureStepReachesOnlyTheName).toBe(true);
+  });
+
+  it("types the inbox the ensure step adopts as a link naming only the inbox's name", () => {
+    expect(adoptedInboxReachesOnlyTheName).toBe(true);
   });
 
   it("types the pointing step's pointer as a link naming only the inbox's name", () => {

@@ -844,6 +844,15 @@
         },
         "type": "object"
       },
+      "EnsurePrivateInboxEvent": {
+        "properties": {
+          "adopt": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "An inbox a profile advertises, which the host has vetted for Home to\nadopt; absent when the host vetted none."
+          }
+        },
+        "type": "object"
+      },
       "ExternalIdentityAssertion": {
         "properties": {
           "type": {
@@ -1818,9 +1827,9 @@
         "$ref": "#/$defs/TrustedDefaultProfile"
       },
       "ensurePrivateInbox": {
+        "$ref": "#/$defs/EnsurePrivateInboxEvent",
         "asCell": [
-          "stream",
-          "opaque"
+          "stream"
         ]
       },
       "favorites": {

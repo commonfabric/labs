@@ -17,6 +17,7 @@ import ProfileHome, {
 } from "./profile-home.tsx";
 import PrivateInbox, {
   ensurePrivateInbox,
+  type EnsurePrivateInboxEvent,
   isNonListAppendRefusal,
   type Offer,
   OFFER_ADDRESS_MAX_LENGTH,
@@ -86,6 +87,32 @@ const EarlierVintageProfile = pattern<
   return { inbox, setInbox: setStandInInbox({ inbox }) };
 });
 
+/** The string a malformed stored pointer holds instead of an object. */
+const MALFORMED_POINTER = "broken-pointer-container";
+
+/**
+ * Stands in for a profile whose stored pointer is not an object, as a writer
+ * bypassing `setInbox` can leave it. `stored` is the pointer as stored, which
+ * `inbox`'s type does not show.
+ */
+const MalformedPointerProfile = pattern<
+  Record<never, never>,
+  {
+    inbox: Pointer;
+    stored: Pointer | string;
+    setInbox: Stream<{ inbox?: Cell<PrivateInboxPiece> }>;
+  }
+>(() => {
+  const inbox = new Writable<Pointer | string>(MALFORMED_POINTER).for("inbox");
+  return {
+    // deno-lint-ignore no-explicit-any
+    inbox: inbox as any,
+    stored: inbox,
+    // deno-lint-ignore no-explicit-any
+    setInbox: setStandInInbox({ inbox: inbox as any }),
+  };
+});
+
 /**
  * Stands in for the profile-create surface's seed step, the step that runs
  * after each profile is created, with Home's inbox given or left out as an
@@ -105,7 +132,7 @@ const Seeder = pattern<
  */
 const EnsuringHome = pattern<
   { privateInbox: Writable<PrivateInboxHolder>; profiles: PointTarget[] },
-  { ensure: Stream<void> }
+  { ensure: Stream<EnsurePrivateInboxEvent> }
 >(({ privateInbox, profiles }) => ({
   ensure: ensurePrivateInbox({
     privateInbox,
@@ -336,14 +363,21 @@ export default pattern(() => {
   const unpointed = ProfileHome({ initialName: "Unpointed" });
   const earlierPointed = EarlierVintageProfile({});
   const earlierUnpointed = EarlierVintageProfile({});
+  const malformedPointer = MalformedPointerProfile({});
   const home = new Writable<PrivateInboxHolder>({});
   const elsewhere = new Writable<PrivateInboxHolder>({});
   const holdHomeInbox = holdNewInbox({ holder: home });
   const holdElsewhereInbox = holdNewInbox({ holder: elsewhere });
   const pointProfiles = pointProfilesAtPrivateInbox({
     privateInbox: home,
-    // deno-lint-ignore no-explicit-any
-    profiles: [pointed, earlierPointed, earlierUnpointed, unpointed] as any,
+    profiles: [
+      pointed,
+      earlierPointed,
+      earlierUnpointed,
+      unpointed,
+      malformedPointer,
+      // deno-lint-ignore no-explicit-any
+    ] as any,
   });
 
   const action_create_inboxes = action(() => {
@@ -362,6 +396,14 @@ export default pattern(() => {
   const assert_inboxes_created = assert(() =>
     home.get().piece !== undefined && elsewhere.get().piece !== undefined &&
     !equals(home.get().piece, elsewhere.get().piece)
+  );
+  // Home repairs a stored pointer that is not an object: the pointer type
+  // reads it as no pointer, so the owner's Home points the owner's profile.
+  const assert_the_malformed_pointer_is_stored = assert(() =>
+    malformedPointer.stored === MALFORMED_POINTER
+  );
+  const assert_the_malformed_pointer_is_repaired = assert(() =>
+    equals(malformedPointer.inbox?.piece, home.get().piece)
   );
   const assert_only_the_unpointed_profile_points_at_home_inbox = assert(() =>
     equals(pointed.inbox?.piece, elsewhere.get().piece) &&
@@ -421,11 +463,13 @@ export default pattern(() => {
     namedAtIndex.inbox?.piece === undefined && namedAtIndex.name === "Ada"
   );
 
-  // Ensuring Home's inbox: Home adopts the inbox the first profile in its list
-  // that points at one points at, and keeps an inbox it holds. A profile
-  // pointing at another inbox keeps its pointer, and the seed step points a new
-  // profile at the adopted inbox. Creating an inbox when no profile points at
-  // one is covered by `integration/private-inbox-multi-runtime.test.ts`.
+  // Ensuring Home's inbox: Home adopts the inbox the host names, keeps an
+  // inbox it holds, and holds none when profiles advertise an inbox but the
+  // host names none, as when the advertised inbox failed the host's vetting
+  // (`packages/piece/test/ops/pieces-controller-spaces.test.ts`). A profile
+  // pointing at another inbox keeps its pointer, and the seed step points a
+  // new profile at the adopted inbox. Creating an inbox when no profile points
+  // at one is covered by `integration/private-inbox-multi-runtime.test.ts`.
   const third = new Writable<PrivateInboxHolder>({});
   const holdThirdInbox = holdNewInbox({ holder: third });
   const loneUnpointed = ProfileHome({ initialName: "Lone unpointed" });
@@ -437,16 +481,18 @@ export default pattern(() => {
     profiles: [loneUnpointed, loneAdvertising] as any,
   });
   const firstUnpointed = ProfileHome({ initialName: "First unpointed" });
-  const firstAdvertising = ProfileHome({ initialName: "First advertising" });
-  const secondAdvertising = ProfileHome({ initialName: "Second advertising" });
+  const adoptedAdvertising = ProfileHome({
+    initialName: "Adopted advertising",
+  });
+  const otherAdvertising = ProfileHome({ initialName: "Other advertising" });
   const lastUnpointed = EarlierVintageProfile({});
-  const adoptingFirst = new Writable<PrivateInboxHolder>({});
-  const ensureAdoptingFirst = EnsuringHome({
-    privateInbox: adoptingFirst,
+  const adoptingAmongOthers = new Writable<PrivateInboxHolder>({});
+  const ensureAdoptingAmongOthers = EnsuringHome({
+    privateInbox: adoptingAmongOthers,
     profiles: [
       firstUnpointed,
-      firstAdvertising,
-      secondAdvertising,
+      adoptedAdvertising,
+      otherAdvertising,
       lastUnpointed,
       // deno-lint-ignore no-explicit-any
     ] as any,
@@ -461,6 +507,16 @@ export default pattern(() => {
     // deno-lint-ignore no-explicit-any
     profiles: [keepingAdvertising, keepingUnpointed] as any,
   });
+  const unvettedUnpointed = ProfileHome({ initialName: "Unvetted unpointed" });
+  const unvettedAdvertising = ProfileHome({
+    initialName: "Unvetted advertising",
+  });
+  const unvetted = new Writable<PrivateInboxHolder>({});
+  const ensureUnvetted = EnsuringHome({
+    privateInbox: unvetted,
+    // deno-lint-ignore no-explicit-any
+    profiles: [unvettedUnpointed, unvettedAdvertising] as any,
+  });
   const freshAfterAdoption = ProfileHome({ initialName: "" });
   const seederAfterAdoption = Seeder({
     // deno-lint-ignore no-explicit-any
@@ -469,42 +525,46 @@ export default pattern(() => {
   });
   const action_advertise_inboxes = action(() => {
     holdThirdInbox.send();
-    loneAdvertising.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
-    });
-    firstAdvertising.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
-    });
-    keepingAdvertising.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
-    });
+    const advertised = elsewhere.get().piece?.resolveAsCell();
+    loneAdvertising.setInbox.send({ inbox: advertised });
+    adoptedAdvertising.setInbox.send({ inbox: advertised });
+    keepingAdvertising.setInbox.send({ inbox: advertised });
+    unvettedAdvertising.setInbox.send({ inbox: advertised });
     keeping.set({ piece: home.get().piece?.resolveAsCell() });
   });
   const action_advertise_a_second_inbox = action(() => {
-    secondAdvertising.setInbox.send({
+    otherAdvertising.setInbox.send({
       inbox: third.get().piece?.resolveAsCell(),
     });
   });
   const action_ensure_inboxes = action(() => {
-    ensureAdoptingOne.ensure.send();
-    ensureAdoptingFirst.ensure.send();
-    ensureKeeping.ensure.send();
+    const vetted = elsewhere.get().piece?.resolveAsCell();
+    ensureAdoptingOne.ensure.send({ adopt: vetted });
+    ensureAdoptingAmongOthers.ensure.send({ adopt: vetted });
+    ensureKeeping.ensure.send({ adopt: vetted });
+    ensureUnvetted.ensure.send({});
   });
-  const assert_the_one_advertised_inbox_is_adopted = assert(() =>
+  const assert_the_named_inbox_is_adopted = assert(() =>
     equals(adoptingOne.get().piece, elsewhere.get().piece) &&
     equals(loneUnpointed.inbox?.piece, elsewhere.get().piece) &&
     equals(loneAdvertising.inbox?.piece, elsewhere.get().piece)
   );
-  const assert_the_first_advertised_inbox_is_adopted = assert(() =>
-    equals(adoptingFirst.get().piece, elsewhere.get().piece) &&
+  const assert_another_advertised_inbox_is_left_as_it_was = assert(() =>
+    equals(adoptingAmongOthers.get().piece, elsewhere.get().piece) &&
     equals(firstUnpointed.inbox?.piece, elsewhere.get().piece) &&
     equals(lastUnpointed.inbox?.piece, elsewhere.get().piece) &&
-    equals(secondAdvertising.inbox?.piece, third.get().piece)
+    equals(otherAdvertising.inbox?.piece, third.get().piece)
   );
   const assert_a_held_inbox_is_kept = assert(() =>
     equals(keeping.get().piece, home.get().piece) &&
     equals(keepingUnpointed.inbox?.piece, home.get().piece) &&
     equals(keepingAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_an_unvetted_advertisement_leaves_home_without_an_inbox = assert(
+    () =>
+      unvetted.get().piece === undefined &&
+      unvettedUnpointed.inbox?.piece === undefined &&
+      equals(unvettedAdvertising.inbox?.piece, elsewhere.get().piece),
   );
   const action_seed_after_adoption = action(() => {
     seederAfterAdoption.seed.send({ name: "Fresh", index: 0 });
@@ -534,8 +594,10 @@ export default pattern(() => {
       { action: action_create_inboxes },
       { assertion: assert_inboxes_created },
       { action: action_point_one_elsewhere },
+      { assertion: assert_the_malformed_pointer_is_stored },
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
+      { assertion: assert_the_malformed_pointer_is_repaired },
       // Pointing again changes nothing.
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
@@ -547,14 +609,22 @@ export default pattern(() => {
       { action: action_advertise_inboxes },
       { action: action_advertise_a_second_inbox },
       { action: action_ensure_inboxes },
-      { assertion: assert_the_one_advertised_inbox_is_adopted },
-      { assertion: assert_the_first_advertised_inbox_is_adopted },
+      { assertion: assert_the_named_inbox_is_adopted },
+      { assertion: assert_another_advertised_inbox_is_left_as_it_was },
       { assertion: assert_a_held_inbox_is_kept },
+      {
+        assertion:
+          assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
+      },
       // Ensuring again changes nothing.
       { action: action_ensure_inboxes },
-      { assertion: assert_the_one_advertised_inbox_is_adopted },
-      { assertion: assert_the_first_advertised_inbox_is_adopted },
+      { assertion: assert_the_named_inbox_is_adopted },
+      { assertion: assert_another_advertised_inbox_is_left_as_it_was },
       { assertion: assert_a_held_inbox_is_kept },
+      {
+        assertion:
+          assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
+      },
       { action: action_seed_after_adoption },
       { assertion: assert_a_new_profile_is_pointed_at_the_adopted_inbox },
     ],

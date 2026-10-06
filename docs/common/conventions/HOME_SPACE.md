@@ -143,18 +143,20 @@ sees their own profile.
 The home default pattern holds the user's private inbox in
 `defaultPattern.privateInbox.piece`: a share inbox piece, in a space of its
 own, where other people deliver offers to the user. The user has one inbox,
-whichever side creates it. Home's `ensurePrivateInbox` stream keeps an inbox
-Home holds; otherwise it adopts the one a profile already points at, such as a
-loom daemon's (the first such profile in the `profiles` list), and creates one
-from `packages/patterns/system/private-inbox.tsx` only when no profile points
-at one. It then points each profile that points at no inbox at Home's, through
-the profile's `inbox` field, which is how a sender finds it, and leaves a
-profile pointing at another inbox as it is. The host sends that stream once per
-runtime worker, the first time the worker brings up Home. A profile created
-once Home holds the inbox is pointed at it as it is created; one created
-earlier is pointed by the next ensure. A loom daemon is to do the same in the
-other direction: adopt the inbox a profile advertises, and never replace a
-pointer to a different one.
+whichever side creates it. The host sends Home's `ensurePrivateInbox` stream
+once per runtime worker, the first time the worker brings up Home. Home keeps
+an inbox it holds; otherwise it adopts the inbox the first profile in the
+`profiles` list that points at one points at, such as a loom daemon's, once the
+host has vetted it as a loom daemon vets one, and creates one from
+`packages/patterns/system/private-inbox.tsx` only when no profile points at
+one. An advertised inbox that fails vetting is neither adopted nor replaced,
+and Home holds none. Home then points each profile that points at no inbox at
+its own, through the profile's `inbox` field, which is how a sender finds it,
+and leaves a profile pointing at another inbox as it is. A profile created once
+Home holds the inbox is pointed at it as it is created; one created earlier is
+pointed by the next ensure. A loom daemon does the same in the other direction,
+adopting the inbox a profile advertises and never replacing a pointer to a
+different one.
 [The private inbox](../../features/private-inbox.md) describes the whole
 arrangement.
 
