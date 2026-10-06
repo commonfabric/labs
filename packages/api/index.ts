@@ -1727,18 +1727,21 @@ export type NodeFactory<T, R> =
 
 /**
  * Access a space created by `PatternFactory.inSpace()` grants beyond its
- * owner, by principal DID, or `"*"` for anyone. The grants
+ * creator, by principal DID, or `"*"` for anyone. A principal DID may be
+ * granted `OWNER`, and `"*"` may not. The identity the run acts for is an
+ * OWNER of the space whatever the grants name it. The grants
  * apply when the space is created, and the first call to name a space in a
  * run is the one that creates it; a space that already exists keeps its own
  * access-control document.
  */
 export type InSpaceGrants = Readonly<
-  { [principal in DID | "*"]?: "READ" | "WRITE" }
+  & { [principal in DID]?: "READ" | "WRITE" | "OWNER" }
+  & { "*"?: "READ" | "WRITE" }
 >;
 
 /** Options for `PatternFactory.inSpace()`. */
 export interface InSpaceOptions {
-  /** Access the created space grants beyond its owner. */
+  /** Access the created space grants beyond its creator. */
   grants?: InSpaceGrants;
 
   /**
@@ -4002,6 +4005,31 @@ export type SpaceAccessFunction = (
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;
+
+/**
+ * Returns the DID of the space `target`'s value lives in, after following any
+ * links it holds: so a pattern can name a space it holds a cell of, such as
+ * one a handler just created with `PatternFactory.inSpace()`, in data such as
+ * an invitation to it. A cell in the pattern's own space returns that space's
+ * DID.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`,
+ * which is what a value that cannot be read yet reads as, or the run has named
+ * an `inSpace()` target whose space is not resolved yet. The runtime resolves
+ * that space once the run ends, and runs the handler or computation again,
+ * discarding what the first run wrote. The run after it returns the new
+ * space's DID.
+ *
+ * Call it in a handler or a reactive computation (`computed()`, `lift()`).
+ * Calling it in a pattern body throws, since a pattern body's references name
+ * no space yet: wrap it in `computed()` instead. The answer does not depend on
+ * who asks, and carries no label of its own.
+ */
+export type SpaceOfFunction = (
+  target: AnyCell<unknown> | undefined,
+) => DID | undefined;
+
+export declare const spaceOf: SpaceOfFunction;
 
 /** The level `grantSpaceAccess()` sets an access-list entry to. */
 export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";

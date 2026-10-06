@@ -4289,9 +4289,10 @@ export class Runtime {
 
   /**
    * Creates a space and returns its DID. The space's key is generated from
-   * random data, signs one genesis commit whose access-control document makes
-   * `owner` its only OWNER alongside `grants`, and is dropped once that commit
-   * is confirmed. The DID is returned only after that confirmation.
+   * random data, signs one genesis commit whose access-control document holds
+   * `grants` and makes `owner` an OWNER whatever `grants` names it, and is
+   * dropped once that commit is confirmed. The DID is returned only after that
+   * confirmation.
    *
    * `owner` defaults to the identity this runtime acts as. A serving runtime
    * acts as a service, and a space it creates on a user's behalf must be

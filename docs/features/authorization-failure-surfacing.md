@@ -123,6 +123,11 @@ revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
 admission restores the content.
 
+A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
+placeholder as revoked content shown directly, while its binding is withheld,
+and the binding is made again, mounting the content, once the space is in reach
+again.
+
 ## CLI: surface the denial for the space it was asked to reach
 
 The CLI reads `storageManager.authorizationError(space)` for the one space it

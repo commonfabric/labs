@@ -496,6 +496,59 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
+  it("a serving runtime creates an `inSpace` target with the grants the run names, the acting identity an OWNER whatever they name it", async () => {
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    const serving = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+      servingPosture: true,
+      experimental: { serverExecution: true },
+    });
+    const name = "co-owned-probe";
+    const grants = {
+      [aliceSigner.did()]: "READ",
+      [bobSigner.did()]: "OWNER",
+    } as const;
+    try {
+      const actingTx = serving.edit();
+      stampWaveRunContext(actingTx, {
+        actionId: "co-owned/acting",
+        kind: "event-handler",
+        eventId: "e-co-owned",
+        acting: { user: aliceSigner.did(), session: "sess-co-owned" },
+        capabilityRef: "event-consequence:e-co-owned",
+      });
+      await expect(
+        serving.runner.accessForTestingOnly.resolvePendingSpaceNamesAndRetry(
+          {
+            space: homeSpace,
+            pendingSpaceNames: new Map([[name, grants]]),
+          } as Frame,
+          actingTx,
+        ),
+      ).rejects.toThrow("Resolving in-space target spaces");
+      const did = serving.resolveInSpaceNameSync(
+        homeSpace,
+        name,
+        actingTx,
+        grants,
+      );
+      actingTx.abort(new Error("test-only"));
+
+      expect(did).toBeDefined();
+      expect((await server.readDocument(did!, `of:${did}`))?.value).toEqual({
+        [aliceSigner.did()]: "OWNER",
+        [bobSigner.did()]: "OWNER",
+      });
+    } finally {
+      await serving.dispose();
+      await manager.close();
+    }
+  });
+
   it("OW31 B4: a provisioning write into a DID nobody created is refused at the accept gate — counted, nothing lands, and the home space keeps serving", async () => {
     // No space has the DID, so no ACL grants the carried actor anything:
     // the crossing refuses action-scoped at accumulation, and the wave
