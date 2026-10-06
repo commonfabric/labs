@@ -416,6 +416,11 @@
         "description": "The permission mode a started session's first turn runs under, one the\ndriver advertises. Empty leaves the driver's default, which cannot pass a\ntool or network approval headlessly.",
         "type": "string"
       },
+      "startSurface": {
+        "default": "",
+        "description": "Where a started session runs: `headless` (the default) runs the first\nturn on this Mac through the connector; `desktop` opens Claude Code on\nthis Mac with the kickoff ready to send, takes no mode, and the session\nthe app makes joins once the person sends it and the connector sees it.",
+        "type": "string"
+      },
       "starts": {
         "asCell": [
           "cell"
@@ -524,6 +529,10 @@
           "sourceId": {
             "type": "string"
           },
+          "startedAs": {
+            "description": "The id the start that made this session named, or \"\" when the session\nis its own start's or none.",
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
@@ -541,7 +550,8 @@
           "gitRepo",
           "updatedAt",
           "active",
-          "attached"
+          "attached",
+          "startedAs"
         ],
         "type": "object"
       },
@@ -611,7 +621,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/topic-workbench/main.tsx",
-              "moduleIdentity": "b8y9QXdL7NDmWaIWNNUppsfKZ-6B2JZrwn4L1HYUsbQ",
+              "moduleIdentity": "eFXATQEErJmmHwtdG1hTvn0PL2tyHCc5JVL5ANMhVc4",
               "path": [
                 "startSessionCommand"
               ]
