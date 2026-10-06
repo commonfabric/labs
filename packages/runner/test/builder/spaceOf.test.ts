@@ -46,13 +46,15 @@ describe("spaceOf()", () => {
    * Runs a root pattern whose `create` handler creates one child in a space of
    * its own, with `inSpace()` and grants, and queues a notice holding the
    * child and what `spaceOf()` returns for it. Each run of the handler records
-   * that return in `seen`. A `deliver` handler records in `delivered` what
-   * `spaceOf()` returns for the first queued notice's child.
+   * that return in `seen`, and in `refusals` the message `spaceOf()` throws
+   * for a value that is not a cell. A `deliver` handler records in `delivered`
+   * what `spaceOf()` returns for the first queued notice's child.
    */
   const spawnRoot = async () => {
     const { commonfabric } = createTrustedBuilder(runtime);
     const { handler, pattern } = commonfabric;
     const seen: unknown[] = [];
+    const refusals: string[] = [];
     const delivered: unknown[] = [];
     const Child = pattern<{ value: string }>(({ value }) => ({ value }));
     const stateSchema = {
@@ -73,6 +75,11 @@ describe("spaceOf()", () => {
         });
         const space = commonfabric.spaceOf(room);
         seen.push(space);
+        try {
+          commonfabric.spaceOf({ space: home } as never);
+        } catch (error) {
+          refusals.push((error as Error).message);
+        }
         notices.push({ room, ...(space === undefined ? {} : { space }) });
       },
     );
@@ -122,6 +129,7 @@ describe("spaceOf()", () => {
     };
     return {
       seen,
+      refusals,
       delivered,
       create: (value: string) => send("create", { value }),
       deliver: () => send("deliver", {}),
@@ -255,6 +263,17 @@ describe("spaceOf()", () => {
     expect(() => callIn("lift", { space: home })).toThrow(
       "takes a cell as its target",
     );
+  });
+
+  it("throws for a target that is not a cell in a run that names an unresolved `inSpace()` space, too", async () => {
+    const root = await spawnRoot();
+    await root.create("first");
+
+    expect(root.seen).toEqual([undefined, expect.any(String)]);
+    expect(root.refusals.length).toBe(2);
+    for (const message of root.refusals) {
+      expect(message).toContain("takes a cell as its target");
+    }
   });
 
   it("throws in a pattern body", () => {

@@ -137,8 +137,9 @@ export function spaceOf(
   const [target] = args;
 
   if (target === undefined) return undefined;
+  const cell = cellOfTarget(target, "spaceOf(target)");
   if ((frame!.pendingSpaceNames?.size ?? 0) > 0) return undefined;
-  return spaceOfTarget(target, "spaceOf(target)");
+  return spaceOfTarget(cell, "spaceOf(target)");
 }
 
 /**
