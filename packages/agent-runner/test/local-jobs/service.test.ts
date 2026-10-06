@@ -2,8 +2,8 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
-import type { HarnessJobResult } from "../../lib/harness-job.ts";
-import { startLocalJobs } from "../../lib/local-jobs/service.ts";
+import type { HarnessJobResult } from "../../src/harness-job.ts";
+import { startLocalJobs } from "../../src/local-jobs/service.ts";
 
 /** A profile file with one read-only profile. */
 const PROFILES = {

@@ -1,5 +1,6 @@
 {
   "workspace": [
+    "./packages/agent-runner",
     "./packages/api",
     "./packages/piece",
     "./packages/cli",

@@ -8,13 +8,13 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 
+import type { LocalJobsConfig } from "@commonfabric/agent-runner/local-jobs/service";
 import {
   type AgentRunnerCommandConfig,
   type AgentRunnerCommandDeps,
   createAgentCommand,
   resolveLocalJobsConfig,
 } from "../commands/agent.ts";
-import type { LocalJobsConfig } from "../lib/local-jobs/service.ts";
 
 const DID = "did:key:z6MkTestRequester";
 
