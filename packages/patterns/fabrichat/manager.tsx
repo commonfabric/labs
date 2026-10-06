@@ -89,7 +89,11 @@ const isStart = (act: ManagerAct): boolean =>
  * as `target.dataset.counterpart`.
  */
 export interface ManagerStreamEvent {
-  /** Chosen by the sender; the outcome is recorded under it. */
+  /**
+   * Chosen by the sender; the outcome is recorded under it, except for a start
+   * that would create a room without its reviewed `ChatStart`, which is
+   * refused whole and records none.
+   */
   requestId?: string;
 
   /** The DID of a direct room's other member. */
@@ -317,7 +321,9 @@ const createRoom = (
  * Performs one manager act: finding or creating a direct room, creating a
  * group room, accepting a room, forgetting one, or reporting a notice
  * delivered. Each act's outcome is recorded under its `requestId`, and a
- * request already decided changes nothing.
+ * request already decided changes nothing. A start that creates a room commits
+ * only from `commitStart` under a reviewed `ChatStart`; without one, its run
+ * is refused whole, and it records no outcome.
  */
 const performManagerAct = (
   event: ManagerStreamEvent | undefined,

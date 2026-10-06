@@ -102,10 +102,13 @@ export const participantsOf = (
     [...listed],
   );
 
-/** What starting a direct chat asks of a manager: who to chat with. */
+/**
+ * What a participant's chip sends its viewer's manager's `openDirect`: the
+ * click on its chat control, whose target names the person to chat with.
+ */
 export interface StartDirectEvent {
-  /** The other person's principal. */
-  counterpart: string;
+  /** The chat control, naming the other person's principal. */
+  readonly target?: { readonly dataset?: { readonly counterpart?: string } };
 }
 
 /** What a participant's chip needs. */

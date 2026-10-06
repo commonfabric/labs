@@ -639,7 +639,7 @@
             "type": "array"
           },
           "requestId": {
-            "description": "Chosen by the sender; the outcome is recorded under it.",
+            "description": "Chosen by the sender; the outcome is recorded under it, except for a start\nthat would create a room without its reviewed `ChatStart`, which is\nrefused whole and records none.",
             "type": "string"
           },
           "room": {

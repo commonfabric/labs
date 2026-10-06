@@ -314,7 +314,8 @@ from this design, as below.
   `createGroup` are performed by a handler of their own, `commitStart`, and the
   record a manager-created room keeps about itself names that handler and
   `ChatStart` on `ChatStartSurface` as its only writer, so a start that creates
-  a room commits only from that reviewed gesture. A start that creates none,
+  a room commits only from that reviewed gesture; without it, its run is
+  refused whole, and records no outcome. A start that creates none,
   `openDirect` finding a direct room already shared or a start that is
   refused, commits without one, and grants no one access. The manager's other
   acts are performed by `commitManager`, with no gesture. A participant's chip
