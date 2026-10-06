@@ -594,6 +594,48 @@ export const trustedEventMatchesUiContract = (
   );
 };
 
+/** The provenance an event carries for a reviewed action on a trusted surface. */
+export type ReviewedActionProvenance = {
+  /** `dom` for a browser event, `native` for a native host's own control. */
+  origin: TrustedUiProvenance["origin"];
+
+  /** Always `true`: the event came from a trusted surface. */
+  trusted: true;
+
+  /** The surface the action was taken on, and the action. */
+  ui: {
+    /** The surface, matched against a contract's `trustedPattern`. */
+    pattern: string;
+
+    /** The surface, matched against a contract's `requiredEventIntegrity`. */
+    eventIntegrity: string[];
+
+    /** The action, matched against a `UiAction` contract's `action`. */
+    uiContractDataset: { uiAction: string };
+  };
+};
+
+/**
+ * Builds the provenance of `action` taken on the trusted surface `surface`,
+ * which `trustedEventMatchesUiContract()` matches against a `UiAction`
+ * contract naming that action, whose `trustedPattern` and
+ * `requiredEventIntegrity` name that surface. It returns a fresh object on
+ * each call. The event it goes on matches only once it also carries the
+ * renderer-trust mark, which `markRendererTrustedEvent()` applies.
+ */
+export const reviewedActionProvenance = (
+  origin: ReviewedActionProvenance["origin"],
+  { surface, action }: { readonly surface: string; readonly action: string },
+): ReviewedActionProvenance => ({
+  origin,
+  trusted: true,
+  ui: {
+    pattern: surface,
+    eventIntegrity: [surface],
+    uiContractDataset: { uiAction: action },
+  },
+});
+
 const trustedEventMatchCandidates = (event: unknown): unknown[] => {
   const candidates: unknown[] = [];
   const sourceIsRendererTrusted = isRendererTrustedEvent(event);
