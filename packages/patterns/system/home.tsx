@@ -117,10 +117,10 @@ export type HomeOutput = {
   chatManager: FabriChatManagerOutput;
   // The user's private inbox, where others deliver offers to them: the one a
   // profile already pointed at when `ensurePrivateInbox` first ran, if the host
-  // vetted it, or else one it created. Each of their profiles that points at no
-  // inbox is pointed here; one that points at another inbox keeps it. Absent
-  // until `ensurePrivateInbox` runs, and while a profile advertises an inbox
-  // that failed vetting.
+  // vetted it, or, when no profile advertises an inbox, one it created. Each of
+  // their profiles that points at no inbox is pointed here; one that points at
+  // another inbox keeps it. Absent until `ensurePrivateInbox` runs, and while a
+  // profile advertises an inbox that failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
