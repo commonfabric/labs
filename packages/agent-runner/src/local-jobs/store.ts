@@ -46,6 +46,12 @@ export interface LocalJobRequest {
   resultSchema: unknown;
   tools?: string[];
   maxModelTurns?: number;
+
+  /**
+   * The caller can host the job's browser. Its contents are not read yet;
+   * declaring it is what counts, as on the console's task route.
+   */
+  browserHost?: Record<string, unknown>;
 }
 
 /** One event of a job, in `seq` order. */

@@ -37,6 +37,7 @@ import {
   normalizeCdpOrigin,
   parseBrowserAccessExpiresAt,
 } from "./contracts/browser-access.ts";
+import type { HarnessBrowserHost } from "./contracts/browser-host.ts";
 import {
   readHarnessRunArtifacts,
   resolveHarnessRunPaths,
@@ -398,6 +399,14 @@ export interface RunCfHarnessCliDependencies {
 
   /** Trusted, fixed binding supplied only by the dedicated local Loom host. */
   loomLocalHostBinding?: LoomLocalHostBinding;
+
+  /**
+   * The client hosting this run's browser, supplied only by an embedder that
+   * holds one (the agent runner's local lane, for a job that declared one).
+   * The `browser` subagent profile reaches it when the run allows that
+   * profile; the CLI itself has no flag that names a host.
+   */
+  browserHost?: HarnessBrowserHost;
 
   fetchFn?: HarnessFetch;
   structuredHostFailures?: boolean;
@@ -3577,7 +3586,12 @@ export const runCfHarnessCli = async (
         }
       }
       : undefined;
-    const sessionOptions = harnessSessionEngineOptions(parsed);
+    const sessionOptions = {
+      ...harnessSessionEngineOptions(parsed),
+      ...(deps.browserHost !== undefined
+        ? { browserHost: deps.browserHost }
+        : {}),
+    };
     const skillsShSearchClientFactory = parsed.skillsSh !== undefined &&
         deps.fetchFn !== undefined
       ? createHarnessSkillsShSearchClientFactory(

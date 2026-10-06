@@ -192,6 +192,7 @@ export const startLocalJobs = async (
       token,
       kick: () => lane!.kick(),
       cancel: (id) => lane!.cancel(id),
+      browserHost: (id) => lane!.browserHost(id),
       fabricLane: () => fabricLane,
       stopping: stopping.signal,
     });
