@@ -161,13 +161,11 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
     return new ReadableStream<Uint8Array>({
       start: (controller) => {
         mine = controller;
+        // A stream whose reader went away has already dropped itself
+        // (`cancel`), so the one held is live and closes cleanly.
         const previous = this.#stream;
         this.#stream = controller;
-        try {
-          previous?.close();
-        } catch {
-          // Its reader already went away.
-        }
+        previous?.close();
         for (const [id, { operation, settle }] of this.#outstanding) {
           controller.enqueue(
             frame(LOCAL_BROWSER_HOST_REQUEST_EVENT, { id, operation }),
@@ -238,11 +236,7 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
       settle?.({ status: "session-ended", message });
     }
     this.#send(LOCAL_BROWSER_HOST_CLOSE_EVENT, {});
-    try {
-      this.#stream?.close();
-    } catch {
-      // Its reader already went away.
-    }
+    this.#stream?.close();
     this.#stream = undefined;
   }
 
@@ -271,25 +265,16 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
     for (const [id, { operation, settle }] of this.#queued) {
       this.#queued.delete(id);
       this.#outstanding.set(id, { operation, settle });
-      if (!this.#send(LOCAL_BROWSER_HOST_REQUEST_EVENT, { id, operation })) {
-        return;
-      }
+      this.#send(LOCAL_BROWSER_HOST_REQUEST_EVENT, { id, operation });
     }
   }
 
   /**
-   * Writes one event to the attached stream, if any. Answers whether it was
-   * written; a stream whose reader went away is dropped, and what it missed
-   * is replayed on the next attach.
+   * Writes one event to the attached stream, if any. A stream whose reader
+   * went away has dropped itself (`cancel`), and what it missed is replayed
+   * on the next attach.
    */
-  #send(event: string, data: unknown): boolean {
-    if (this.#stream === undefined) return false;
-    try {
-      this.#stream.enqueue(frame(event, data));
-      return true;
-    } catch {
-      this.#stream = undefined;
-      return false;
-    }
+  #send(event: string, data: unknown): void {
+    this.#stream?.enqueue(frame(event, data));
   }
 }

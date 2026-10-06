@@ -292,15 +292,12 @@ const browserStream = (
       }
       signal.addEventListener("abort", end, { once: true });
       options.stopping?.addEventListener("abort", end, { once: true });
+      // The host ends its stream when it replaces or closes it.
       (async () => {
-        try {
-          for (;;) {
-            const { done, value } = await source.read();
-            if (done || ended) break;
-            controller.enqueue(value);
-          }
-        } catch {
-          // The host replaced or closed this stream.
+        for (;;) {
+          const { done, value } = await source.read();
+          if (done || ended) break;
+          controller.enqueue(value);
         }
         end();
       })();

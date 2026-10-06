@@ -604,6 +604,22 @@ describe("local-jobs/api", () => {
       });
       expect(streamed.status).toBe(413);
 
+      const empty = await call(`/jobs/${id}/browser/result`, {
+        method: "POST",
+      });
+      expect(empty.status).toBe(400);
+      expect((await empty.json()).code).toBe("invalid_request");
+      const broken = await call(`/jobs/${id}/browser/result`, {
+        method: "POST",
+        body: new ReadableStream({
+          start(controller) {
+            controller.error(new Error("the connection dropped"));
+          },
+        }),
+      });
+      expect(broken.status).toBe(400);
+      expect((await broken.json()).error).toBe("The body could not be read.");
+
       const invalid = await post(`/jobs/${id}/browser/result`, {
         id: "1",
         result: { status: "fine" },
