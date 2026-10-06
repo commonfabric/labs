@@ -24,7 +24,7 @@ import type { Cell, NAME } from "commonfabric";
 import type { inboxPieceLinkSchema } from "@commonfabric/piece/ops";
 import type { Schema } from "@commonfabric/runner";
 import type {
-  advertisesInbox,
+  advertisedInbox,
   EnsurePrivateInboxEvent,
   PointTarget,
   PrivateInboxOutput,
@@ -47,9 +47,9 @@ type ReachesOnlyTheName<Pointee> = unknown extends Pointee ? false
   ] extends [never] ? true
   : false;
 
-/** A profile as the ensure step reads it, deciding whether to create. */
+/** A profile as the ensure step reads it, finding the advertised inbox. */
 type EnsureStepProfile = NonNullable<
-  NonNullable<Parameters<typeof advertisesInbox>[0]>[number]
+  NonNullable<Parameters<typeof advertisedInbox>[0]>[number]
 >;
 
 const ensureStepReachesOnlyTheName: ReachesOnlyTheName<

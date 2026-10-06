@@ -463,9 +463,10 @@ export default pattern(() => {
     namedAtIndex.inbox?.piece === undefined && namedAtIndex.name === "Ada"
   );
 
-  // Ensuring Home's inbox: Home adopts the inbox the host names, keeps an
-  // inbox it holds, and holds none when profiles advertise an inbox but the
-  // host names none, as when the advertised inbox failed the host's vetting
+  // Ensuring Home's inbox: Home adopts the inbox the host names, when the first
+  // profile that points at an inbox points at it, keeps an inbox it holds, and
+  // holds none when profiles advertise an inbox but the host names none, as
+  // when the advertised inbox failed the host's vetting, or names another
   // (`packages/piece/test/ops/pieces-controller-spaces.test.ts`). A profile
   // pointing at another inbox keeps its pointer, and the seed step points a
   // new profile at the adopted inbox. Creating an inbox when no profile points
@@ -517,6 +518,15 @@ export default pattern(() => {
     // deno-lint-ignore no-explicit-any
     profiles: [unvettedUnpointed, unvettedAdvertising] as any,
   });
+  const mismatchedAdvertising = ProfileHome({
+    initialName: "Mismatched advertising",
+  });
+  const mismatched = new Writable<PrivateInboxHolder>({});
+  const ensureMismatched = EnsuringHome({
+    privateInbox: mismatched,
+    // deno-lint-ignore no-explicit-any
+    profiles: [mismatchedAdvertising] as any,
+  });
   const freshAfterAdoption = ProfileHome({ initialName: "" });
   const seederAfterAdoption = Seeder({
     // deno-lint-ignore no-explicit-any
@@ -530,6 +540,7 @@ export default pattern(() => {
     adoptedAdvertising.setInbox.send({ inbox: advertised });
     keepingAdvertising.setInbox.send({ inbox: advertised });
     unvettedAdvertising.setInbox.send({ inbox: advertised });
+    mismatchedAdvertising.setInbox.send({ inbox: advertised });
     keeping.set({ piece: home.get().piece?.resolveAsCell() });
   });
   const action_advertise_a_second_inbox = action(() => {
@@ -543,6 +554,7 @@ export default pattern(() => {
     ensureAdoptingAmongOthers.ensure.send({ adopt: vetted });
     ensureKeeping.ensure.send({ adopt: vetted });
     ensureUnvetted.ensure.send({});
+    ensureMismatched.ensure.send({ adopt: third.get().piece?.resolveAsCell() });
   });
   const assert_the_named_inbox_is_adopted = assert(() =>
     equals(adoptingOne.get().piece, elsewhere.get().piece) &&
@@ -565,6 +577,10 @@ export default pattern(() => {
       unvetted.get().piece === undefined &&
       unvettedUnpointed.inbox?.piece === undefined &&
       equals(unvettedAdvertising.inbox?.piece, elsewhere.get().piece),
+  );
+  const assert_an_inbox_no_profile_advertises_is_not_adopted = assert(() =>
+    mismatched.get().piece === undefined &&
+    equals(mismatchedAdvertising.inbox?.piece, elsewhere.get().piece)
   );
   const action_seed_after_adoption = action(() => {
     seederAfterAdoption.seed.send({ name: "Fresh", index: 0 });
@@ -616,6 +632,7 @@ export default pattern(() => {
         assertion:
           assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
       },
+      { assertion: assert_an_inbox_no_profile_advertises_is_not_adopted },
       // Ensuring again changes nothing.
       { action: action_ensure_inboxes },
       { assertion: assert_the_named_inbox_is_adopted },
@@ -625,6 +642,7 @@ export default pattern(() => {
         assertion:
           assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
       },
+      { assertion: assert_an_inbox_no_profile_advertises_is_not_adopted },
       { action: action_seed_after_adoption },
       { assertion: assert_a_new_profile_is_pointed_at_the_adopted_inbox },
     ],

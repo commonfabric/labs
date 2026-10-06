@@ -41,8 +41,11 @@ the user's Home pattern: `PiecesController.ensurePrivateInbox()` in
 which does it through `ensurePrivateInboxOf()` in
 `packages/piece/src/ops/private-inbox.ts`. When Home holds no inbox, the host
 finds the inbox the first profile in Home's `profiles` list that points at one
-points at, and vets it as a loom daemon vets an inbox before adopting it. The
-inbox is usable when:
+points at, and vets it as a loom daemon vets an inbox before adopting it. Which
+profile decides differs: Home vets the first advertising profile in its list,
+while a loom daemon adopts the pointer on its active (`@`) profile, so the two
+can adopt different inboxes only when those profiles already advertise
+different ones, after an earlier split. The inbox is usable when:
 
 - its space is neither the Home space nor the advertising profile's own space;
 - that space grants the identity `OWNER` and every principal, `"*"`, `WRITE`,
@@ -58,7 +61,10 @@ adopt when it is usable, and no inbox otherwise. A Home pattern without the
 stream is left alone. Home's handler gives Home its inbox:
 
 - When Home holds an inbox already, Home keeps it.
-- Otherwise, when the event names an inbox, Home adopts it.
+- Otherwise, when the event names an inbox, Home adopts it if the first profile
+  in the list that points at an inbox still points at that one, a comparison
+  of the two links that reads nothing in the inbox's space; if not, as when the
+  pointer moved after the host vetted it, Home is left as it is.
 - Otherwise, when no profile in the list points at an inbox, Home creates one,
   as "Where it lives" says.
 - Otherwise a profile advertises an inbox that failed vetting, and Home neither
@@ -117,7 +123,7 @@ pointed at the adopted one. Both ways go through `pointAtInboxIfUnset()` in
 `profile-home.tsx`, which reads the pointer as a typed link, as the next
 paragraphs require.
 
-The handler reads the profile list as a value, as `advertisesInbox()` in
+The handler reads the profile list as a value, as `advertisedInbox()` in
 `private-inbox.tsx` requires, so the runner holds the event until every profile
 has loaded, and an unloaded profile is never taken for one that advertises no
 inbox. Vetting reads the inbox's access list and two of its members in the

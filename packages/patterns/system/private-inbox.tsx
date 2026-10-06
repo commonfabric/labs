@@ -20,6 +20,7 @@ import {
   type CurrentPrincipal,
   currentPrincipal,
   Default,
+  equals,
   handler,
   isWellFormedDID,
   NAME,
@@ -325,17 +326,17 @@ function inboxLinkOf(inbox: unknown): unknown {
 }
 
 /**
- * Whether any profile in `profiles` points at an inbox. Call it from a handler,
- * with `profiles` bound as a value of type {@link PointTarget}, so that each
- * pointer is read as a typed link. A profile whose stored pointer is not an
- * object holding a link points at none, as the pointer type reads it.
+ * The link the first profile in `profiles` that points at an inbox holds, or
+ * `undefined` when none does. Call it from a handler, with `profiles` bound as
+ * a value of type {@link PointTarget}, so that each pointer is read as a typed
+ * link. A profile whose stored pointer is not an object holding a link points
+ * at none, as the pointer type reads it.
  */
-export function advertisesInbox(
+export function advertisedInbox(
   profiles: readonly (PointTarget | undefined)[] | undefined,
-): boolean {
-  return (profiles ?? []).some((profile) =>
-    profile?.inbox?.piece !== undefined
-  );
+): Cell<PrivateInboxPiece> | undefined {
+  return (profiles ?? []).find((profile) => profile?.inbox?.piece !== undefined)
+    ?.inbox?.piece;
 }
 
 /** What the host sends Home's `ensurePrivateInbox`. */
@@ -350,13 +351,14 @@ export type EnsurePrivateInboxEvent = {
 /**
  * Gives Home a private inbox if it holds none, then has each profile in Home's
  * list that points at no inbox point at Home's. An inbox Home holds is kept.
- * Otherwise Home adopts the inbox the event names, and creates one only when
- * no profile points at an inbox. So when profiles advertise an inbox but the
- * event names none, Home holds none: the host names an inbox only once it has
- * vetted it, and leaves one that fails vetting where it is
- * (`PiecesController.ensurePrivateInbox()` in `packages/piece`). A profile
- * pointing at another inbox keeps its pointer. Running it again creates
- * nothing and re-points nothing.
+ * Otherwise Home adopts the inbox the event names, when it is the one the
+ * first profile in the list that points at an inbox points at, and creates one
+ * only when no profile points at an inbox. So when profiles advertise an inbox
+ * but the event names none, or names another, Home holds none: the host names
+ * an inbox only once it has vetted it, and leaves one that fails vetting where
+ * it is (`PiecesController.ensurePrivateInbox()` in `packages/piece`). A
+ * profile pointing at another inbox keeps its pointer. Running it again
+ * creates nothing and re-points nothing.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
@@ -380,9 +382,13 @@ export const ensurePrivateInbox = handler<
   }
 >((event, { privateInbox, profiles, pointProfiles }) => {
   if (privateInbox.get()?.piece === undefined) {
+    const advertised = advertisedInbox(profiles);
     if (event?.adopt !== undefined) {
-      privateInbox.set({ piece: event.adopt });
-    } else if (!advertisesInbox(profiles)) {
+      // A comparison of links, which reads nothing in the inbox's space.
+      if (advertised !== undefined && equals(event.adopt, advertised)) {
+        privateInbox.set({ piece: event.adopt });
+      }
+    } else if (advertised === undefined) {
       privateInbox.set({
         piece: inboxLinkOf(
           PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
