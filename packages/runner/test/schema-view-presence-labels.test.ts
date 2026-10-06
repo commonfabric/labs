@@ -100,7 +100,7 @@ describe("schema-view presence labels", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
   };
 
   /** The confidentiality of every derived entry stored on document `id`. */
@@ -135,7 +135,7 @@ describe("schema-view presence labels", () => {
     const out = runtime.getCell(space, `${source}-out`, undefined, tx);
     out.set({ result });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return derivedConfidentiality(out.getAsNormalizedFullLink().id);
   };
 
@@ -364,7 +364,7 @@ describe("schema-view presence labels", () => {
         { source: sourceCell },
         resultCell,
       );
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       await result.pull();
       await runtime.idle();
       const outputId = () => {
@@ -391,7 +391,7 @@ describe("schema-view presence labels", () => {
     ) => {
       const tx = runtime.edit();
       runtime.getCell(space, cause, undefined, tx).set(value);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       await result.pull();
       await runtime.idle();
     };

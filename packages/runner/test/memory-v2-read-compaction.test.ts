@@ -52,7 +52,7 @@ describe("memory-v2-read-compaction", () => {
           section1: { field0: "value2" },
         },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path: [] });
@@ -88,7 +88,7 @@ describe("memory-v2-read-compaction", () => {
           section1: { field0: "value2" },
         },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       tx.readValueOrThrow(
@@ -132,7 +132,7 @@ describe("memory-v2-read-compaction", () => {
         { ...DOCUMENT_ADDRESS, space },
         { live: { nested: "value" } },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       tx.readValueOrThrow({ ...DOCUMENT_ADDRESS, space, path: ["live"] });
@@ -177,7 +177,7 @@ describe("memory-v2-read-compaction", () => {
         { ...DOCUMENT_ADDRESS, space },
         { refShape: { a: 1, b: 2 }, scalar: 5, other: 7 },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       // (1) marked + nonRecursive: an asCell reference-resolution shape read;
@@ -239,7 +239,7 @@ describe("memory-v2-read-compaction", () => {
         { ...DOCUMENT_ADDRESS, space },
         { refShape: { a: 1, b: 2 } },
       );
-      expect((await seed.commit()).ok).toEqual({});
+      expect((await seed.commit().settled).ok).toEqual({});
 
       const tx = runtime.edit();
       // The link read: a marked, nonRecursive reference-resolution shape read.

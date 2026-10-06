@@ -84,7 +84,7 @@ describe("cold start over an owned cell that holds no value", () => {
     const tx = creator.edit();
     creator.run(tx, compiled, {}, result);
     creator.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancelCreator = result.sink(() => {});
     await quiesce(creator);
 

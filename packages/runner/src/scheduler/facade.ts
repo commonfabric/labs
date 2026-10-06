@@ -1060,7 +1060,7 @@ export class Scheduler {
   }
 
   #waitForQuiescence(awaitPendingCommits: boolean): Promise<void> {
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       const blocker = this.#quiescenceBlocker(awaitPendingCommits);
       if (blocker === undefined) {
         this.#resetConvergenceHoldPasses();
@@ -1070,7 +1070,7 @@ export class Scheduler {
       // Re-evaluate every condition from scratch once the thing we are waiting
       // on settles.
       const recheck = () =>
-        this.#waitForQuiescence(awaitPendingCommits).then(resolve);
+        this.#waitForQuiescence(awaitPendingCommits).then(resolve, reject);
       // A parked waiter (idlePromises) is released when the scheduler drains,
       // and draining settles only the conditions the execute loop owns. Two
       // things can still be outstanding at that moment: a commit in flight,
@@ -1091,7 +1091,7 @@ export class Scheduler {
       };
       switch (blocker.kind) {
         case "settle":
-          blocker.settled().then(recheck);
+          blocker.settled().then(recheck, reject);
           break;
         case "pull":
           this.queueExecution();
@@ -2154,7 +2154,7 @@ export class Scheduler {
     tx: IExtendedStorageTransaction,
     log: ReactivityLog,
     succeeded: boolean,
-    commit: ReturnType<IExtendedStorageTransaction["commit"]>,
+    commit: ReturnType<IExtendedStorageTransaction["commit"]>["settled"],
     failure?: unknown,
   ): void {
     if (!this.#viewRunning.delete(action)) return;

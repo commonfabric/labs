@@ -76,7 +76,7 @@ list.set({
 });
 const top = runtime.getCell(space, "read-release-top", undefined, seed);
 top.set({ list: list.getAsLink() });
-await seed.commit();
+await seed.commit().settled;
 
 const heldLoads: Cell<unknown>[] = [];
 if (scenario === "in-flight-load") {
@@ -107,7 +107,7 @@ async function readAndSettle(settle: "abort" | "commit"): Promise<void> {
   if (settle === "abort") {
     tx.abort("done");
   } else {
-    await tx.commit();
+    await tx.commit().settled;
   }
   if (scenario === "settled-transaction") settledTransactions.push(tx);
 }

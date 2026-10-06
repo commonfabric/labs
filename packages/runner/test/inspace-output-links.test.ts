@@ -117,7 +117,7 @@ async function createRoom(
   const root = runtime.getCell(home, "creator", undefined, tx);
   const result = runtime.run(tx, Root, { room }, root);
   runtime.prepareTxForCommit(tx);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   await runtime.idle();
   await result.pull();
   result.key("create").send({});

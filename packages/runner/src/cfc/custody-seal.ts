@@ -42,7 +42,7 @@ import {
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import { type Cell, cellRuntime, isCell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
@@ -54,10 +54,7 @@ import {
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
-import type {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "../storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { matchAtomPattern } from "./atom-pattern.ts";
 import {
@@ -69,6 +66,17 @@ import {
   evaluateExchangeRules,
   modulePolicyRecordId,
 } from "./exchange-eval.ts";
+import {
+  canonicalJson,
+  containsAtomPatternVariable,
+  evidenceHolds,
+  hasExactKeys,
+  isTrustedGestureOn,
+  type ReadEvidence,
+  readEvidence,
+  rootWrittenByBuiltin,
+  syncResolved,
+} from "./host-review.ts";
 import { cfcLabelViewForResolvedCellWithStatus } from "./label-view.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
@@ -82,7 +90,6 @@ import {
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { runtimeWritePolicyAuthorization } from "./types.ts";
-import { isRendererTrustedEvent } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Builtin implementation identity that alone may write a custody box. */
@@ -246,12 +253,6 @@ export interface CustodySealResult {
   readonly receipt: Cell<unknown>;
 }
 
-/** A read whose content the commit re-verifies. */
-interface ReadEvidence {
-  readonly address: IMemorySpaceAddress;
-  readonly digest: string;
-}
-
 /** Everything one inspection establishes. */
 interface Inspection {
   readonly actor: string;
@@ -346,14 +347,6 @@ const isSealStamp = (atom: unknown): boolean =>
   isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy &&
   isObjectNotArray(atom.identity) && atom.identity.kind === "builtin" &&
   atom.identity.builtinId === CUSTODY_SEAL_WRITER;
-
-/** Whether `value` is a record with exactly the keys named. */
-const hasExactKeys = (
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean =>
-  Object.keys(value).length === keys.length &&
-  keys.every((key) => Object.hasOwn(value, key));
 
 /**
  * Whether one confidentiality alternative stands for the actor alone. Each
@@ -711,46 +704,6 @@ const declaredPolicy = (policy: CfcModulePolicyRefAtom) => ({
 });
 
 /**
- * `value` as JSON with every object's keys sorted, so equal terms serialize to
- * equal bytes. Terms are sealed into each entry as this one string: a leaf,
- * which no write below it can alter, and which a consumer compares across
- * entries byte for byte.
- */
-const canonicalJson = (value: JSONValue): string =>
-  JSON.stringify(
-    value,
-    (_key, entry: unknown) =>
-      isObjectNotArray(entry)
-        ? Object.fromEntries(
-          utf8SortedKeysOf(entry).map((key) => [key, entry[key]]),
-        )
-        : entry,
-  );
-
-/** Records every read of an inspection transaction with its content digest. */
-const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
-  const reads = tx.getReadActivities?.();
-  if (reads === undefined) {
-    throw new Error("Custody seal requires a verifiable read journal");
-  }
-  return [...reads].map((read) => {
-    const address: IMemorySpaceAddress = {
-      space: read.space,
-      id: read.id,
-      type: read.type,
-      scope: read.scope,
-      path: [...read.path],
-    };
-    return {
-      address,
-      digest: hashStringOf(
-        tx.readOrThrow(address, { meta: internalVerifierRead }),
-      ),
-    };
-  });
-};
-
-/**
  * The one reader a custody room's rule releases its projection to: the seal
  * itself. No member's runtime holds a `Builtin` atom as a reader, so a clause
  * a rule widens with it is still read by no member. A room's projection is
@@ -812,7 +765,9 @@ export const releaseRequiresSealWitness = (
  * `THIS_POLICY.moduleIdentity` names the policy's own module, so it counts.
  */
 const namesConcreteCode = (identity: unknown): boolean => {
-  if (!isObjectNotArray(identity) || containsVariable(identity)) return false;
+  if (!isObjectNotArray(identity) || containsAtomPatternVariable(identity)) {
+    return false;
+  }
   switch (identity.kind) {
     case "verified":
       return (typeof identity.codeHash === "string" &&
@@ -828,14 +783,6 @@ const namesConcreteCode = (identity: unknown): boolean => {
       return false;
   }
 };
-
-/** Whether `pattern` holds a `{ var }` placeholder anywhere. */
-const containsVariable = (pattern: unknown): boolean =>
-  Array.isArray(pattern)
-    ? pattern.some(containsVariable)
-    : isObjectNotArray(pattern) &&
-      (Object.hasOwn(pattern, "var") ||
-        Object.values(pattern).some(containsVariable));
 
 /**
  * Whether the document at `link` is absent, or its root was written by the
@@ -853,13 +800,7 @@ const absentOrSealed = (
     }) ===
       undefined
   ) return true;
-  return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? []).some(
-    (entry) =>
-      entry.path.length === 0 && entry.origin === "derived" &&
-      (entry.label.integrity ?? []).some((atom) =>
-        deepEqual(atom, sealedFor(instance))
-      ),
-  );
+  return rootWrittenByBuiltin(tx, link, sealIdentity(instance));
 };
 
 /**
@@ -1421,7 +1362,7 @@ const resolveSeats = async (
         );
       }
       seats[index] = principals[0];
-      for (const read of readEvidence(tx)) evidence.push(read);
+      for (const read of readEvidence(tx, "Custody seal")) evidence.push(read);
     } finally {
       tx.abort();
     }
@@ -1453,21 +1394,11 @@ const allowedSourcesOf = async (
   const tx = runtime.edit();
   try {
     const sources = sourcePolicyIn(allowed, tx);
-    for (const read of readEvidence(tx)) evidence.push(read);
+    for (const read of readEvidence(tx, "Custody seal")) evidence.push(read);
     return sources;
   } finally {
     tx.abort();
   }
-};
-
-/**
- * Loads `cell` and the document it resolves to. A cell a pattern hands the
- * host is often a field of its result that links to the document holding
- * the value, as a computed output or an argument does.
- */
-const syncResolved = async (cell: Cell<unknown>): Promise<void> => {
-  await cell.sync();
-  await cell.resolveAsCell().sync();
 };
 
 /** Whether `value` has the shape of a module policy reference at all. */
@@ -1539,7 +1470,7 @@ const requestedPolicyOf = async (
     const requested = isModulePolicyShaped(value)
       ? snapshotJsonValue(value)
       : declaredPolicyOf(tx, cell.getAsNormalizedFullLink());
-    for (const read of readEvidence(tx)) evidence.push(read);
+    for (const read of readEvidence(tx, "Custody seal")) evidence.push(read);
     return requested;
   } finally {
     tx.abort();
@@ -1616,7 +1547,9 @@ const inspectRoom = async (
         debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${withheld}`,
       );
     }
-    for (const read of readEvidence(termsTx)) evidence.push(read);
+    for (const read of readEvidence(termsTx, "Custody seal")) {
+      evidence.push(read);
+    }
   } finally {
     termsTx.abort();
   }
@@ -1710,7 +1643,9 @@ const inspect = async (
       collectConsumedLabel(draftTx).confidentiality,
       actor,
     );
-    for (const read of readEvidence(draftTx)) evidence.push(read);
+    for (const read of readEvidence(draftTx, "Custody seal")) {
+      evidence.push(read);
+    }
   } finally {
     draftTx.abort();
   }
@@ -1750,7 +1685,7 @@ const inspect = async (
         meta: internalVerifierRead,
       }),
     );
-    for (const read of readEvidence(aclTx)) evidence.push(read);
+    for (const read of readEvidence(aclTx, "Custody seal")) evidence.push(read);
   } finally {
     aclTx.abort();
   }
@@ -1873,13 +1808,7 @@ export async function commitCustodySeal(
     throw new Error("Custody seal consent is unknown or already consumed");
   }
   consents.delete(consent);
-  if (
-    !isRendererTrustedEvent(event) || !isObjectNotArray(event) ||
-    !isObjectNotArray(event.provenance) || event.provenance.origin !== "dom" ||
-    event.provenance.trusted !== true ||
-    !isObjectNotArray(event.provenance.ui) ||
-    event.provenance.ui.pattern !== CUSTODY_SEAL_GESTURE
-  ) {
+  if (!isTrustedGestureOn(event, CUSTODY_SEAL_GESTURE)) {
     throw new Error("Custody seal requires a trusted host seal gesture");
   }
   signal?.throwIfAborted();
@@ -1973,7 +1902,7 @@ export async function commitCustodySeal(
     });
     receiptTx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
     signal?.throwIfAborted();
-    const result = await receiptTx.commit();
+    const result = await receiptTx.commit().settled;
     if (result.error) {
       throw new Error(`Custody seal receipt failed: ${result.error.message}`);
     }
@@ -2000,13 +1929,8 @@ export async function commitCustodySeal(
       if (tx.getCfcState().trustSnapshot?.actingPrincipal !== actor) {
         throw new Error("Custody seal actor changed after review");
       }
-      for (const read of current.evidence) {
-        const stored = tx.readOrThrow(read.address, {
-          meta: internalVerifierRead,
-        });
-        if (hashStringOf(stored) !== read.digest) {
-          throw new Error("Custody seal review changed before commit");
-        }
+      if (!evidenceHolds(tx, current.evidence)) {
+        throw new Error("Custody seal review changed before commit");
       }
       setCfcImplementationIdentity(tx, sealIdentity(instance));
       if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
@@ -2322,13 +2246,8 @@ export async function publishCustodyAnswer(
   let published: { value: JSONValue } | undefined;
   const written = await runtime.editWithRetry((tx) => {
     // The room read at inspection is the room published for.
-    for (const read of evidence) {
-      const stored = tx.readOrThrow(read.address, {
-        meta: internalVerifierRead,
-      });
-      if (hashStringOf(stored) !== read.digest) {
-        throw new Error("Custody answer's room changed while publishing");
-      }
+    if (!evidenceHolds(tx, evidence)) {
+      throw new Error("Custody answer's room changed while publishing");
     }
     setCfcImplementationIdentity(tx, sealIdentity(instance));
     const answer = answerCell(runtime, policy, instance, tx);

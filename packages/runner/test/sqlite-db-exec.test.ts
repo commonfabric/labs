@@ -107,7 +107,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     );
     marker.set({ ok: true });
     db.exec("INSERT INTO notes (body) VALUES (?)", ["hi"]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -119,7 +119,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       runtime.getCell<{ ok: boolean }>(space, "exec-marker", undefined, tx2)
         .withTx(tx2).get(),
     ).toEqual({ ok: true });
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 
   it("reads the handle via getRaw even when the cell schema shapes it to {}", async () => {
@@ -150,7 +150,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     expect(db.get()).toEqual({});
     // ...but exec still records the write from the raw handle.
     db.exec("INSERT INTO notes (body) VALUES (?)", ["hi"]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
     const provider = storageManager.open(space);
     const r = await provider.sqliteQuery!(dbRef, "SELECT body FROM notes");
@@ -194,7 +194,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     expect(value.id).toBe(dbRef.id);
     expect(value.rev).toBe(3);
     expect(value.tables).toEqual(dbRef.tables);
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   it("throws on an undefined param, allows null", async () => {
@@ -208,7 +208,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       .toThrow();
     // null is allowed (SQL NULL).
     db.exec("INSERT INTO notes (body) VALUES (?)", [null]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
     const provider = storageManager.open(space);
     const r = await provider.sqliteQuery!(
@@ -235,7 +235,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     author.set({ name: "Ada" });
     const db = sqliteDb(dbRef, tx, "db-h");
     db.exec("INSERT INTO people (author_cf_link) VALUES (?)", [author]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -254,7 +254,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
         author.getAsNormalizedFullLink(),
       ),
     ).toBe(true);
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 
   it("encodes nested cells before a JSON bind reaches storage", async () => {
@@ -277,7 +277,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       payload: { links: [author] },
     });
 
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -310,7 +310,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       { links: [author] },
     ]);
 
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -346,7 +346,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       "INSERT INTO people (author_cf_link) VALUES (?), (?)",
       [a, b],
     );
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
     const provider = storageManager.open(space);
     const r = await provider.sqliteQuery!(
@@ -385,7 +385,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
         labelMap: { version: 1, entries: [] },
       },
     });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     const db = sqliteDb(
@@ -488,7 +488,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     marker.set({ touched: true });
     // null into a NOT NULL column -> fails inside applyCommit -> abort.
     db.exec("INSERT INTO notes (body) VALUES (?)", [null]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeDefined();
 
     const tx2 = runtime.edit();
@@ -501,6 +501,6 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       )
         .withTx(tx2).get(),
     ).toBeUndefined();
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 });

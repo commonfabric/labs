@@ -124,7 +124,7 @@ export async function createAggregateFixture(
     const initializationStart = performance.now();
     const result = runtime.run(tx, compiled, { items, numbers }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     cancel = result.sink(() => {});
     await runtime.idle();
     await result.key("value").pull();
@@ -144,7 +144,7 @@ export async function createAggregateFixture(
         : size + iteration;
       const edit = runtime.edit();
       rows[0].withTx(edit).key("n").set(value);
-      await edit.commit();
+      await edit.commit().settled;
       await runtime.idle();
       const actual = await result.key("value").pull();
       const expected = operation === "count"

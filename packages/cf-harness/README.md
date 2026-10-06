@@ -134,6 +134,8 @@ What works today:
 - read-only Loom retrieval through a separately configured host transport, with
   every row measured against the run's observation ceiling; see
   [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
+- the commands a host admits, listed and run through the host's own scoped
+  broker; see [Host commands](docs/LOOM_COMMANDS.md);
 - built-in tools:
   - `bash`
   - `browser` (structured browser control for the browser subagent profile only,
@@ -153,9 +155,13 @@ What works today:
     reason the task cannot proceed; ends the turn through ordinary policy and
     artifacts)
   - `weaver_action` (parent-only, present only when the host opts the session
-    in: asks the person's client to run up to eight client actions mid-turn and
-    waits for the person to settle each; never a default tool, never offered to
-    a subagent)
+    in: asks the person's Weaver mid-turn to run up to eight actions — a typed
+    command invocation, a catalog request, or opening a loom or web address —
+    and waits for each to settle; a retained JSON body (at most 256 KiB) is held
+    as a `command`-labeled `document` handle when the run supplies a holder and
+    its provenance can be derived. The model gets outcome metadata and a token
+    when available; never a default tool, never offered to a subagent; see
+    [Client actions](console/README.md#client-actions))
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the
     host-owned result file)
@@ -192,6 +198,11 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
+  - `list_commands` and `run_command` (present only with
+    `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
+    the host's broker admits for this run, run as the agent; each answer
+    `run_command` returns is measured like a retrieval row, and the listing is
+    the host's command metadata, unmeasured)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -219,9 +230,15 @@ What works today:
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
-  local/private target blocking, extracted text/links, and raw bounded response
-  retention in tool-output artifacts; `web_fetch` is intentionally not part of
-  the default parent tool surface
+  extracted text/links, and raw bounded response retention in tool-output
+  artifacts; `web_fetch` is intentionally not part of the default parent tool
+  surface. It fetches only from addresses on the open internet, whether the URL
+  names the address or a host name resolves to it. It refuses local, private and
+  reserved addresses, and any address on a network one of this device's
+  interfaces is on, such as a home network's public IPv6 prefix; an IPv6
+  interface's network counts as at least the /64 that holds its address. The
+  process running it needs `--allow-sys=networkInterfaces` to read those
+  networks
 - provider-neutral bounded prompt/tool loop with OpenAI-compatible gateway and
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
@@ -1741,8 +1758,13 @@ orientation establishes a supported approach; it does not claim that the
 application has been built. Both purposes can inspect pattern source, describe
 handles, and return examples. Orientation's `leads` are host-observed metadata,
 usable as search references for delegation, and remain separate from inspected
-`patterns`. The current user goal accompanies narrower research questions and
-delegated tasks so they retain the original context.
+`patterns`. Orientation's `refinedTask` restates the request as the intersection
+of what was asked and what research verified is possible, each part bound to the
+grant or confirmed pattern that serves it, with the parts nothing serves left
+under `missing`; the parent works, and writes a delegation's goal, from it. An
+orientation that omits it is still admitted. The current user goal accompanies
+narrower research questions and delegated tasks so they retain the original
+context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
@@ -2627,6 +2649,12 @@ the file directly; both ways end at the same path. With `--allow-tool`, name
 retained in run state, so a resumed root run keeps the same result contract
 without repeating the command-line flags; a conflicting restatement is refused.
 
+The system prompt includes the complete result schema for both batch and
+operator runs, whether the result is submitted through the tool or written to
+the file. Object schemas are closed by default, including nested objects: a
+result includes only properties the schema declares unless that schema allows
+additional properties explicitly.
+
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from
 `--structured-result-schema-file`. After the run, cf-harness reads the sidecar,
@@ -2767,32 +2795,49 @@ answers, when the host's stream or the turn ends (settling it as
 `session-ended`), or when the run's abort signal fires. A browser child in such
 a run holds the `browser` tool alone, with no skill scripts and no host
 execution. Every result carries the page: the address the host committed for it,
-and the title the page wrote.
+and the title the page wrote. A page with no web origin, such as `about:blank`
+or a `data:` document, is reported, and labeled, as `null`, the web's spelling
+of an opaque origin, so nothing of its address reaches a label or a result's
+page.
 
 No operation names this device, its network, or an address written as an IP
 literal: `open`, a `urlHandle`'s value, and a `urlPattern` naming a host are
-refused here, and the host refuses such a load whatever starts it. Once the
-owner finishes a hand-off, the page may hold their sign-in, so from then on the
-session can only be read and opened on the origin they finished on: `click`,
-`check`, `press`, `fill`, `type`, and `select` change the page, `back` and
-`forward` leave it for an address nobody checked, and `reload` may send it
-again, so all of them are refused.
+refused here, and the host refuses such a load whatever starts it. Once a
+hand-off is sent, the page may hold the owner's sign-in, however the hand-off
+ends: finished, declined, refused, withheld by the run's read ceiling, or never
+answered because the run withdrew it. From then on the session can only be read
+and opened on the web origin of the last page the run saw before it first handed
+the page off: `click`, `check`, `press`, `fill`, `type`, and `select` change the
+page, `back` and `forward` leave it for an address nobody checked, and `reload`
+may send it again, so all of them are refused. The origin is checked against the
+address the host committed for each result, not only the one an `open` asked
+for, so a result the owner, the page, or a redirect took to another origin is
+withheld; a hand-off the owner ends elsewhere tells the run only how it ended
+and where. A page handed off on no web origin the run knows leaves no site to
+open.
 
 A value reaches a page in one of two ways, and the host is told which:
 
 - text the agent wrote is entered as given;
-- a string a browser child found on the web, which its parent holds as a
-  `cfh:v:` return referent and passes on without reading, goes as a
-  `handle-value`, and the host enters it and leaves it out of later snapshots,
-  since no model that saw it chose it. An address one resolves to is opened the
-  same way, and the host reports that document by its origin alone. A referent
-  labeled above the run's read ceiling is refused.
+- a string a browser child returned, which its parent holds as a `cfh:v:` return
+  referent and passes on without reading, goes as a `handle-value`, and the host
+  enters it and leaves it out of later snapshots, since no model that saw it
+  chose it. An address one resolves to is opened the same way, and the host
+  reports that document by its origin alone. A referent labeled above the run's
+  read ceiling is refused.
 
-The host path takes no value from the owner's space: nothing yet holds such a
+The host path resolves no handle to the owner's space: nothing yet holds such a
 value to the page it was meant for, so an address handle (`cfh:a:`) is refused
-there. Only a browser child of a run with a host returns referents, and only
-before the owner finishes a hand-off; after one, a page may hold their account,
-which no label describes, so its strings stay sealed.
+there. No label check applies to text an agent writes, which can carry anything
+in the agent's context, the owner's data included.
+
+Only a browser child of a run with a host returns referents, only under its
+model-context label, which includes what it inherited from its parent, so a
+child with no label returns none, and only before a hand-off is sent; after one,
+a page may hold the owner's account, which no label describes, so its strings
+stay sealed, and a reply in words reaches the parent as a fixed sentence saying
+it is sealed. Nothing checks where a referent's string came from: a child can
+return a string from its own brief as readily as one it found on a page.
 
 Nothing asks the owner whether a value may go to a page, or whether a click may
 commit them to something: a question at every step teaches a person to agree
@@ -2802,23 +2847,26 @@ or clicks.
 
 What a host shows is labeled by where the session stands. Before any hand-off it
 is a fresh browser with no sign-in, so what it shows is the public web: text and
-pixels a page wrote, which may carry instructions. Each result enters the
-model's context under the unscreened prompt-injection caveat
-(`prompt-injection-risk-unscreened`), sourced to the page's origin, under any
-enforcement mode, and a run whose read ceiling does not admit it is told the
-action ran and given none of the page. A child's return brings the child's label
-into its parent's model context, as every child's does, so the caveat reaches
-the parent with whatever crosses — a scalar, a summary, a referent. Once the
-owner finishes a hand-off, a page may show their account, which no label
-describes, so a run under `enforce-explicit` or `enforce-strict` learns only how
-the hand-off ended and on which origin, refuses every action but another
-`handoff`, and observes nothing more of the page.
+pixels a page wrote, which may carry instructions. Each successful result, a
+screenshot's included, enters the model's context under the unscreened
+prompt-injection caveat (`prompt-injection-risk-unscreened`), sourced to the
+page's origin, under any enforcement mode, and a run whose read ceiling does not
+admit it is told the action ran and given none of the page. A child's return
+brings the child's label into its parent's model context, as every child's does,
+so the caveat reaches the parent with whatever crosses — a scalar, a summary, a
+referent. A screenshot is labeled as the page's text is. Once a hand-off is
+sent, a page may show the owner's account, which no label describes, so a run
+under `enforce-explicit` or `enforce-strict` learns at most how the hand-off
+ended and on which origin, and nothing when its read ceiling withholds the page,
+refuses every action but another `handoff`, and observes nothing more of the
+page.
 
 A page can show what it was given back — in its text, its title, its address, or
-a screenshot. Wherever a host's later answer carries a value it was sent, the
-harness puts the value's handle in its place before a model reads the answer,
-and the host paints over every field a value went into before it takes a
-screenshot. What the page shows after changing a value is the page's.
+a screenshot, as given or changed. So the session keeps a label, the join of the
+labels of every value a handle sent it, and every result from then on carries it
+as well as the page's caveat. Text an agent writes is not joined into it. The
+host also paints over every field a value went into before it takes a
+screenshot.
 
 The host decides which fields only the owner may fill. Its refusals come back
 under their own codes — `stale_ref`, `owner_only_field`, `session_ended` —

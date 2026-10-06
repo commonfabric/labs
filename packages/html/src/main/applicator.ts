@@ -436,7 +436,7 @@ export class DomApplicator {
 
     // Create new listener
     const listener: EventListener = (event: Event) => {
-      const serialized = serializeEvent(event);
+      const serialized = serializeEvent(event, node);
       const message: DomEventMessage = {
         type: "dom-event",
         handlerId,

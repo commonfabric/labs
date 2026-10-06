@@ -1310,6 +1310,17 @@ integrity. Use an explicit `requiredTextIntegrity` when a component needs a
 different policy, and avoid cell-backed `$author` for purely decorative author
 names.
 
+The badge reads `loading` until the label on `$value` and the label on
+`$author` have both loaded. Meanwhile it shows a neutral marker with no warning
+icon, the words "Checking author", and the claimed author's name when the claim
+gives one.
+After that it reads `verified`, `unverified`, or `unknown`, so `unknown` says
+that the loaded labels establish no authorship, never that they have yet to
+arrive. The element's `authorshipState` property holds the same word. The
+element reads and decides the labels through `observeAuthorship()` from
+`@commonfabric/runtime-client`, which a host that draws no Lit component can
+call directly.
+
 The component itself checks its value's `authored-by` against the same
 principal, and marks the content verified when they match. Verified means
 that a run acting for that principal wrote the content, not that they asked

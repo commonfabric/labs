@@ -37,7 +37,7 @@ describe("reactivity", () => {
       const tx = runtime.edit();
       const cell = runtime.getCell<number>(space, name, undefined, tx);
       cell.withTx(tx).set(value);
-      await tx.commit();
+      await tx.commit().settled;
       return cell;
     }
 
@@ -45,7 +45,7 @@ describe("reactivity", () => {
     async function write(cell: Cell<number>, value: number): Promise<void> {
       const tx = runtime.edit();
       cell.withTx(tx).set(value);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
     }
 

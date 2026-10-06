@@ -141,7 +141,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         },
       }),
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(inSpace, id);
   };
 

@@ -91,8 +91,10 @@ export function trustedEventWriteCandidatesFromTransaction(
       ...(transactionLog.attemptedWrites ?? []),
     ]
   ) {
-    // The reactivity log records the journal's document-rooted paths.
-    addCandidate(write, canonicalizeDocumentPath(toDocumentPath(write.path)));
+    // The reactivity log records the journal's document-rooted paths. A write
+    // to one of the document's own members names no link.
+    const path = canonicalizeDocumentPath(toDocumentPath(write.path));
+    if (path !== undefined) addCandidate(write, path);
     detailSpaces.add(write.space);
   }
 
@@ -110,10 +112,8 @@ export function trustedEventWriteCandidatesFromTransaction(
 
   for (const space of detailSpaces) {
     for (const detail of getTransactionWriteDetails(tx, space)) {
-      addCandidate(
-        detail.address,
-        canonicalizeDocumentPath(detail.address.path),
-      );
+      const path = canonicalizeDocumentPath(detail.address.path);
+      if (path !== undefined) addCandidate(detail.address, path);
     }
   }
 

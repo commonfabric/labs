@@ -161,7 +161,7 @@ describe("wish-result-view-labels", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return document.withTx(undefined);
   };
 
@@ -177,7 +177,7 @@ describe("wish-result-view-labels", () => {
     const tx = runtime.edit();
     const document = runtime.getCell(space, cause, undefined, tx);
     document.set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return document.withTx(undefined);
   };
 
@@ -212,7 +212,7 @@ describe("wish-result-view-labels", () => {
           : [...kept, { path, label: { confidentiality } }],
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** Runs `piecePattern` on `argument` in the pattern space, and settles it. */
@@ -229,7 +229,7 @@ describe("wish-result-view-labels", () => {
       tx,
     );
     const piece = runtime.run(tx, piecePattern, argument, resultCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await piece.pull();
     await runtime.idle();
     return piece.withTx(undefined);
@@ -250,7 +250,7 @@ describe("wish-result-view-labels", () => {
         title: "pinned",
       })),
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(
       owner.did(),
@@ -260,7 +260,7 @@ describe("wish-result-view-labels", () => {
     );
     homeDefault.key("profiles").set([profile]);
     runtime.getHomeSpaceCell(homeTx).key("defaultPattern").set(homeDefault);
-    expect((await homeTx.commit()).error).toBeUndefined();
+    expect((await homeTx.commit().settled).error).toBeUndefined();
   };
 
   /** Pins `piece` in the owner's default profile under `tag`. */
@@ -280,7 +280,7 @@ describe("wish-result-view-labels", () => {
     defaultPattern.set({ backlinksIndex: backlinks });
     runtime.getCell(patternSpace, patternSpace, undefined, tx)
       .key("defaultPattern").set(defaultPattern);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** A piece whose view holds a render boundary over the sealed cell. */
@@ -291,7 +291,7 @@ describe("wish-result-view-labels", () => {
       title: "Sheet",
       [UI]: vnode("cf-cfc-render-boundary", [vnode("div", [sealed])]),
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return piece.withTx(undefined);
   };
 
@@ -611,7 +611,7 @@ describe("wish-result-view-labels", () => {
         tx,
       );
       const running = runtime.run(tx, finder, {}, resultCell);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
       await runtime.idle();
       const result = running.withTx(undefined);
@@ -629,11 +629,11 @@ describe("wish-result-view-labels", () => {
         id: state.id,
         path: [],
       }, undefined);
-      expect((await deleteTx.commit()).error).toBeUndefined();
+      expect((await deleteTx.commit().settled).error).toBeUndefined();
       runtime.runner.stop(running);
       const rerunTx = runtime.edit();
       const rerun = runtime.run(rerunTx, finder, {}, resultCell);
-      expect((await rerunTx.commit()).error).toBeUndefined();
+      expect((await rerunTx.commit().settled).error).toBeUndefined();
       await rerun.pull();
       await runtime.idle();
       const healed = rerun.withTx(undefined);
@@ -683,7 +683,7 @@ describe("wish-result-view-labels", () => {
           tx,
         );
         piece.set({ [NAME]: `shared${kind}`, title: kind, [UI]: held });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await mention(piece.withTx(undefined));
 
         const result = await runSharedWish(`#shared${kind}`, `${kind}-shared`);

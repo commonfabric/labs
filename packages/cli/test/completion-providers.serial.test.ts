@@ -303,6 +303,9 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf inspect html x --out ", "files", undefined],
   ["cf check --output ", "files", undefined],
   ["cf agent runner --loom-retrieval-config ", "files", "*.json"],
+  ["cf agent runner --local-job-profiles ", "files", "*.json"],
+  ["cf agent runner --local-jobs-socket ", "files", undefined],
+  ["cf agent runner --local-jobs-store ", "files", undefined],
   ["cf agent runner --work-root ", "dirs", undefined],
   ["cf space set-home ", "files", "*.tsx"],
   ["cf piece set-home ", "files", "*.tsx"],
@@ -1483,7 +1486,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     ) {
       const tx = this.edit();
       cell.withTx(tx).set(value);
-      await tx.commit();
+      await tx.commit().settled;
     }
     return true;
   });

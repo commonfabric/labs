@@ -1,0 +1,45 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-2",
+  "settlement": {
+    "status": "executed",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "outcome": {
+      "executor": "loom",
+      "transportStatus": 422,
+      "ok": false,
+      "id": "loom.move",
+      "code": "needs-input",
+      "error": "which panel?",
+      "bodyBytes": 186,
+      "body": {
+        "ok": false,
+        "id": "loom.move",
+        "code": "needs-input",
+        "error": "which panel?",
+        "missing": [
+          {
+            "name": "component",
+            "candidates": [
+              {
+                "id": "c-1",
+                "title": "Notes"
+              },
+              {
+                "id": "c-2",
+                "title": "Reading list"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "receipt": "loom.move needs input: which panel?"
+  }
+}

@@ -124,7 +124,15 @@ export class CFOwnerView extends BaseElement {
     this.#stopFollowing = labelled.subscribe((_value, cfcLabel) => {
       this.#label = cfcLabel;
       if (this.#reset) void this.#decideFrom(++this.#generation, cfcLabel);
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // An origin the worker will not show attests no owner: the
+      // presentation closes, decided from no label, without reading one.
+      onRefused: () => {
+        this.#label = undefined;
+        if (this.#reset) this.#decide(++this.#generation, undefined);
+      },
+    });
   }
 
   /**

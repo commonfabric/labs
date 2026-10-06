@@ -7780,6 +7780,58 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool 
   );
 });
 
+Deno.test("parseCfHarnessCliArgs reads the host command broker configuration from the flag or the environment", async () => {
+  const commands = {
+    cliPath: "/trusted/loom",
+    transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
+  };
+  const readTextFile = (path: string) => {
+    assertEquals(path, "/trusted/commands.json");
+    return Promise.resolve(JSON.stringify(commands));
+  };
+  const flagged = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--loom-commands-config",
+      "/trusted/commands.json",
+      "--allow-tool",
+      "run_command",
+    ],
+    { cwd: "/tmp/project", env: {}, readTextFile },
+  );
+  if ("help" in flagged) throw new Error("expected config result");
+  assertEquals(flagged.loomCommands, commands);
+  const fromEnvironment = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: { CF_HARNESS_LOOM_COMMANDS_CONFIG: "/trusted/commands.json" },
+      readTextFile,
+    },
+  );
+  if ("help" in fromEnvironment) throw new Error("expected config result");
+  assertEquals(fromEnvironment.loomCommands, commands);
+  const absent = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.loomCommands, undefined);
+});
+
+Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the broker configuration", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "list_commands"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool list_commands requires a host command broker configuration",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both backings", async () => {
   await assertRejects(
     () =>

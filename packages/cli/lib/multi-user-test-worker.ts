@@ -71,6 +71,7 @@ import {
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
+import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 export interface WorkerRequest {
@@ -506,7 +507,7 @@ const handlers: Record<
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       rt().prepareTxForCommit?.(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await rt().idle();
     }
 
@@ -525,7 +526,7 @@ const handlers: Record<
       await setupCell.sync();
       rt().run(tx, descriptor.setup, {}, setupCell);
       rt().prepareTxForCommit?.(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await settle();
     }
 
@@ -543,7 +544,7 @@ const handlers: Record<
       resultCell,
     );
     rt().prepareTxForCommit?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
     if (args.continuousUI === true) {
       continuousUiCancel = await mountTestVDOM(
         resultCell.key("$UI") as Cell<unknown>,
@@ -642,14 +643,7 @@ const handlers: Record<
     const tx = rt().edit();
     markersCellFor(selfParticipant!).withTx(tx).key(marker as string).set(true);
     rt().prepareTxForCommit?.(tx);
-    // A dropped marker is a wait that never ends, so the commit's verdict is
-    // read rather than assumed.
-    const result = await tx.commit();
-    if (result.error) {
-      throw new Error(
-        `Announcing marker "${marker}" failed: ${result.error.message}`,
-      );
-    }
+    await waitForMarkerCommit(marker as string, tx.commit());
     await settle();
     return {};
   },

@@ -100,6 +100,7 @@ import {
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
+  hostGestureProvenance,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
@@ -167,6 +168,8 @@ import {
 import {
   type ActionRunTraceResponse,
   BooleanResponse,
+  type CellFieldsRequest,
+  type CellFieldsResponse,
   type CellGetCfcLabelRequest,
   type CellGetRequest,
   type CellGetResponse,
@@ -437,17 +440,6 @@ function sqliteParamForRuntime(
     );
   }
   return value;
-}
-
-/**
- * Whether `cell` holds no value: nothing at all, or an empty plain object. A
- * pull can find a scoped target in either state while the write that creates
- * its value is still committing, which the commit-aware barrier waits for.
- */
-function holdsNoValue(cell: Cell<unknown>): boolean {
-  const raw = cell.getRaw({ lastNode: "value" });
-  return raw === undefined ||
-    (isPlainObject(raw) && Object.keys(raw).length === 0);
 }
 
 function sqliteParamsForRuntime(
@@ -1542,19 +1534,32 @@ export class RuntimeProcessor {
     request: CellPullRequest,
   ): Promise<CellGetResponse> {
     const cell = getCell(this.#runtime, request.cell);
-    await cell.pull();
-    // The durable pull crosses the commit-aware fixpoint so subsequent
-    // operations observe all work causally demanded here. Rendering can read
-    // reactive state while the host continues to report unconfirmed writes,
-    // once there is a value to read. A cell holding none may be waiting on the
-    // very write that creates it, so that pull crosses the barrier too.
-    if (request.awaitDurability !== false || holdsNoValue(cell)) {
-      await this.#runtime.scheduler.idleWithPendingCommits();
-    }
+    await cell.pull({ awaitDurability: request.awaitDurability });
     return this.handleCellGet({
       type: RequestType.CellGet,
       cell: request.cell,
     });
+  }
+
+  /**
+   * Classifies whether recorded reads depend on pending local writes.
+   * Missing read observations retain the full initialization barrier.
+   */
+  #initializationReadState(
+    tx: IExtendedStorageTransaction,
+  ): "confirmed" | "pending" | "unknown" {
+    const reads = tx.tx.getReadActivities?.();
+    if (reads === undefined) return "unknown";
+    for (const read of reads) {
+      if (
+        this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
+          read.id,
+          read.scope,
+          tx.tx.scopeKeyIdentity,
+        )
+      ) return "pending";
+    }
+    return "confirmed";
   }
 
   /** Atomically stores a default only while the target has no backing value. */
@@ -1565,6 +1570,42 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
+    const target = getCell(this.#runtime, request.cell);
+    const readinessFailure = await target.pull().then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+    // Projection can discover reads beyond the initial pull. editWithRetry
+    // reconciles documents read as absent and re-runs this probe when those
+    // documents turn out to exist.
+    const existing = await this.#runtime.editWithRetry((tx) => {
+      const cell = target.withTx(tx);
+      try {
+        const value = (
+            cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+            cell.get() === undefined
+          )
+          ? undefined
+          : this.#hostReadGate.read(cell);
+        const state = this.#initializationReadState(tx);
+        if (readinessFailure !== undefined && state !== "pending") {
+          throw readinessFailure.error;
+        }
+        return state === "confirmed" ? value : undefined;
+      } catch (error) {
+        // Only a recorded pending write justifies retrying a failed read
+        // after repair. Other readiness and projection failures propagate.
+        if (this.#initializationReadState(tx) !== "pending") throw error;
+        return undefined;
+      }
+    });
+    if (existing.error) throw new Error(existing.error.message);
+    if (existing.ok !== undefined) return existing.ok;
+
+    // A pending commit or its retry can install a producer for an absent
+    // value. Keep demand active through the full barrier before storing a
+    // default, including after an optimistic backing value is withdrawn.
+    await target.pull({ awaitDurability: true });
     let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
@@ -1636,7 +1677,7 @@ export class RuntimeProcessor {
       popFrame(frame);
     }
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.commit();
+    const commit = tx.commit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "push");
   }
@@ -2023,13 +2064,13 @@ export class RuntimeProcessor {
     const cell = getCell(this.#runtime, request.cell);
     cell.withTx(tx).send(mapCellRefsToSigilLinks(request.event));
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.commit();
+    const commit = tx.commit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "send");
   }
 
   #observeCellCommit(
-    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>,
+    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>["settled"],
     operation: "set" | "push" | "send",
   ): void {
     void commit.then(
@@ -2051,7 +2092,7 @@ export class RuntimeProcessor {
   }
 
   async #requireCellCommit(
-    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>,
+    commit: ReturnType<ReturnType<Runtime["edit"]>["commit"]>["settled"],
   ): Promise<void> {
     const result = await commit;
     if (result.error) throw new Error(result.error.message);
@@ -2188,11 +2229,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: "ShareSnapshot" },
-      },
+      provenance: hostGestureProvenance("ShareSnapshot"),
     };
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
@@ -2268,11 +2305,7 @@ export class RuntimeProcessor {
     }
     const event = {
       type: "click",
-      provenance: {
-        origin: "dom",
-        trusted: true,
-        ui: { pattern: CUSTODY_SEAL_GESTURE },
-      },
+      provenance: hostGestureProvenance(CUSTODY_SEAL_GESTURE),
     };
     markRendererTrustedEvent(event);
     // A client that detaches at any point before the entry's transaction is
@@ -2325,6 +2358,27 @@ export class RuntimeProcessor {
       policy: this.#hostSelectedCell(request.policy),
     });
     return answer === undefined ? {} : { answer };
+  }
+
+  /**
+   * The fields a record holds, each as a link to its own cell, as the
+   * host-read gate decides them. Synced first, so that the labels the list
+   * is decided on are the record's.
+   *
+   * @throws When the record's space refused the worker access: a load it
+   *   refused resolves as one that found nothing, and a record the worker
+   *   could not read is not one that holds no record.
+   */
+  async handleCellFields(
+    request: CellFieldsRequest,
+  ): Promise<CellFieldsResponse> {
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.sync();
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(request.cell.space) ??
+      storage.authorizationError?.(request.cell.space);
+    if (denied !== undefined) throw denied;
+    return this.#hostReadGate.fields(cell);
   }
 
   handleCellGetCfcLabel(
@@ -2426,7 +2480,11 @@ export class RuntimeProcessor {
 
   async #pullSqliteDbRef(cell: Cell<unknown>): Promise<SqliteDbRef> {
     await cell.pull();
-    if (holdsNoValue(cell)) {
+    const raw = cell.getRaw({ lastNode: "value" });
+    if (
+      raw === undefined ||
+      (isPlainObject(raw) && Object.keys(raw).length === 0)
+    ) {
       // A resolved scoped target can be demanded while its lazy factory write
       // is still committing. Its object schema presents that missing value as
       // an empty object rather than `undefined`. Pull waits for reactive work,
@@ -3472,6 +3530,8 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.CellFields:
+        return await this.handleCellFields(request);
       case RequestType.SnapshotSharePrepare:
         return await this.handleSnapshotSharePrepare(request, client);
       case RequestType.SnapshotShareCommit:

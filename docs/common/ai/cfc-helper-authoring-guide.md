@@ -59,6 +59,15 @@ and an explicit replacement of those clauses remains subject to the ordinary
 monotonic schema-merge checks. This binding concerns confidentiality; it does
 not grant write authority or mint a principal attestation.
 
+A document a transaction creates beneath an existing private store binds to that
+store's readers instead of to its creator. An item a visitor appends to an
+owner-private list becomes a document of its own, and a `CurrentPrincipal`
+declaration on the items binds it to the list's owner, so the owner can read
+it and the visitor's append fits the list it read. Where the parent's policy
+names no user at that position, the new document binds to its creator.
+[The principal a handler acts for](../../features/current-principal.md) states
+the rule in full.
+
 A placeholder already present in a stored schema or confidentiality label is
 not an authenticated creator identity. Commit preparation and schema-update
 preflight refuse that unresolved stored policy. Writing the store or passing a
@@ -80,7 +89,9 @@ state instance; a confidentiality declaration restricts who can read that
 instance under a bounded runtime read ceiling. Space ACLs do not enforce these
 per-cell labels on raw server reads. `PerSpace` selects one shared instance. For a creator-private shared
 inbox, initialize that instance under its intended owner's authenticated
-transaction before accepting visitor writes. Binding uses the principal creating
+transaction before accepting visitor writes, and label the items as well as the
+list: each object item a visitor appends is a document of its own, which only a
+label on the items reaches. Binding uses the principal creating
 the store, not a profile displayed by the pattern or the first person intended
 to read it.
 
@@ -330,7 +341,13 @@ The dataset attributes and type metadata must agree:
 - `data-ui-event-integrity` should include the event-integrity labels required
   by the output contract.
 - `data-ui-action` should equal the action string in the `TrustedActionWrite`
-  type.
+  type, and sit on the element that carries the handler, as `cf-button` does
+  above. A click's UI provenance is read from the element the handler is bound
+  to and its ancestors only, so a handler on an element above the control does
+  not get the control's `data-ui-action`, and a handler bound outside the
+  surface gets no UI provenance at all. A click vouches only for handlers on or
+  inside the innermost surface it lands in, so a handler above that surface
+  gets no UI provenance even on an element carrying the same markers.
 
 Use generic names and neutral copy. A trusted surface may say what operation it
 performs, such as "publish" or "confirm recipient", but it should not mention a

@@ -47,7 +47,7 @@ describe("generateText", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -131,7 +131,7 @@ describe("generateText", () => {
 
       expect(sendRequestCalls).toEqual([]);
 
-      const commitPromise = tx.commit();
+      const commitPromise = tx.commit().settled;
       expect(sendRequestCalls).toEqual([]);
 
       await commitPromise;
@@ -320,7 +320,7 @@ describe("generateText with queue", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
