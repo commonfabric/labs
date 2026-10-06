@@ -129,11 +129,14 @@ present; no stage handles a missing one.
      idempotency guards. It uses a plain presence check with **no**
      `getOriginalNode` fallback (it tags synthetic nodes whose original is the
      pre-injection user call).
-   - `patternResultAnchor` — for a `toSchema` call SchemaInjection created to
+   - `patternResult` — for a `toSchema` call SchemaInjection created to
      describe a pattern's **result**, the authored node a diagnostic about that
-     schema points at. It is what tells SchemaGeneration which of a file's
-     `toSchema` calls is a result rather than an argument, a handler's event or
-     a nested claim; §6.12 is the rule that reads it. Like `schemaInjected` it
+     schema points at, and which of the result's positions an author
+     declared, all of them for a result type written as
+     `pattern<Input, Output>()`. It is what tells SchemaGeneration
+     which of a file's `toSchema` calls is a result rather than an argument, a
+     handler's event or a nested claim; §6.6 and §6.12 are the rules that read
+     it. Like `schemaInjected` it
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
@@ -812,14 +815,16 @@ structurally representable.
   expressions
 - direct top-level `any` / `unknown` result inference emits
   `pattern:any-result-schema`
-- individual inferred-result **fields** whose type is `unknown`, at any depth of
-  object types, array elements, tuple elements, `readonly` types, and the
-  members of a union, emit **Error** `pattern-result:unknown-type`, naming the
-  offending paths (`a.b`, `items[]`, `pair[0]`, and `pair[1...]` for a tuple's
-  rest element; a union member's path is the union's) — the schema would
-  carry `{ type: "unknown" }` there, which a consumer does not materialize: it
-  reads the field back as an opaque reference carrying no properties
-  (`reportUnknownPatternResult()` in `schema-injection.ts`). Under
+- positions of an inferred result whose schema is `{ type: "unknown" }`, at
+  any depth, and which no author declared, emit **Error**
+  `pattern-result:unknown-type`, naming the offending paths (`a.b` for a
+  property, `items[]` for an array's items and a tuple's slots, which the
+  schema holds as an array, and `a.*` for an index signature's values; an arm
+  of a union or an intersection reports under the path of its position) — a
+  consumer does not materialize such a position: it reads it back as an opaque
+  reference carrying no properties, which only a field declared `unknown`
+  means (`reportUnknownResultFields()` in `unknown-result-fields.ts`, called
+  from `schema-generator.ts`). Under
   `TransformationOptions.storedSource` it reports as a **Warning**: a reload of
   stored source reconstructs what was admitted when it was deployed, which may
   hold a shape this check covers only since
@@ -833,30 +838,50 @@ holding `[]` anywhere is printed whole. A result type the checker prints no node
 for, such as the instance type of an anonymous class expression, and that no
 recovery reads, stands as an `unknown` placeholder recorded as printed from it,
 as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
-as that type (§12). Both checks above read such a placeholder by its type:
-whether the type is `any` or `unknown`, and which of its fields are `unknown`.
-The field walk descends each object type with no name, each instance of a class
-expression with no name, each array element, each tuple element, and each
-member of a union, as the node walk descends a printed type literal, array,
-tuple, union, and `readonly` operand. It skips a member schema generation leaves
-out of an object's schema, a symbol-keyed member or a cell's internal marker
-(`isInternalMemberName()` in the schema generator), since no consumer receives
-it as a field. It stops at a type it is already inside, since a type with no
-name can hold itself through `typeof`, and walks a type reached again by
-another path under that path.
+as that type (§12). The `pattern:any-result-schema` check reads such a
+placeholder by its type: whether the type is `any` or `unknown`.
 
-Neither walk descends a named type: an alias, whether it names an object, an
-array, a tuple, or a union; an interface; a class; or an instance of a named
-class. A named type is a declaration, and `unknown` in a declaration is the form
-for a reference to another piece
-([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)). So an
-`unknown` reached only through a name is the declaration's, and the check
-leaves it alone. A pattern that returns another pattern's instance, whose
-declared result holds such references, passes them on without a report. The
-schema carries `{ type: "unknown" }` at those fields as it does at any
-reference. An alias of `unknown` itself is the exception: the checker keeps no
-name on `unknown`, so a field declared through `type Ref = unknown` is `unknown`
-to both walks, and is reported.
+The field check reads each of its two halves where it is known. Which
+positions are `{ type: "unknown" }` is read from the schema the result
+generated, in SchemaGeneration, so the check sees what a consumer receives,
+whichever inference path produced the schema. The walk reads through
+properties, array items, `prefixItems` slots, `additionalProperties` values,
+and the arms of `anyOf`, `oneOf` and `allOf`, built on `subschemaEdges()` from
+`@commonfabric/data-model-schema/schema-walk`. It follows every `$ref` into
+`$defs` once per path, passes by a position marked `asCell`, which holds a cell
+or stream handle, and leaves out the root.
+
+Which positions an author declared is read in SchemaInjection from the pattern
+callback's authored return expression (`collectDeclaredResultPositions()`) and
+recorded on the result's schema call (§2.2's `patternResult`). A result type
+written as `pattern<Input, Output>()` declares every position. A field declared
+`unknown` holds a reference to another piece
+([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)); `unknown`
+as the type of a whole value, written or inferred, says only that the type is
+not known, and declares nothing. So these are declared:
+
+- a value read from the pattern's input, each binding of which is one of its
+  fields, through an alias of `unknown` as much as any other type
+- a field of a type written out: in a local's or a parameter's annotation, a
+  cast other than `as const`, a call's type argument, a callback's return
+  type, or the return type of a signature that names no type parameter
+- a member read through its own declaration, when that declaration writes its
+  type without naming a type parameter
+- another pattern's result, which passed this check in its own compile; a
+  cell; a class instance; a literal, a function, or JSX
+
+The trace follows a local's initializer, both arms of a conditional and of
+`??`, `||` and `&&`, the elements of an array literal, the properties and
+spreads of an object literal, and the callback of `computed()`, a lift, and an
+array's `map()`, `filter()`, `slice()`, `toSorted()` and `toReversed()`, each
+callback's parameter bound to the value it is called with. A position is
+declared where every return of the callback declares it. Nothing else is: an
+untyped `wish()`, `generateObject()` or `generateText()`, whose type argument
+is inferred; another generic call with no type argument written; a helper
+whose written return type is `unknown`; `x as unknown` and a tuple of
+`unknown`. A pattern that returns another pattern's instance passes the
+references its declared result holds without a report, and an untyped `wish()`
+returned whole is reported.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1180,8 +1205,8 @@ report these through the same collector (deduplicated via §2.2's
 - **Error** `pattern-context:inline-reactive-root-access`
   (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
   reactive-root read at a position that stage cannot lower
-- **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
-  `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
+- **Error** `pattern-result:unknown-type` (`unknown-result-fields.ts`, called
+  from `schema-generator.ts`) — see §6.6; demoted to a **Warning** under
   `TransformationOptions.storedSource`
 - **Error** `pattern-result:opaque-reserved-key`
   (`reserved-result-keys.ts`, called from `schema-generator.ts`) — a pattern's
@@ -1236,7 +1261,7 @@ to fix the shape. It runs from SchemaGeneration, which is the
 one place a declared result exists as the schema it generated — whatever type
 the author named, and whichever inference path §10.2 took to reach it.
 SchemaInjection records the result schema calls and the node to point at
-(§2.2's `patternResultAnchor`).
+(§2.2's `patternResult`).
 
 The rule reaches the root of a result schema and nothing else. Two shapes stay
 legal, and a rule written without them breaks working patterns:
@@ -2596,7 +2621,10 @@ Behavior:
 6. report `pattern-result:opaque-reserved-key` when this call describes a
    pattern's result and the generated schema leaves a reserved key opaque at
    its root (§6.12)
-7. emit literal as:
+7. report `pattern-result:unknown-type` when this call describes a pattern's
+   result and the generated schema is `{ type: "unknown" }` below its root at a
+   position no author declared (§6.6)
+8. emit literal as:
    - `<schemaAst> as const satisfies __cfHelpers.JSONSchema`
 
 Special path:

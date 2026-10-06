@@ -555,7 +555,11 @@ ${body}`,
 
     it("reports `pattern-result:unknown-type` for each field and array element of a pattern's inferred result typed `unknown`", async () => {
       const { diagnostics } = await transformWithMake(
-        "export default pattern<{ u: unknown }>(({ u }) => ({ a: make(), u, us: [u] }));",
+        `function opaque(): unknown { return 1; }
+export default pattern<Record<string, never>>(() => {
+  const u = opaque();
+  return { a: make(), u, us: [u] };
+});`,
       );
 
       expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
@@ -695,14 +699,16 @@ export const f = lift((x: ReturnType<typeof makeObject>) => x.a);`,
 
   describe("a pattern result holding `unknown` in a tuple, a `readonly` type, or a union", () => {
     // Each `unknown` below lowers to `{ type: "unknown" }` somewhere in the
-    // schema, as a field typed `unknown` does, so it is reported the same
-    // way, whether the result is printed or read from a placeholder for a
-    // type with no print.
+    // schema. `u` comes from a helper written to return `unknown`, which
+    // declares no reference, so each is reported, whether the result is
+    // printed or read from a placeholder for a type with no print. The
+    // schema holds a tuple as an array whose items describe every slot, so a
+    // slot is reported as an item, `f[]`.
 
     /**
-     * The diagnostics transforming a pattern over `u: unknown` whose callback
-     * returns `result`, beside a module-level `make()` returning an anonymous
-     * class instance.
+     * The diagnostics transforming a pattern whose callback returns `result`
+     * over a `u` that a helper returns as `unknown`, beside a module-level
+     * `make()` returning an anonymous class instance.
      */
     async function diagnosticsFor(
       result: string,
@@ -712,7 +718,11 @@ export const f = lift((x: ReturnType<typeof makeObject>) => x.a);`,
         "/main.tsx": `/// <cts-enable />
 import { pattern } from "commonfabric";
 function make() { return new (class { v = 1 })(); }
-export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
+function opaque(): unknown { return 1; }
+export default pattern<Record<string, never>>(() => {
+  const u = opaque();
+  return (${result});
+});`,
       }, {
         types: COMMONFABRIC_TYPES,
         typeCheck: true,
@@ -729,20 +739,20 @@ export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
     ) {
       for (
         const [value, field] of [
-          ["[u, 1] as [unknown, number]", "f[0]"],
-          ["[1, u] as [first: number, second: unknown]", "f[1]"],
-          ["[1, u] as [number, unknown?]", "f[1]"],
-          ["[1, u] as [number, ...unknown[]]", "f[1...]"],
-          ["[u, 1] as const", "f[0]"],
-          ["[[u], 1] as const", "f[0][0]"],
+          ["[u, 1] as [unknown, number]", "f[]"],
+          ["[1, u] as [first: number, second: unknown]", "f[]"],
+          ["[1, u] as [number, unknown?]", "f[]"],
+          ["[1, u] as [number, ...unknown[]]", "f[]"],
+          ["[u, 1] as const", "f[]"],
+          ["[[u], 1] as const", "f[][]"],
           ["[u] as readonly unknown[]", "f[]"],
-          ["[1, { v: u }] as [number, { v: unknown }?]", "f[1].v"],
-          ["[1, [u]] as [number, unknown[]?]", "f[1][]"],
-          ["[1, [u]] as [number, [unknown]?]", "f[1][0]"],
-          ["{ v: u } as { v: unknown } | null", "f.v"],
+          ["[1, { v: u }] as const", "f[].v"],
+          ["[1, [u]] as [number, unknown[]?]", "f[][]"],
+          ["[1, [u]] as [number, [unknown]?]", "f[][]"],
+          ["(u === 0 ? null : { v: u })", "f.v"],
         ] as const
       ) {
-        it(`reports \`pattern-result:unknown-type\` for \`${field}\` of \`${value}\` in a result ${reading}`, async () => {
+        it(`reports \`pattern-result:unknown-type\` for \`${value}\` in a result ${reading}`, async () => {
           const diagnostics = await diagnosticsFor(
             `{ ${before}f: ${value} }`,
           );
@@ -767,7 +777,11 @@ export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
         await transformFiles({
           "/main.tsx": `/// <cts-enable />
 import { pattern } from "commonfabric";
-export default pattern<{ u: unknown }>(({ u }) => ({ f: [u, 1] as const }));`,
+function opaque(): unknown { return 1; }
+export default pattern<Record<string, never>>(() => {
+  const u = opaque();
+  return { f: [u, 1] as const };
+});`,
         }, {
           types: COMMONFABRIC_TYPES,
           typeCheck: true,

@@ -15,7 +15,7 @@
  *      table (mirroring the TS compiler's internal NodeLinks: one struct of
  *      optional derived facts per node, lazily populated) holding the
  *      transformer-internal, non-cache-invalidating per-node channels:
- *      `capabilitySummary`, `schemaInjected`, `patternResultAnchor` and
+ *      `capabilitySummary`, `schemaInjected`, `patternResult` and
  *      `printedFrom`. Reached only through the record/lookup/mark/is methods
  *      on CrossStageState.
  *   3. The marker family — node/symbol-keyed WeakSets whose context-level
@@ -169,10 +169,10 @@
  * would otherwise return stale pre-mutation verdicts after a registry write.
  *
  * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected,
- * patternResultAnchor, printedFrom) are accessed through record/lookup/mark/is
+ * patternResult, printedFrom) are accessed through record/lookup/mark/is
  * methods (recordSchemaHint/lookupSchemaHint, recordCapabilitySummary/
  * lookupCapabilitySummary, markSchemaInjected/isSchemaInjected,
- * recordPatternResultSchemaCall/lookupPatternResultSchemaAnchor,
+ * recordPatternResultSchemaCall/lookupPatternResultSchemaCall,
  * recordPrintedFrom/printedFrom) but do not invalidate caches (no analysis
  * cache depends on them). typeRegistry is still mutated via direct .set() at call
  * sites; same caveat applies. If you add a cache that depends on any of these,
@@ -225,6 +225,7 @@
 
 export { TransformationContext } from "./context.ts";
 export { CrossStageState } from "./cross-stage-state.ts";
+export type { DeclaredPositions } from "./cross-stage-state.ts";
 export type {
   BuilderSourceSiteOptions,
   CapabilityParamDefault,

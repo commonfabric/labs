@@ -26,6 +26,7 @@ import { createPropertyName } from "../utils/identifiers.ts";
 import { normalizeWriterIdentityFile } from "../utils/writer-identity-file.ts";
 import { compileCfcPolicyManifestsForSource } from "./cfc-policy-authoring.ts";
 import { reportOpaqueReservedResultKeys } from "./reserved-result-keys.ts";
+import { reportUnknownResultFields } from "./unknown-result-fields.ts";
 
 export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
   transform(context: TransformationContext): ts.SourceFile {
@@ -212,14 +213,20 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         // This is the one place a pattern's declared result exists as the
         // schema it generated, whatever type the author named and whichever
         // inference path SchemaInjection took to reach it. SchemaInjection
-        // recorded which calls describe a result, and the node to point at.
-        const patternResultAnchor = context.state
-          .lookupPatternResultSchemaAnchor(node);
-        if (patternResultAnchor) {
+        // recorded which calls describe a result, which of its positions an
+        // author declared, and the node to point at.
+        const patternResult = context.state.lookupPatternResultSchemaCall(node);
+        if (patternResult) {
           reportOpaqueReservedResultKeys(
             context,
             emittedSchema,
-            patternResultAnchor,
+            patternResult.anchor,
+          );
+          reportUnknownResultFields(
+            context,
+            emittedSchema,
+            patternResult.declared,
+            patternResult.anchor,
           );
         }
         const schemaAst = createSchemaAst(emittedSchema, context.factory);

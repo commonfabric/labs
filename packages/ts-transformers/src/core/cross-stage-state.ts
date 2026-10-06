@@ -38,17 +38,15 @@ export interface NodeTypeLinks {
 
   /**
    * For a `toSchema` call SchemaInjection created to describe a pattern's
-   * RESULT, the authored node a diagnostic about that schema points at. The
-   * schema call is synthetic and carries no source position of its own, so the
-   * anchor is what gives the reader a line to look at.
+   * RESULT, what it recorded about that result.
    *
    * SchemaGeneration is the stage that turns the call into a schema literal,
-   * and it is the only stage that can see what the declared result type
-   * generated. This channel is what tells it which of the many `toSchema` calls
-   * in a file is a pattern result rather than an argument, a handler's event,
-   * or a nested claim.
+   * and it is the only stage that can see what the result type generated. This
+   * channel is what tells it which of the many `toSchema` calls in a file is a
+   * pattern result rather than an argument, a handler's event, or a nested
+   * claim.
    */
-  patternResultAnchor?: ts.Node;
+  patternResult?: PatternResultSchemaCall;
 
   /**
    * For a type node printed from a type, that type. The node stands for the
@@ -64,6 +62,34 @@ export interface NodeTypeLinks {
    * reading a print by its type, would read as a node.
    */
   printedWithin?: ts.TypeNode;
+}
+
+/**
+ * The positions of a value that an author declared: `true` for the whole
+ * value, or, for a value assembled from parts, the declared positions of each
+ * part by its key. The elements of an array are keyed `[]`.
+ */
+export type DeclaredPositions = true | ReadonlyMap<string, DeclaredPositions>;
+
+/**
+ * What SchemaInjection records about a `toSchema` call it created to describe a
+ * pattern's result.
+ */
+export interface PatternResultSchemaCall {
+  /**
+   * The authored node a diagnostic about the schema points at. The schema call
+   * is synthetic and carries no source position of its own, so the anchor is
+   * what gives the reader a line to look at.
+   */
+  readonly anchor: ts.Node;
+
+  /**
+   * The positions of the result an author declared. A result type written as
+   * the second type argument of `pattern<Input, Output>()` declares all of
+   * them. One inferred from the pattern's callback declares the positions its
+   * return expression traces to a declaration, or none.
+   */
+  readonly declared: DeclaredPositions | undefined;
 }
 
 /**
@@ -321,18 +347,23 @@ export class CrossStageState {
   }
 
   //
-  // patternResultAnchor (nodeLinks-backed)
+  // patternResult (nodeLinks-backed)
   //
 
-  recordPatternResultSchemaCall(schemaCall: ts.Node, anchor: ts.Node): void {
-    this.#linksFor(schemaCall).patternResultAnchor = anchor;
+  recordPatternResultSchemaCall(
+    schemaCall: ts.Node,
+    result: PatternResultSchemaCall,
+  ): void {
+    this.#linksFor(schemaCall).patternResult = result;
   }
 
-  lookupPatternResultSchemaAnchor(schemaCall: ts.Node): ts.Node | undefined {
+  lookupPatternResultSchemaCall(
+    schemaCall: ts.Node,
+  ): PatternResultSchemaCall | undefined {
     // Plain identity lookup with NO getOriginalNode fallback: the marker sits
     // on the synthetic call SchemaInjection built, and that node reaches
     // SchemaGeneration as the same object.
-    return this.nodeLinks.get(schemaCall)?.patternResultAnchor;
+    return this.nodeLinks.get(schemaCall)?.patternResult;
   }
 
   //

@@ -1,4 +1,3 @@
-import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
 import ts from "typescript";
@@ -52,6 +51,7 @@ import {
 import { analyzeFunctionCapabilities } from "../policy/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 import { isPatternFactoryCalleeExpression } from "./structural-reactive-factory.ts";
+import { collectDeclaredResultPositions } from "./unknown-result-fields.ts";
 import {
   applyShrinkAndWrap,
   type CapabilitySummaryApplicationMode,
@@ -2827,15 +2827,10 @@ function reportAnyResultSchema(
 }
 
 /**
- * Reports on a pattern's inferred result schema. A top-level `any`/`unknown`
- * result is an error (the whole output is permissive). Detected nested
- * `unknown` fields report an error when authoring and a warning under
- * `TransformationOptions.storedSource`, so a stored-source reload reconstructs
- * the admitted pattern. Those fields lower to `{ type: "unknown" }`, which a
- * consumer does not materialize: it reads them back as opaque references
- * carrying no properties.
+ * Reports a pattern whose inferred result is `any` or `unknown` as a whole,
+ * which makes the whole output permissive.
  */
-function reportUnknownPatternResult(
+function reportPermissiveInferredResult(
   context: TransformationContext,
   node: ts.CallExpression,
   resultNode: ts.TypeNode | undefined,
@@ -2849,172 +2844,7 @@ function reportUnknownPatternResult(
     )
   ) {
     reportAnyResultSchema(context, node);
-    return;
   }
-  if (!resultNode) return;
-  // A placeholder for a type with no print holds none of its structure, so
-  // the type it stands for is walked in its place.
-  const placeholderFor = isTopLevelAnyOrUnknownTypeNode(resultNode)
-    ? context.state.printedFrom(resultNode)
-    : undefined;
-  const paths = placeholderFor
-    ? collectUnknownResultTypePaths(placeholderFor, context.checker)
-    : collectUnknownResultPaths(resultNode);
-  if (paths.length === 0) return;
-  const fields = paths.map((p) => `\`${p}\``).join(", ");
-  context.reportDiagnosticOnce({
-    // A reload of stored source reconstructs what was admitted when it was
-    // deployed, so a shape this check has covered only since then reports
-    // there without refusing the reload.
-    severity: context.options.storedSource ? "warning" : "error",
-    type: "pattern-result:unknown-type",
-    message:
-      `pattern() output ${paths.length > 1 ? "fields" : "field"} ${fields} ` +
-      `${
-        paths.length > 1 ? "have" : "has"
-      } inferred type \`unknown\`, so the ` +
-      `output schema carries \`{ type: "unknown" }\` there. A consumer does ` +
-      `not materialize such a field: it reads back as an opaque reference ` +
-      `carrying no properties. Add an ` +
-      `explicit Output type, e.g. pattern<Input, { /* shape */ }>(...).`,
-    node: node.expression,
-  });
-}
-
-/**
- * Collects dotted paths to `unknown`-typed leaves within a result type node,
- * descending object literals, array element types, tuple elements, a
- * `readonly` type's operand, and each member of a union, whose schema the
- * output carries as one of its alternatives. A tuple element's path is its
- * index, written `[i...]` for a rest element, whose own element is the one
- * walked; a union member's path is the union's. A top-level `unknown` is
- * handled by the error path above, so this only sees nested occurrences.
- *
- * It stops at a type reference. A named type is a declaration, and `unknown`
- * in a declaration is the form for a reference to another piece
- * (`docs/common/concepts/types-and-schemas/unknown.md`), so what a name
- * declares is not reported.
- */
-function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
-  const paths: string[] = [];
-  const walk = (typeNode: ts.TypeNode, path: string): void => {
-    const unwrapped = unwrapTypeParentheses(typeNode);
-    if (unwrapped.kind === ts.SyntaxKind.UnknownKeyword) {
-      paths.push(path || "(result)");
-      return;
-    }
-    if (
-      ts.isTypeOperatorNode(unwrapped) &&
-      unwrapped.operator === ts.SyntaxKind.ReadonlyKeyword
-    ) {
-      walk(unwrapped.type, path);
-    } else if (ts.isUnionTypeNode(unwrapped)) {
-      for (const member of unwrapped.types) walk(member, path);
-    } else if (ts.isTypeLiteralNode(unwrapped)) {
-      for (const member of unwrapped.members) {
-        if (
-          ts.isPropertySignature(member) && member.type && member.name &&
-          (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))
-        ) {
-          const name = member.name.text;
-          walk(member.type, path ? `${path}.${name}` : name);
-        }
-      }
-    } else if (ts.isArrayTypeNode(unwrapped)) {
-      walk(unwrapped.elementType, `${path}[]`);
-    } else if (ts.isTupleTypeNode(unwrapped)) {
-      unwrapped.elements.forEach((element, index) => {
-        const named = ts.isNamedTupleMember(element) ? element : undefined;
-        let elementType = named?.type ?? element;
-        const rest = !!named?.dotDotDotToken || ts.isRestTypeNode(elementType);
-        if (
-          ts.isRestTypeNode(elementType) || ts.isOptionalTypeNode(elementType)
-        ) {
-          elementType = elementType.type;
-        }
-        const spread = rest ? unwrapTypeParentheses(elementType) : undefined;
-        if (spread && ts.isArrayTypeNode(spread)) {
-          elementType = spread.elementType;
-        }
-        walk(elementType, `${path}[${index}${rest ? "..." : ""}]`);
-      });
-    }
-  };
-  walk(resultNode, "");
-  return paths;
-}
-
-/**
- * Like `collectUnknownResultPaths()`, except that it reads `type`, for a
- * result that stands as a placeholder printed from a type the checker prints
- * no node for. It descends an object type with no name, which a print writes
- * out as structure; an instance of a class expression with no name, which is
- * what leaves a type with no print; an array's element; a tuple's elements;
- * and each member of a union, along the paths the node walk gives them. It
- * stops at a named type, as the node walk stops at a reference, since what a
- * name declares is not reported.
- */
-function collectUnknownResultTypePaths(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): string[] {
-  const paths: string[] = [];
-  // The types the walk is inside. A type with no name can hold itself, as one
-  // written with `typeof` does, and reaching one of these again ends that
-  // descent; a type reached again by another path is walked under that path.
-  const enclosing = new Set<ts.Type>();
-  const walk = (current: ts.Type, path: string): void => {
-    if (current.flags & ts.TypeFlags.Unknown) {
-      paths.push(path || "(result)");
-      return;
-    }
-    // An alias names its type whatever shape it has, an array or a union as
-    // much as an object, so the walk stops at one before reading its shape.
-    if (current.aliasSymbol) return;
-    if (enclosing.has(current)) return;
-    enclosing.add(current);
-    if (current.isUnion()) {
-      for (const member of current.types) walk(member, path);
-    } else if (checker.isTupleType(current)) {
-      const tuple = current as ts.TypeReference;
-      const { elementFlags } = tuple.target as ts.TupleType;
-      checker.getTypeArguments(tuple).forEach((element, index) => {
-        const flags = elementFlags[index] ?? ts.ElementFlags.Required;
-        const rest = (flags & ts.ElementFlags.Variable) !== 0;
-        walk(element, `${path}[${index}${rest ? "..." : ""}]`);
-      });
-    } else if (checker.isArrayType(current)) {
-      const [element] = checker.getTypeArguments(current as ts.TypeReference);
-      if (element) walk(element, `${path}[]`);
-    } else if (hasNoNameToPrint(current)) {
-      for (const property of checker.getPropertiesOfType(current)) {
-        // Schema generation leaves this member out, so no consumer receives
-        // it as a field.
-        if (isInternalMemberName(property.name)) continue;
-        walk(
-          checker.getTypeOfSymbol(property),
-          path ? `${path}.${property.name}` : property.name,
-        );
-      }
-    }
-    enclosing.delete(current);
-  };
-  walk(type, "");
-  return paths;
-}
-
-/**
- * Whether `type` is an object type with no name to print it by: an anonymous
- * object type no alias names, or an instance of a class expression with no
- * name.
- */
-function hasNoNameToPrint(type: ts.Type): boolean {
-  if ((type.flags & ts.TypeFlags.Object) === 0 || type.aliasSymbol) {
-    return false;
-  }
-  return ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Anonymous) !==
-      0 ||
-    type.getSymbol()?.escapedName === ts.InternalSymbolName.Class;
 }
 
 function isMapWithPatternCallbackPatternCall(node: ts.CallExpression): boolean {
@@ -3089,8 +2919,9 @@ function handlePatternSchemaInjection(
   let inputType: ts.Type | undefined;
   let resultTypeNode: ts.TypeNode;
   let resultType: ts.Type | undefined;
+  const resultTypeWritten = !!typeArgs && typeArgs.length >= 2;
 
-  if (typeArgs && typeArgs.length >= 2) {
+  if (resultTypeWritten) {
     // Case 1: Two or more type arguments → both schemas from type args
     inputTypeNode = typeArgs[0]!;
     resultTypeNode = typeArgs[1]!;
@@ -3148,7 +2979,7 @@ function handlePatternSchemaInjection(
       argumentCapabilityMode,
       context,
     );
-    reportUnknownPatternResult(
+    reportPermissiveInferredResult(
       context,
       node,
       inferred.result,
@@ -3187,7 +3018,7 @@ function handlePatternSchemaInjection(
         argumentCapabilityMode,
         context,
       );
-      reportUnknownPatternResult(
+      reportPermissiveInferredResult(
         context,
         node,
         inferred.result,
@@ -3203,10 +3034,10 @@ function handlePatternSchemaInjection(
 
       // Use existing schema directly as input, create result schema from type
       const toSchemaResult = createToSchemaCall(context, resultTypeNode);
-      context.state.recordPatternResultSchemaCall(
-        toSchemaResult,
-        node.expression,
-      );
+      context.state.recordPatternResultSchemaCall(toSchemaResult, {
+        anchor: node.expression,
+        declared: collectDeclaredResultPositions(builderFunction, checker),
+      });
       preserveUiContractHint(
         resultTypeNode,
         toSchemaResult,
@@ -3248,7 +3079,7 @@ function handlePatternSchemaInjection(
         argumentCapabilityMode,
         context,
       );
-      reportUnknownPatternResult(
+      reportPermissiveInferredResult(
         context,
         node,
         inferred.result,
@@ -3308,10 +3139,12 @@ function handlePatternSchemaInjection(
     checker,
     typeRegistry,
   );
-  context.state.recordPatternResultSchemaCall(
-    resultSchemaCall,
-    node.expression,
-  );
+  context.state.recordPatternResultSchemaCall(resultSchemaCall, {
+    anchor: node.expression,
+    declared: resultTypeWritten
+      ? true
+      : collectDeclaredResultPositions(builderFunction, checker),
+  });
   if (
     unwrappedPatternReturnExpr &&
     ts.isObjectLiteralExpression(unwrappedPatternReturnExpr)
