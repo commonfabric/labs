@@ -113,7 +113,7 @@ const writeThroughCountedSchema: ItemsWrite = async (runtime, id, items) => {
     schema: COUNTED_ITEMS_SCHEMA.schema,
   });
   tx.prepareCfc();
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
 };
 
 /**
@@ -148,7 +148,7 @@ async (runtime, id, items) => {
       },
     },
   });
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
 };
 
 /**
@@ -287,7 +287,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // The laundering tx: read A raw, write a derived plain value to the
       // unlabeled doc B. No schema ifc anywhere near B.
@@ -309,7 +309,7 @@ describe("CFC flow labels (default transition)", () => {
       );
       derived.set({ copied: `${raw.secret}!` });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The derived doc carries the consumed confidentiality as a derived
       // component at the written path.
@@ -349,7 +349,7 @@ describe("CFC flow labels (default transition)", () => {
       );
       gated.set({ value: "leak" });
       egress.prepareCfc();
-      const result = await egress.commit();
+      const result = await egress.commit().settled;
       expect(result.error?.message).toContain("maxConfidentiality");
     } finally {
       await runtime.dispose();
@@ -422,7 +422,7 @@ describe("CFC flow labels (default transition)", () => {
         id: targetId,
         path: [],
       }, { value: { source: "public" } });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Write side: a tainted write landing exactly at B's user field
       // `value.source` must enter the flow targets (raw path
@@ -444,7 +444,7 @@ describe("CFC flow labels (default transition)", () => {
         path: ["value", "source"],
       }, `${raw.secret}!`);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, targetId);
       const flowEntry = entries.find((e) => e.origin === "derived");
@@ -472,7 +472,7 @@ describe("CFC flow labels (default transition)", () => {
       );
       out.set({ copied });
       launder.prepareCfc();
-      expect((await launder.commit()).ok).toBeDefined();
+      expect((await launder.commit().settled).ok).toBeDefined();
 
       const outId = out.getAsNormalizedFullLink().id;
       const outEntry = replicaEntries(storageManager, outId).find((e) =>
@@ -534,7 +534,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Tainted write: doc gets a derived ["secret"] component.
       const taint = runtime.edit();
@@ -553,7 +553,7 @@ describe("CFC flow labels (default transition)", () => {
       );
       target.set({ note: raw.secret });
       taint.prepareCfc();
-      expect((await taint.commit()).ok).toBeDefined();
+      expect((await taint.commit().settled).ok).toBeDefined();
 
       const targetId = target.getAsNormalizedFullLink().id;
       expect(
@@ -579,7 +579,7 @@ describe("CFC flow labels (default transition)", () => {
         path: ["value"],
       }, { note: "fresh public text" });
       clean.prepareCfc();
-      expect((await clean.commit()).ok).toBeDefined();
+      expect((await clean.commit().settled).ok).toBeDefined();
 
       const entriesAfter = replicaEntries(storageManager, targetId);
       const derivedAfter = entriesAfter.filter((e) => e.origin === "derived");
@@ -645,7 +645,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const deriveOnce = () => {
         const tx = runtime.edit();
@@ -674,7 +674,7 @@ describe("CFC flow labels (default transition)", () => {
       // First derivation: the envelope IS written (a real derived component).
       const first = deriveOnce();
       expect(first.wroteCfc).toBe(true);
-      expect((await first.tx.commit()).ok).toBeDefined();
+      expect((await first.tx.commit().settled).ok).toBeDefined();
       expect(
         replicaEntries(storageManager, first.targetId).find((e) =>
           e.origin === "derived"
@@ -684,7 +684,7 @@ describe("CFC flow labels (default transition)", () => {
       // Identical re-derivation: the envelope write is SKIPPED (idempotent).
       const second = deriveOnce();
       expect(second.wroteCfc).toBe(false);
-      expect((await second.tx.commit()).ok).toBeDefined();
+      expect((await second.tx.commit().settled).ok).toBeDefined();
       // ...and the stored label is unchanged.
       expect(
         replicaEntries(storageManager, second.targetId).find((e) =>
@@ -773,7 +773,7 @@ describe("CFC flow labels (default transition)", () => {
         id: targetId,
         path: [],
       }, { value: { a: "a0", b: "b0" } });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // One derivation shape, run twice with fresh values: read the labeled
       // source, write two sibling leaves (two derived stamps, so the entry
@@ -804,7 +804,7 @@ describe("CFC flow labels (default transition)", () => {
 
       const first = derive("1");
       expect(first.wroteCfc).toBe(true);
-      expect((await first.tx.commit()).ok).toBeDefined();
+      expect((await first.tx.commit().settled).ok).toBeDefined();
       const stored = getDocument(targetId) as {
         cfc: {
           labelMap: {
@@ -855,7 +855,7 @@ describe("CFC flow labels (default transition)", () => {
         id: targetId,
         path: [],
       }, { ...stored, cfc: permuted } as never);
-      expect((await reseed.commit()).ok).toBeDefined();
+      expect((await reseed.commit().settled).ok).toBeDefined();
       expect((getDocument(targetId) as { cfc: unknown }).cfc).toEqual(
         permuted,
       );
@@ -866,7 +866,7 @@ describe("CFC flow labels (default transition)", () => {
       // canonically equal, so the SC-11 skip must elide it.
       const second = derive("2");
       expect(second.wroteCfc).toBe(false);
-      expect((await second.tx.commit()).ok).toBeDefined();
+      expect((await second.tx.commit().settled).ok).toBeDefined();
 
       // Storage-layer contract: the stored envelope is byte-untouched while
       // the value writes landed.
@@ -926,7 +926,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // The same laundering shape the persist tests use: read the secret,
       // write a derived plain value to an unlabeled doc.
@@ -961,7 +961,7 @@ describe("CFC flow labels (default transition)", () => {
           (w) => w.address.id === targetId && w.address.path[0] === "cfc",
         ),
       ).toBe(false);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // ...and the stored doc carries no envelope at all (no version bump
       // from label persistence — the doc has exactly its value).
@@ -1023,7 +1023,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // The transaction reads nothing — only the trigger connects it to
       // the labeled doc.
@@ -1042,7 +1042,7 @@ describe("CFC flow labels (default transition)", () => {
       );
       out.set({ flag: 1 });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const outId = out.getAsNormalizedFullLink().id;
       const entry = replicaEntries(storageManager, outId).find((e) =>
@@ -1102,7 +1102,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const setup = runtime.edit();
       const source = runtime.getCell(
@@ -1147,7 +1147,7 @@ describe("CFC flow labels (default transition)", () => {
       }, "v2");
       recordSecretWritePolicy(bump, sourceId);
       bump.prepareCfc();
-      expect((await bump.commit()).ok).toBeDefined();
+      expect((await bump.commit().settled).ok).toBeDefined();
       await runtime.idle();
       expect(runs).toBeGreaterThan(1);
 
@@ -1231,7 +1231,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await create.commit()).ok).toBeDefined();
+      expect((await create.commit().settled).ok).toBeDefined();
       await runtime.idle();
       expect(runs).toBeGreaterThan(1);
 
@@ -1379,7 +1379,7 @@ describe("CFC flow labels (default transition)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const setup = runtime.edit();
       const source = runtime.getCell(
@@ -1427,7 +1427,7 @@ describe("CFC flow labels (default transition)", () => {
       }, "v2");
       recordSecretWritePolicy(bump, sourceId);
       bump.prepareCfc();
-      expect((await bump.commit()).ok).toBeDefined();
+      expect((await bump.commit().settled).ok).toBeDefined();
       await runtime.idle();
       expect(runs).toBeGreaterThanOrEqual(3);
 

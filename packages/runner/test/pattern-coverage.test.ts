@@ -1047,7 +1047,7 @@ Deno.test("pattern coverage records a piece resumed by identity", async () => {
       tx1,
     );
     const r1 = rt1.run(tx1, cold, {}, resultCell1);
-    await tx1.commit();
+    await tx1.commit().settled;
     await r1.pull();
     await pm1.flushCompileCacheWrites();
     await rt1.storageManager.synced();
@@ -1062,7 +1062,7 @@ Deno.test("pattern coverage records a piece resumed by identity", async () => {
       undefined,
       tx2,
     );
-    await tx2.commit();
+    await tx2.commit().settled;
     await resultCell2.sync();
     const started = await rt2.start(resultCell2);
     assertEquals(started, true);
@@ -1140,7 +1140,7 @@ Deno.test("pattern coverage records a piece authored without coverage and resume
       tx1,
     );
     const r1 = rt1.run(tx1, cold, {}, resultCell1);
-    await tx1.commit();
+    await tx1.commit().settled;
     await r1.pull();
     await pm1.flushCompileCacheWrites();
     await rt1.storageManager.synced();
@@ -1156,7 +1156,7 @@ Deno.test("pattern coverage records a piece authored without coverage and resume
       undefined,
       tx2,
     );
-    await tx2.commit();
+    await tx2.commit().settled;
     await resultCell2.sync();
     assertEquals(await rt2.start(resultCell2), true);
     // Pins the path under test. `tryColdLoadByIdentity` is the one load path
@@ -1205,7 +1205,7 @@ Deno.test("pattern coverage records a piece authored without coverage and resume
       undefined,
       tx3,
     );
-    await tx3.commit();
+    await tx3.commit().settled;
     await resultCell3.sync();
     assertEquals(await rt3.start(resultCell3), true);
     assertEquals(pm3.getCompileCacheStats().byIdentityHits, 1);

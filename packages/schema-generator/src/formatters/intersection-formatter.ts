@@ -11,6 +11,7 @@ import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { cloneSchemaDefinition, getNativeTypeSchema } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
+import { isCfcCarrier } from "./common-fabric-formatter.ts";
 
 const logger = getLogger("schema-generator.intersection");
 const DOC_CONFLICT_COMMENT =
@@ -54,13 +55,16 @@ export class IntersectionFormatter implements TypeFormatter {
     //   1. RequireDefaults<T> applied to non-Default types (e.g. number[] & {})
     //   2. Default<T,V> brand constituents in a union (e.g. boolean & { [DEFAULT_MARKER]: T })
     // Brand-only parts are object types with no string-keyed properties and no
-    // index signatures — they carry only symbol-keyed brand markers.
+    // index signatures — they carry only symbol-keyed brand markers. A CFC
+    // metadata carrier holds no part of the value either: its labels are the
+    // CommonFabricFormatter's to read.
     const effectiveParts = parts.filter(
-      (p) => !this.#isBrandOnlyOrEmpty(p, checker),
+      (p) => !this.#isBrandOnlyOrEmpty(p, checker) && !isCfcCarrier(p),
     );
 
-    // If all parts were brand markers / empty, fall back to the full set
-    // (shouldn't happen in practice, but be defensive).
+    // If all parts were brand markers / empty / carriers, as nested CFC
+    // policies over `unknown` are nothing but carriers, fall back to the full
+    // set, which merges into an object.
     const partsToProcess = effectiveParts.length > 0 ? effectiveParts : parts;
 
     // If filtering reduced us to a single substantive part, delegate directly.

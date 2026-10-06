@@ -14,7 +14,7 @@ import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "./utils.ts";
 
 const ALIASES = `
-  type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+  type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
   type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
   type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
 `;

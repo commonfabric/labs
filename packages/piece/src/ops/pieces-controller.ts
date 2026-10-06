@@ -2032,9 +2032,8 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Recreates the default pattern from scratch.
-   * Stops and unlinks the existing default pattern, then creates a new one.
-   * This is useful for resetting the space's default pattern state.
+   * Creates a fresh default pattern, replacing a non-Home space's root.
+   * An existing identity Home must be updated in place to retain account data.
    *
    * @param options.customProgram - A pre-compiled program to use instead of the default URL-based pattern
    * @returns The newly created default pattern piece
@@ -2060,17 +2059,22 @@ export class PiecesController<T = unknown> {
       throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
     }
 
-    // Stop and unlink the existing default pattern first (before any operations that might fail)
-    // We need to stop it to prevent resource leaks or duplicate behavior from the old pattern
-    // Access the space cell directly to get the pattern reference without running it
     const spaceCellContents = this.getSpaceCellContents();
     await spaceCellContents.sync();
-    const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
-    if (defaultPatternRef) {
-      // Stop the existing pattern (no-op if not running)
-      this.runtime.runner.stop(defaultPatternRef);
+    const protectHome = (cell: Cell<SpaceCellContents>) => {
+      if (isHomeSpace && cell.key("defaultPattern").getRaw() !== undefined) {
+        throw new Error(
+          "Cannot replace an existing Home root. Update its source in place " +
+            "to preserve account data.",
+        );
+      }
+    };
+    protectHome(spaceCellContents);
+    if (!isHomeSpace) {
+      const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
+      if (defaultPatternRef) this.runtime.runner.stop(defaultPatternRef);
+      await this.unlinkDefaultPattern();
     }
-    await this.unlinkDefaultPattern();
 
     let patternConfig: { name: string; source: string; cause: string };
     let pattern;
@@ -2122,6 +2126,8 @@ export class PiecesController<T = unknown> {
     let pieceCell: Cell<NameSchema>;
 
     const { error } = await this.runtime.editWithRetry((tx) => {
+      // First-open initializers may have installed Home during compilation.
+      protectHome(spaceCellContents.withTx(tx));
       // Create piece cell within this transaction
       pieceCell = this.runtime.getCell<NameSchema>(
         this.getSpace(),

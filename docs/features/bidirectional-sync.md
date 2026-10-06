@@ -377,7 +377,7 @@ export async function doSyncCycle(
     // 5. Commit. A failure means a new edit was appended while this cycle was
     //    running, so go round again and catch up. The watermark keeps the
     //    filesystem from receiving the earlier edits a second time.
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (!error) {
       committed = true;
       // The redirects are durable now, so stop offering those cells.
@@ -941,7 +941,7 @@ async function fullRebuild() {
   } finally {
     popFrame(frame);
   }
-  await tx.commit();
+  await tx.commit().settled;
 }
 ```
 

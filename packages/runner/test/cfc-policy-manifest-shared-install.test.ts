@@ -21,6 +21,7 @@ import { isRetryableCommitRejection } from "../src/storage/rejection.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("shared manifest install");
 const space = signer.did();
@@ -139,7 +140,8 @@ describe("cfc-policy-manifest-shared-install", () => {
     const tx = rtB.edit();
     rtB.getCell(space, "b-brief", policyOfSchema, tx).set("b-brief secret");
     rtB.prepareTxForCommit(tx);
-    const committed = await tx.commit({ resolveAt: "verdict" });
+    const committed = await tx.commit({ holdSyncedUntilCovered: false })
+      .verdict;
 
     // The guard is the transaction's confirmed read of the absent manifest:
     // the rejection names that document, which is what the retry catches up.
@@ -232,7 +234,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       await piece.sync();
       runtime.run(tx, compiled, { brief }, piece);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return piece.withTx();
     };
 
@@ -565,7 +567,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       await piece.sync();
       rtA.run(tx, compiled, {}, piece);
       rtA.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await rtA.idle();
       await storageA.synced();
       return cfcPolicyManifestDocId(digest);
@@ -606,18 +608,25 @@ describe("cfc-policy-manifest-shared-install", () => {
       const edits = stub(rtV, "edit", (options) => {
         const tx = edit(options);
         const commit = tx.commit.bind(tx);
-        stub(tx, "commit", async (commitOptions) => {
-          if (!instantiations.has(tx)) return await commit(commitOptions);
-          const refusal = refuse(verdicts.length + 1);
-          if (refusal !== undefined) {
-            verdicts.push(refusal);
-            tx.abort(refusal.message);
-            return { error: refusal };
-          }
-          const result = await commit(commitOptions);
-          verdicts.push(result.error);
-          return result;
-        });
+        stub(
+          tx,
+          "commit",
+          (commitOptions) =>
+            createTransactionCommitReceipt((async () => {
+              if (!instantiations.has(tx)) {
+                return await commit(commitOptions).settled;
+              }
+              const refusal = refuse(verdicts.length + 1);
+              if (refusal !== undefined) {
+                verdicts.push(refusal);
+                tx.abort(refusal.message);
+                return { error: refusal };
+              }
+              const result = await commit(commitOptions).settled;
+              verdicts.push(result.error);
+              return result;
+            })()),
+        );
         return tx;
       });
       return {
@@ -873,7 +882,7 @@ describe("cfc-policy-manifest-shared-install", () => {
         type: "application/json",
         path: ["value"],
       }, collidingArtifact);
-      expect((await forge.commit()).ok).toBeDefined();
+      expect((await forge.commit().settled).ok).toBeDefined();
       const forged = await stored(installedId);
       expect(forged.value).toEqual(collidingArtifact);
 
@@ -896,7 +905,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       type: "application/json",
       path: ["value"],
     }, collidingArtifact as never);
-    expect((await forge.commit()).ok).toBeDefined();
+    expect((await forge.commit().settled).ok).toBeDefined();
 
     const committed = await writeLabeled(rtB, "b-brief");
 

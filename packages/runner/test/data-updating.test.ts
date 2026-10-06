@@ -67,7 +67,7 @@ const linkRecognitionsOfOneEntryRewrite = async (
 
   const seed = runtime.edit();
   map.withTx(seed).set(entries("before"));
-  expect((await seed.commit()).error).toBeUndefined();
+  expect((await seed.commit().settled).error).toBeUndefined();
 
   const rewritten = entries("after");
   const tx = runtime.edit();
@@ -80,7 +80,7 @@ const linkRecognitionsOfOneEntryRewrite = async (
         isObjectOrArray(value) && Object.hasOwn(value, "/")
       ).length;
   }
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
 
   return {
     recognitions,
@@ -105,7 +105,7 @@ describe("data-updating", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -2690,7 +2690,7 @@ describe("compactChangeSet", () => {
 
         expect(testCell.get()).toEqual({ profile: { name: "Ada" } });
       } finally {
-        await localTx.commit();
+        await localTx.commit().settled;
         await localRuntime.dispose();
         await localStorageManager.close();
       }
@@ -2734,7 +2734,7 @@ describe("scope-isolation write guard", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -3082,7 +3082,7 @@ describe("a write into a slot whose schema names a scoped definition", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

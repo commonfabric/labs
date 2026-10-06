@@ -89,7 +89,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
         },
       }),
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell<string>(signer.did(), id);
   };
 
@@ -121,7 +121,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     runtime.getCell(signer.did(), id, undefined, tx).setRawUntyped(
       tree as never,
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(signer.did(), id).asSchema(rendererVDOMSchema);
   };
 
@@ -344,7 +344,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
           runtime.getCell(signer.did(), id, undefined, tx).setRawUntyped({
             inner: link(held),
           } as never);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           return runtime.getCell(signer.did(), id);
         };
         const secretHolder = await holding(
@@ -758,7 +758,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
             props: { $value: link(target) },
             children: [],
           } as never);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           await t.settle();
         };
         await point(plain);

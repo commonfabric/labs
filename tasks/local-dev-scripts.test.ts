@@ -141,6 +141,29 @@ describe("local-dev-scripts", () => {
       ]);
     });
 
+    it("forwards `--allow-browser-host` to the console server when named", async () => {
+      const named = await consoleLaunchArgs({
+        CF_HARNESS_ALLOW_BROWSER_HOST_FLAG: "true",
+        DB_PATH: "/space.sqlite",
+      });
+      // A server flag, so after the one `--`, beside `--space-db`.
+      expect(named.slice(named.indexOf("--"))).toEqual([
+        "--",
+        "--allow-browser-host",
+        "--space-db",
+        "/space.sqlite",
+      ]);
+      expect(named.filter((argument) => argument === "--")).toHaveLength(1);
+
+      const unnamed = await consoleLaunchArgs({ DB_PATH: "/space.sqlite" });
+      expect(unnamed).not.toContain("--allow-browser-host");
+      expect(unnamed.slice(unnamed.indexOf("--"))).toEqual([
+        "--",
+        "--space-db",
+        "/space.sqlite",
+      ]);
+    });
+
     it("parses `--allow-skill-scripts` beside `--cf-harness`", async () => {
       // What this reaches is the argument loop: the flag is recognized rather
       // than falling into its catch-all, and the run still ends at the port

@@ -457,7 +457,7 @@ describe("stored claim shapes", () => {
             target = target.key(key as never) as typeof target;
           }
           target.set(attempt.value as never);
-          const result = await tx.commit();
+          const result = await tx.commit().settled;
 
           expect(isCfcEnforcementRejection(result.error)).toBe(true);
           expect(cell.get()).toEqual(shape.seed);

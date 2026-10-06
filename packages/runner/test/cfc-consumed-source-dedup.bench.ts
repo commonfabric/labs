@@ -74,7 +74,7 @@ for (const size of [128, 458, 916, 1832, 2668]) {
         },
       },
     });
-    const committed = await seed.commit();
+    const committed = await seed.commit().settled;
     if (committed.error) throw committed.error;
 
     /** One collector call with a fixed read set and a fresh verifier journal. */

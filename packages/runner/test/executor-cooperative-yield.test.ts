@@ -145,7 +145,7 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     );
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await settleServing(engine, clientRuntime, space);
     expect(host!.spaceServer(space)?.active).toBe(true);
     return engine;

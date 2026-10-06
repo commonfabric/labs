@@ -19,8 +19,8 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
-// commit can be withdrawn AFTER commit() resolves — runner.ts's pattern-swap
-// settlement precedent) so a withdrawn one-shot is at least named.
+// contribution can be withdrawn after `commit().settled` resolves — the
+// pattern-swap settlement precedent in runner.ts) so a withdrawn one-shot is at least named.
 import { waveSettlementOf } from "../executor/wave.ts";
 import {
   type CellScope,
@@ -950,6 +950,32 @@ function searchByHashtag(
 }
 
 /**
+ * Throws a `WishError` naming the remedies when the home pattern in
+ * `homeSpaceCell` holds nothing at `field`, which it names to the user as
+ * `what`. The system home pattern gains a field its current source adds only
+ * when the home space is next opened, since nothing updates a piece nobody
+ * opens, so a home set up before the field existed lacks it until then. A
+ * custom home pattern follows no source of the system's, and holds the field
+ * only if it says so. The wish does not open the home itself.
+ */
+function requireHomeField(
+  homeSpaceCell: Cell<unknown>,
+  field: string,
+  what: string,
+  ctx: WishContext,
+): void {
+  const held = resolvePath(homeSpaceCell, ["defaultPattern", field], ctx);
+  if (held.getRaw() === undefined) {
+    throw new WishError(
+      `The home space holds no ${what}. If its home pattern is the system ` +
+        `one, set up before it had one, open the home space once, which ` +
+        `brings it up to date. A custom home pattern needs to hold the ` +
+        `${what} itself.`,
+    );
+  }
+}
+
+/**
  * Resolve well-known targets that map to home space paths.
  */
 function resolveHomeSpaceTarget(
@@ -1053,8 +1079,10 @@ function resolveHomeSpaceTarget(
           "User identity DID not available for #chatManager",
         );
       }
+      const homeSpaceCell = getHomeSpaceCell(ctx);
+      requireHomeField(homeSpaceCell, "chatManager", "chat manager", ctx);
       return [{
-        cell: getHomeSpaceCell(ctx),
+        cell: homeSpaceCell,
         pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
@@ -2469,7 +2497,7 @@ export function wish(
       >[1],
     );
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     if (error === undefined) return;
     if (
       attempt < 2 &&
@@ -2627,7 +2655,7 @@ export function wish(
       sidecarError: message,
     });
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     // The account of the failure failed to land, so the surface stays blank
     // and this is the only place the reason exists. Writing it again would
     // meet whatever refused it the first time.
@@ -2712,7 +2740,7 @@ export function wish(
           sidecarRunOptions(surface),
         );
         runtime.prepareTxForCommit(runTx);
-        const { error } = await runTx.commit();
+        const { error } = await runTx.commit().settled;
         if (error) {
           const disposition = await sidecarRunFailureDisposition(
             error,
@@ -2730,7 +2758,8 @@ export function wish(
           );
           return;
         }
-        // Under a serving wave, commit() resolving ok is not durability:
+        // Under a serving wave, `commit().settled` resolving `ok` accepts
+        // the contribution into the wave:
         // the commit step can still withdraw the contribution (runner.ts's
         // pattern-swap settlement precedent). Nothing re-issues a withdrawn
         // sidecar instantiation, so at least SAY so — the silent one-shot
@@ -2882,7 +2911,7 @@ export function wish(
               });
               readyCell.withTx(readyTx).set(true);
               runtime.prepareTxForCommit(readyTx);
-              trackSidecarLaunch(readyTx.commit());
+              trackSidecarLaunch(readyTx.commit().settled);
             }
             return runSidecarInOwnTx(
               slot.resultCell,

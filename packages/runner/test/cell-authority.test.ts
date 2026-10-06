@@ -242,7 +242,7 @@ describe("cell-authority", () => {
       tx,
     );
     cell.set("initial");
-    await tx.commit();
+    await tx.commit().settled;
     return cell.withTx();
   };
 
@@ -280,7 +280,7 @@ describe("cell-authority", () => {
         ifc: { confidentiality: [B] },
       }, tx);
       secret.set("withheld content");
-      await tx.commit();
+      await tx.commit().settled;
       await secret.sync();
       const reader = new Runtime({
         apiUrl: new URL("http://toolshed.test"),
@@ -347,7 +347,7 @@ describe("cell-authority", () => {
           tx,
         );
         holder.set({ pub: "public", ref: secret });
-        await tx.commit();
+        await tx.commit().settled;
         // Each event names a route to the secret, and the attacker writes
         // whether what it read there was the secret. A refused run leaves the
         // note as it was, so the routes that must succeed go last.

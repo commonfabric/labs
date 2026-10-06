@@ -54,7 +54,7 @@ describe("extended-storage-transaction", () => {
   const seeded = async (cause: string) => {
     const write = runtime.edit();
     runtime.getCell(space, cause, undefined, write).set({ title: "before" });
-    await write.commit();
+    await write.commit().settled;
     const tx = runtime.edit();
     tx.markLazyMaterialize(true);
     return { tx, cell: runtime.getCell(space, cause, SCHEMA, tx) };
@@ -92,7 +92,7 @@ describe("extended-storage-transaction", () => {
       for (const value of values) {
         install.stageContentAddressedDocument(space, value);
       }
-      expect((await install.commit()).error).toBeUndefined();
+      expect((await install.commit().settled).error).toBeUndefined();
       await storageManager.synced();
 
       const tx = runtime.edit();
@@ -200,9 +200,9 @@ describe("extended-storage-transaction", () => {
         settlements.push(result.error ? result.error.name : "ok");
       });
 
-      const first = tx.commit();
+      const first = tx.commit().settled;
       expect(tx.status().status).toBe("pending");
-      const second = await tx.commit();
+      const second = await tx.commit().settled;
       expect(second.error?.name).toBe("StorageTransactionCompleteError");
 
       expect((await first).error).toBeUndefined();
@@ -217,8 +217,8 @@ describe("extended-storage-transaction", () => {
       runtime.getCell(space, "double-commit-settled", undefined, tx).set({
         title: "once",
       });
-      expect((await tx.commit()).error).toBeUndefined();
-      const second = await tx.commit();
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const second = await tx.commit().settled;
       expect(second.error?.name).toBe("StorageTransactionCompleteError");
     });
 
@@ -228,7 +228,7 @@ describe("extended-storage-transaction", () => {
         title: "once",
       });
       tx.abort("done with this one");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.name).toBe("StorageTransactionAborted");
     });
 
@@ -254,8 +254,8 @@ describe("extended-storage-transaction", () => {
         runtime.getCell(space, "labeled-double-commit", undefined, tx).set({
           title: "once",
         });
-        const first = tx.commit();
-        const second = await tx.commit();
+        const first = tx.commit().settled;
+        const second = await tx.commit().settled;
         expect(second.error?.name).toBe("StorageTransactionCompleteError");
         expect((await first).error).toBeUndefined();
       });
@@ -265,7 +265,7 @@ describe("extended-storage-transaction", () => {
         runtime.getCell(space, "labeled-commit-after-abort", undefined, tx)
           .set({ title: "once" });
         tx.abort("done with this one");
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.name).toBe("StorageTransactionAborted");
       });
     });
@@ -320,7 +320,7 @@ describe("extended-storage-transaction", () => {
           "after",
         );
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -351,7 +351,7 @@ describe("extended-storage-transaction", () => {
             'fetchText: "medical"',
         }]);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
   });
@@ -454,7 +454,7 @@ describe("extended-storage-transaction", () => {
         const [recorded] = tx.getCfcState().writePolicyInputs;
         expect(tx.isRuntimeWritePolicyInput(recorded)).toBe(true);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -465,7 +465,7 @@ describe("extended-storage-transaction", () => {
         const [recorded] = tx.getCfcState().writePolicyInputs;
         expect(tx.isRuntimeWritePolicyInput(recorded)).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -490,7 +490,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toEqual([true, false, true]);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -506,7 +506,7 @@ describe("extended-storage-transaction", () => {
         );
         expect(tx.isRuntimeWritePolicyInput(input("of:owned"))).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
   });
@@ -528,7 +528,7 @@ describe("extended-storage-transaction", () => {
         "owner-key",
         runtimeWritePolicyAuthorization,
       );
-      await first.commit();
+      await first.commit().settled;
 
       const later = runtime.edit();
       try {
@@ -540,7 +540,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
       } finally {
-        await later.commit();
+        await later.commit().settled;
       }
     });
 
@@ -561,7 +561,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -585,7 +585,7 @@ describe("extended-storage-transaction", () => {
           wrapper.isRuntimeOwnedStore(space, "of:through-a-wrapper"),
         ).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -606,7 +606,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -632,7 +632,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -645,7 +645,7 @@ describe("extended-storage-transaction", () => {
         expect(() => tx.configureRuntimeOwnedStores(new RuntimeOwnedStores()))
           .toThrow("already configured");
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
   });
@@ -697,7 +697,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -715,7 +715,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -733,7 +733,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -751,7 +751,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -774,7 +774,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -783,7 +783,7 @@ describe("extended-storage-transaction", () => {
       // transaction, and nothing carries it forward.
       const first = runtime.edit();
       mark(first, "of:marked-earlier");
-      await first.commit();
+      await first.commit().settled;
 
       const later = runtime.edit();
       try {
@@ -795,7 +795,7 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(false);
       } finally {
-        await later.commit();
+        await later.commit().settled;
       }
     });
   });
@@ -813,7 +813,7 @@ describe("extended-storage-transaction", () => {
     const wrapper = createNonReactiveTransaction(tx);
     expect(wrapper.committedSeq?.(space)).toBeUndefined();
 
-    await tx.commit();
+    await tx.commit().settled;
 
     const seq = tx.committedSeq?.(space);
     expect(seq).toBeGreaterThan(0);

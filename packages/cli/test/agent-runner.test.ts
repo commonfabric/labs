@@ -46,6 +46,7 @@ import {
   type AgentRunnerOptions,
   type ClaimedAgentRun,
 } from "../lib/agent-runner.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const CLOUD = "https://cloud.example";
 const LOCAL = "https://local.example";
@@ -109,7 +110,7 @@ describe("agent runner", () => {
     patternSide = connect(CLOUD, { agentBuiltin: true });
     const tx = patternSide.edit();
     seedHomeAgentQueue(patternSide, home, tx);
-    await tx.commit();
+    await tx.commit().settled;
     await patternSide.idle();
   });
 
@@ -154,7 +155,7 @@ describe("agent runner", () => {
     const resultCell = runtime.getCell(home, id, testPattern.resultSchema, tx);
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await waitForCellValue<{ state?: string }>(
       runtime,
       result.key("run"),
@@ -339,7 +340,7 @@ describe("agent runner", () => {
     // record.
     const tx = patternSide.edit();
     first.withTx(tx).key("pending").get();
-    await tx.commit();
+    await tx.commit().settled;
     await patternSide.idle();
     await runner.idle();
 
@@ -659,21 +660,23 @@ describe("agent runner", () => {
         ) {
           delayedRenewal = true;
           const commit = tx.commit.bind(tx);
-          tx.commit = async (...args) => {
-            renewalReady.resolve();
-            await releaseRenewal.promise;
-            const result = await commit(...args);
-            renewalCommitted.resolve();
-            return result;
-          };
+          tx.commit = (...args) =>
+            createTransactionCommitReceipt((async () => {
+              renewalReady.resolve();
+              await releaseRenewal.promise;
+              const result = await commit(...args).settled;
+              renewalCommitted.resolve();
+              return result;
+            })());
         } else if (!delayedRecovery && value === "re-queued") {
           delayedRecovery = true;
           const commit = tx.commit.bind(tx);
-          tx.commit = async (...args) => {
-            recoveryReady.resolve();
-            await renewalCommitted.promise;
-            return await commit(...args);
-          };
+          tx.commit = (...args) =>
+            createTransactionCommitReceipt((async () => {
+              recoveryReady.resolve();
+              await renewalCommitted.promise;
+              return await commit(...args).settled;
+            })());
         }
         return value;
       }, ...rest)) as typeof runnerSide.editWithRetry;
@@ -950,13 +953,14 @@ describe("agent runner", () => {
         ) {
           interceptedCompletion = true;
           const commit = tx.commit.bind(tx);
-          tx.commit = async (...args) => {
-            await patternSide.editWithRetry((competing) => {
-              recordOf(result).withTx(competing).key("cancelRequestedAt")
-                .set(clock.toISOString());
-            });
-            return await commit(...args);
-          };
+          tx.commit = (...args) =>
+            createTransactionCommitReceipt((async () => {
+              await patternSide.editWithRetry((competing) => {
+                recordOf(result).withTx(competing).key("cancelRequestedAt")
+                  .set(clock.toISOString());
+              });
+              return await commit(...args).settled;
+            })());
         }
         return value;
       }, ...rest)) as typeof runnerSide.editWithRetry;
@@ -1007,25 +1011,26 @@ describe("agent runner", () => {
           const value = fn(tx);
           if (++callbacks === interleaveAt) {
             const commit = tx.commit.bind(tx);
-            tx.commit = async (...args) => {
-              await patternSide.editWithRetry((competing) => {
-                const record = recordOf(result).withTx(competing);
-                if (conflict === "renewed") {
-                  record.key("claim").key("leaseUntil").set(
-                    "2026-09-18T13:00:00.000Z",
-                  );
-                } else if (conflict === "cancel requested") {
-                  record.key("cancelRequestedAt").set(clock.toISOString());
-                } else {
-                  record.key("state").set("cancelled");
-                  record.key("outcome").set("cancelled");
-                  record.key("errorCode").set("CANCELLED");
-                  record.key("finishedAt").set(clock.toISOString());
-                  record.key("claim").set(undefined);
-                }
-              });
-              return commit(...args);
-            };
+            tx.commit = (...args) =>
+              createTransactionCommitReceipt((async () => {
+                await patternSide.editWithRetry((competing) => {
+                  const record = recordOf(result).withTx(competing);
+                  if (conflict === "renewed") {
+                    record.key("claim").key("leaseUntil").set(
+                      "2026-09-18T13:00:00.000Z",
+                    );
+                  } else if (conflict === "cancel requested") {
+                    record.key("cancelRequestedAt").set(clock.toISOString());
+                  } else {
+                    record.key("state").set("cancelled");
+                    record.key("outcome").set("cancelled");
+                    record.key("errorCode").set("CANCELLED");
+                    record.key("finishedAt").set(clock.toISOString());
+                    record.key("claim").set(undefined);
+                  }
+                });
+                return commit(...args).settled;
+              })());
           }
           return value;
         }, ...rest)) as typeof runnerSide.editWithRetry;
@@ -1652,7 +1657,7 @@ describe("agent runner", () => {
         );
 
         expect(record.state).toBe(schema ? "completed" : "failed");
-        expect(record.errorCode).toBe(schema ? undefined : "PROVIDER_FAILURE");
+        expect(record.errorCode).toBe(schema ? undefined : "INVALID_RESULT");
       });
     }
 
@@ -1848,7 +1853,7 @@ describe("agent runner", () => {
       expect(record.runRef).toBeUndefined();
     });
 
-    it("fails as `PROVIDER_FAILURE` a run that wrote no result", async () => {
+    it("fails as `INVALID_RESULT` a run that wrote no result", async () => {
       await startHarnessRunner(() =>
         Promise.resolve(loopResult("run-no-result"))
       );
@@ -1856,7 +1861,7 @@ describe("agent runner", () => {
 
       const record = await waitForState(result, "failed");
 
-      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.errorCode).toBe("INVALID_RESULT");
       expect(record.modelTurns).toBe(3);
     });
 
@@ -1880,7 +1885,7 @@ describe("agent runner", () => {
       );
 
       const ended = await waitForState(result, "failed");
-      expect(ended.errorCode).toBe("PROVIDER_FAILURE");
+      expect(ended.errorCode).toBe("INVALID_RESULT");
       expect(ended.result).toBeUndefined();
     });
 
@@ -1971,7 +1976,7 @@ describe("agent runner", () => {
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
     });
 
-    it("fails as `PROVIDER_FAILURE` a result that does not fit the schema", async () => {
+    it("fails as `INVALID_RESULT` a result that does not fit the schema", async () => {
       await startHarnessRunner(async ({ resultPath }) => {
         await Deno.writeTextFile(resultPath, JSON.stringify({ answer: 7 }));
         return loopResult("run-bad-result");
@@ -1980,7 +1985,27 @@ describe("agent runner", () => {
 
       const record = await waitForState(result, "failed");
 
-      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.errorCode).toBe("INVALID_RESULT");
+      expect(record.modelTurns).toBe(3);
+      expect(record.result).toBeUndefined();
+    });
+
+    it("fails as `INVALID_RESULT` a malformed JSON result after a completed loop", async () => {
+      const messages: string[] = [];
+      await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(resultPath, "{broken");
+        return loopResult("run-malformed-result");
+      }, { report: (message) => messages.push(message) });
+      const result = await submit();
+
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("INVALID_RESULT");
+      expect(record.modelTurns).toBe(3);
+      expect(record.result).toBeUndefined();
+      expect(messages).toContain(
+        "structured result validation failed: structured result file was not valid JSON",
+      );
     });
 
     it("fails as `LIMIT_REACHED` a run the model-turn limit ended", async () => {

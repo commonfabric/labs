@@ -149,16 +149,13 @@ const __cfLift_2 = __cfHelpers.lift<{
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
                 }
             },
             required: ["id", "name", "type"]
-        },
-        AnonymousType_1: {
-            type: "array",
-            items: {
-                $ref: "#/$defs/Entry"
-            }
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
@@ -189,16 +186,13 @@ const __cfLift_3 = __cfHelpers.lift<{
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
                 }
             },
             required: ["id", "name", "type"]
-        },
-        AnonymousType_1: {
-            type: "array",
-            items: {
-                $ref: "#/$defs/Entry"
-            }
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, {
@@ -304,16 +298,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
                 }
             },
             required: ["id", "name", "type"]
-        },
-        AnonymousType_1: {
-            type: "array",
-            items: {
-                $ref: "#/$defs/Entry"
-            }
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, {
@@ -381,14 +372,14 @@ export default pattern((__cf_pattern_input) => {
     type: "object",
     properties: {
         entries: {
-            $ref: "#/$defs/AnonymousType_1",
+            $ref: "#/$defs/AnonymousType_2",
             "default": [],
             asCell: ["cell"]
         }
     },
     required: ["entries"],
     $defs: {
-        AnonymousType_1: {
+        AnonymousType_2: {
             type: "array",
             items: {
                 $ref: "#/$defs/Entry"
@@ -407,7 +398,7 @@ export default pattern((__cf_pattern_input) => {
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    $ref: "#/$defs/AnonymousType_2"
                 }
             },
             required: ["id", "name", "type"]

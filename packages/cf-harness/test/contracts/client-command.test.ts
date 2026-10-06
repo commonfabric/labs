@@ -6,6 +6,7 @@ import {
   effectiveHarnessCommandApproval,
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_BODY_MAX_BYTES,
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
   harnessClientProtocolEcho,
   harnessCommandActorFor,
   harnessCommandResultProvenance,
@@ -76,6 +77,7 @@ const RESOLVE_FIXTURES = [
   "resolve-executed-weaver-local",
   "resolve-executed-catalog",
   "resolve-executed-catalog-mixed-ids",
+  "resolve-executed-catalog-starts-run",
   "resolve-declined",
   "resolve-failed-to-deliver",
   "resolve-failed-to-deliver-unsent",
@@ -394,6 +396,38 @@ describe("client command contract", () => {
       >).attribution;
       expect(readHarnessCommandSettlement({ ...declined, attribution: agent }))
         .toBeUndefined();
+    });
+
+    it("reads a run-starting entry, and refuses startsRun off a service mutation or as anything but true", () => {
+      const catalog = (fixture("resolve-executed-catalog-starts-run")
+        .settlement as {
+          catalog: { entries: Record<string, unknown>[] };
+        }).catalog;
+      const [deploy, outcome] = catalog.entries;
+      expect(readHarnessCommandCatalog({ entries: [deploy] })?.entries[0])
+        .toEqual(deploy);
+      for (
+        const entry of [
+          { ...outcome, startsRun: true },
+          { ...deploy, startsRun: false },
+          { ...deploy, startsRun: "yes" },
+          { ...deploy, startsRun: null },
+          // The run is the service's: a Weaver-local command has none.
+          { ...deploy, executes: "weaver" },
+        ]
+      ) {
+        expect(readHarnessCommandCatalog({ entries: [entry] }))
+          .toBeUndefined();
+      }
+    });
+
+    it("serves starts_run, so a host may send startsRun", () => {
+      expect(HARNESS_SUPPORTED_CLIENT_FEATURES).toContain("starts_run");
+      expect(harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES))
+        .toEqual({
+          protocolVersion: 1,
+          features: ["client_actions", "typed_commands", "starts_run"],
+        });
     });
 
     it("refuses a catalog entry that runs a mutation automatically", () => {
@@ -766,8 +800,22 @@ describe("client command contract", () => {
           requires: [],
         }),
       ).toEqual({ protocolVersion: 1, requires: [] });
-      expect(checkHarnessClientProtocol({ protocolVersion: 1, requires: [] }))
-        .toEqual({ ok: true, protocol: harnessClientProtocolEcho() });
+      expect(checkHarnessClientProtocol(
+        { protocolVersion: 1, requires: [] },
+        HARNESS_SUPPORTED_CLIENT_FEATURES,
+      ))
+        .toEqual({
+          ok: true,
+          protocol: harnessClientProtocolEcho(
+            HARNESS_SUPPORTED_CLIENT_FEATURES,
+          ),
+        });
+      expect(
+        harnessClientProtocolEcho(["browser_host", "client_actions", "other"]),
+      ).toEqual({
+        protocolVersion: 1,
+        features: ["client_actions", "browser_host"],
+      });
     });
 
     it("shows a reader that knows three words each settlement's word", () => {

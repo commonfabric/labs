@@ -129,7 +129,7 @@ async function fabric() {
       db,
       sql: "INSERT INTO messages (id, body) VALUES (1, 'first'), (2, 'second')",
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
   if (reopen && previousPieceId) {
     const prior = await pieces.getPieceCell<Result>(previousPieceId, true);
@@ -150,7 +150,7 @@ async function fabric() {
       tx.recordSqliteWrite!(pieces.getSpace(), { op: "sqlite", db, sql });
       pieces.getArgument<{ tick: number }>(prior).key("tick").withTx(tx)
         .set(count);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await waitForCellValue<Result>(
         runtime,
         prior,

@@ -735,7 +735,7 @@ declare module "@commonfabric/api" {
       options?: SinkOptions,
     ): Cancel;
     sync(): Promise<Cell<T>>;
-    pull(): Promise<Readonly<T>>;
+    pull(options?: { awaitDurability?: boolean }): Promise<Readonly<T>>;
     getAsQueryResult<Path extends PropertyKey[]>(
       path?: Readonly<Path>,
       tx?: IExtendedStorageTransaction,
@@ -1777,10 +1777,16 @@ export class CellImpl<T extends FabricValue>
    * const value = await cell.pull();
    * ```
    *
-   * @returns A promise that resolves to the cell's current value after all
-   *          dependencies have been computed.
+   * The default waits for installed producers and required loads. A pending
+   * commit can still install a producer later, so an absent result can change
+   * after this pull completes.
+   *
+   * `awaitDurability: true` keeps the read demanded through the runtime-wide
+   * commit-aware barrier, including producers installed by pending commits.
+   *
+   * @returns The cell's reactive value after the selected readiness barrier.
    */
-  pull(): Promise<Readonly<T>> {
+  pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -1807,7 +1813,12 @@ export class CellImpl<T extends FabricValue>
     const needsTraversal = schema === undefined ||
       ContextualFlowControl.isTrueSchema(schema);
 
-    return new Promise((resolve) => {
+    const idle = () =>
+      options.awaitDurability === true
+        ? this.#runtime.scheduler.idleWithPendingCommits()
+        : this.#runtime.scheduler.idle();
+
+    return new Promise((resolve, reject) => {
       const action: Action = (tx) => {
         // Read the value inside the effect - this ensures dependencies are pulled
         const value = validateAndTransform(this.#runtime, tx, this.#viewRef);
@@ -1840,25 +1851,30 @@ export class CellImpl<T extends FabricValue>
       // rounds is bounded by the reachable-doc depth; the fixed cap is only
       // a backstop against a pathological graph. Pulls that kicked nothing
       // take the zero-iteration path and keep their previous timing.
-      this.#runtime.scheduler.idle().then(async () => {
-        const storage = this.#runtime.storageManager;
-        // The pending pool is manager-global (same semantics as `synced()`):
-        // this pull may also wait on loads kicked by concurrent readers.
-        let round = 0;
-        for (; round < 100; round++) {
-          if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
-          await (storage.crossSpaceSettled?.() ?? Promise.resolve());
-          await this.#runtime.scheduler.idle();
+      const ready = async () => {
+        try {
+          await idle();
+          const storage = this.#runtime.storageManager;
+          // The pending pool is manager-global (same semantics as `synced()`):
+          // this pull may also wait on loads kicked by concurrent readers.
+          let round = 0;
+          for (; round < 100; round++) {
+            if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
+            await (storage.crossSpaceSettled?.() ?? Promise.resolve());
+            await idle();
+          }
+          if (
+            round === 100 &&
+            (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0
+          ) {
+            logger.warn("pull", () => [
+              "pull() convergence bound exhausted with link-target loads still",
+              `pending: ${this.sourceURI}`,
+            ]);
+          }
+        } finally {
+          cancel?.();
         }
-        if (
-          round === 100 && (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0
-        ) {
-          logger.warn("pull", () => [
-            "pull() convergence bound exhausted with link-target loads still",
-            `pending: ${this.sourceURI}`,
-          ]);
-        }
-        cancel?.();
         // The effect above exists to drive the scheduler: it reads inside its
         // own transaction so the dependencies get registered and the
         // computations they gate run. That transaction has committed by the
@@ -1870,8 +1886,9 @@ export class CellImpl<T extends FabricValue>
         // holding a long-lived open transaction has snapshots in it from
         // before the computations this pull just drove, so reading through it
         // would hand back exactly the stale values pull() exists to avoid.
-        resolve(validateAndTransform(this.#runtime, undefined, this.#viewRef));
-      });
+        return validateAndTransform(this.#runtime, undefined, this.#viewRef);
+      };
+      ready().then(resolve, reject);
     });
   }
 

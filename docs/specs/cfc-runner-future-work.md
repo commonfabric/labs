@@ -307,23 +307,18 @@ Each is bounded and mostly independent. Several are fail-safe today.
 - **§6.5 intent-consumption / attempt-cell contract.** Commit-point single-use
   intent consumption + bounded-retry attempt-cell ledger (`attemptCellId`/
   `consumedCellId`). This is runner-remit even though the rest of the Ch.6 refiner
-  chain is not. [Reviewed intents](./cfc-reviewed-intent.md) mint the
-  single-use record a consumer claims attempts against (`idempotencyKey`, `exp`,
-  `maxAttempts`); whether the ledger itself belongs to the runner or to the
-  consumer is an open question there.
+  chain is not.
 - **A builtin's attribution needs a labeled read.** `TransformedBy` is minted
   only over a nonempty flow join, so a builtin's transaction that reads nothing
   labeled writes nothing stamped. Host operations work around it: the custody
-  seal reads an anchor it wrote, and a reviewed intent reads its own receipt,
-  which is why the receipt is written before the record. A way for a builtin
-  to stamp what it writes without a read would remove the workaround and the
-  ordering it forces. ([Reviewed intents](./cfc-reviewed-intent.md#attribution-and-documents-written-once),
-  [sealed custody](./cfc-custody-seal.md#attribution).)
+  seal reads an anchor it wrote first. A way for a builtin to stamp what it
+  writes without a read would remove the workaround and the ordering it
+  forces. ([Sealed custody](./cfc-custody-seal.md#attribution).)
 - **Write-once documents.** Nothing makes a document immutable after its first
-  write. A builtin's record stays as written only because its address is
+  write. A builtin's document stays as written only because its address is
   unpredictable and its writer claim refuses other writers; a claim governs
-  its own location and not those below it, so the record repeats it on every
-  member and stores nested values as one leaf string. Create-only marks are
+  its own location and not those below it, so such a document repeats it on
+  every member and stores nested values as one leaf string. Create-only marks are
   enforced only under `experimental.commitPreconditions`. A write-once
   primitive would state the property directly; the custody seal raises the
   same question for which instance a room shows

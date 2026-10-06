@@ -131,6 +131,7 @@ import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import { lookupSchemaDocument } from "../schema-registry.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import type { URI } from "../sigil-types.ts";
+import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import {
   type CommitError,
   createReadOnlyTransactionError,
@@ -153,6 +154,7 @@ import {
   type StorageTransactionStatus,
   toThrowable,
   type TransactionCommitOptions,
+  type TransactionCommitReceipt,
   type TransactionReactivityLog,
   type TransactionSealDestination,
   type TransactionWriteDetail,
@@ -483,7 +485,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * Verdict callbacks, which fire when the commit's fate is sealed — the accept
    * verdict or the rejection receipt — _before_ the coverage and read-repair
-   * waits the commit promise (and commit callbacks) additionally sit out.
+   * waits `commit().settled` (and commit callbacks) additionally sit out.
    */
   #verdictCallbacks = new Set<
     (
@@ -517,7 +519,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * The verdict-time effect run of the current `commit()`: verdict callbacks
    * plus the CFC outbox flush. What `settled()`-style barriers wait on in place
-   * of the commit promise, whose resolution additionally waits for view
+   * of commit settlement, which additionally waits for view
    * coverage.
    */
   #postCommitEffects?: Promise<void>;
@@ -531,6 +533,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * dispatch.
    */
   readonly #verdict = Promise.withResolvers<Result<Unit, CommitError>>();
+
+  #storageReceipt?: TransactionCommitReceipt;
 
   #commitPreconditions = new Map<MemorySpace, CommitPrecondition[]>();
   #createOnlyMarks = new Map<MemorySpace, Set<string>>();
@@ -815,10 +819,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
-   * One-shot configuration of the seal destination, called by the Runtime
-   * in edit() for every transaction it creates — with `undefined` on every
-   * client and in the OFF arm, and with the wave accumulator's destination
-   * on a serving runtime under EXPERIMENTAL_SERVER_EXECUTION.
+   * Pins the destination once at transaction creation: a serving-wave
+   * accumulator, a client speculation overlay, or direct storage when absent.
    */
   configureSealDestination(
     destination: TransactionSealDestination | undefined,
@@ -2373,10 +2375,6 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return this.#postCommitEffects ?? Promise.resolve();
   }
 
-  commitVerdict(): Promise<Result<Unit, CommitError>> {
-    return this.#verdict.promise;
-  }
-
   #preparedDigest(): string {
     if (this.#preparedDigestMemo?.epoch === this.#cfcActivityEpoch) {
       this.#cfcInstrumentation.onPreparedDigest?.("memo");
@@ -3669,7 +3667,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return result;
   }
 
-  async commit(
+  /** Starts this commit attempt and exposes its verdict and settlement. */
+  commit(options?: TransactionCommitOptions): TransactionCommitReceipt {
+    const ready = this.status().status === "ready";
+    const settled = this.#commit(options);
+    return createTransactionCommitReceipt(
+      settled,
+      ready ? this.#verdict.promise : undefined,
+      ready ? this.#storageReceipt : undefined,
+    );
+  }
+
+  async #commit(
     options?: TransactionCommitOptions,
   ): Promise<Result<Unit, CommitError>> {
     if (this.#statusOverride?.status === "error") {
@@ -3825,20 +3834,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }
     }
 
-    // The destination switch (serving-loop.md §3d): with a seal destination
-    // installed — a serving runtime under EXPERIMENTAL_SERVER_EXECUTION —
-    // this action tx SEALS into the wave accumulator instead of committing
-    // to the store. Everything above (the per-action-run CFC gates, §3c)
-    // and below (commit callbacks, post-commit side effects) fires for both
-    // destinations: sealing fires everything commit fires today. Sealed
-    // means accepted into the wave, not durable: a later withdrawal
-    // (superseded, requeued, lease lost) surfaces on the wave's verdict
-    // channel, AFTER the callbacks and side effects here observed "ok" —
-    // the serving loop (stage F) and the effect channel (stage G) must
-    // consume dispositions from the wave outcome, never from this result.
-    const promise = this.#sealDestination !== undefined
-      ? this.#sealDestination.seal(this)
-      : this.tx.commit(options);
+    // Direct store forwarding preserves its early verdict and later coverage.
+    // A genuine wave or speculative seal supplies acceptance of the
+    // contribution; its later durable disposition belongs to the wave.
+    let receipt: TransactionCommitReceipt;
+    if (this.#sealDestination !== undefined) {
+      const sealed = this.#sealDestination.seal(this, options);
+      receipt = "settled" in sealed
+        ? sealed
+        : createTransactionCommitReceipt(sealed);
+    } else {
+      receipt = this.tx.commit(options);
+    }
+    this.#storageReceipt = receipt;
+    const promise = receipt.settled;
 
     // Two callback layers with two timelines (CT-1950):
     //
@@ -3847,22 +3856,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     //   They guard on durability alone (start the LLM request, register
     //   background work), so holding them out for the fan-out or the
     //   read-repair round trip would cost a window for nothing.
-    // - COMMIT callbacks run when the commit promise settles: after
+    // - COMMIT callbacks run when `receipt.settled` resolves: after
     //   coverage on accept, after the read-repair gate on rejection.
     //   Their consumers act on the post-commit view — a compensation or
     //   retry that runs before the repair frame would read the very state
     //   the rejection just invalidated.
     //
-    // Both promises always resolve, even when the commit fails (the result
-    // then carries the error); an exception is an internal error handled
-    // below. The verdict is raced with the promise, not taken alone: in
-    // the real flow the verdict settles first, but a wrapped commit whose
-    // inner commit() was replaced or bypassed (test stubs) never resolves
-    // the inner verdict, and the effect run — and with it this commit()'s
-    // own completion — must not hang on it.
-    const verdict = this.tx.commitVerdict !== undefined
-      ? Promise.race([this.tx.commitVerdict(), promise])
-      : promise;
+    // Ordinary failures resolve with an error result; an exception rejects
+    // the stage. The storage receipt supplies a settlement backstop when a
+    // backend cannot report a separate verdict.
+    const verdict = receipt.verdict;
     const effects = verdict.then(
       async (result) => {
         this.#runVerdictCallbacks(result);
@@ -3934,19 +3937,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       },
     );
 
-    // resolveAt "verdict" returns at fate-sealing on BOTH paths: the
-    // verdict race resolves at the accept verdict or the rejection
-    // receipt, ahead of the coverage / read-repair waits the settlement
-    // promise sits out — and ahead of the effect run, which a slow outbox
-    // effect must not stretch (it stays tracked via
-    // postCommitEffectsSettled()). Commit callbacks and the
-    // pending-commit barrier stay on the settlement promise either way.
-    // Otherwise commit() spans the full settlement plus the effect layer:
-    // callers that await the commit observe the outbox flushed, exactly
-    // as when the flush ran inline here.
-    if (options?.resolveAt === "verdict") {
-      return await verdict;
-    }
+    // The receipt's settlement stage includes the inline effect layer.
+    // Observing its verdict never waits for these effects.
     const result = await promise;
     await effects;
 
@@ -4599,7 +4591,7 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   commit(
     options?: TransactionCommitOptions,
-  ): Promise<Result<Unit, CommitError>> {
+  ): TransactionCommitReceipt {
     return this.#wrapped.commit(options);
   }
 

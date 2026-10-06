@@ -184,7 +184,7 @@ the dependent write rejected
 it("does not let an author-declared InjectionSafe satisfy a requiredIntegrity gate", async () => {
   const digest = tx.prepareCfc();
   expect(digest).toBe("");
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   expect(result.error?.message).toContain("requiredIntegrity failed");
 ```
 

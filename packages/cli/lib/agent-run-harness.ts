@@ -1,34 +1,22 @@
 /**
  * Runs one claimed agent request with `cf-harness`, and writes its result.
  *
- * The run goes through the harness's own batch entry point, `runCfHarnessCli`,
- * so the session is assembled the way every harness run is: the arguments
- * below resolve to a `HarnessSessionConfig`, the provider comes from the
- * settings under `CF_HARNESS_HOME`, and the prompt loop runs through
- * `harnessSessionEngineOptions`. The request's inputs enter as input cells,
- * which the model holds as handles; its `maxConfidentiality` is the fabric
- * session's read ceiling; its task text is bound to the prompt-slot role
- * `context`, since a pattern's text is not an operator's command. The
- * model's structured result is then handed to `writeAgentResult`, which
- * writes the result document under the `agent` builtin's identity.
+ * The executor is the Fabric adapter over `runHarnessJob` (`harness-job.ts`):
+ * it turns the record into a job spec — the request's inputs as input cells,
+ * which the model holds as handles; its `maxConfidentiality`, met with the
+ * host's, as the fabric session's read ceiling; its task text bound to the
+ * prompt-slot role `context`, since a pattern's text is not an operator's
+ * command — and hands the model's structured result to `writeAgentResult`,
+ * which writes the result document under the `agent` builtin's identity.
  */
 
 import { join } from "@std/path";
 
-import {
-  runCfHarnessCli,
-  type RunCfHarnessCliDependencies,
-} from "@commonfabric/cf-harness/cli";
-import {
-  CfHarnessPromptLoop,
-  type CreateHarnessPromptLoopOptions,
-  type HarnessPromptLoopResult,
-} from "@commonfabric/cf-harness/prompt-loop";
+import type { RunCfHarnessCliDependencies } from "@commonfabric/cf-harness/cli";
 import {
   createHarnessFabricSessionFactory,
   type HarnessFabricSession,
 } from "@commonfabric/cf-harness/fabric-session";
-import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
 import {
   agentObservedHandlesOfTable,
   AgentResultWriteError,
@@ -41,7 +29,7 @@ import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import {
-  LIMIT_REACHED,
+  INVALID_RESULT,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
 import { addressKey, renderCellReference } from "@commonfabric/runner/shared";
@@ -53,15 +41,9 @@ import {
 } from "@commonfabric/runner/cfc";
 
 import { getAcl } from "./acl.ts";
+import { runHarnessJob } from "./harness-job.ts";
 
-import type {
-  AgentRunExecution,
-  AgentRunReport,
-  ClaimedAgentRun,
-} from "./agent-runner.ts";
-
-/** The workspace file the host writes when the model calls `submit_result`. */
-const RESULT_FILE = "agent-result.json";
+import type { AgentRunExecution, ClaimedAgentRun } from "./agent-runner.ts";
 
 export interface HarnessAgentRunExecutorOptions {
   /** The PKCS#8 key file of the identity the run reads and writes as. */
@@ -132,34 +114,21 @@ export async function agentRunObservationCeiling(
   return meetCfcObservationCeilings(requested, hostCeiling);
 }
 
-/** Helper for the executor, which turns a run's loop result into a report. */
-const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
-  const usage = result.totalUsage ?? result.usage;
-  return {
-    ...(usage !== undefined
-      ? {
-        usage: { ...usage },
-        usageCoverage: result.totalUsage !== undefined
-          ? "including-descendants"
-          : "direct",
-      }
-      : {}),
-    modelTurns: result.modelTurns,
-    toolCalls: result.runState.toolOutputs.length,
-    ...(result.runState.artifactRoot !== undefined
-      ? { runRef: result.runState.artifactRoot }
-      : {}),
-  };
-};
-
 /**
- * Builds the executor `AgentRunner` hands each claimed run to.
+ * Builds the executor `AgentRunner` hands each claimed run to: the Fabric
+ * adapter over `runHarnessJob`.
+ *
+ * The record becomes a job spec whose task binds as `context`, since a
+ * pattern's text is not an operator's command, with the request's inputs as
+ * input cells and its ceiling met with the host's as the fabric session's
+ * read ceiling. A completed job's result is then written into the record's
+ * space by `writeAgentResult`.
  *
  * A run ends `completed` with a link to the result document; `cancelled`
  * when its signal aborted; `refused` when the space's policy refused the
  * result write; `failed` as `LIMIT_REACHED` when the model-turn limit ended
- * it, and as `PROVIDER_FAILURE` when the model, a tool, or the result it
- * produced failed any other way.
+ * it; `INVALID_RESULT` when the completed loop supplied no result satisfying
+ * its schema; and `PROVIDER_FAILURE` for other model, tool, or storage errors.
  */
 export const createHarnessAgentRunExecutor = (
   options: HarnessAgentRunExecutorOptions,
@@ -170,14 +139,6 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     options.workRoot,
     hashStringOf([run.host, addressKey(run.link)]),
   );
-  const workspace = join(runRoot, "workspace");
-  await Deno.mkdir(workspace, { recursive: true });
-  const resultPath = join(workspace, RESULT_FILE);
-  try {
-    await Deno.remove(resultPath);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
 
   // The record reads as live proxies; the harness and the writer take plain
   // values.
@@ -197,114 +158,45 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     requestedCeiling as CfcObservationMaxConfidentiality,
   ))!;
   const inputs = record.inputs as Record<string, Cell<unknown>>;
-  const tools = record.tools ?? options.allowedTools;
-  const argv = [
-    "--output-mode",
-    "batch",
-    "--workspace",
-    workspace,
-    "--artifact-root",
-    join(runRoot, "artifacts"),
-    // One word, so that a task starting with `-` still reads as the value
-    // rather than as flags of its own.
-    `--prompt=${record.task}`,
-    "--prompt-slot-role",
-    "context",
-    "--structured-result-path",
-    resultPath,
-    "--structured-result-schema",
+
+  const job = await runHarnessJob({
+    task: record.task,
+    taskRole: "context",
     // The run validates everything but the `asCell` positions, where the
     // model writes a handle token and the writer places a link.
-    JSON.stringify(relaxAsCellPositions(resultSchema)),
-    "--fabric-api-url",
-    run.host,
-    "--fabric-identity",
-    options.identityKeyPath,
-    "--fabric-space",
-    run.link.space,
-    "--max-confidentiality",
-    JSON.stringify(maxConfidentiality),
+    resultSchema: relaxAsCellPositions(resultSchema),
+    // A request naming its tools narrows the run to them.
+    tools: record.tools ?? options.allowedTools,
+    ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.loomRetrievalConfigPath !== undefined
-      ? ["--loom-retrieval-config", options.loomRetrievalConfigPath]
-      : []),
-    ...Object.entries(inputs).flatMap(([name, cell]) => [
-      "--input-cell",
-      `${name}=${renderCellReference(cell.getAsNormalizedFullLink())}`,
-    ]),
-    // A request naming its tools narrows the run to them, and to the tool
-    // the run returns its result through.
-    ...[...tools, "submit_result"].flatMap(
-      (tool) => ["--allow-tool", tool],
-    ),
-    ...(options.model !== undefined ? ["--model", options.model] : []),
-  ];
-
-  // The harness builds its loop through this seam, so wrapping it is how the
-  // run takes the runner's abort signal, renews the lease on each transcript
-  // event the harness persists, and hands back the loop's full result.
-  let loopResult: HarnessPromptLoopResult | undefined;
-  let loopError: unknown;
-  const createInnerLoop = options.harnessDeps?.createPromptLoop ??
-    ((loopOptions: CreateHarnessPromptLoopOptions) =>
-      new CfHarnessPromptLoop(loopOptions));
-  const deps: RunCfHarnessCliDependencies = {
-    ...options.harnessDeps,
-    io: {
-      stdout: (text) => options.report?.(text.trimEnd()),
-      stderr: (text) => options.report?.(text.trimEnd()),
+      ? { loomRetrievalConfigPath: options.loomRetrievalConfigPath }
+      : {}),
+    fabric: {
+      host: run.host,
+      space: run.link.space,
+      identityKeyPath: options.identityKeyPath,
+      maxConfidentiality,
+      inputs: Object.fromEntries(
+        Object.entries(inputs).map(([name, cell]) => [
+          name,
+          renderCellReference(cell.getAsNormalizedFullLink()),
+        ]),
+      ),
     },
-    // The runner owns the process's signals and its exit.
-    registerSignalHandler: () => () => {},
-    exit: () => {},
-    createPromptLoop: (loopOptions) => {
-      const loop = createInnerLoop(loopOptions);
-      return {
-        runPrompt: async (promptOptions) => {
-          try {
-            loopResult = await loop.runPrompt({
-              ...promptOptions,
-              signal: run.signal,
-              onTranscriptEvent: async (event) => {
-                await run.renewLease();
-                await promptOptions.onTranscriptEvent?.(event);
-              },
-            });
-            return loopResult;
-          } catch (error) {
-            loopError = error;
-            throw error;
-          }
-        },
-        runTranscript: loop.runTranscript.bind(loop),
-      };
-    },
-  };
+  }, {
+    runRoot,
+    signal: run.signal,
+    // Each transcript event the harness persists is a durable write, so it
+    // renews the lease.
+    onEvent: () => run.renewLease(),
+    ...(options.harnessDeps !== undefined
+      ? { harnessDeps: options.harnessDeps }
+      : {}),
+    ...(options.report !== undefined ? { report: options.report } : {}),
+  });
+  if (job.outcome !== "completed") return job;
+  const { structuredResult, handleTable, report } = job;
 
-  const exitCode = await runCfHarnessCli(argv, deps);
-  if (run.signal.aborted) return { outcome: "cancelled" };
-  if (loopResult === undefined) {
-    const limit = loopError instanceof Error &&
-      loopError.message.includes("exceeded max model turns");
-    return {
-      outcome: "failed",
-      errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
-    };
-  }
-  const report = reportOf(loopResult);
-  if (exitCode !== 0) {
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
-  }
-
-  let structuredResult: unknown;
-  try {
-    structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
-  } catch {
-    // The run finished without the result file it was asked for.
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
-  }
-
-  const handleTable = loopResult.runState.handleTable ??
-    createHarnessHandleTable(loopResult.runState.runId);
   // Every cell the run holds a handle to, and every Loom row it was shown.
   const observedHandles = agentObservedHandlesOfTable(handleTable);
   let session: HarnessFabricSession | undefined;
@@ -350,7 +242,14 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
         error instanceof Error ? error.message : String(error)
       }${detail}`,
     );
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+    return {
+      outcome: "failed",
+      errorCode: error instanceof AgentResultWriteError &&
+          error.code === "invalid_result"
+        ? INVALID_RESULT
+        : PROVIDER_FAILURE,
+      report,
+    };
   } finally {
     if (ownsSession) await session?.pieces.runtime.dispose().catch(() => {});
   }

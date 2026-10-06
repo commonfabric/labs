@@ -164,13 +164,13 @@ describe("profile-space-access", () => {
         ),
       );
       ownerRuntime.prepareTxForCommit(setupTx);
-      expect((await setupTx.commit()).error).toBeUndefined();
+      expect((await setupTx.commit().settled).error).toBeUndefined();
       await result.pull();
 
       const createTx = ownerRuntime.edit();
       result.withTx(createTx).key("createProfile").send(createEvent("Ada"));
       ownerRuntime.prepareTxForCommit(createTx);
-      expect((await createTx.commit()).error).toBeUndefined();
+      expect((await createTx.commit().settled).error).toBeUndefined();
       await result.pull();
       await ownerRuntime.idle();
       await result.pull();
@@ -206,7 +206,7 @@ describe("profile-space-access", () => {
       const toggleTx = visitorRuntime.edit();
       visited.withTx(toggleTx).key("toggleEditing").send(undefined);
       visitorRuntime.prepareTxForCommit(toggleTx);
-      expect((await toggleTx.commit()).error).toBeUndefined();
+      expect((await toggleTx.commit().settled).error).toBeUndefined();
       await visitorRuntime.idle();
       const booleanSchema = { type: "boolean" } as const;
       const visitorIsEditing = visited.key("isEditing").asSchema<boolean>(

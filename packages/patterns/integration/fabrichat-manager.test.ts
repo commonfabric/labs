@@ -108,12 +108,12 @@ describe("fabrichat-manager", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await manager.pull();
     const send = async (stream: string, event: Record<string, unknown>) => {
       const sendTx = runtime.edit();
       manager.withTx(sendTx).key(stream).send(event);
-      expect((await sendTx.commit()).error).toBeUndefined();
+      expect((await sendTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await manager.pull();
     };

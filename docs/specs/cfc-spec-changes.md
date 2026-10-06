@@ -2,14 +2,18 @@
 
 Changes `~/src/specs/cfc` needs so the spec can answer the questions that came
 up while designing implementation work. Started 2026-06-10 during the S16
-(default transition) design; intended to grow as later sessions hit new gaps.
-Each item: where, what's missing or contradictory, proposed edit. Tags:
+(default transition) design. **Closed to new entries since 2026-10-05:** a new
+gap is filed as a specs pull request, as
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+describes, and the `open` entries below are being migrated to specs pull
+requests one group at a time, after which this list is archived. Each item: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
-Status legend: `open` (not yet applied to the spec), `adopted` (the spec has
-ruled on the entry and carries the requirement, in the section named),
-`applied`.
+Status legend: `open` (not yet before the spec), `proposed` (a specs pull
+request carrying it is open, named in the entry), `applied` (the proposed edit
+landed as written), `adopted` (the spec has ruled on the entry and carries the
+requirement in its own words, in the section named).
 
 ## From the S16 default-transition design
 
@@ -1509,7 +1513,7 @@ query's selection inputs are labeled"). Three points where the text and the
 runner differ, or where the text leaves a choice open:
 
 **SC-49 [normative] A secret in a member's address — §8.17.6 rule 4.**
-`open`. Rule 4 derives a member's address from its content and payload
+`proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: keyed derivation permitted, the slot carries `S` alone, the key-disclosure and address-equality residuals recorded under §18.6.4; the runner's salt conforms, no code change. Rule 4 derives a member's address from its content and payload
 label, and so puts the payload label on the reference identity at each slot,
 since a reader could otherwise confirm a guess at a member by recomputing
 its address. The runner keys each member's address on a per-space secret as
@@ -1525,7 +1529,7 @@ equal members, and a member kept across a change of the selection, share an
 address.
 
 **SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
-item.** `open`. The item requires that untrusted code obtain a member
+item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: the requirement stated over both routes, keyed derivation as the means for the constructed-reference route; no code change. The item requires that untrusted code obtain a member
 reference only through a result, and offers a namespace untrusted code cannot
 write to as the means. A namespace stops a member's address from being
 received by writing the same content. It does not stop a reference from being
@@ -1537,7 +1541,7 @@ Proposed edit: state the requirement over both routes, and allow a secret
 in the address as the means for the second.
 
 **SC-51 [clarify] The existence entry of a member with labels at two levels —
-§8.17.6 rule 4, last item.** `open`. The item says the existence entry
+§8.17.6 rule 4, last item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option C: root label where present, else the join of field labels, the full join under an unkeyed address; the runner's root-label existence entries conform, no code change. The item says the existence entry
 carries the member's payload label. A member can carry a label at its root
 and further labels on its fields. The runner's existence observation of such
 a member consumes the root label. Proposed edit: say whether the payload
@@ -1789,3 +1793,37 @@ What this costs, and what is not covered:
 - **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
   given. The gate keys on labels, not URLs, so a labelled value does not get
   through; an unlabelled one is outside this entry.
+
+## From appending to another principal's private list (2026-10-01)
+
+**SC-57 [normative] A document created beneath a private parent takes the
+parent's readers — the `User(CurrentPrincipal)` creator binding, beside
+§8.12.4.** `open`, for the CFC spec owner's ruling. A `User` confidentiality
+clause whose subject is `CurrentPrincipal` binds, at commit, to a concrete
+reader: a store already holding labels keeps the readers it stores, and a new
+store takes the acting principal. An item a second principal appends to an
+owner-private list falls between the two. It is a new document, so it took
+the appender, while the transaction that appended it read the list and so
+carries the owner's reader in its taint. §8.12.4's `canWrite` then measured
+that taint against a ceiling naming the appender, and refused the append,
+whether the appender's own runtime or the serving loop ran the handler. The
+runner now binds a document created beneath a stored parent
+to the parent instead. When a transaction creates a document and links it
+into a document that existed before the transaction, the placeholder binds to
+the concrete `User` readers the parent's declared policy names at the position
+the link lands on, gathered across every such parent; a document created
+beneath such a document in the same transaction takes the same readers. Where
+the parents name no `User` reader there, the binding falls to the acting
+principal as before. The binding only raises: the new document's readers are
+ones the parent already promised that position to, a reader has to satisfy
+every clause the document holds, and the appender gains no standing as a
+reader. What it changes is the write ceiling, which now admits the parent's
+readers in a transaction's taint and nothing else, so data labeled for any
+other reader, the appender's own included, still misfits. Proposed edit: state
+the parent rule where the spec describes binding a reader-private declaration
+to its creator, define "beneath" as the link placement above, and say that the
+parent is read as stored before the transaction. Implemented in
+`packages/runner/src/cfc/prepare.ts` (`creatorBinding`, through
+`bindCurrentPrincipalToStoredConfidentiality` in
+`packages/runner/src/cfc/current-principal-confidentiality.ts`); described in
+[`current-principal.md`](../features/current-principal.md).

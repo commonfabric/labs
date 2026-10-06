@@ -290,7 +290,7 @@ describe("cfc-builtin-output-ifc", () => {
           tx,
         );
         const result = runtime.run(tx, factory, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         const addMessage = await result.key("addMessage").pull();
         addMessage!.send({ role: "user", content: "what does it say?" });
         const settled = await waitForLlmMessages(runtime, result, 2);

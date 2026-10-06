@@ -8,6 +8,7 @@ import {
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
+import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
 import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 
@@ -475,12 +476,7 @@ async function buildCli(config: BuildConfig): Promise<void> {
       // as a non-static asset. Checking should be done
       // prior to building.
       "--no-check",
-      "--allow-write",
-      "--allow-read",
-      "--allow-env",
-      "--allow-run",
-      "--allow-ffi", // for @db/sqlite
-      "--allow-net", // for @db/sqlite lazy download
+      ...CF_PERMISSION_FLAGS,
       ...embedArgs(config, "cf"),
       config.cliEntryPath(),
     ],
