@@ -287,9 +287,9 @@ export function navigateTo(
     // instance (the same annotation-keyed addressing) — the client's own
     // speculative write converges on the same instance.
     resultCell.withTx(intentTx).set(true);
-    // The seal outcome resolves as { error } (commit promises always
-    // resolve — extended-storage-transaction.ts); handle BOTH shapes,
-    // loudly, and COUNT them (serving-loop.md §7's
+    // An expected seal refusal resolves `.settled` with `{ error }`; an
+    // internal exception rejects that stage. Handle both shapes loudly
+    // and count them (serving-loop.md §7's
     // servedIntentSealFailures). Recovery on failure is STORE-derived
     // (independent review M2) and the event is NEVER consequenced-clean
     // over a failed intent (owner review P1-2): a wave-conflict requeue
@@ -302,7 +302,7 @@ export function navigateTo(
     // re-drain's re-run reads the result cell FALSE and re-issues
     // under the same deterministic nonce — no closure state to roll
     // back, and the engine's nonce dedupe absorbs the re-append.
-    intentTx.commit().then(({ error }) => {
+    intentTx.commit().settled.then(({ error }) => {
       if (error !== undefined) {
         runtime.notifyServedIntentSealFailure?.();
         logger.error(

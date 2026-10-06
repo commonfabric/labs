@@ -198,11 +198,11 @@ export default pattern<{ url: ${scoped} }, { fetched: any }>(({ url }) => ({
       await result.sync();
       const seed = runtime.edit();
       argument.withTx(seed).key("url").set(url);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       if (create) {
         const start = runtime.edit();
         runtime.run(start, pattern, argument, result);
-        expect((await start.commit()).error).toBeUndefined();
+        expect((await start.commit().settled).error).toBeUndefined();
       }
       client.cancel = result.sink(() => {});
       return {
@@ -286,7 +286,7 @@ describe("executor-fetch-instances", () => {
       await f.settled();
       const edit = f.first.runtime.edit();
       f.first.argument.withTx(edit).key("url").set(`${url}/returned-session`);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
       await f.issued(7);
       f.requests[6].response.resolve(new Response("returned payload"));
       await f.value(f.first, "returned payload");
@@ -379,7 +379,7 @@ describe("executor-fetch-instances", () => {
         await f.issued(2);
         const edit = f.first.runtime.edit();
         f.first.argument.withTx(edit).key("url").set(`${url}/replacement`);
-        expect((await edit.commit()).error).toBeUndefined();
+        expect((await edit.commit().settled).error).toBeUndefined();
         await f.issued(3);
         expect(f.requests[0].signal?.aborted).toBe(true);
         expect(f.requests[1].signal?.aborted).toBe(false);

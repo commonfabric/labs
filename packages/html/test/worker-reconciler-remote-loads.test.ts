@@ -134,7 +134,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         },
       },
     });
-    assertEquals((await tx.commit()).ok !== undefined, true);
+    assertEquals((await tx.commit().settled).ok !== undefined, true);
     return id;
   };
   const linkTo = (id: string, path: string[] = []) => {

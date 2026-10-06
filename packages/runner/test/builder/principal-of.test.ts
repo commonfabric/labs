@@ -191,7 +191,7 @@ describe("principalOf()", () => {
         }),
       } as never,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return runtime.getCell(space, cause);
   };
 
@@ -210,7 +210,7 @@ describe("principalOf()", () => {
         labelMap: { version: 1, entries },
       } as never,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /**
@@ -259,7 +259,7 @@ describe("principalOf()", () => {
       },
     });
     tx.prepareCfc();
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     return { cell: runtime.getCell(space, cause), author, error };
   };
 
@@ -319,7 +319,7 @@ describe("principalOf()", () => {
       const holder = runtime.getCell<unknown>(space, "holder");
       const tx = runtime.edit();
       holder.withTx(tx).set(profile);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(callIn(edit(), holder, "represents-principal")).toBe(bob.did());
     });
@@ -331,7 +331,7 @@ describe("principalOf()", () => {
       const holder = runtime.getCell<unknown>(space, "holder");
       const tx = runtime.edit();
       holder.withTx(tx).set(profile);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callIn(edit(), holder.getAsReactiveProxy(), "represents-principal"),
@@ -407,7 +407,7 @@ describe("principalOf()", () => {
           },
         } as never,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(() => callIn(edit(), profile, "represents-principal")).toThrow(
         UnknownCfcMetadataVersionError,
@@ -548,7 +548,7 @@ describe("principalOf()", () => {
         { target: runtime.getCell(space, "profile") },
         runtime.getCell(space, "principal-of-lift", undefined, tx),
       ) as Cell<{ principal?: string; held?: string }>;
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const cancel = result.sink(() => {});
       try {
         await waitForCellValue(
@@ -603,12 +603,12 @@ describe("principalOf()", () => {
       {
         const tx = runtime.edit();
         argument.withTx(tx).set({ seen: "no event yet", profile });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = runtime.edit();
         runtime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const cancel = result.sink(() => {});
       await runtime.idle();

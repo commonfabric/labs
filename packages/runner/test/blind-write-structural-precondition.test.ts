@@ -44,7 +44,7 @@ Deno.test("a blind UI-input write threads a structural precondition at the cell'
       setup,
     );
     cell.withTx(setup).set({ box: { leaf: "x" } });
-    await setup.commit();
+    await setup.commit().settled;
     await runtime.idle();
 
     // Blind write to the nested leaf `box.leaf`.
@@ -61,7 +61,7 @@ Deno.test("a blind UI-input write threads a structural precondition at the cell'
     leaf.withTx(tx).set("typed");
     unmarkUiInputBlindWriteTx(tx);
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     await runtime.idle();
 
     assert(

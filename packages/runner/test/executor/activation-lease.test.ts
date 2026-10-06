@@ -165,7 +165,7 @@ async function commitFirstWork(
   const tx = f.runtime.edit();
   stampWaveRunContext(tx, { actionId: "first-work", kind: "derivation" });
   probe.withTx(tx).set(42);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   const accepted = await waveSettlementOf(tx);
   expect(accepted).toBeDefined();
   expect(accepted?.error).toBeUndefined();
@@ -417,7 +417,7 @@ describe("activation-lease", () => {
     });
     const tx = alice.edit();
     privateValue.withTx(tx).set(7);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const address = {
       id: privateValue.getAsNormalizedFullLink().id,
       scopeKey: resolveScopeKey("user", { principal: aliceSigner.did() }),

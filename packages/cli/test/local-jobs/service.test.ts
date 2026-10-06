@@ -140,7 +140,12 @@ describe("startLocalJobs()", () => {
   });
 
   it("removes the socket and token when it stops, and replaces a socket file left behind", async () => {
-    await Deno.writeTextFile(join(dir, "jobs.sock"), "stale");
+    const listener = Deno.listen({
+      transport: "unix",
+      path: join(dir, "old.sock"),
+    });
+    await Deno.rename(join(dir, "old.sock"), join(dir, "jobs.sock"));
+    listener.close();
     const running = await start(join(dir, "store.sqlite")).service;
     await running.stop();
 
@@ -150,6 +155,132 @@ describe("startLocalJobs()", () => {
       );
     }
     expect((await Deno.stat(join(dir, "store.sqlite"))).isFile).toBe(true);
+  });
+
+  it("refuses a second service without replacing the first token or listener", async () => {
+    const first = await start().service;
+    let second: Awaited<ReturnType<typeof startLocalJobs>> | undefined;
+    try {
+      const token = await Deno.readTextFile(first.tokenPath);
+      await expect((async () => {
+        second = await start().service;
+      })()).rejects.toThrow();
+      expect(await Deno.readTextFile(first.tokenPath)).toBe(token);
+      expect((await call("/health")).status).toBe(200);
+    } finally {
+      await second?.stop();
+      await first.stop();
+    }
+  });
+
+  it("rolls back a startup failure and releases ownership for another start", async () => {
+    await expect(startLocalJobs({
+      socketPath: join(dir, "jobs.sock"),
+      profilesPath: join(dir, "profiles.json"),
+      maxConcurrent: 1,
+      workRoot: join(dir, "runs"),
+    }, () => {
+      throw new Error("report failed");
+    })).rejects.toThrow("report failed");
+    for (const name of ["jobs.sock", "jobs.sock.token"]) {
+      await expect(Deno.stat(join(dir, name))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+    }
+    const next = await start().service;
+    await next.stop();
+  });
+
+  it("admits only one concurrent starter reclaiming a stale socket", async () => {
+    const listener = Deno.listen({
+      transport: "unix",
+      path: join(dir, "old.sock"),
+    });
+    await Deno.rename(join(dir, "old.sock"), join(dir, "jobs.sock"));
+    listener.close();
+    const results = await Promise.allSettled([
+      start().service,
+      start().service,
+    ]);
+    try {
+      expect(results.filter((result) => result.status === "fulfilled"))
+        .toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected"))
+        .toHaveLength(1);
+      expect((await call("/health")).status).toBe(200);
+    } finally {
+      for (const result of results) {
+        if (result.status === "fulfilled") await result.value.stop();
+      }
+    }
+  });
+
+  it("refuses a different socket sharing an active store", async () => {
+    const first = await start().service;
+    let second: Awaited<ReturnType<typeof startLocalJobs>> | undefined;
+    try {
+      await expect((async () => {
+        second = await startLocalJobs({
+          socketPath: join(dir, "other.sock"),
+          storePath: join(dir, "jobs.sqlite"),
+          profilesPath: join(dir, "profiles.json"),
+          maxConcurrent: 1,
+          workRoot: join(dir, "runs"),
+        }, () => {});
+      })()).rejects.toThrow("already owned");
+      expect((await call("/health")).status).toBe(200);
+    } finally {
+      await second?.stop();
+      await first.stop();
+    }
+  });
+
+  it("refuses requests before initialization and rolls back a socket chmod failure", async () => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const startup = startLocalJobs(
+      {
+        socketPath: join(dir, "jobs.sock"),
+        profilesPath: join(dir, "profiles.json"),
+        maxConcurrent: 1,
+        workRoot: join(dir, "runs"),
+      },
+      () => {},
+      {
+        chmod: async () => {
+          entered.resolve();
+          await finish.promise;
+          throw new Error("chmod failed");
+        },
+      },
+    );
+    const rejected = expect(startup).rejects.toThrow("chmod failed");
+    await entered.promise;
+    try {
+      expect((await call("/health")).status).toBe(503);
+      expect(
+        (await call("/jobs", {
+          method: "POST",
+          body: JSON.stringify({
+            caller: "test",
+            profile: "read",
+            idempotencyKey: "early",
+            task: "t",
+            resultSchema: true,
+          }),
+        })).status,
+      ).toBe(503);
+    } finally {
+      finish.resolve();
+      await rejected;
+    }
+    for (const name of ["jobs.sock", "jobs.sock.token"]) {
+      await expect(Deno.stat(join(dir, name))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+    }
+    const next = await start().service;
+    await next.stop();
   });
 
   it("throws when something other than a socket file stands at the socket path", async () => {

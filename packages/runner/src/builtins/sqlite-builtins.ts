@@ -1486,9 +1486,9 @@ export function sqliteQuery(
       } as FabricValue,
       "sqlite-query",
       // The flush awaits the query and its writeback, so the transaction's own
-      // commit promise spans them and the scheduler registers that promise for
-      // every commit carrying post-commit effects. Nothing here is handed to
-      // `trackAsyncWork` for that reason; the unsent settle above is separate
+      // `postCommitEffectsSettled()` spans them, and the scheduler registers
+      // that effect-layer promise for commits carrying post-commit effects.
+      // Nothing here is handed to `trackAsyncWork` for that reason; the unsent settle above is separate
       // work with its own completion, and is registered.
       async () => {
         if (cancelled.signal.aborted) return;

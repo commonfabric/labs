@@ -104,7 +104,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
       vote: "approve",
       note: "secret-note",
     });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
   });
 
   afterEach(async () => {
@@ -122,7 +122,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
   ): Promise<void> => {
     const setup = runtime.edit();
     runtime.getCell<unknown>(space, cause, undefined, setup).set(null);
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     setCfcImplementationIdentity(tx, identity);
@@ -138,7 +138,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     tx.writeOrThrow(at(), {});
     tx.writeOrThrow(at("approve"), brief.vote === "approve" ? 1 : 0);
     tx.writeOrThrow(at("reject"), brief.vote === "reject" ? 1 : 0);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   // Sets one key of the counts under `identity`, having read the brief.
@@ -152,7 +152,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     const brief = runtime.getCell(space, "brief", briefSchema, tx).get();
     runtime.getCell<Record<string, number>>(space, cause, undefined, tx)
       .key(key(brief.note)).set(2);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   // Copies the counts field by field into a public-only store, observing
@@ -169,7 +169,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
       approve,
       reject,
     });
-    return (await tx.commit()).error === undefined;
+    return (await tx.commit().settled).error === undefined;
   };
 
   // Copies the object's key set, and nothing under it, into a public-only
@@ -186,7 +186,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     runtime.getCell(space, `public-keys-${cause}`, publicTextSchema, tx).set(
       Object.keys(node).join(","),
     );
-    return (await tx.commit()).error === undefined;
+    return (await tx.commit().settled).error === undefined;
   };
 
   it("releases an object written field by field by the named function", async () => {
@@ -210,7 +210,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
   it("refuses an object whose transaction wrote under two identities", async () => {
     const setup = runtime.edit();
     runtime.getCell<unknown>(space, "counts", undefined, setup).set(null);
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     setCfcImplementationIdentity(tx, TALLY);
@@ -227,7 +227,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     tx.writeOrThrow(at("approve"), 1);
     setCfcImplementationIdentity(tx, HAND_COUNT);
     tx.writeOrThrow(at("reject"), 0);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     expect(await publishCounts("counts")).toBe(false);
     expect(await publishKeys("counts")).toBe(false);
@@ -251,7 +251,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
       approve: brief.vote === "approve" ? 1 : 0,
       reject: brief.vote === "reject" ? 1 : 0,
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   const addKeyReadingNothing = async (
@@ -268,7 +268,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
       id,
       path: ["value", "added"],
     }, 2);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   it("releases the key set of an object the named function wrote whole", async () => {

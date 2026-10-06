@@ -166,20 +166,31 @@ const eventStream = (
   const encoder = new TextEncoder();
   let unsubscribe = () => {};
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let cleanup = () => {};
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
       const close = () => {
         if (closed) return;
-        closed = true;
-        unsubscribe();
-        clearInterval(heartbeat);
+        cleanup();
         try {
           controller.close();
         } catch {
           // The reader already went away.
         }
       };
+      cleanup = () => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        clearInterval(heartbeat);
+        signal.removeEventListener("abort", close);
+        options.stopping?.removeEventListener("abort", close);
+      };
+      if (signal.aborted || options.stopping?.aborted) {
+        close();
+        return;
+      }
       const send = (event: LocalJobEvent) => {
         controller.enqueue(encoder.encode(sse(event)));
         if (isTerminal(event)) close();
@@ -206,8 +217,7 @@ const eventStream = (
       options.stopping?.addEventListener("abort", close, { once: true });
     },
     cancel() {
-      unsubscribe();
-      clearInterval(heartbeat);
+      cleanup();
     },
   });
   return new Response(body, {

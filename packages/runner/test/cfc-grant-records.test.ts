@@ -161,7 +161,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       id: `cid:${SECRET_SCHEMA.taggedHashString}`,
       path: [],
     }, { value: SECRET_SCHEMA.schema });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
   };
 
   // The §13.4.4 rule at the network egress boundary: the acting owner's
@@ -235,7 +235,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       grantedAt: 1000,
       ...overrides,
     });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.ok).toBeDefined();
     return written;
   };
@@ -750,7 +750,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
             path: ["value"],
           }, { stashed: source.key("secret").get() });
           tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
 
           const replica = storageManager.open(signer.did())
             .replica as unknown as {
@@ -779,7 +779,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           type: "application/json",
           path: ["value"],
         }, { probe: true });
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.ok).toBeDefined();
         expect(
           tx.getCfcState().diagnostics.some((note) =>
@@ -898,7 +898,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           audience: [userBob],
           grantedAt: 1000,
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         await seedLabeledCell(runtime, "grant-malformed", {
           confidentiality: [cfcAtom.user(signer.did())],
@@ -1332,7 +1332,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           type: "application/json",
           path: ["value"],
         }, { forged: true });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const resolver = createTxCfcGrantResolver(tx);
@@ -1627,7 +1627,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
         await writeGrant(runtime, { revoked: { at: 2000, by: signer.did() } });
         // The prepared decision consumed the live grant; the commit must not
         // go through over the revoked one.
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isStorageTransactionInconsistent(result.error)).toBe(true);
         expect(String((result.error as Error).message)).toContain(grant.id);
       });

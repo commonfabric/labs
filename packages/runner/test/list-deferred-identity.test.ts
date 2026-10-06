@@ -74,7 +74,7 @@ describe("list deferred identity", () => {
         );
         element.set(42);
         plan.container.set([element]);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await storage.synced();
         const sync = storage.syncCell.bind(storage);
         const syncIdentities: unknown[] = [];
@@ -108,7 +108,7 @@ describe("list deferred identity", () => {
         tx = runtime.edit();
         tx.tx.scopeKeyIdentity = identity;
         coordinator.action(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(plan.container.withTx().get()).toEqual([42]);
         expect(syncIdentities).toEqual([identity]);
         expect(stamps).toEqual([]);
@@ -171,7 +171,7 @@ describe("list deferred identity", () => {
         tx,
       );
       result.set([element]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await storage.synced();
       const sync = storage.syncCell.bind(storage);
       const syncIdentities: unknown[] = [];

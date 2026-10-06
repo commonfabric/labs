@@ -49,6 +49,7 @@ import {
   isRetryableCommitRejection,
   isStaleReadConflict,
 } from "../src/storage/rejection.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const spaceSigner = await Identity.fromPassphrase("ui-cell-write space");
 const space = spaceSigner.did() as MemorySpace;
@@ -117,7 +118,9 @@ const injectConflictOnNextCommits = (
         const rejection = makeRejection();
         tx.abort(rejection);
         rejections.record();
-        return Promise.resolve({ error: rejection as never });
+        return createTransactionCommitReceipt(
+          Promise.resolve({ error: rejection as never }),
+        );
       };
     }
     return tx;
@@ -175,7 +178,7 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
     const seed = runtime.edit();
     const cell = runtime.getCell<Doc>(space, "ui-write-retry", schema, seed);
     cell.withTx(seed).set({ drafts: { message: "seed" } });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     expect(seeded.error).toBeUndefined();
 
     const leaf = cell.key("drafts").key("message");
@@ -292,7 +295,7 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
     const seed = runtime.edit();
     const cell = runtime.getCell<Doc>(space, "ui-write-lww", schema, seed);
     cell.withTx(seed).set({ drafts: { message: "seed" } });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     expect(seeded.error).toBeUndefined();
 
     const leaf = cell.key("drafts").key("message");
@@ -346,7 +349,7 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
     const seed = runtime.edit();
     const cell = runtime.getCell<Doc>(space, "ui-write-cas", schema, seed);
     cell.withTx(seed).set({ drafts: { message: "seed" } });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     expect(seeded.error).toBeUndefined();
 
     const leaf = cell.key("drafts").key("message");
@@ -384,7 +387,7 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
     const seed = runtime.edit();
     const cell = runtime.getCell<Doc>(space, "ui-write-loss", schema, seed);
     cell.withTx(seed).set({ drafts: { message: "seed" } });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     expect(seeded.error).toBeUndefined();
 
     const leaf = cell.key("drafts").key("message");

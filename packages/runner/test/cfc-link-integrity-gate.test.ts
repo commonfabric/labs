@@ -81,7 +81,7 @@ describe("CFC link-write integrity gate", () => {
       });
 
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(target.getAsLink()).id!;
       const replica = storageManager.open(signer.did()).replica as unknown as {
@@ -171,7 +171,7 @@ describe("CFC link-write integrity gate", () => {
         },
       });
       tx.prepareCfc();
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "Link CurrentPrincipal confidentiality requires a concrete stored reader",
       );
     } finally {
@@ -223,7 +223,7 @@ describe("CFC link-write integrity gate", () => {
         },
       });
       tx.prepareCfc();
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "Link CurrentPrincipal confidentiality requires a concrete stored reader",
       );
     } finally {

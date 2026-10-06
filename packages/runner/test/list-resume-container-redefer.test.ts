@@ -111,7 +111,7 @@ describe("list resume container re-defer", () => {
       const tx = writer.edit();
       const rc = writer.getCell(space, RESULT_KEY, resultSchema, tx);
       const handle = writer.run(tx, compiled, { items: MAP_ITEMS }, rc);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       for (let round = 0; round < 10; round++) {
         await handle.pull();
         await writer.idle();
@@ -142,7 +142,7 @@ describe("list resume container re-defer", () => {
       await resumed.patternManager.compilePattern(MAP_PROGRAM, { space });
       const tx = resumed.edit();
       const rc = resumed.getCell(space, RESULT_KEY, resultSchema, tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       if (standLayer) {
         // Setting the document to `{}` leaves it holding no `value`, which is

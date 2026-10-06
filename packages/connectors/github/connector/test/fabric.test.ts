@@ -12,6 +12,7 @@ import {
   writeGithubFabricCells,
 } from "../src/fabric-storage.ts";
 import type { GithubPullRequest } from "../src/types.ts";
+import { createTransactionCommitReceipt } from "../../../../runner/src/storage/commit-receipt.ts";
 
 async function readIndex(
   connection: GithubFabricConnection,
@@ -386,7 +387,9 @@ describe("Fabric storage", () => {
             },
             commit: () => {
               commitCount++;
-              return Promise.resolve({ error: undefined });
+              return createTransactionCommitReceipt(
+                Promise.resolve({ error: undefined }),
+              );
             },
           };
         },
@@ -420,7 +423,8 @@ describe("Fabric storage", () => {
           edit: () => ({
             writeValueOrThrow: () => {},
             abort: () => {},
-            commit: () => Promise.resolve({ error }),
+            commit: () =>
+              createTransactionCommitReceipt(Promise.resolve({ error })),
           }),
         },
       } as unknown as GithubFabricConnection;

@@ -58,7 +58,7 @@ describe("generateText outbox mechanism", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -157,7 +157,7 @@ describe("generateText outbox mechanism", () => {
       setupTx,
     );
     inputsCell.set({ prompt });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
@@ -189,15 +189,15 @@ describe("generateText outbox mechanism", () => {
       // has to survive.
       const conflictTx = runtime.edit();
       inputsCell.withTx(conflictTx).set({ prompt, maxTokens: 128 });
-      expect((await conflictTx.commit()).ok).toBeDefined();
-      const rejectedResult = await rejectedTx.commit();
+      expect((await conflictTx.commit().settled).ok).toBeDefined();
+      const rejectedResult = await rejectedTx.commit().settled;
       expect(rejectedResult.error?.name).toBe("StorageTransactionInconsistent");
       await runtime.idle();
       expect(sendRequestCalls).toEqual([]);
 
       const retryTx = runtime.edit();
       action(retryTx);
-      const retryResult = await retryTx.commit();
+      const retryResult = await retryTx.commit().settled;
       expect(retryResult.ok).toBeDefined();
       await firstSendRequest.promise;
       await waitForLlmSettled(runtime, resultCell);
@@ -238,7 +238,7 @@ describe("generateText outbox mechanism", () => {
     inputsCell.set({
       messages: [{ role: "user", content: prompt }],
     });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
@@ -273,15 +273,15 @@ describe("generateText outbox mechanism", () => {
         messages: [{ role: "user", content: prompt }],
         maxTokens: 128,
       });
-      expect((await conflictTx.commit()).ok).toBeDefined();
-      const rejectedResult = await rejectedTx.commit();
+      expect((await conflictTx.commit().settled).ok).toBeDefined();
+      const rejectedResult = await rejectedTx.commit().settled;
       expect(rejectedResult.error?.name).toBe("StorageTransactionInconsistent");
       await runtime.idle();
       expect(sendRequestCalls).toEqual([]);
 
       const retryTx = runtime.edit();
       action(retryTx);
-      const retryResult = await retryTx.commit();
+      const retryResult = await retryTx.commit().settled;
       expect(retryResult.ok).toBeDefined();
       await firstSendRequest.promise;
       await waitForLlmSettled(runtime, resultCell);
@@ -331,7 +331,7 @@ describe("generateText outbox mechanism", () => {
       setupTx,
     );
     inputsCell.set({ prompt });
-    const setupResult = await setupTx.commit();
+    const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
@@ -360,7 +360,7 @@ describe("generateText outbox mechanism", () => {
     try {
       const firstTx = runtime.edit();
       action(firstTx);
-      const firstResult = await firstTx.commit();
+      const firstResult = await firstTx.commit().settled;
       expect(firstResult.ok).toBeDefined();
       await firstSendRequest.promise;
       await waitForLlmSettled(runtime, resultCell);
@@ -379,12 +379,12 @@ describe("generateText outbox mechanism", () => {
       );
       userPrompt.set(prompt);
       inputsCell.withTx(linkTx).key("prompt").set(userPrompt);
-      const linkResult = await linkTx.commit();
+      const linkResult = await linkTx.commit().settled;
       expect(linkResult.ok).toBeDefined();
 
       const secondTx = runtime.edit();
       action(secondTx);
-      const secondResult = await secondTx.commit();
+      const secondResult = await secondTx.commit().settled;
       expect(secondResult.ok).toBeDefined();
       await secondSendRequest.promise;
       await waitForLlmSettled(runtime, resultCell);

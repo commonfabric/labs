@@ -195,7 +195,7 @@ async function runLivePiece(passphrase: string): Promise<LivePiece> {
   const rootCell = runtime.getCell(space, "verb-prose-live", undefined, tx);
   const root = runtime.run(tx, compiled, {}, rootCell);
   runtime.prepareTxForCommit(tx);
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   await root.pull();
 
   // `getResultCellWithSourceSchema` is the one narrowing `PiecesController`

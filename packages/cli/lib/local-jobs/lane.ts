@@ -246,7 +246,13 @@ export class LocalJobLane {
     this.#stopping = true;
     const running = [...this.#running.values()];
     for (const { abort } of running) abort.abort();
-    await Promise.all(running.map(({ done }) => done));
+    const settled = await Promise.allSettled(running.map(({ done }) => done));
+    const errors = settled.filter((result) => result.status === "rejected").map(
+      (result) => result.reason,
+    );
+    if (errors.length) {
+      throw new AggregateError(errors, "Local jobs failed while stopping");
+    }
   }
 
   /** Helper for `kick`, which runs one claimed job to its end. */

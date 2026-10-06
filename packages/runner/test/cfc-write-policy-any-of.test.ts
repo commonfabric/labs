@@ -131,7 +131,7 @@ function fixture() {
         });
       }
       tx.prepareCfc();
-      return (await tx.commit()).error?.message;
+      return (await tx.commit().settled).error?.message;
     },
     async dispose() {
       await runtime.dispose();

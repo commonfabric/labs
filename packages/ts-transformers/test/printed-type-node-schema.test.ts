@@ -1164,6 +1164,11 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
       // `null & carrier` is nothing, and the reduced type keeps no alias name.
       // A written reference still names the policy; a type alone has only its
       // carrier, which holds the labels but cannot spell a writer binding.
+      const TITLE_AND_RANK = {
+        type: "object",
+        properties: { title: { type: "string" }, rank: { type: "number" } },
+        required: ["title", "rank"],
+      };
       for (
         const [spelling, declaration, a, input, output] of [
           [
@@ -1264,6 +1269,53 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
           ],
+          [
+            "a nullable intersection written directly",
+            "",
+            `Confidential<({ title: string } & { rank: number }) | null, ["secret"]>`,
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
+            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable intersection in another label's payload",
+            `type Sec<T> = Confidential<(T & { rank: number }) | null, ["secret"]>;`,
+            `Integrity<Sec<{ title: string }>, ["trusted"]>`,
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+            {
+              ...TITLE_AND_RANK,
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          ],
+          [
+            "an intersection whose name `NonNullable` drops",
+            "",
+            `NonNullable<Confidential<{ title: string } & { rank: number }, ["secret"]>>`,
+            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable intersection's writer written directly",
+            `const setEntry = handler<{ title: string }, { entry: Writable<({ title: string } & { rank: number }) | null> }>((event, { entry }) => { entry.set({ title: event.title, rank: 0 }); });`,
+            "WriteAuthorizedBy<({ title: string } & { rank: number }) | null, typeof setEntry>",
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    file: "/main.tsx",
+                    path: ["setEntry"],
+                  },
+                },
+              },
+            },
+            TITLE_AND_RANK,
+          ],
         ] as const
       ) {
         it(`keeps the metadata of ${spelling}`, async () => {
@@ -1280,6 +1332,236 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           expect((schemas.output.properties as Schema).a).toEqual(output);
         });
       }
+    });
+
+    describe("a labeled payload merged into a larger value", () => {
+      // A restriction lands wherever the payload's data may be, and evidence
+      // only where it must be, which a spread's result never says: a later
+      // spread of the payload's own type writes over its members.
+      const gps = { integrity: ["gps"] };
+      const secret = { confidentiality: ["secret"] };
+
+      /** Where `schema`'s labels sit: on the whole value, and on each member. */
+      const placement = (schema: Schema) => ({
+        whole: schema.ifc,
+        members: Object.fromEntries(
+          Object.entries((schema.properties ?? {}) as Record<string, Schema>)
+            .flatMap(([name, member]) =>
+              member.ifc ? [[name, member.ifc]] : []
+            ),
+        ),
+      });
+
+      for (
+        const [spelling, location, other, out, whole, members] of [
+          [
+            "a spread",
+            `Integrity<Point, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of the payload's own type over it",
+            `Integrity<Point, ["gps"]>`,
+            "Point",
+            "{ ...location, ...other, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of part of the payload's own type over it",
+            `Integrity<Point, ["gps"]>`,
+            `Pick<Point, "lat">`,
+            "{ ...location, ...other, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of a finite `Record`",
+            `Integrity<Record<"lat" | "long", number>, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of an index signature",
+            `Integrity<Record<string, number>, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of a payload with no members",
+            `Integrity<{}, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of an `unknown` payload",
+            `Integrity<unknown, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of minted evidence over a payload with no members",
+            `Cfc<{}, { addIntegrity: ["gps"] }>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of a payload a mapped type renamed",
+            `Rename<Confidential<Point, ["secret"]>>`,
+            "number",
+            "{ ...location }",
+            secret,
+            {},
+          ],
+          [
+            "a spread of a payload a mapped type renamed, beside another member",
+            `Rename<Confidential<Point, ["secret"]>>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            { latitude: secret, long: secret },
+          ],
+          [
+            "a confidential spread of the payload's own type over it",
+            `Confidential<Point, ["secret"]>`,
+            "Point",
+            "{ ...location, ...other, name }",
+            undefined,
+            { lat: secret, long: secret },
+          ],
+          [
+            "a confidential spread of a finite `Record`",
+            `Confidential<Record<"lat" | "long", number>, ["secret"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            { lat: secret, long: secret },
+          ],
+          [
+            "a confidential spread of an index signature",
+            `Confidential<Record<string, number>, ["secret"]>`,
+            "number",
+            "{ ...location, name }",
+            secret,
+            {},
+          ],
+        ] as const
+      ) {
+        it(`places the labels of ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Cfc, Confidential, Integrity, pattern } from "commonfabric";
+type Point = { lat: number; long: number };
+type Rename<T> = { [K in keyof T as K extends "lat" ? "latitude" : K]: T[K] };
+export default pattern<{ location: ${location}; other: ${other}; name: string }>(
+  ({ location, other, name }) => ({ out: ${out} }),
+);`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { output } = patternSchemas(parseModule(files["/main.tsx"]!));
+          expect(placement((output.properties as Record<string, Schema>).out!))
+            .toEqual({ whole, members });
+        });
+      }
+
+      for (
+        const [spelling, a, whole] of [
+          [
+            "a kept member of a finite `Record`",
+            `Pick<Confidential<Record<"lat" | "long", number>, ["secret"]>, "lat">`,
+            secret,
+          ],
+          [
+            "a member beside an index signature",
+            `Pick<Integrity<Record<string, number>, ["gps"]> & { name: string }, "name">`,
+            undefined,
+          ],
+          [
+            "a payload whose members a mapped type renames",
+            `Rename<Confidential<Point, ["secret"]>>`,
+            secret,
+          ],
+          [
+            "a primitive intersected with a labeled object",
+            `string & Confidential<{ payload: string }, ["secret"]>`,
+            secret,
+          ],
+          [
+            "an object intersected with a labeled primitive",
+            `Integrity<string, ["gps"]> & { name: string }`,
+            undefined,
+          ],
+          [
+            "a string index signature intersected with a labeled primitive",
+            `Integrity<string, ["gps"]> & Record<string, number>`,
+            undefined,
+          ],
+          [
+            "a number index signature intersected with a labeled primitive",
+            `Integrity<number, ["gps"]> & Record<number, string>`,
+            undefined,
+          ],
+          [
+            "a kept member of an intersection",
+            `Pick<Integrity<Point, ["gps"]> & { name: string }, "lat">`,
+            gps,
+          ],
+        ] as const
+      ) {
+        it(`places the labels of ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, pattern } from "commonfabric";
+type Point = { lat: number; long: number };
+type Rename<T> = { [K in keyof T as K extends "lat" ? "latitude" : K]: T[K] };
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          for (const schema of [input, output]) {
+            expect(
+              placement((schema.properties as Record<string, Schema>).a!),
+            ).toEqual({ whole, members: {} });
+          }
+        });
+      }
+
+      it("places a restriction on each alternative of a payload mixing a primitive and an object", async () => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Result = NonNullable<Confidential<string | { a: number } | null, ["secret"]>>;
+export default pattern<{ a: Result }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        for (const schema of [input, output]) {
+          const a = (schema.properties as Record<string, Schema>).a!;
+          const resolved = typeof a.$ref === "string"
+            ? ((schema.$defs ?? {}) as Record<string, Schema>)[
+              (a.$ref as string).split("/").pop()!
+            ]!
+            : a;
+          expect((resolved.anyOf as Schema[]).map(placement)).toEqual([
+            { whole: secret, members: {} },
+            { whole: secret, members: {} },
+          ]);
+        }
+      });
     });
 
     describe("a generic CFC alias written with its arguments", () => {

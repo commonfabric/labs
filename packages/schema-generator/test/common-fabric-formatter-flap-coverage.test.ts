@@ -90,7 +90,7 @@ describe("Common Fabric formatter flap coverage", () => {
       // Three type arguments: the requiredEventIntegrity falls back to the
       // trusted pattern because no integrity argument is supplied.
       const code = `
-        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
         type TrustedActionUiContract<
           T,
           Action extends string,
@@ -128,7 +128,7 @@ describe("Common Fabric formatter flap coverage", () => {
     "TrustedActionUiContract uses an explicit required-event-integrity tuple when provided",
     async () => {
       const code = `
-        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
         type TrustedActionUiContract<
           T,
           Action extends string,
@@ -182,7 +182,7 @@ describe("Common Fabric formatter flap coverage", () => {
           `,
           "/main.ts": `
             import { LABELS } from "./labels.ts";
-            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
             type Confidential<T, X extends readonly unknown[]> = Cfc<
               T,
               { confidentiality: X }

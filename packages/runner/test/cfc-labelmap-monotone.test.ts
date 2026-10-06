@@ -73,7 +73,7 @@ describe("CFC labelMap confidentiality monotonicity", () => {
         id: `cid:${guarded.taggedHashString}`,
         path: [],
       }, { value: guarded.schema });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Re-write the path through its schema (which declares only ["base"]).
       const tx = runtime.edit();
@@ -85,7 +85,7 @@ describe("CFC labelMap confidentiality monotonicity", () => {
       );
       cell.set({ secret: "updated" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
       const replica = storageManager.open(signer.did()).replica as unknown as {
@@ -170,7 +170,7 @@ describe("CFC labelMap confidentiality monotonicity", () => {
         id: `cid:${guarded.taggedHashString}`,
         path: [],
       }, { value: guarded.schema });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Re-write the CHILD path; its new entry must not shadow (drop) the
       // ancestor's confidentiality under longest-prefix reads.
@@ -183,7 +183,7 @@ describe("CFC labelMap confidentiality monotonicity", () => {
       );
       cell.set({ obj: { field: "updated" } });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
       const replica = storageManager.open(signer.did()).replica as unknown as {

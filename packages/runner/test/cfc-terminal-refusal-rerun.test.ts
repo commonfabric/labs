@@ -83,7 +83,7 @@ const seedSource = async () => {
   runtime.prepareTxForCommit(tx);
   // Assert on the ERROR, not on `ok`: a seed that cannot land says why in the
   // failure message instead of reporting an undefined `ok`.
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   return { storageManager, runtime, space, source };
 };
 
@@ -142,7 +142,7 @@ describe("cfc terminal refusal re-run", () => {
         update,
       ).set({ secret: "rotated" });
       runtime.prepareTxForCommit(update);
-      expect((await update.commit()).error).toBeUndefined();
+      expect((await update.commit().settled).error).toBeUndefined();
       await runtime.scheduler.idleWithPendingCommits();
 
       expect(state.runs).toBeGreaterThan(1);
@@ -179,7 +179,7 @@ describe("cfc prepared-state drift", () => {
       runtime.prepareTxForCommit(tx);
       // A read AFTER prepare invalidates the prepared digest.
       source.withTx(tx).get();
-      const { error } = await tx.commit();
+      const { error } = await tx.commit().settled;
       expect(error).toBeDefined();
       expect(error!.name).toBe("StorageTransactionAborted");
       expect(error!.message).toContain("read-after-prepare");

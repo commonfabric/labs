@@ -132,14 +132,14 @@ describe("resume-list-children-cross-space-append", () => {
     // deno-lint-ignore no-explicit-any
     const handleA = a.run(txA, compiledA as any, {}, rcA);
     a.prepareTxForCommit(txA);
-    expect((await txA.commit()).error).toBeUndefined();
+    expect((await txA.commit().settled).error).toBeUndefined();
     await handleA.pull();
     await a.idle();
     await a.storageManager.synced();
     const addA = a.edit();
     const committedA = waitForEventCommit(a);
     handleA.withTx(addA).key("addItem").send({ seed: "1" });
-    await addA.commit();
+    await addA.commit().settled;
     await committedA;
     await settle(a, handleA);
     expect(rowLabels(handleA)).toEqual(["child-1"]);
@@ -161,7 +161,7 @@ describe("resume-list-children-cross-space-append", () => {
     const addB = b.edit();
     const committedB = waitForEventCommit(b);
     rcB.withTx(addB).key("addItem").send({ seed: "2" });
-    await addB.commit();
+    await addB.commit().settled;
     await committedB;
     // The cross-space child's own run and the row over it land through
     // pending/retry cycles; settle them as the build did before leaving.

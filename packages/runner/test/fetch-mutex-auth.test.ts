@@ -70,7 +70,7 @@ describe("fetch-json mutex mechanism: protected request auth", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

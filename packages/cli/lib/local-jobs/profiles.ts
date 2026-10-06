@@ -9,6 +9,7 @@
 
 import { isAbsolute } from "@std/path";
 
+import { parseCfHarnessCliToolId } from "@commonfabric/cf-harness/cli";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
@@ -70,6 +71,11 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     !Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")
   ) {
     fail("`tools` must be a list of tool names");
+  }
+  for (const tool of tools as string[]) {
+    if (parseCfHarnessCliToolId(tool) === undefined) {
+      fail(`\`tools\` names an unknown CLI tool: ${tool}`);
+    }
   }
   if (
     typeof maxModelTurns !== "number" || !Number.isInteger(maxModelTurns) ||

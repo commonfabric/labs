@@ -65,7 +65,7 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
         },
       }),
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell<unknown>(signer.did(), id);
   };
 

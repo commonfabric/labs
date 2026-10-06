@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { Database } from "@db/sqlite";
 import { join } from "@std/path";
 
 import {
@@ -80,6 +81,93 @@ describe("local-jobs/store", () => {
       expect(again.created).toBe(false);
       expect(again.job.id).toBe("job-1");
       expect(store.list(10)).toHaveLength(1);
+    });
+
+    it("compares nested JSON values independently of object key order but preserves array order", () => {
+      const store = openStore();
+      const original = {
+        ...request(),
+        context: { outer: { b: [1, 2], a: { x: "yes", y: 3 } } },
+      };
+      try {
+        store.enqueue("c", "ask", "k", original);
+        expect(
+          added(
+            store.enqueue("c", "ask", "k", {
+              ...original,
+              context: { outer: { a: { y: 3, x: "yes" }, b: [1, 2] } },
+            }),
+          ).created,
+        ).toBe(false);
+        expect(
+          store.enqueue("c", "ask", "k", {
+            ...original,
+            context: { outer: { b: [2, 1], a: { x: "yes", y: 3 } } },
+          }),
+        ).toHaveProperty("conflict");
+        expect(
+          store.enqueue("c", "ask", "k", {
+            ...original,
+            context: { outer: { b: [1, 2], a: { x: "no", y: 3 } } },
+          }),
+        ).toHaveProperty("conflict");
+      } finally {
+        store.close();
+      }
+    });
+
+    it("compares the JSON-normalized request and retries a stored sorted row after reopening", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "local-jobs-hash-" });
+      const path = join(dir, "jobs.sqlite");
+      let store = LocalJobStore.open(path);
+      const original = {
+        ...request(),
+        context: {
+          missing: undefined,
+          negativeZero: -0,
+          infinite: Infinity,
+          array: [undefined, 1],
+        },
+      };
+      try {
+        const job = added(store.enqueue("c", "ask", "k", original)).job;
+        expect(
+          added(
+            store.enqueue(
+              "c",
+              "ask",
+              "k",
+              JSON.parse(JSON.stringify(original)),
+            ),
+          ).job.id,
+        ).toBe(job.id);
+        store.close();
+        const db = new Database(path);
+        try {
+          const sorted = JSON.stringify(
+            original,
+            (_key, value) =>
+              value && typeof value === "object" && !Array.isArray(value)
+                ? Object.fromEntries(
+                  Object.keys(value).sort().map((key) => [key, value[key]]),
+                )
+                : value,
+          );
+          db.prepare("UPDATE jobs SET request_json = ? WHERE id = ?").run(
+            sorted,
+            job.id,
+          );
+        } finally {
+          db.close();
+        }
+        store = LocalJobStore.open(path);
+        expect(added(store.enqueue("c", "ask", "k", original)).job.id).toBe(
+          job.id,
+        );
+      } finally {
+        store.close();
+        await Deno.remove(dir, { recursive: true });
+      }
     });
 
     it("returns a conflict, adding nothing, for a key resent with a different request or profile", () => {

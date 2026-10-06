@@ -61,7 +61,7 @@ describe("compile-cache write-back after a runtime-version bump", () => {
       const entryIdentity = ref.identity;
       const symbol = ref.symbol;
       await runtimeA.patternManager.flushCompileCacheWrites();
-      await txA.commit();
+      await txA.commit().settled;
       await smA.synced();
 
       // Version B ("the compiler shipped"): a COLD replica finds no compiled

@@ -37,8 +37,8 @@ describe("concurrent commits via emulated v2 storage", () => {
 
     // Fire both commits concurrently.
     const [resultA, resultB] = await Promise.all([
-      txA.commit(),
-      txB.commit(),
+      txA.commit().settled,
+      txB.commit().settled,
     ]);
     assert(resultA.ok, "commit A should succeed");
     assert(resultB.ok, "commit B should succeed");
@@ -51,7 +51,7 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:concurrent-same-doc", type, path: [] },
       { count: 0 },
     );
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     // Both transactions read the same initial state.
     const txA = storage.edit();
@@ -69,11 +69,11 @@ describe("concurrent commits via emulated v2 storage", () => {
     );
 
     // Commit A first — it should succeed.
-    const resultA = await txA.commit();
+    const resultA = await txA.commit().settled;
     assert(resultA.ok, "commit A should succeed");
 
     // Commit B should fail because the document changed under it.
-    const resultB = await txB.commit();
+    const resultB = await txB.commit().settled;
     assert(
       resultB.error,
       "commit B should fail due to concurrent modification",
@@ -91,7 +91,7 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:reject-independent-A", type, path: [] },
       { count: 0 },
     );
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     // txA will conflict — read then another tx mutates before it commits.
     const txA = storage.edit();
@@ -103,7 +103,7 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:reject-independent-A", type, path: [] },
       { count: 999 },
     );
-    await interleave.commit();
+    await interleave.commit().settled;
 
     txA.write(
       { space, id: "of:reject-independent-A", type, path: ["count"] },
@@ -117,10 +117,10 @@ describe("concurrent commits via emulated v2 storage", () => {
       { label: "independent" },
     );
 
-    const resultA = await txA.commit();
+    const resultA = await txA.commit().settled;
     assert(resultA.error, "commit A should fail");
 
-    const resultB = await txB.commit();
+    const resultB = await txB.commit().settled;
     assert(resultB.ok, "commit B should succeed independently");
   });
 
@@ -131,7 +131,7 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:three-seq-A", type, path: [] },
       { version: 0 },
     );
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     // Commit 1 — succeeds.
     const tx1 = storage.edit();
@@ -139,7 +139,7 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:three-seq-A", type, path: [] },
       { version: 1 },
     );
-    const result1 = await tx1.commit();
+    const result1 = await tx1.commit().settled;
     assert(result1.ok, "commit 1 should succeed");
 
     // tx2 reads old state, then we interleave a mutation.
@@ -151,13 +151,13 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:three-seq-A", type, path: [] },
       { version: 2 },
     );
-    await interleave.commit();
+    await interleave.commit().settled;
 
     tx2.write(
       { space, id: "of:three-seq-A", type, path: ["version"] },
       42,
     );
-    const result2 = await tx2.commit();
+    const result2 = await tx2.commit().settled;
     assert(result2.error, "commit 2 should fail (conflict)");
 
     // Commit 3 to different doc — succeeds.
@@ -166,7 +166,7 @@ describe("concurrent commits via emulated v2 storage", () => {
       { space, id: "of:three-seq-B", type, path: [] },
       { version: 3 },
     );
-    const result3 = await tx3.commit();
+    const result3 = await tx3.commit().settled;
     assert(result3.ok, "commit 3 should succeed");
   });
 });

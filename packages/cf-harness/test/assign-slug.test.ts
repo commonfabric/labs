@@ -212,7 +212,7 @@ describe("assign-slug", () => {
         id: "pending-mailbox",
         tables: { messages: table({ id: "integer primary key" }) },
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const resultSchema = {
         type: "object",

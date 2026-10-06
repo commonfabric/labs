@@ -217,7 +217,7 @@ describe("executor-llm-supersession", () => {
   async function setPrompt(argument: Cell<{ prompt: string }>, prompt: string) {
     const tx = client.edit();
     argument.withTx(tx).set({ prompt });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const engine = await server.engineForSpace(space);
     const seq = maxOf(
       Engine.selectCommitsSince(engine, { fromSeq: 0 })
@@ -260,7 +260,7 @@ export default pattern<{ prompt: string }, { output: any }>(({ prompt }) => ({
           const tx = client.edit();
           argument.withTx(tx).set({ prompt: "A" });
           client.run(tx, pattern, argument, result);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const cancel = result.sink(() => {});
           try {
             await until(() => requests.length === 1 && admitted.length >= 1);
@@ -365,10 +365,10 @@ export default pattern<{ prompt: ${scopeType}<Writable<string>> }, { output: any
         await result.sync();
         const seed = client.edit();
         argument.withTx(seed).key("prompt").set("same");
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const setup = client.edit();
         client.run(setup, pattern, argument, result);
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         const manager = EmulatedStorageManager.connectTo(server, {
           as: scope === "user" ? otherSigner : userSigner,
@@ -395,7 +395,7 @@ export default pattern<{ prompt: ${scopeType}<Writable<string>> }, { output: any
           await peerResult.sync();
           const edit = peer.edit();
           peerArgument.withTx(edit).key("prompt").set("same");
-          expect((await edit.commit()).error).toBeUndefined();
+          expect((await edit.commit().settled).error).toBeUndefined();
           cancelPeer = peerResult.sink(() => {});
           await until(() => requests.length === 2);
           expect(requests.map((request) => request.prompt)).toEqual([

@@ -1,3 +1,12 @@
+/**
+ * A per-user agent runner with independent local and Fabric lanes.
+ *
+ * The Fabric lane holds the requester's identity, follows their home queue,
+ * runs each request locally, and publishes its result to the requesting space.
+ * The local lane serves direct requests on a host-owned Unix socket. A
+ * local-only runner needs neither an identity nor a toolshed connection.
+ */
+
 import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
@@ -33,16 +42,6 @@ import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
 import { loadPieces } from "../lib/piece.ts";
 import { absPath } from "../lib/utils.ts";
-
-// `cf agent runner` — the per-user process that runs agent requests.
-//
-// A pattern's `agent()` request becomes an `AgentRun` record, listed in the
-// requester's home-space agent queue. This process holds the requester's
-// identity, sits beside their Loom instance, and pulls: it follows the queue
-// on the toolshed serving the home space, follows each entry to its record on
-// whichever toolshed serves the requesting space, runs `cf-harness` locally,
-// and writes the result and the record's terminal fields back. Nothing on
-// either toolshed connects to this process.
 
 /** The Loom retrieval tools a runner offers when it has a Loom configuration. */
 const LOOM_TOOLS = [...LOOM_RETRIEVAL_TOOL_IDS];
@@ -410,6 +409,7 @@ export function resolveLocalJobsConfig(
     const stray = [
       ["--local-job-profiles", options.localJobProfiles],
       ["--local-jobs-store", options.localJobsStore],
+      ["--max-concurrent-local", options.maxConcurrentLocal],
       ["--local-only", options.localOnly],
     ].find(([, value]) => value !== undefined);
     if (stray !== undefined) {
@@ -528,9 +528,12 @@ async function runFabricLane(
 }
 
 const runnerDescription = cliText(
-  `Run agent requests for one user, beside their Loom instance.
+  `Run agent requests for one user through independent local and Fabric lanes.
 
-A pattern's agent() request becomes an AgentRun record listed in the
+--local-jobs-socket enables the local lane with host-owned profiles. --local-only
+serves that lane alone, needing neither an identity nor a toolshed connection.
+
+On the Fabric lane, a pattern's agent() request becomes an AgentRun record listed in the
 requester's home-space agent queue (wish '#agent_queue'). This process holds
 the requester's identity and pulls: it registers itself as the queue's
 agentRunner, claims the oldest queued record under --max-concurrent, runs

@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { spy } from "@std/testing/mock";
 import { describe, it } from "@std/testing/bdd";
 
 import { createLocalJobApi } from "../../lib/local-jobs/api.ts";
@@ -299,6 +300,46 @@ describe("local-jobs/api", () => {
   });
 
   describe("GET /jobs/<id>/events", () => {
+    for (const ending of ["terminal", "cancel", "request abort"] as const) {
+      it(`removes the service abort listener on ${ending}`, async () => {
+        const { store, post, call, stopping } = apiWith();
+        const added = spy(stopping.signal, "addEventListener");
+        const removed = spy(stopping.signal, "removeEventListener");
+        const request = new AbortController();
+        let response: Response | undefined;
+        try {
+          const { job } = await (await post("/jobs", BODY)).json();
+          store.claimNext();
+          response = await call(`/jobs/${job.id}/events`, {
+            signal: request.signal,
+          });
+          expect(added.calls).toHaveLength(1);
+          if (ending === "terminal") {
+            store.finish(job.id, { state: "completed" });
+            await response.text();
+          } else if (ending === "cancel") {
+            await response.body!.cancel();
+          } else {
+            request.abort();
+            await response.text();
+          }
+          expect(stopping.signal.aborted).toBe(false);
+          expect(
+            removed.calls.some((call) =>
+              call.args[0] === "abort" &&
+              call.args[1] === added.calls[0].args[1]
+            ),
+          ).toBe(true);
+        } finally {
+          stopping.abort();
+          if (response && !response.bodyUsed) await response.body!.cancel();
+          added.restore();
+          removed.restore();
+          store.close();
+        }
+      });
+    }
+
     it("streams the stored events, then new ones, and ends after the job's terminal state", async () => {
       const { store, post, call } = apiWith();
       const { job } = await (await post("/jobs", BODY)).json();
