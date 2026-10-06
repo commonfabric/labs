@@ -13,6 +13,7 @@ import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
+  type ACL,
   aclDocId,
   ANYONE_USER,
   type Capability,
@@ -768,6 +769,45 @@ export type AdmittedCommitNotice = {
    * client transacts, system writes, or event deliveries. */
   warm?: true;
 };
+
+/**
+ * A served run's change to a space's access list, as the serving loop hands
+ * it to {@link Server.checkServedAclChange} and
+ * {@link Server.commitServedAclChange}. The run is a handler run delivering a
+ * durable stream entry, and the change is made under its delegated carriage
+ * (protocol.md §2's delegated row).
+ */
+export type ServedAclChange = {
+  /** The space whose access list changes. */
+  space: string;
+
+  /** The carried actor: the event's actor, whom the change is made as. */
+  actingPrincipal: string;
+
+  /** The carried actor's session, where the event names one. */
+  actingSession?: string;
+
+  /**
+   * The grant the change is admitted under, which names the event:
+   * `event-consequence:<eventId>`.
+   */
+  capabilityRef: string;
+
+  /** The durable stream entry the run delivers, which `capabilityRef` names. */
+  sourceEvent: { space: string; sidecarId: string; eventId: string };
+
+  /**
+   * Returns the access list the change leaves, given the stored list's value
+   * (`undefined` for a space with no list). It throws to refuse the change,
+   * and the refusal names what it threw.
+   */
+  change: (stored: unknown) => ACL;
+};
+
+/** What {@link Server.checkServedAclChange} and its commit decide. */
+export type ServedAclChangeVerdict =
+  | { readonly refused: string }
+  | { readonly admitted: true; readonly seq?: number };
 
 /**
  * The ExecutorHost's in-process observer (serving-loop.md §1's wiring):
@@ -2721,14 +2761,17 @@ export class Server {
    *  `enforce` modes alike, apart from the access decision those modes
    *  differ on. These are storage invariants: an invalid ACL or an ordinary
    *  first write would make later enforcement ambiguous or impossible. The
-   *  `off` mode skips them, and checks only a genesis root reservation. */
+   *  `off` mode skips them, and checks only a genesis root reservation.
+   *  `committer` is the principal the commit is made as, with the genesis
+   *  root its session declared: a session's own, or a served run's carried
+   *  actor, which declares none. */
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    session: SessionState,
+    committer: Pick<SessionState, "principal" | "genesisRoot">,
     commit: ClientCommit,
   ): V2Error | null {
-    const principal = session.principal;
+    const principal = committer.principal;
     if (commit.genesisRoot !== undefined) {
       if (!isGenesisRoot(commit.genesisRoot)) {
         return toError("ProtocolError", "Invalid genesis root reservation");
@@ -2748,14 +2791,14 @@ export class Server {
           "A root reservation requires space-key ACL genesis",
         );
       }
-      if (!valueEqual(commit.genesisRoot, session.genesisRoot)) {
+      if (!valueEqual(commit.genesisRoot, committer.genesisRoot)) {
         return toError(
           "AuthorizationError",
           "The genesis root must match the authenticated session intent",
         );
       }
     } else if (
-      Engine.serverSeq(engine) === 0 && session.genesisRoot !== undefined
+      Engine.serverSeq(engine) === 0 && committer.genesisRoot !== undefined
     ) {
       return toError(
         "AuthorizationError",
@@ -2818,6 +2861,36 @@ export class Server {
       );
     }
     return null;
+  }
+
+  /**
+   * The capability check of `commit`, made as `principal` to `space`, whose
+   * shape {@link #validateAclCommit} admitted. A commit that leaves the ACL
+   * document alone needs `WRITE`. One that writes it changes who may access
+   * the space, so it needs `OWNER`, with one exception: a member removing its
+   * own entry and nothing else ({@link #isSelfRemoval}, INV-12) needs only
+   * `READ`, which any entry grants. That holds in `observe` mode as in
+   * `enforce`. A session's transact and a served run's access-list change
+   * are both admitted through this check.
+   */
+  #authorizeCommitWithEngine(
+    engine: Engine.Engine,
+    space: string,
+    principal: string | undefined,
+    commit: ClientCommit,
+  ): V2Error | null {
+    const requirement: Capability =
+      !commitTouchesAclDoc(commit.operations, space)
+        ? "WRITE"
+        : this.#isSelfRemoval(engine, space, principal, commit)
+        ? "READ"
+        : "OWNER";
+    return this.#authorizeMessageWithEngine(
+      engine,
+      space,
+      principal,
+      requirement,
+    );
   }
 
   /**
@@ -3896,6 +3969,146 @@ export class Server {
     return { seq: applied.seq, deduped: false };
   }
 
+  /**
+   * Decides `request`, a served run's change to an access list, as
+   * {@link commitServedAclChange} would against the store as it stands, and
+   * commits nothing. The serving loop asks this when the run seals, so that a
+   * refusal fails that run alone, before anything of it reaches the wave.
+   */
+  async checkServedAclChange(
+    request: ServedAclChange,
+  ): Promise<ServedAclChangeVerdict> {
+    const engine = await this.#openEngine(request.space);
+    const sourceEngine = await this.#openEngine(request.sourceEvent.space);
+    const prepared = this.#prepareServedAclChange(
+      engine,
+      sourceEngine,
+      request,
+      0,
+    );
+    return "refused" in prepared ? prepared : { admitted: true };
+  }
+
+  /**
+   * Commits `request`, a served run's change to an access list, as one
+   * authored commit holding a single whole-document `set` of the list, under
+   * the run's delegated carriage (protocol.md §2's delegated row), with the
+   * delegating SpaceServer's session `sessionId` as its envelope (LT5) and
+   * `localSeq` from that host's process-lifetime counter, as for
+   * {@link commitDelegatedAppend}. A change that leaves the list as it is
+   * commits nothing.
+   *
+   * The change is admitted as a session's transact is, with the carried actor
+   * as the principal: INV-12's shape and the genesis rule
+   * ({@link #validateAclCommit}), then the capability check
+   * ({@link #authorizeCommitWithEngine}), on the same mode dial. The actor is
+   * never the space, so a space with no list refuses. The grant is resolved
+   * too: `capabilityRef` must name the entry the run delivers, and that entry
+   * must have been fired by the carried actor. The list is read, changed and
+   * written with no wait between, so nothing lands in between. On admission
+   * the commit is published as a transact writing the list is.
+   */
+  async commitServedAclChange(
+    request: ServedAclChange & { sessionId: string; localSeq: number },
+  ): Promise<ServedAclChangeVerdict> {
+    return await this.#withSpacePublicationLock(request.space, async () => {
+      const engine = await this.#openEngine(request.space);
+      const sourceEngine = await this.#openEngine(request.sourceEvent.space);
+      const prepared = this.#prepareServedAclChange(
+        engine,
+        sourceEngine,
+        request,
+        request.localSeq,
+      );
+      if ("refused" in prepared) return prepared;
+      if (prepared.commit === undefined) return { admitted: true };
+      const applied = Engine.applyCommit(engine, {
+        sessionId: request.sessionId,
+        space: request.space,
+        commit: prepared.commit,
+        commitClass: "authored",
+        delegated: {
+          actingPrincipal: request.actingPrincipal,
+          ...(request.actingSession === undefined
+            ? {}
+            : { actingSession: request.actingSession }),
+          capabilityRef: request.capabilityRef,
+        },
+      });
+      const aclId = aclDocId(request.space);
+      this.#invalidateAclCapabilities(request.space);
+      this.#revokeDeauthorizedSessions(engine, request.space);
+      this.#noticeAdmissions(engine, request.space);
+      this.markSpaceDirty(request.space, [toDirtyKey(aclId)]);
+      this.#notifyCommitAdmitted({
+        space: request.space,
+        seq: applied.seq,
+        class: "authored",
+        sessionId: request.sessionId,
+        writes: [{ id: aclId, scopeKey: "space" }],
+      });
+      return { admitted: true, seq: applied.seq };
+    });
+  }
+
+  /**
+   * Helper for {@link checkServedAclChange} and {@link commitServedAclChange},
+   * which returns the commit `request` makes against `engine`, the store of
+   * `request.space`, numbered `localSeq`: `undefined` when the change leaves
+   * the list as it is, or why it is refused. `sourceEngine` is the store of
+   * the space whose stream holds the entry the run delivers.
+   */
+  #prepareServedAclChange(
+    engine: Engine.Engine,
+    sourceEngine: Engine.Engine,
+    request: ServedAclChange,
+    localSeq: number,
+  ): { refused: string } | { commit: ClientCommit | undefined } {
+    const { space, actingPrincipal, sourceEvent } = request;
+    if (request.capabilityRef !== `event-consequence:${sourceEvent.eventId}`) {
+      return {
+        refused: `The grant ${request.capabilityRef} does not name the ` +
+          `event ${sourceEvent.eventId} the run delivers.`,
+      };
+    }
+    const sidecar = Engine.read(sourceEngine, { id: sourceEvent.sidecarId })
+      ?.value as StreamEventsDocValue | undefined;
+    const entry = (Array.isArray(sidecar?.entries) ? sidecar.entries : [])
+      .find((candidate) => candidate?.eventId === sourceEvent.eventId);
+    if (entry?.firedAt?.user !== actingPrincipal) {
+      return {
+        refused: `The event ${sourceEvent.eventId} was not fired by ` +
+          `${actingPrincipal}, the actor the change is made as.`,
+      };
+    }
+    const aclId = aclDocId(space);
+    const stored = Engine.read(engine, { id: aclId });
+    let next: ACL;
+    try {
+      next = request.change(stored?.value);
+    } catch (error) {
+      return {
+        refused: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (stored !== null && valueEqual(stored.value as FabricValue, next)) {
+      return { commit: undefined };
+    }
+    const commit: ClientCommit = {
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: aclId,
+        value: { ...(stored ?? {}), value: next } as EntityDocument,
+      }],
+    };
+    const committer = { principal: actingPrincipal };
+    const invalid = this.#validateAclCommit(engine, space, committer, commit) ??
+      this.#authorizeCommitWithEngine(engine, space, actingPrincipal, commit);
+    return invalid === null ? { commit } : { refused: invalid.message };
+  }
+
   async sqliteQuery(
     message: SqliteQueryRequest,
   ): Promise<ResponseMessage<SqliteQueryWireResult>> {
@@ -4949,32 +5162,18 @@ export class Server {
               invalid,
             );
           }
-          // ACL-document writes change who may access the space, so they need
-          // OWNER, with one exception: a member removing its own entry and
-          // nothing else (`#isSelfRemoval()`, INV-12) needs only READ, which
-          // any entry grants. That holds in `observe` mode as in `enforce`.
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
           );
-          const requirement: Capability = !aclTouched
-            ? "WRITE"
-            : this.#isSelfRemoval(
-                engine,
-                message.space,
-                session.principal,
-                message.commit,
-              )
-            ? "READ"
-            : "OWNER";
           const routedDeny = session.routedAuthority?.() === false
             ? toError("SessionRevokedError", "Routed memory authority ended")
             : null;
-          const deny = routedDeny ?? this.#authorizeMessageWithEngine(
+          const deny = routedDeny ?? this.#authorizeCommitWithEngine(
             engine,
             message.space,
             session.principal,
-            requirement,
+            message.commit,
           );
           if (deny) {
             return respondTypedError<Engine.AppliedCommit>(

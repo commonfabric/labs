@@ -1,27 +1,34 @@
 /**
  * `grantSpaceAccess()` and `revokeSpaceAccess()`, the handler calls that change
- * a space's access list, and `commitSpaceAccessChanges()`, which the runner
- * calls to commit what a handler run staged.
+ * a space's access list, and `settleSpaceAccessChanges()`, which the runner
+ * calls to settle what a handler run staged.
  * `docs/features/space-access-changes.md` describes the whole arrangement.
  *
  * A call validates what it can know on its own and stages the change on the
- * handler's frame. The runner then commits each space's staged changes as a
- * commit of its own, the only kind the memory server admits for an access
- * list, before the handler's transaction commits. The actor keeps `OWNER`
- * throughout, since no call may change the actor's own entry, so the ordering
- * never costs the handler its own writes.
+ * handler's frame. Each space's staged changes then commit as a commit of
+ * their own, the only kind the memory server admits for an access list, ahead
+ * of the handler's own writes: on a client the runner commits them before the
+ * handler's transaction commits, and on a serving runtime they ride that
+ * transaction into the serving loop's wave, which commits them first. The
+ * actor keeps `OWNER` throughout, since no call may change the actor's own
+ * entry, so the ordering never costs the handler its own writes.
  */
 
 import type { SpaceGrantLevel } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
 import { isWellFormedDID } from "@commonfabric/identity/did";
-import { type ACL, aclDocId, hasConcreteOwner } from "@commonfabric/memory/acl";
+import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
-import { validateStoredAcl, writeAcl } from "../acl-manager.ts";
-import { spaceReaderRole } from "../cfc/space-membership.ts";
+import {
+  applyAccessListChanges,
+  validateStoredAcl,
+  writeAcl,
+} from "../acl-manager.ts";
+import { stageSpaceAccessChanges } from "../executor/wave.ts";
 import type { Runtime } from "../runtime.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
+import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { isStaleReadConflict } from "../storage/rejection.ts";
 import { topFrame } from "./frame-context.ts";
 import { spaceOfTarget } from "./space-access.ts";
@@ -71,14 +78,50 @@ export function revokeSpaceAccess(target: unknown, principal: unknown): void {
 }
 
 /**
- * Commits the access-list changes the handler run of `frame` staged, one
- * commit per space, each holding the space's changes applied in call order to
- * the list as this runtime holds it once it has caught up with the memory
- * server. This is where a change that leaves the list as it was is found out:
+ * Settles the access-list changes the handler run of `frame` staged. The
+ * runner calls this after the handler body returns and before the handler's
+ * own transaction commits. Where the changes commit turns on the run:
+ *
+ * - On a client they commit on their own, through
+ *   {@link commitSpaceAccessChanges}, and the returned promise settles as that
+ *   one does.
+ * - On a serving runtime they ride the handler's transaction into the serving
+ *   loop's wave, which checks them when the transaction seals and commits
+ *   them ahead of everything else the run wrote or sent.
+ * - In a speculative run, a client's echo of a handler a serving runtime runs
+ *   for the same event, they commit nowhere: the served run makes them.
+ *
+ * Returns `undefined` when nothing is left to wait for.
+ */
+export function settleSpaceAccessChanges(
+  frame: Frame,
+): Promise<void> | undefined {
+  const pending = frame.pendingSpaceAccessChanges;
+  const runtime = frame.runtime;
+  const tx = frame.tx;
+  if (pending === undefined || runtime === undefined || tx === undefined) {
+    return undefined;
+  }
+  if (runtime.servingPosture) {
+    frame.pendingSpaceAccessChanges = undefined;
+    stageSpaceAccessChanges(tx, pending);
+    return undefined;
+  }
+  if (speculationRunContextOf(tx) !== undefined) {
+    frame.pendingSpaceAccessChanges = undefined;
+    return undefined;
+  }
+  return commitSpaceAccessChanges(frame);
+}
+
+/**
+ * Commits the access-list changes the handler run of `frame` staged on a
+ * client, one commit per space, each holding the space's changes applied in
+ * call order to the list as this runtime holds it once it has caught up with
+ * the memory server. This is where a change that leaves the list as it was is found out:
  * that space sends nothing, since writing the value a document already holds
  * changes nothing. A change that lands at the server after that catch-up is
- * ordered after this one. The runner calls this after the handler body returns
- * and before the handler's own transaction commits.
+ * ordered after this one.
  *
  * Each commit reads the list it replaces, so a concurrent change to the list
  * makes it conflict. The memory server's refusal of a stale read throws
@@ -105,7 +148,11 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
     const tx = runtime.edit();
     tx.tx.immediate = true;
     try {
-      writeAcl(tx, space, (current) => applyChanges(space, current, changes));
+      writeAcl(
+        tx,
+        space,
+        (current) => applyAccessListChanges(space, current, changes),
+      );
     } catch (error) {
       tx.abort(error);
       throw error;
@@ -134,16 +181,16 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
  * `call` names the call, for errors.
  *
  * Checked here, whatever the access list holds: that the call runs in a
- * handler on a client runtime, for an event that is a trusted gesture, that
- * `target` is a cell in a space other than the actor's Home space, whose DID
- * is the actor's own, and that `principal` is a DID other than `"*"`, the
- * space's own and the actor's. When this runtime already holds the list, the
- * actor's `OWNER` and the survival of a concrete `OWNER` are checked here as
- * well, so a refusal throws from the call; {@link commitSpaceAccessChanges}
- * checks both again against the list it replaces. A refusal throws before
- * anything is staged, so a handler that catches it has staged nothing for
- * that call. Whether a change leaves the list as it is is not decided here,
- * since the list this runtime holds may be stale; the commit decides it.
+ * handler, for an event that is a trusted gesture, that `target` is a cell in
+ * a space other than the actor's Home space, whose DID is the actor's own, and
+ * that `principal` is a DID other than `"*"`, the space's own and the actor's.
+ * When this runtime already holds the list, the actor's `OWNER` and the
+ * survival of a concrete `OWNER` are checked here as well, so a refusal throws
+ * from the call; the commit checks both again against the list it replaces. A
+ * refusal throws before anything is staged, so a handler that catches it has
+ * staged nothing for that call. Whether a change leaves the list as it is is
+ * not decided here, since the list this runtime holds may be stale; the commit
+ * decides it.
  *
  * Refusing the actor's Home space keeps one click from exposing everything a
  * user keeps there. Every other space the actor holds `OWNER` in stays
@@ -168,14 +215,6 @@ function stageChange(
     throw new Error(
       `\`${call}\` is available only in a handler, not in a pattern body, ` +
         "a `computed()`, or a `lift()`.",
-    );
-  }
-  if (runtime.servingPosture) {
-    // TODO(danfuzz): Carry the change through the wave instead, once the
-    // commit carrying a served change checks the actor's level in the space.
-    throw new Error(
-      `\`${call}\` is not available on a serving runtime, which cannot yet ` +
-        "check that the event's actor holds `OWNER` in the space.",
     );
   }
   if (frame.trustedGesture !== true) {
@@ -214,47 +253,13 @@ function stageChange(
   const change: SpaceAccessChange = { principal, level, actor };
   const staged = frame.pendingSpaceAccessChanges?.get(space) ?? [];
   const current = knownAcl(runtime, space);
-  if (current !== undefined) applyChanges(space, current, [...staged, change]);
+  if (current !== undefined) {
+    applyAccessListChanges(space, current, [...staged, change]);
+  }
   (frame.pendingSpaceAccessChanges ??= new Map()).set(space, [
     ...staged,
     change,
   ]);
-}
-
-/**
- * Helper for {@link stageChange} and {@link commitSpaceAccessChanges}, which
- * returns `current`, the access list of `space`, with `changes` applied in
- * order. `current` is `null` when the space has no list.
- *
- * @throws Error when a change's actor holds no `OWNER` in the list it
- *   changes, or when a change would leave no concrete `OWNER`.
- */
-function applyChanges(
-  space: MemorySpace,
-  current: ACL | null,
-  changes: readonly SpaceAccessChange[],
-): ACL {
-  let acl: ACL | null = current;
-  for (const { principal, level, actor } of changes) {
-    if (acl === null || spaceReaderRole(acl, actor) !== "owner") {
-      throw new Error(
-        `Changing the access list of ${space} requires \`OWNER\` there, ` +
-          `which ${actor} does not hold.`,
-      );
-    }
-    const { [principal]: _removed, ...rest } = acl;
-    const next: ACL = level === undefined
-      ? rest
-      : { ...rest, [principal]: level };
-    if (!hasConcreteOwner(next)) {
-      throw new Error(
-        `Changing the entry of ${principal} would leave the access list of ` +
-          `${space} with no concrete \`OWNER\`.`,
-      );
-    }
-    acl = next;
-  }
-  return acl ?? {};
 }
 
 /**

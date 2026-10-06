@@ -738,9 +738,9 @@ The change to the access list commits on its own, just before the handler's
 other writes, so if those fail the change still stands; the handler running
 again for the same event repairs that.
 
-Both calls throw on a serving runtime for now.
-[`space-access-changes.md`](../../features/space-access-changes.md) has the
-details.
+Both calls work alike in a handler a client runs and in one the serving loop
+runs. [`space-access-changes.md`](../../features/space-access-changes.md) has
+the details.
 
 ### Naming a space
 
