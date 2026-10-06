@@ -223,7 +223,7 @@ describe("compiled CTS action<E, R> results in receipts", () => {
     );
     const root = runtime.run(tx, compiled, {}, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await root.pull();
     return root;

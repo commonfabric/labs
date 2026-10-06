@@ -93,7 +93,7 @@ const seedLabeledDoc = async (
       labelMap: { version: 1, entries: [{ path: [], label }] },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 const seedPlainDoc = async (
@@ -110,7 +110,7 @@ const seedPlainDoc = async (
     type: "application/json",
     path: [],
   }, { value });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
@@ -355,7 +355,7 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
       runtime.getCell(signer.did(), "d4-stats-low", undefined, tx).get();
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       const stats = runtime.getCfcStats();
@@ -414,7 +414,7 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       const stats = runtime.getCfcStats();
@@ -462,7 +462,7 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
       sink.set({ out: "granted" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       const stats = runtime.getCfcStats();
@@ -520,7 +520,7 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
         sink.set({ out: "b" });
 
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           message: String((result.error as Error | undefined)?.message),
           stats: runtime.getCfcStats(),
@@ -578,7 +578,7 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       const stats = runtime.getCfcStats();

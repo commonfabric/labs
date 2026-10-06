@@ -126,7 +126,7 @@ describe("argument-default-seed", () => {
           runtime.getCell<Result>(space, "result", compiled.resultSchema, tx),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         await runtime.idle();
 
@@ -153,7 +153,7 @@ describe("argument-default-seed", () => {
       );
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /items",
       );
     });
@@ -170,7 +170,7 @@ describe("argument-default-seed", () => {
       );
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /items",
       );
     });

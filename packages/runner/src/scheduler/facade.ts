@@ -2154,7 +2154,7 @@ export class Scheduler {
     tx: IExtendedStorageTransaction,
     log: ReactivityLog,
     succeeded: boolean,
-    commit: ReturnType<IExtendedStorageTransaction["commit"]>,
+    commit: ReturnType<IExtendedStorageTransaction["commit"]>["settled"],
     failure?: unknown,
   ): void {
     if (!this.#viewRunning.delete(action)) return;

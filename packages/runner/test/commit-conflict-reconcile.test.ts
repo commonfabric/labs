@@ -70,7 +70,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v0" });
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed v0: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
       // No synced(): the barrier holds on A's parked accept, which forces
@@ -97,7 +97,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v1" });
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `bump v1: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
       // No synced() here either — same premise-preservation as the seed.
@@ -127,8 +127,9 @@ describe("read-repair: stale read after cross-replica conflict", () => {
     // only after the server staged the rejection's repair docs, so the
     // explicit fan-out below deterministically carries the repair frame the
     // default-mode promise is gated on.
-    const commitP = txB.commit();
-    await txB.commitVerdict!();
+    const receipt = txB.commit();
+    const commitP = receipt.settled;
+    await receipt.verdict;
     await server.flushSessions([space]);
     await clock.settle();
     const resB = await commitP;
@@ -167,7 +168,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v0" });
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed v0: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
     }
@@ -186,7 +187,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v1" });
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `bump v1: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
     }
@@ -208,7 +209,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       commitCallbackFired = true;
     });
     let promiseSettled = false;
-    const receipt = txB.startCommit();
+    const receipt = txB.commit();
     const commitP = receipt.settled.then((result) => {
       promiseSettled = true;
       return result;
@@ -236,7 +237,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       .toBe(true);
   });
 
-  it("returns a rejected resolveAt-verdict commit at rejection receipt, while its commit callback waits for repair", async () => {
+  it("reports rejection through the verdict while its commit callback waits for repair", async () => {
     const CAUSE = "verdict-mode-rejection-doc";
 
     // Same choreography again: A seeds and bumps; B stages a stale write.
@@ -245,7 +246,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v0" });
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed v0: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
     }
@@ -264,7 +265,7 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v1" });
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `bump v1: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
     }
@@ -283,10 +284,12 @@ describe("read-repair: stale read after cross-replica conflict", () => {
     let verdictModeResult:
       | { error?: { name?: string } }
       | undefined;
-    const commitP = txB.commit({ resolveAt: "verdict" }).then((result) => {
-      verdictModeResult = result as { error?: { name?: string } };
-      return result;
-    });
+    const commitP = txB.commit({ holdSyncedUntilCovered: false }).verdict.then(
+      (result) => {
+        verdictModeResult = result as { error?: { name?: string } };
+        return result;
+      },
+    );
 
     await clock.settle();
     expect(

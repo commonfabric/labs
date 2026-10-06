@@ -162,7 +162,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
   ): Promise<void> => {
     const tx = runtime.edit();
     tx.recordSqliteWrite!(at, { op: "sqlite", db, sql, params });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /**
@@ -368,7 +368,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     return { bodies: result.key("bodies") as Cell<any> };
   };
@@ -474,7 +474,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     const bodies = result.key("bodies") as Cell<any>;
 
@@ -573,7 +573,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       // deno-lint-ignore no-explicit-any -- `ifc` is not on the schema type
     } as any, seedTx);
     picked.set("c-alpha");
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const { commonfabric: cf } = createTrustedBuilder(runtime);
     const parameterOf = parameterLift((pick) => String(pick ?? ""));
@@ -604,7 +604,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     const bodies = result.key("bodies") as Cell<any>;
 
@@ -664,7 +664,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       // deno-lint-ignore no-explicit-any -- the builtin's state
       return result.key("rows") as Cell<any>;
     };
@@ -742,7 +742,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
 
     const pickSecond = runtime.edit();
     pick.withTx(pickSecond).set(1);
-    expect((await pickSecond.commit()).error).toBeUndefined();
+    expect((await pickSecond.commit().settled).error).toBeUndefined();
     await rowsFor(1);
     expect(hasClause(declaredAt(bodies, ["requestHash"]), first)).toBe(true);
     expect(hasClause(declaredAt(bodies, ["requestHash"]), second)).toBe(true);
@@ -750,7 +750,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
 
     const pickThird = runtime.edit();
     pick.withTx(pickThird).set(2);
-    expect((await pickThird.commit()).error).toBeUndefined();
+    expect((await pickThird.commit().settled).error).toBeUndefined();
     await rowsFor(2);
     const held = declaredAt(bodies, ["requestHash"]);
     expect(hasClause(held, first)).toBe(true);
@@ -779,7 +779,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       const out = runtime.getCell(space, cause, undefined, tx);
       out.set({ seen: String(seen) });
       tx.prepareCfc();
-      return await tx.commit();
+      return await tx.commit().settled;
     };
 
     /**
@@ -923,7 +923,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         for (const [picked, rows] of [[1, 1], [2, 2]] as const) {
           const tx = runtime.edit();
           pick.withTx(tx).set(picked);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await rowsFor(rows);
         }
 
@@ -962,11 +962,11 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         const cancel = bodies.sink(() => {});
         const pickSecond = runtime.edit();
         pick.withTx(pickSecond).set(1);
-        expect((await pickSecond.commit()).error).toBeUndefined();
+        expect((await pickSecond.commit().settled).error).toBeUndefined();
         await secondClaimed.promise;
         const pickThird = runtime.edit();
         pick.withTx(pickThird).set(2);
-        expect((await pickThird.commit()).error).toBeUndefined();
+        expect((await pickThird.commit().settled).error).toBeUndefined();
         await rowsFor(2);
         cancel();
 
@@ -992,7 +992,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         });
         const tx = runtime.edit();
         pick.withTx(tx).set(1);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const failed = await waitForCellValue<QueryState<BodyRow>>(
           runtime,
           bodies,
@@ -1027,7 +1027,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         handleTx,
       );
       handle.set(db);
-      expect((await handleTx.commit()).error).toBeUndefined();
+      expect((await handleTx.commit().settled).error).toBeUndefined();
 
       const { commonfabric: cf } = createTrustedBuilder(runtime);
       const parameterOf = parameterLift((keys) =>
@@ -1058,7 +1058,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       );
       const result = runtime.run(tx, testPattern, { db: handle }, resultCell);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       // The first query's parameter is a literal, so its transaction carries
       // nothing and the request goes: the refusal below is about the label,
@@ -1115,7 +1115,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         handleTx,
       );
       handle.set(db);
-      expect((await handleTx.commit()).error).toBeUndefined();
+      expect((await handleTx.commit().settled).error).toBeUndefined();
 
       const setup = runtime.edit();
       const plain = runtime.getCell<string>(space, "plain note", {
@@ -1128,7 +1128,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         // deno-lint-ignore no-explicit-any -- a schema literal with `ifc`
       } as any, setup);
       labeled.set("something to see");
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
 
       const { commonfabric: cf } = createTrustedBuilder(runtime);
       const testPattern = cf.pattern<{ db: unknown; note: unknown }>((
@@ -1164,7 +1164,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         resultCell,
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       // deno-lint-ignore no-explicit-any -- the builtin's state
       const rows = result as Cell<any>;
@@ -1178,7 +1178,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       const relabel = runtime.edit();
       // deno-lint-ignore no-explicit-any -- the argument holds a cell
       result.getArgumentCell()!.withTx(relabel).key("note").set(labeled as any);
-      expect((await relabel.commit()).error).toBeUndefined();
+      expect((await relabel.commit().settled).error).toBeUndefined();
 
       const refused = await waitForCellValue<QueryState<KeyRow>>(
         runtime,
@@ -1219,7 +1219,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
           handleTx,
         );
         handle.set(db);
-        expect((await handleTx.commit()).error).toBeUndefined();
+        expect((await handleTx.commit().settled).error).toBeUndefined();
 
         const paramTx = flowless.edit();
         const container = flowless.getCell<string>(space, "flowless choice", {
@@ -1228,7 +1228,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
           // deno-lint-ignore no-explicit-any -- a schema literal with `ifc`
         } as any, paramTx);
         container.set("c-alpha");
-        expect((await paramTx.commit()).error).toBeUndefined();
+        expect((await paramTx.commit().settled).error).toBeUndefined();
 
         const { commonfabric: cf } = createTrustedBuilder(flowless);
         const testPattern = cf.pattern<{ db: unknown; container: string }>((
@@ -1259,7 +1259,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
           resultCell,
         );
         flowless.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         const refused = await waitForCellValue<QueryState<KeyRow>>(
           flowless,
@@ -1296,7 +1296,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         handleTx,
       );
       handle.set(db);
-      expect((await handleTx.commit()).error).toBeUndefined();
+      expect((await handleTx.commit().settled).error).toBeUndefined();
 
       // Its own transaction: one transaction holds a writer for one space.
       const choiceTx = runtime.edit();
@@ -1307,7 +1307,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         choiceTx,
       );
       container.set("c-alpha");
-      expect((await choiceTx.commit()).error).toBeUndefined();
+      expect((await choiceTx.commit().settled).error).toBeUndefined();
 
       const { commonfabric: cf } = createTrustedBuilder(runtime);
       const testPattern = cf.pattern<{ db: unknown; container: string }>((
@@ -1338,7 +1338,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         resultCell,
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       // deno-lint-ignore no-explicit-any -- the builtin's state
       const rows = result as Cell<any>;
@@ -1353,7 +1353,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       // read on the way to the second request.
       const again = runtime.edit();
       container.withTx(again).set("c-beta");
-      expect((await again.commit()).error).toBeUndefined();
+      expect((await again.commit().settled).error).toBeUndefined();
 
       const second = await waitForCellValue<QueryState<KeyRow>>(
         runtime,

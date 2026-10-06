@@ -956,7 +956,7 @@ turn starts. Another version, or a required feature it does not serve, answers
   "code": "protocol_mismatch",
   "protocol": {
     "protocolVersion": 1,
-    "features": ["client_actions", "typed_commands"]
+    "features": ["client_actions", "typed_commands", "starts_run"]
   },
   "requestedVersion": 2,
   "missing": []
@@ -977,12 +977,18 @@ The features are `client_actions`, the final-action kinds above;
 `typed_commands`, the typed command invocation, catalog, and settlement defined
 in [`src/contracts/client-command.ts`](../src/contracts/client-command.ts); and
 `browser_host`, a task's `browserHost` declaration
-([Browser hosts](#browser-hosts)). The HTTP console serves the first two, and
-`browser_host` when it was launched with `--allow-browser-host`; the stdio
-transport has no browser host and serves the first two alone. A client ignores a
-feature name it does not know. A console that answers without a `protocol`
-serves `client_actions` alone, and a host requiring `typed_commands` treats it
-as unable to serve that host. The wire shapes are pinned by the JSON files under
+([Browser hosts](#browser-hosts)); and `starts_run`, a catalog entry's
+`startsRun`. That marks a command which answers once its work is accepted and
+names, in `outputs.run_id`, a run that can still fail; the session reads the
+service's `command.run-outcome` to learn how it ended. A console without
+`starts_run` refuses such an entry, so a host sends the field only to a console
+that echoes the feature. Every console serves `client_actions`, `typed_commands`
+and `starts_run`. The HTTP console also serves `browser_host` when it was
+launched with `--allow-browser-host`; the stdio transport has no browser host. A
+client ignores a feature name it does not know. A console that answers without a
+`protocol` serves `client_actions` alone, and a host requiring `typed_commands`
+treats it as unable to serve that host. The wire shapes are pinned by the JSON
+files under
 [`test/fixtures/client-command-wire/`](../test/fixtures/client-command-wire/),
 which the Weaver's Swift tests read too; the two `protocol-mismatch-*` files are
 the answers of a console serving `client_actions` alone.

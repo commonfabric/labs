@@ -589,7 +589,7 @@ const handlers: Record<
     cell.withTx(tx).set(value as never);
     unmarkUiInputBlindWriteTx(tx);
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit() as {
+    const res = await tx.commit().settled as {
       error?: { name?: string; message?: string };
     };
     if (doIdle !== false) await idle();
@@ -621,7 +621,7 @@ const handlers: Record<
     const tx = runtime.edit();
     cell.withTx(tx).set([...current, value] as never);
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit() as {
+    const res = await tx.commit().settled as {
       error?: { name?: string; message?: string };
     };
     if (doIdle !== false) await idle();
@@ -647,7 +647,7 @@ const handlers: Record<
     defaultPattern.key("agentQueue").set({ entries: [] });
     home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
       .key("defaultPattern").set(defaultPattern);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     await idle();
     return true;
@@ -693,7 +693,7 @@ const handlers: Record<
       ifc: { confidentiality: [cfcAtom.user(runtime.userIdentityDID)] },
     }, tx);
     source.set(value);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     const prepared = prepareSnapshotShare(source.withTx(undefined), {
       space: result().key("originator"),
@@ -776,7 +776,7 @@ const handlers: Record<
       value: result().key("selected"),
     });
     runtime.prepareTxForCommit(tx);
-    const written = await tx.commit();
+    const written = await tx.commit().settled;
     if (written.error) throw written.error;
     await idle();
     const sent = await runtime.editWithRetry((eventTx) => {
@@ -795,7 +795,7 @@ const handlers: Record<
       result().key("selected").key("books", 0),
     );
     runtime.prepareTxForCommit(tx);
-    const written = await tx.commit();
+    const written = await tx.commit().settled;
     if (written.error) throw written.error;
     await idle();
     return true;
@@ -893,7 +893,7 @@ const handlers: Record<
     defaultPattern.key("defaultProfile").set({ profile });
     home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
       .key("defaultPattern").set(defaultPattern);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     await idle();
     return {};
@@ -991,7 +991,7 @@ const handlers: Record<
       ok?: { value?: FabricValue };
       error?: { message?: string };
     };
-    await tx.commit();
+    await tx.commit().settled;
     return {
       ok: res.error === undefined,
       value: res.ok?.value,

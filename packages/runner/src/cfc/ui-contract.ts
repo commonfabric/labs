@@ -124,8 +124,13 @@ type AddressLike = {
   path: readonly unknown[];
 };
 
-type TrustedDomProvenance = {
-  origin: "dom";
+/**
+ * The provenance a trusted UI surface puts on an event: `dom` from the
+ * renderer's dispatch of a browser event, `native` from a native host's
+ * control bound by `bindNativeUiControl()`.
+ */
+type TrustedUiProvenance = {
+  origin: "dom" | "native";
   trusted: true;
   ui?: {
     pattern?: unknown;
@@ -136,11 +141,11 @@ type TrustedDomProvenance = {
 
 const rendererTrustedEvents = new WeakSet<object>();
 
-const isTrustedDomProvenance = (
+const isTrustedUiProvenance = (
   provenance: unknown,
-): provenance is TrustedDomProvenance =>
+): provenance is TrustedUiProvenance =>
   isObjectOrArray(provenance) &&
-  provenance.origin === "dom" &&
+  (provenance.origin === "dom" || provenance.origin === "native") &&
   provenance.trusted === true;
 
 export const markRendererTrustedEvent = (event: unknown): void => {
@@ -509,7 +514,7 @@ export const trustedEventProvenanceMatchesUiContract = (
   provenance: unknown,
   contract: UiContract | undefined,
 ): boolean => {
-  if (contract === undefined || !isTrustedDomProvenance(provenance)) {
+  if (contract === undefined || !isTrustedUiProvenance(provenance)) {
     return false;
   }
   if (
@@ -629,11 +634,13 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
  * provenance says the browser trusted a DOM event on a UI surface. This is
  * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
  * their match on which surface it was, so it shows that a person acted and
- * not on what.
+ * not on what. An event from a native host's control satisfies a write's UI
+ * contract but is not a trusted gesture.
  */
 export const isTrustedGesture = (event: unknown): boolean =>
   isRendererTrustedEvent(event) && isObjectNotArray(event) &&
-  isTrustedDomProvenance(event.provenance) &&
+  isTrustedUiProvenance(event.provenance) &&
+  event.provenance.origin === "dom" &&
   isObjectNotArray(event.provenance.ui);
 
 const pathsEqual = (

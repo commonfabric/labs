@@ -199,7 +199,7 @@ describe("stage G outbox + sqlite discharge", () => {
         flushed += 1;
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // NOT flushed at seal: the destination took the effects (post-commit
     // handoff is the wave cycle's duty, not the seal's).
@@ -227,7 +227,7 @@ describe("stage G outbox + sqlite discharge", () => {
         flushed += 1;
       },
     });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     expect(flushed).toBe(1);
     runtime.clearSealDestination();
     wave2.abandon("test over");
@@ -413,7 +413,7 @@ describe("stage G outbox + sqlite discharge", () => {
       actingSession: "sess-1",
       capabilityRef: "cap-1",
     });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     // Contribution 2: READS contribution 1's withdrawn x write — it is
     // withdrawn WHOLE (nothing derived from withdrawn state commits),
@@ -432,7 +432,7 @@ describe("stage G outbox + sqlite discharge", () => {
       actingPrincipal: "user:bob",
       capabilityRef: "cap-2",
     });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
 
     // A concurrent authored commit moves x's head past the wave basis.
     const xLink = x.getAsNormalizedFullLink();
@@ -501,7 +501,7 @@ describe("stage G outbox + sqlite discharge", () => {
       actingSession: "sess-1",
       capabilityRef: "cap-d",
     });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     const outcome = await wave.commitWave(newSink());
     await wave.settled();
@@ -565,7 +565,7 @@ describe("stage G outbox + sqlite discharge", () => {
       actingSession: "sess-1",
       capabilityRef: "cap-d",
     });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     expect((await wave2.commitWave(newSink())).seq).toBeDefined();
     await wave2.settled();
@@ -635,7 +635,7 @@ describe("stage G outbox + sqlite discharge", () => {
       actingSession: "sess-1",
       capabilityRef: "cap-fo",
     });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
     const targetEngine = await server.engineForSpace(targetSpace);
@@ -708,7 +708,7 @@ describe("stage G outbox + sqlite discharge", () => {
       actingSession: "sess-2",
       capabilityRef: "cap-zs",
     });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     expect(wave.contributionCount).toBe(1);
     expect(wave.hasOutboundAppends).toBe(true);
     runtime.clearSealDestination();
@@ -780,7 +780,7 @@ describe("stage G outbox + sqlite discharge", () => {
       sessionlessSpaceScope: true,
       capabilityRef: "cap-x",
     });
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     wave.abandon("test over");
     lease.release();

@@ -76,7 +76,7 @@ describe("filter-resume-rearm", () => {
             .getAsNormalizedFullLink().id
         ),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       // A cell syncs through the storage manager, which holds the children's.
       const storageManager = runtime.storageManager;
       const originalSyncCell = storageManager.syncCell;
@@ -130,14 +130,14 @@ describe("filter-resume-rearm", () => {
       coordinator.onActionRegistered?.(registered);
       tx = runtime.edit();
       coordinator.action(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(setups).toBe(2);
       tx = runtime.edit();
       inputs.withTx(tx).key("list").set([second, first]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = runtime.edit();
       coordinator.action(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(setups).toBe(2);
       expect(invalidated).toEqual([]);
       held.resolve();
@@ -145,7 +145,7 @@ describe("filter-resume-rearm", () => {
       expect(invalidated).toEqual([registered]);
       tx = runtime.edit();
       coordinator.action(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(setups).toBe(4);
     } finally {
       held.resolve();

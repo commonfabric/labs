@@ -82,7 +82,7 @@ describe("snapshot memo", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -579,7 +579,7 @@ describe("snapshot memo", () => {
       otherTx,
     );
     target.set({ value: "over there" });
-    await otherTx.commit();
+    await otherTx.commit().settled;
     const holder = runtime.getCell<{ target: unknown }>(
       space,
       "cross-space-holder",
@@ -747,7 +747,7 @@ describe("snapshot memo", () => {
     expect(resolveLink(runtime, tx, link).id).toBe(
       target.getAsNormalizedFullLink().id,
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     // A finished transaction answers no reads, so it must not answer with what
     // it saw while it was open. Resolution falls through to a walk that finds
@@ -844,7 +844,7 @@ describe("snapshot memo", () => {
           .get())[0].title;
 
       expect(read(tx)).toBe("Entry 0");
-      await tx.commit();
+      await tx.commit().settled;
 
       // Each transaction memoizes for itself. A view taken in one is not an
       // answer any later one may give.

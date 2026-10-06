@@ -97,7 +97,7 @@ describe("llmDialog error-path messages", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const addMessage = await result.key("addMessage").pull();
@@ -128,7 +128,7 @@ describe("llmDialog error-path messages", () => {
       expect(link?.id).not.toBe(undefined);
     }
 
-    await rtx.commit();
+    await rtx.commit().settled;
   });
 
   it("stores a failed-request error message in its own document", async () => {
@@ -179,7 +179,7 @@ describe("llmDialog error-path messages", () => {
         tx,
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const addMessage = await result.key("addMessage").pull();
@@ -204,7 +204,7 @@ describe("llmDialog error-path messages", () => {
         expect(parseLink(raw)?.id).not.toBe(undefined);
       }
 
-      await rtx.commit();
+      await rtx.commit().settled;
     } finally {
       LLMClient.prototype.sendRequest = original;
     }

@@ -200,7 +200,7 @@ describe("engine-read-through", () => {
       await result.sync();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
     } finally {
       await runtime.dispose();
@@ -253,7 +253,7 @@ describe("engine-read-through", () => {
     const engine = await server.engineForSpace(space);
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // Only the authored input is the settlement target; the store head can
     // already include a serving wave that followed it.
     const authoredSeq = Engine.readState(engine, {
@@ -294,7 +294,7 @@ describe("engine-read-through", () => {
     });
     const tx = clientRuntime.edit();
     cell.withTx(tx).set({ draft });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await clientRuntime.storageManager.synced();
     return link.id;
   };
@@ -414,7 +414,7 @@ describe("engine-read-through", () => {
 
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 41 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await tenure.whenParked;
     expect(tenure.active).toBe(false);
     expect(refreshCalls).toBe(STORE_REFRESH_ATTEMPTS);
@@ -684,7 +684,7 @@ describe("engine-read-through", () => {
       const id = cell.getAsNormalizedFullLink().id;
       const tx = runtime.edit();
       cell.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const replica = manager.open(space).replica as SpaceReplica;
       const confirmed = replica.get({ id, path: [], scope: "space" })?.since;
       expect(confirmed).toBeGreaterThan(0);
@@ -893,7 +893,7 @@ describe("engine-read-through", () => {
     const probe = factoryRuntime!.edit();
     factoryRuntime!.getCell<{ n: number }>(space, "read-through-arg", undefined)
       .withTx(probe).get();
-    expect((await probe.commit()).error).toBeUndefined();
+    expect((await probe.commit().settled).error).toBeUndefined();
   };
 
   it("advances the watermark document over a commit authored while the wave creating that document was in flight, when nothing derives from it", async () => {
@@ -924,7 +924,7 @@ describe("engine-read-through", () => {
     });
     const creating = clientRuntime.edit();
     cell.withTx(creating).set({ made: true });
-    expect((await creating.commit()).error).toBeUndefined();
+    expect((await creating.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.readState(engine, { id })!.seq;
     expect(Engine.commitClassOfSeq(engine, authoredSeq)).toBe("authored");
     hold.release();
@@ -965,13 +965,13 @@ describe("engine-read-through", () => {
     hold.arm();
     const input = clientRuntime.edit();
     clientArg.withTx(input).set({ n: 50 });
-    expect((await input.commit()).error).toBeUndefined();
+    expect((await input.commit().settled).error).toBeUndefined();
     await hold.held();
     const previous = hold.commits.at(-1)!;
     await sealReadProbe();
     const next = clientRuntime.edit();
     clientArg.withTx(next).set({ n: 60 });
-    expect((await next.commit()).error).toBeUndefined();
+    expect((await next.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.readState(engine, {
       id: clientArg.getAsNormalizedFullLink().id,
     })!.seq;
@@ -1018,7 +1018,7 @@ describe("engine-read-through", () => {
       .withTx(tx).get();
     expect(replica.unexaminedAbsences(tx).map((absence) => absence.id))
       .toEqual([id]);
-    await tx.commit();
+    await tx.commit().settled;
 
     // A commit creating the document reaches the replica through the feed.
     const cell = clientRuntime.getCellFromLink<{ made: boolean }>({
@@ -1031,7 +1031,7 @@ describe("engine-read-through", () => {
     // The refresh baseline is read ahead of the commit: the loop can have
     // refreshed the record before the commit's own promise resolves.
     const refreshesBefore = host.stats().storeRefreshes;
-    expect((await creating.commit()).error).toBeUndefined();
+    expect((await creating.commit().settled).error).toBeUndefined();
     // The creating commit's own seq is the settlement target: the loop's
     // wave commits can land between the client's commit and this read,
     // and the watermark covers authored input only.

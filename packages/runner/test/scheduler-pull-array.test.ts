@@ -56,7 +56,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     arrayCell.set(["a", "b"]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track sink calls
@@ -72,7 +72,7 @@ describe("pull mode array reactivity", () => {
 
     // Push a new element using the current transaction
     arrayCell.withTx(tx).push("c");
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Wait for scheduler to process
@@ -93,7 +93,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     arrayCell.set(["a", "b"]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const cancel = arrayCell.withTx(tx).sink(() => {});
@@ -135,7 +135,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     arrayCell.set([1, 2, 3]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track sink calls
@@ -150,7 +150,7 @@ describe("pull mode array reactivity", () => {
 
     // Set a new array with different length using the current transaction
     arrayCell.withTx(tx).set([1, 2, 3, 4, 5]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Wait for scheduler to process
@@ -185,7 +185,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     filteredCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track how many times the computation runs
@@ -219,7 +219,7 @@ describe("pull mode array reactivity", () => {
 
     // Now push a new item to the source array
     sourceArray.withTx(tx).push({ name: "item3", hidden: false });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Pull again - the computation SHOULD run because its input changed
@@ -258,7 +258,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     computedCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track sink notifications
@@ -298,7 +298,7 @@ describe("pull mode array reactivity", () => {
     // (the previous tx was used by the sink which read computedCell)
     const pushTx = runtime.edit();
     sourceArray.withTx(pushTx).push("c");
-    await pushTx.commit();
+    await pushTx.commit().settled;
 
     // The sink SHOULD be notified with the updated computed value
     // Without explicit pull - just let the scheduler run
@@ -351,7 +351,7 @@ describe("pull mode array reactivity", () => {
         { name: "Hidden Note", isHidden: true },
       ],
     });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Get the pieceRegistry subcell
@@ -365,7 +365,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     visiblePiecesCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track renderer notifications
@@ -419,7 +419,7 @@ describe("pull mode array reactivity", () => {
       name: "New Note",
       isHidden: false,
     });
-    await createNoteTx.commit();
+    await createNoteTx.commit().settled;
 
     // Let the scheduler process the change
     await runtime.scheduler.idle();
@@ -458,7 +458,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     spaceCell.set({ pieceRegistry: [{ name: "Initial Piece" }] });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const pieceRegistryCell = spaceCell.key("pieceRegistry");
@@ -474,7 +474,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     countCell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const countPieces: Action = function countPieces(actionTx) {
@@ -508,7 +508,7 @@ describe("pull mode array reactivity", () => {
     // Push first new piece (total should be 2)
     const tx1 = runtime.edit();
     pieceRegistryCell.withTx(tx1).push({ name: "Piece 1" });
-    await tx1.commit();
+    await tx1.commit().settled;
 
     await runtime.scheduler.idle();
     expect(renderedPieceCount[renderedPieceCount.length - 1]).toBe(2);
@@ -516,7 +516,7 @@ describe("pull mode array reactivity", () => {
     // Push second piece (total should be 3)
     const tx2 = runtime.edit();
     pieceRegistryCell.withTx(tx2).push({ name: "Piece 2" });
-    await tx2.commit();
+    await tx2.commit().settled;
 
     await runtime.scheduler.idle();
     expect(renderedPieceCount[renderedPieceCount.length - 1]).toBe(3);
@@ -524,7 +524,7 @@ describe("pull mode array reactivity", () => {
     // Push third piece (total should be 4)
     const tx3 = runtime.edit();
     pieceRegistryCell.withTx(tx3).push({ name: "Piece 3" });
-    await tx3.commit();
+    await tx3.commit().settled;
 
     await runtime.scheduler.idle();
     expect(renderedPieceCount[renderedPieceCount.length - 1]).toBe(4);
@@ -558,7 +558,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     pieceRegistryCell.set([{ name: "Initial Note" }]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Create computed cell (visiblePieces)
@@ -569,7 +569,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     visiblePiecesCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track what renderer sees
@@ -616,7 +616,7 @@ describe("pull mode array reactivity", () => {
     // STEP 3: Create note while on another page (push while unsubscribed)
     const createTx = runtime.edit();
     pieceRegistryCell.withTx(createTx).push({ name: "New Note" });
-    await createTx.commit();
+    await createTx.commit().settled;
 
     // STEP 4: Navigate back (remount default app, resubscribe renderer)
     const tx2 = runtime.edit();
@@ -662,7 +662,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     pieceRegistryCell.set([{ name: "Initial Note" }]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Create computed cell (visiblePieces)
@@ -673,7 +673,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     visiblePiecesCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track what renderer sees
@@ -720,7 +720,7 @@ describe("pull mode array reactivity", () => {
     // STEP 3: Create note while on another page
     const createTx = runtime.edit();
     pieceRegistryCell.withTx(createTx).push({ name: "New Note" });
-    await createTx.commit();
+    await createTx.commit().settled;
 
     // STEP 4: Navigate back - resubscribe BOTH computation AND renderer
     cancelComputation = runtime.scheduler.subscribe(
@@ -782,7 +782,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     pieceRegistryCell.set([{ name: "Initial Note" }]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // IMPORTANT: The computed output cell is created with a FIXED cause
@@ -794,7 +794,7 @@ describe("pull mode array reactivity", () => {
       tx,
     );
     visiblePiecesCell.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Track what renderer sees
@@ -840,7 +840,7 @@ describe("pull mode array reactivity", () => {
     // PUSH while unmounted
     const createTx = runtime.edit();
     pieceRegistryCell.withTx(createTx).push({ name: "New Note" });
-    await createTx.commit();
+    await createTx.commit().settled;
 
     // REMOUNT: Create computation #2 (NEW action, but SAME output cell)
     const computeVisible2: Action = function computeVisible2(actionTx) {
@@ -893,7 +893,7 @@ describe("pull mode array reactivity", () => {
         tx,
       );
       log.set([]);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const accumulator: Action = (tx) => {
@@ -929,7 +929,7 @@ describe("pull mode array reactivity", () => {
         tx,
       );
       output.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const doubler: Action = (tx) => {
@@ -958,7 +958,7 @@ describe("pull mode array reactivity", () => {
         tx,
       );
       output.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const randomWriter: Action = (tx) => {

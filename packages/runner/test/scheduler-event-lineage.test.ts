@@ -249,7 +249,7 @@ describe("scheduler event lineage", () => {
     );
     originWrites.set(0);
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const rejection = rejectNextServerTransact(storageManager);
@@ -322,7 +322,7 @@ describe("scheduler event lineage", () => {
     );
     originWrites.set(0);
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let originAttempts = 0;
@@ -391,7 +391,7 @@ describe("scheduler event lineage", () => {
       tx,
     );
     originWrites.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const presyncStarted = Promise.withResolvers<void>();
@@ -486,7 +486,7 @@ describe("scheduler event lineage", () => {
     );
     originWrites.set(0);
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const handlerA: EventHandler = (handlerTx) => {
@@ -565,7 +565,7 @@ describe("scheduler event lineage", () => {
       tx,
     );
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const handler: EventHandler = (handlerTx, event: unknown) => {
@@ -624,10 +624,10 @@ describe("scheduler event lineage", () => {
       tx,
     );
     originWrites.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     payloads.withTx(tx).set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const gate = delayNextServerTransact(storageManager);
@@ -706,10 +706,10 @@ describe("scheduler event lineage", () => {
       tx,
     );
     originWrites.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     payloads.withTx(tx).set([]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const gate = delayNextServerTransact(storageManager);
@@ -776,10 +776,10 @@ describe("scheduler event lineage", () => {
       tx,
     );
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
 
     const originTx = runtime.edit();
-    await originTx.commit();
+    await originTx.commit().settled;
     tx = runtime.edit();
 
     const handler: EventHandler = (handlerTx, event: unknown) => {
@@ -814,7 +814,7 @@ describe("scheduler event lineage", () => {
       tx,
     );
     payloads.set([]);
-    await tx.commit();
+    await tx.commit().settled;
 
     const originTx = runtime.edit();
     originTx.abort("already failed lineage origin");
@@ -884,7 +884,7 @@ describe("scheduler event lineage", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -965,7 +965,7 @@ describe("scheduler event lineage", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
     await runtime.scheduler.idleWithPendingCommits();
@@ -1086,7 +1086,7 @@ describe("scheduler event lineage", () => {
         localTx,
       );
       const root = local.runtime.run(localTx, rootPattern, {}, rootCell);
-      await localTx.commit();
+      await localTx.commit().settled;
       localTx = local.runtime.edit();
       await root.pull();
       await local.runtime.scheduler.idleWithPendingCommits();

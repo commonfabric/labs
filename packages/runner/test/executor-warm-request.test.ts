@@ -332,7 +332,7 @@ describe("executor-warm-request", () => {
       argumentCell.withTx(tx).set({ n: 42 });
       serving.run(tx, compiled, argumentCell, resultCell);
       homeAnchor.withTx(tx).set({ linked: true });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const resultId = resultCell.getAsNormalizedFullLink().id;
       const setupSeq = () => serverSeq(pEngine);

@@ -98,7 +98,7 @@ describe("agent-served", () => {
     await server.writeDocument(home, `of:${home}`, { [home]: "OWNER" });
     const seed = client.edit();
     seedHomeAgentQueue(client, home, seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const compiled = await client.patternManager.compilePattern({
       main: "/main.tsx",
@@ -115,7 +115,7 @@ describe("agent-served", () => {
     const tx = client.edit();
     argument.withTx(tx).set({ task: "summarize the reading list" });
     client.run(tx, compiled, argument, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancelDemand = result.sink(() => {});
 
     const queue = agentQueueIndexCell(client, home);
@@ -218,7 +218,7 @@ describe("agent-served", () => {
                 host: `other${raced.count}.example`,
               },
             ]);
-            expect((await race.commit()).error).toBeUndefined();
+            expect((await race.commit().settled).error).toBeUndefined();
           }
           return sealed;
         },

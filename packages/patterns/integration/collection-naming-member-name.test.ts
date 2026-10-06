@@ -88,11 +88,11 @@ describe("a collection member's stored name", () => {
       );
       const seed = runtime.edit();
       argument.withTx(seed).set({ items: [], names: {} });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const setup = runtime.edit();
       runtime.run(setup, compiled, argument, result);
       runtime.prepareTxForCommit(setup);
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
 
       await result.key("addItem").pull();
       for (const title of titles) {
