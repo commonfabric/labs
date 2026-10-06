@@ -32,6 +32,7 @@ import {
   resolveCfHarnessCliSystemPrompt,
   runCfHarnessCli,
 } from "../src/cli.ts";
+import type { HarnessBrowserHost } from "../src/contracts/browser-host.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -2838,6 +2839,56 @@ Deno.test("runCfHarnessCli omits the posture record for a run that recorded none
   const summary = stdout.join("");
   assertEquals(summary.includes("fabricSessionCfc: enforce-explicit"), true);
   assertEquals(summary.includes("provenance"), false);
+});
+
+Deno.test("runCfHarnessCli hands an embedder's browser host to the run's engine", async () => {
+  const { io } = createIoBuffers();
+  const browserHost: HarnessBrowserHost = {
+    perform: () =>
+      Promise.resolve({
+        status: "ok",
+        page: { url: "about:blank", title: "" },
+      }),
+  };
+  let createdOptions: Record<string, unknown> | undefined;
+  const exitCode = await runCfHarnessCli(
+    [
+      "--model-provider",
+      "openai-compatible-gateway",
+      "--workspace",
+      "/tmp/project",
+      "--prompt",
+      "Find the opening hours",
+      "--model",
+      "gpt-5.4",
+      "--allow-tool",
+      "delegate_task",
+      "--allow-subagent-profile",
+      "browser",
+    ],
+    {
+      io,
+      env: { CF_HARNESS_API_KEY: "test-key" },
+      browserHost,
+      createPromptLoop: (options) => {
+        createdOptions = options as Record<string, unknown>;
+        return {
+          runPrompt: () =>
+            Promise.reject(new Error("the loop is not run in this test")),
+          runTranscript: () =>
+            Promise.reject(new Error("unexpected resume path")),
+        };
+      },
+    },
+  );
+
+  assertEquals(exitCode, 1);
+  assertEquals(
+    (createdOptions?.engine as { browserHost?: HarnessBrowserHost })
+      ?.browserHost,
+    browserHost,
+  );
+  assertEquals(createdOptions?.allowedSubagentProfiles, ["browser"]);
 });
 
 Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata", async () => {
