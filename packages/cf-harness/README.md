@@ -1127,11 +1127,13 @@ is bound to the runtime of its next resume or turn, as the
 A run on the native default is a run on the direct driver, with everything the
 rest of this section says of that driver. Two of its differences stop or change
 a run that works on Docker. A workspace or a writable host mount that holds the
-store or the policy is refused, since the sandbox could rewrite them, so a run
-whose workspace is the home directory names Docker or another workspace; the
-refusal says that the runtime was the default and how Docker is selected. And
-`host.docker.internal` reaches only the host ports the launch forwards into the
-VM.
+store or the policy, or that lies inside the store, is refused, since the
+sandbox could rewrite them. This holds for any `runsc` run on macOS, whatever
+binary, rootfs and policy it names, because the macOS `runsc` runs from the
+store. So a run whose workspace is the home directory names Docker or another
+workspace; the refusal says that the runtime was the default and how Docker is
+selected. And `host.docker.internal` reaches only the host ports the launch
+forwards into the VM.
 
 The two sidecar directory flags are the Docker driver's: the console's launcher,
 `console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on

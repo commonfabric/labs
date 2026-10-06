@@ -714,6 +714,27 @@ export const resolveRunscSandboxConfig = (
       options.cfcPolicyPath,
       canonicalHostPath("CFC policy", options.cfcPolicyPath),
     );
+  // The macOS `runsc` runs from its store whatever binary, rootfs and policy
+  // are named: the VM's config, image and daemon socket are there. So the
+  // store is kept out of reach both ways: not inside a writable mount, and
+  // no writable mount inside it.
+  if (store !== undefined) {
+    const canonicalStore = trusted(
+      "cfc-vm store",
+      store,
+      canonicalHostPath("cfc-vm store", store),
+    );
+    for (const mount of hostMounts) {
+      if (
+        !mount.readOnly &&
+        mount.canonical.some((root) => inside(root, [canonicalStore]))
+      ) {
+        throw new Error(
+          `the writable mount ${mount.hostPath} lies inside the cfc-vm store ${store}: the sandbox could rewrite what the macOS runsc runs from${unnamed}`,
+        );
+      }
+    }
+  }
   // Frozen, mounts included: the engine checks containment against this
   // set and the runtime rereads it at every launch, and a caller holding
   // `ownedRunscSandboxConfig` must not be able to make those two differ.

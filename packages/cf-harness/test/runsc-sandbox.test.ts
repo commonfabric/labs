@@ -237,6 +237,75 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", asy
   assertEquals(c.cfcPolicyPath, undefined);
 });
 
+Deno.test("resolveRunscSandboxConfig keeps the macOS store out of every writable mount", async () => {
+  // The macOS `runsc` runs from the store whatever binary, rootfs and policy
+  // are named: its config, VM image and daemon socket are there. So the store
+  // is refused inside a writable mount, and a writable mount inside the
+  // store, even with all three named elsewhere.
+  const base = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-store-reach-" }),
+  );
+  const outside = {
+    runscBinary: RUNSC,
+    rootfs: "/images/kitchensink",
+    cfcPolicyPath: "/policy.json",
+  };
+  const darwin = (
+    workspaceHostPath: string,
+    cfcVmHome: string,
+    additionalMounts: Parameters<
+      typeof resolveRunscSandboxConfig
+    >[0]["additionalMounts"] = [],
+  ) =>
+    resolveRunscSandboxConfig({
+      ...outside,
+      workspaceHostPath,
+      additionalMounts,
+      platform: "darwin",
+      homeDir: "/Users/someone",
+      cfcVmHome,
+      scratchDir: join(base, "scratch"),
+    });
+  try {
+    const workspace = join(base, "ws");
+    const store = join(base, "ws", "cfc-vm");
+    await Deno.mkdir(store, { recursive: true });
+    assertThrows(
+      () => darwin(workspace, store),
+      Error,
+      `cfc-vm store ${store} lies inside the writable mount ${workspace}`,
+    );
+
+    const elsewhere = join(base, "cfc-vm");
+    await Deno.mkdir(join(elsewhere, "ext4"), { recursive: true });
+    assertThrows(
+      () =>
+        darwin(join(base, "other"), elsewhere, [{
+          kind: "host-bind",
+          name: "images",
+          hostPath: join(elsewhere, "ext4"),
+          sandboxPath: "/images",
+          readOnly: false,
+        }]),
+      Error,
+      `writable mount ${
+        join(elsewhere, "ext4")
+      } lies inside the cfc-vm store ${elsewhere}`,
+    );
+
+    // Read only, the sandbox cannot rewrite it either way.
+    darwin(join(base, "other"), elsewhere, [{
+      kind: "host-bind",
+      name: "store",
+      hostPath: elsewhere,
+      sandboxPath: "/store",
+      readOnly: true,
+    }]);
+  } finally {
+    await Deno.remove(base, { recursive: true });
+  }
+});
+
 Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolute path", () => {
   // The macOS `runsc` resolves `CFC_VM_HOME` against its own working
   // directory, so a relative store names one place here and another there.

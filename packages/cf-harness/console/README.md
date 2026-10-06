@@ -254,6 +254,13 @@ Loom chooses each instance's runtime, and a console on a default could be on
 another than the instance's runs. It tells the console it serves to hold to the
 same. What follows is the default of a launch with no `--instance`.
 
+A session stays on the runtime it started on. After a restart under another
+runtime, a follow-up turn on a session started before it is refused as
+`provider-mismatch`, naming the runtime the session started on: restart the
+console with that runtime named, or start a new session. The
+[cf-harness README](../README.md#sandbox-runtimes) sets out how runs and sessions
+are bound.
+
 With no runtime named on macOS, the console and `console:launch` refuse to start
 unless the store holds a `config.json` and each piece no setting replaces: an
 executable `bin/runsc` and `bin/cfc-vm` unless `CF_HARNESS_RUNSC_BINARY` names a
