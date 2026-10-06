@@ -165,8 +165,8 @@ export enum RequestType {
    * {@link CellSend} sends an event, except that the worker stamps the event
    * with `native` provenance for the request's surface and action and marks
    * it renderer-trusted, so that it satisfies a write's UI contract for that
-   * surface and action. Waits for the event's commit, and with
-   * `awaitHandling` for its handling, and rejects when either is refused.
+   * surface and action. Waits for the event's handling, and rejects with the
+   * reason when the event, or the run of the stream's handler, is refused.
    */
   CellSendReviewed = "cell:send-reviewed",
 
@@ -1250,13 +1250,6 @@ export type CellSendReviewedRequest = BaseRequest & {
 
   /** The action the control takes, matched against a contract's `action`. */
   action: string;
-
-  /**
-   * Wait for the event's handling as well as its commit, and return its
-   * refusal, such as a write the handler made that the runtime refused, to
-   * the caller.
-   */
-  awaitHandling?: boolean;
 };
 
 /**

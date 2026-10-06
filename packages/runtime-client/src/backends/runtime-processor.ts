@@ -2119,12 +2119,13 @@ export class RuntimeProcessor {
    * Applies a `CellSendReviewedRequest`: sends the request's payload through
    * a native control bound to the request's surface and action, which stamps
    * the event with `native` provenance for them, replacing any `provenance`
-   * the payload carries, and marks it renderer-trusted. Reached only through
-   * a client of this worker, which a pattern the worker runs is not.
+   * the payload carries, and marks it renderer-trusted, and waits for the
+   * event's handling. Reached only through a client of this worker, which a
+   * pattern the worker runs is not.
    *
    * @throws If the payload is not a record, or the surface or action is
-   *   blank, and when the event's commit, or with `awaitHandling` its
-   *   handling, is refused.
+   *   blank, and when the event, or the run of the stream's handler, is
+   *   refused.
    */
   async handleCellSendReviewed(
     request: CellSendReviewedRequest,
@@ -2142,7 +2143,7 @@ export class RuntimeProcessor {
     await this.#sendCellEvent(
       request.cell,
       (send) => bindNativeUiControl({ send }, control)(payload),
-      request.awaitHandling ? "handling" : "commit",
+      "handling",
     );
   }
 

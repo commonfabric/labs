@@ -648,8 +648,12 @@ export class CellHandle<T = unknown> {
    * intent, or change to an access list. The write is held to every other
    * check.
    *
-   * It rejects as {@link sendStrict} does, and `options` has the same
-   * meaning. The surface and action are read once, here.
+   * It resolves once the run of the stream's handler has committed, which
+   * under server execution is the consequence the served run recorded, and
+   * rejects with the reason when the runtime refuses the event, when that
+   * run's commit is refused, as it is for a write whose UI contract the event
+   * does not satisfy, and when the run throws or the event is dropped or
+   * refused admission. The surface and action are read once, here.
    *
    * This mints trusted events. The host calls it only from the control's
    * real user-input path, with exactly the values the control displayed and
@@ -661,11 +665,7 @@ export class CellHandle<T = unknown> {
    * @throws If `event` is not a record, or `control` names a blank surface or
    *   action.
    */
-  async sendReviewed(
-    event: T,
-    control: NativeUiControl,
-    options?: CellSendOptions,
-  ): Promise<void> {
+  async sendReviewed(event: T, control: NativeUiControl): Promise<void> {
     const serialized = CellHandle.serialize(event as ClientCellValue);
     const { surface, action } = control;
     await this.#enqueueOperation(() =>
@@ -675,7 +675,6 @@ export class CellHandle<T = unknown> {
         event: serialized,
         surface,
         action,
-        ...(options?.awaitHandling === true && { awaitHandling: true }),
       })
     );
   }

@@ -132,14 +132,14 @@ throws, and when the event is dropped or refused admission. Under server
 execution the run it waits for is the served one, whose outcome reaches the
 worker as the consequence the serving loop recorded for the event.
 
-`CellHandle.sendReviewed(event, { surface, action }, options?)` sends a reviewed
-action from a control the host draws itself, bound to one trusted surface and
-one action. The worker stamps the event with `native` provenance for them,
-replacing any `provenance` the payload carries, and marks it renderer-trusted,
-so a write gated on that surface and action commits as it would for a reviewed
-gesture on the pattern's rendered surface. It rejects as `sendStrict()` does,
-and takes the same option. It mints trusted events, so it is for the host's own
-code alone;
+`CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
+from a control the host draws itself, bound to one trusted surface and one
+action. The worker stamps the event with `native` provenance for them, replacing
+any `provenance` the payload carries, and marks it renderer-trusted, so a write
+gated on that surface and action commits as it would for a reviewed gesture on
+the pattern's rendered surface. It always waits for the handler's run, as
+`sendStrict()` does with `awaitHandling`, and rejects with the reason on the
+same refusals. It mints trusted events, so it is for the host's own code alone;
 [host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
 says what it owes in exchange.
 

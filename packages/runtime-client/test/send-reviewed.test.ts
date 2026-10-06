@@ -1,6 +1,6 @@
 /**
- * What `CellHandle.sendReviewed()`, and `awaitHandling` on it and on
- * `sendStrict()`, deliver. Each case drives a real `RuntimeClient` over a
+ * What `CellHandle.sendReviewed()`, and `sendStrict()` with and without
+ * `awaitHandling`, deliver. Each case drives a real `RuntimeClient` over a
  * `MessageChannel` to a real processor serving a runtime that runs a pattern
  * whose one writer is gated on a reviewed action, so that what a send claims
  * is held to what that writer's commit does. The cases run twice: once with
@@ -267,7 +267,6 @@ describe("send-reviewed", () => {
             }),
           },
           chatSend,
-          { awaitHandling: true },
         );
         await handle.sendStrict({
           body: "unmarked",
@@ -330,9 +329,7 @@ describe("send-reviewed", () => {
         }
         // Events on one stream are handled in the order they were sent, so
         // once this one is handled any sent above it have been too.
-        await handle.sendReviewed({ body: "barrier" }, chatSend, {
-          awaitHandling: true,
-        });
+        await handle.sendReviewed({ body: "barrier" }, chatSend);
       } finally {
         cancel();
       }
@@ -351,9 +348,7 @@ describe("send-reviewed", () => {
           await using room = await chatRoom(serverExecution);
           await settled(
             serverExecution,
-            room.save.sendReviewed({ body: "  exact text  " }, chatSend, {
-              awaitHandling: true,
-            }),
+            room.save.sendReviewed({ body: "  exact text  " }, chatSend),
             "the reviewed send's handling",
           );
 
@@ -370,9 +365,7 @@ describe("send-reviewed", () => {
           ) {
             await expect(settled(
               serverExecution,
-              room.save.sendReviewed({ body: "refused" }, control, {
-                awaitHandling: true,
-              }),
+              room.save.sendReviewed({ body: "refused" }, control),
               "the mismatched send's handling",
             )).rejects.toThrow(refusalOf(serverExecution));
           }
@@ -394,7 +387,6 @@ describe("send-reviewed", () => {
                 provenance: nativeProvenance(chatSend),
               },
               chatDelete,
-              { awaitHandling: true },
             ),
             "the send claiming another action",
           )).rejects.toThrow(refusalOf(serverExecution));
@@ -406,7 +398,6 @@ describe("send-reviewed", () => {
                 provenance: nativeProvenance(chatDelete),
               },
               chatSend,
-              { awaitHandling: true },
             ),
             "the send claiming the bound action's surface",
           );
@@ -428,20 +419,14 @@ describe("send-reviewed", () => {
           expect(await room.stored()).toEqual([]);
         });
 
-        it("resolves a refused handling without `awaitHandling`", async () => {
+        it("resolves `sendStrict()` on a refused handling without `awaitHandling`", async () => {
           await using room = await chatRoom(serverExecution);
           await room.save.sendStrict({ body: "unmarked" });
-          await room.save.sendReviewed({ body: "mismatched" }, {
-            surface: "ChatSendSurface",
-            action: "ChatDelete",
-          });
           // Events on one stream are handled in the order they were sent, so
-          // once this one is handled the two above have been too.
+          // once this one is handled the one above has been too.
           await settled(
             serverExecution,
-            room.save.sendReviewed({ body: "reviewed" }, chatSend, {
-              awaitHandling: true,
-            }),
+            room.save.sendReviewed({ body: "reviewed" }, chatSend),
             "the barrier send's handling",
           );
 

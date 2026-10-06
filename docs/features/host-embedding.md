@@ -513,19 +513,19 @@ surface, in place of a host building the provenance and marking the event
 itself.
 
 A host whose runtime runs in a worker it owns through a `RuntimeClient` sends
-the same action with `CellHandle.sendReviewed(event, { surface, action },
-options?)` on a handle naming the stream. It reaches the worker as the
-dedicated `cell:send-reviewed` request, which the worker answers by sending the
-request's payload through `bindNativeUiControl()`, bound to the request's
-surface and action, so the event delivered is the one that function sends. The
-payload must be a record. The send rejects when the runtime refuses the event.
-With `{ awaitHandling: true }` it also waits for the run of the stream's
-handler, and rejects with the reason when that run's gated write is refused, or
-when the run throws or its event is dropped or refused admission; under server
-execution the run is the served one, and its outcome is the consequence the
-serving loop recorded for the event. Without it, the send resolving says
-nothing of the handling. `sendStrict()` takes the same option, and without it
-likewise confirms only that the runtime took the event.
+the same action with `CellHandle.sendReviewed(event, { surface, action })` on
+a handle naming the stream. It reaches the worker as the dedicated
+`cell:send-reviewed` request, which the worker answers by sending the request's
+payload through `bindNativeUiControl()`, bound to the request's surface and
+action, so the event delivered is the one that function sends. The payload must
+be a record. The send waits for the run of the stream's handler: it resolves
+once that run, and so its gated write, has committed, and rejects with the
+reason when the runtime refuses the event, when that run's gated write is
+refused, or when the run throws or its event is dropped or refused admission.
+Under server execution the run is the served one, and its outcome is the
+consequence the serving loop recorded for the event. `sendStrict()` waits the
+same way when given `{ awaitHandling: true }`, and otherwise confirms only that
+the runtime took the event.
 
 The runtime's ordinary checks still apply: the writer the contract names, the
 surface and action, the actor, and the space's access list. The mark reaches a
@@ -568,8 +568,8 @@ reach. `packages/runtime-client/test/send-reviewed.test.ts` drives
 worker and under server execution: a gated write committing, one bound to
 another surface or action refused with its reason, a payload `provenance`
 deciding nothing, the same payload refused through `sendStrict()`, a refused
-handling resolving without `awaitHandling`, the event the worker delivers, and
-the requests it refuses.
+handling resolving `sendStrict()` without `awaitHandling`, the event the
+worker delivers, and the requests it refuses.
 
 ---
 
