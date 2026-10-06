@@ -147,10 +147,11 @@ that rides as a reference is read the same way.
 
 A builtin that re-serializes a branch at run time is a separate writer.
 `getAsLink({ base })` carries a schema only when asked
-(`packages/runner/src/link-utils.ts:391`), so `ifElse`, `when` and `unless`
-(`builtins/if-else.ts:77`, `when.ts:48`, `unless.ts:48`) must each ask for it
-when the selected branch declares a stream, or the link they store names the
-stream's document with nothing on it that says so.
+(`packages/runner/src/link-utils.ts:391`), so the action `ifElse`, `when` and
+`unless` share (`builtins/forward-reference.ts`) asks for it, or the link they
+store names the stream's document with nothing on it that says so. It asks
+for it unconditionally: the schema the selected branch resolved to is what
+says what the position is, a stream or a defaulted value alike.
 
 This bends one convention slightly: `asCell` normally describes the position
 that holds a handle, and the handle's own schema is the stripped one. Putting
