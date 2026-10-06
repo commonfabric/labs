@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { parseCfHarnessCliArgs } from "../src/cli.ts";
 import {
   HARNESS_COMMAND_CATALOG_LIMIT,
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
@@ -53,7 +54,55 @@ const failingRunner: ProcessRunner = {
 };
 
 describe("loom-commands", () => {
+  it("uses each concurrent job's identity for discovery and execution in a cleared environment", async () => {
+    const { runner, calls } = runnerAnswering(
+      JSON.stringify({ ok: true, commands: [] }),
+    );
+    await Promise.all(["job-first", "job-second"].map(async (jobId) => {
+      const parsed = await parseCfHarnessCliArgs(
+        ["--prompt", "t", "--loom-commands-config", "/trusted/config.json"],
+        {
+          cwd: "/trusted",
+          env: {},
+          commandJobId: jobId,
+          readTextFile: () =>
+            Promise.resolve(JSON.stringify({
+              ...config,
+              jobIdEnvVar: "HOST_JOB_ID",
+              jobId: "file-must-not-supply-the-current-job",
+            })),
+        },
+      );
+      if ("help" in parsed) throw new Error("expected config");
+      await listLoomCommands(parsed.loomCommands!, runner);
+      await runLoomCommand(
+        parsed.loomCommands!,
+        { command: "note.create", args: {} },
+        runner,
+      );
+    }));
+    expect(calls).toHaveLength(4);
+    for (const jobId of ["job-first", "job-second"]) {
+      const own = calls.filter((call) => call.env?.HOST_JOB_ID === jobId);
+      expect(own).toHaveLength(2);
+      expect(own.map((call) => call.args?.[1]).sort()).toEqual(["list", "run"]);
+      for (const call of own) {
+        expect(call.clearEnv).toBe(true);
+        expect(call.env?.LOOM_PAGE_RPC_QUEUE).toBe(config.transport.queuePath);
+      }
+    }
+  });
+
   describe("validateLoomCommandsConfig()", () => {
+    it("throws for an invalid or reserved job identity environment name", () => {
+      for (
+        const jobIdEnvVar of ["", "bad-name", "PATH", "LOOM_PAGE_RPC_QUEUE"]
+      ) {
+        expect(() => validateLoomCommandsConfig({ ...config, jobIdEnvVar }))
+          .toThrow("jobIdEnvVar");
+      }
+    });
+
     it("accepts an absolute CLI path and an absolute broker queue", () => {
       expect(() => validateLoomCommandsConfig(config)).not.toThrow();
     });

@@ -83,8 +83,25 @@ export interface HarnessJobSpec {
   /** Model name passed to `cf-harness`. */
   model?: string;
 
+  /** The job's system prompt: framing the task's author supplies. */
+  instructions?: string;
+
+  /** The most model turns the job may take; the harness's own when absent. */
+  maxModelTurns?: number;
+
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
+
+  /**
+   * The host-owned file naming the command broker behind `list_commands`
+   * and `run_command`. Those tools, and the harness flag this becomes, come
+   * with labs#8467; a harness without them refuses the flag and the job
+   * fails.
+   */
+  loomCommandsConfigPath?: string;
+
+  /** Host job identity attributed to this job's brokered commands. */
+  commandJobId?: string;
 
   /** The job's fabric session and input cells; absent for a job with none. */
   fabric?: HarnessJobFabric;
@@ -186,6 +203,16 @@ const argvOf = (
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
+  ...(spec.loomCommandsConfigPath !== undefined
+    ? ["--loom-commands-config", spec.loomCommandsConfigPath]
+    : []),
+  // One word each, for the reason the prompt is.
+  ...(spec.instructions !== undefined
+    ? [`--system-prompt=${spec.instructions}`]
+    : []),
+  ...(spec.maxModelTurns !== undefined
+    ? ["--max-model-turns", String(spec.maxModelTurns)]
+    : []),
   ...Object.entries(spec.fabric?.inputs ?? {}).flatMap(([name, ref]) => [
     "--input-cell",
     `${name}=${ref}`,
@@ -235,6 +262,9 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
+    ...(spec.commandJobId !== undefined
+      ? { commandJobId: spec.commandJobId }
+      : {}),
     io: {
       stdout: (text) => options.report?.(text.trimEnd()),
       stderr: (text) => options.report?.(text.trimEnd()),

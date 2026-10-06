@@ -28,6 +28,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import {
   ArrivalLog,
@@ -94,7 +95,7 @@ async function openHome(runtime: Runtime, create: boolean) {
     const tx = runtime.edit();
     root.withTx(tx).key("defaultPattern").set(result);
     runtime.run(tx, compiled, {}, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   } else {
     await result.sync();
     expect(await runtime.start(result)).toBe(true);
@@ -188,11 +189,11 @@ async function rejectInvocation<T>(
   expect(entries()[index].error).toContain(message);
 }
 
-/** Records tentative handler receipts and commit settlements without extra writes. */
+/** Records tentative handler receipts and commit verdicts without extra writes. */
 function watchHandlingCommits(runtime: Runtime) {
   const outcomes = new ArrivalLog<{ eventId: string; value: unknown }>();
-  const settlements = new ArrivalLog<
-    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>>
+  const verdicts = new ArrivalLog<
+    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>["verdict"]>
   >();
   const edit = runtime.edit.bind(runtime);
   const wrapped = stub(runtime, "edit", (...args) => {
@@ -207,15 +208,21 @@ function watchHandlingCommits(runtime: Runtime) {
         value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
           .getRaw(),
       });
-      return (proceed() as ReturnType<IExtendedStorageTransaction["commit"]>)
-        .then((result) => {
-          settlements.record(result);
+      const receipt = proceed() as ReturnType<
+        IExtendedStorageTransaction["commit"]
+      >;
+      return createTransactionCommitReceipt(
+        receipt.settled,
+        receipt.verdict.then((result) => {
+          verdicts.record(result);
           return result;
-        });
+        }),
+        receipt,
+      );
     });
     return tx;
   });
-  return { outcomes, settlements, [Symbol.dispose]: () => wrapped.restore() };
+  return { outcomes, verdicts, [Symbol.dispose]: () => wrapped.restore() };
 }
 
 /** Independent replicas against an ACL-enforcing memory server. */
@@ -464,9 +471,7 @@ describe("Home catalog speculative revisions", () => {
             { status: "applied", space: registration.space, id: "my-archive" },
             { status: "applied", space: registration.space, id: "my-restore" },
           ]);
-        await watch.settlements.matching((verdict) =>
-          verdict.error !== undefined
-        );
+        await watch.verdicts.matching((verdict) => verdict.error !== undefined);
         server.options.subscriptionRefreshDelayMs = 0;
         await server.flushSessions();
         const results = await Promise.all([first, second]);
@@ -537,7 +542,7 @@ describe("Home shared-space catalog", () => {
             state,
           });
         }
-        expect((await tx.commit({ resolveAt: "verdict" })).error)
+        expect((await tx.commit().verdict).error)
           .toBeUndefined();
         expect(catalog.getRaw()).toEqual(before);
         using watch = watchHandlingCommits(runtime);
@@ -584,7 +589,7 @@ describe("Home shared-space catalog", () => {
                 },
               ]);
           }
-          await watch.settlements.matching((verdict) =>
+          await watch.verdicts.matching((verdict) =>
             verdict.error !== undefined
           );
           expect(completed.entries).toHaveLength(0);
@@ -672,7 +677,7 @@ describe("Home shared-space catalog", () => {
           host: registration.host,
           kind: "fabrichat-room",
         });
-        expect((await tx.commit({ resolveAt: "verdict" })).error)
+        expect((await tx.commit().verdict).error)
           .toBeUndefined();
         expect(committed.entries).toHaveLength(0);
         expect(completed.entries).toHaveLength(0);
@@ -1166,7 +1171,7 @@ describe("Home shared-space catalog", () => {
         catalog.withTx(tx).key("entries", registration.space, "futureField")
           .set({ nested: [1, 2] });
         catalog.withTx(tx).key("futureField").set({ version: 2 });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const first = await home.key("sharedSpaceCatalog").pull();
         await invoke(runtime, home.key("changeSharedSpaceMembership"), {
           space: registration.space,
