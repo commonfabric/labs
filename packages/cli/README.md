@@ -1312,7 +1312,9 @@ With `--local-jobs-socket` and `--local-job-profiles`, the runner also runs
 local jobs: work a local caller hands it directly, which never enters the
 fabric. It serves them first and on its own, so they run whether or not the
 Fabric lane starts; a Fabric lane that fails to start is reported and leaves the
-local jobs served. With `--local-only` there is no Fabric lane.
+local jobs served. A local lane that fails to start is reported with its reason,
+and the Fabric lane still starts. With `--local-only` there is no Fabric lane,
+and a local startup failure stops the runner.
 
 The service exclusively locks both its socket and store for its lifetime. An
 active listener is refused; a socket whose listener is gone is reclaimed.

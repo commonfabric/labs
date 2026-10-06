@@ -460,9 +460,9 @@ export function resolveLocalJobsConfig(
 
 /**
  * Runs a runner until the process is asked to stop. With local jobs, they
- * are served first; the Fabric lane then starts unless `--local-only` says
- * not to, and a Fabric lane that fails to start leaves the local jobs
- * served rather than stopping the runner.
+ * are served first; a local startup failure falls back to the Fabric lane,
+ * and a Fabric startup failure leaves the local jobs served.
+ * With `--local-only`, a local startup failure is fatal.
  */
 export async function agentRunnerAction(
   options: AgentRunnerCommandOptions,
@@ -470,10 +470,18 @@ export async function agentRunnerAction(
 ): Promise<void> {
   const localConfig = resolveLocalJobsConfig(options, deps);
   if (localConfig === undefined) return await runFabricLane(options, deps);
-  const local = await (deps.startLocal ?? startLocalJobs)(
-    localConfig,
-    deps.report,
-  );
+  let local: Pick<LocalJobsService, "setFabricLane" | "stop">;
+  try {
+    local = await (deps.startLocal ?? startLocalJobs)(localConfig, deps.report);
+  } catch (error) {
+    if (options.localOnly) throw error;
+    deps.report(
+      `agent runner: the local lane did not start, continuing with the Fabric lane: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return await runFabricLane(options, deps);
+  }
   let fabric: { stop(): Promise<void> } | undefined;
   try {
     if (options.localOnly) {
