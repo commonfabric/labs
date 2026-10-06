@@ -508,6 +508,97 @@ describe("runtime-processor", () => {
       }
     });
 
+    it("retains the durability barrier when the transaction cannot report its reads", async () => {
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let committing: Promise<unknown> | undefined;
+      let initializing: Promise<unknown> | undefined;
+      try {
+        const target = runtime.getCell<number>(
+          cfcSigner.did(),
+          "initialize-without-read-observations",
+        );
+        const unrelated = runtime.getCell<number>(
+          cfcSigner.did(),
+          "initialize-without-read-observations-unrelated",
+        );
+        await Promise.all([target.sync(), unrelated.sync()]);
+        const seed = runtime.edit();
+        target.withTx(seed).set(6);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const transact = server.transact.bind(server);
+        let holdNext = true;
+        using _transact = stub(server, "transact", async (...args) => {
+          if (holdNext) {
+            holdNext = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return transact(...args);
+        });
+        const tx = runtime.edit();
+        unrelated.withTx(tx).set(7);
+        committing = tx.commit().settled;
+        await entered.promise;
+        const edit = runtime.edit.bind(runtime);
+        using _edit = stub(runtime, "edit", (...args) => {
+          const tx = edit(...args);
+          const reads = tx.tx.getReadActivities;
+          Object.defineProperty(tx.tx, "getReadActivities", {
+            configurable: true,
+            value: undefined,
+          });
+          return interceptTransaction(tx, (method, _args, proceed) => {
+            // The probe cannot observe reads; native commit preparation
+            // still uses the backend's read journal.
+            if (method === "prepareForCommit") {
+              Object.defineProperty(tx.tx, "getReadActivities", {
+                value: reads,
+              });
+            }
+            return proceed();
+          });
+        });
+        const barrier = Promise.withResolvers<void>();
+        const settled = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        using _barrier = stub(storageManager, "pendingCommitsSettled", () => {
+          barrier.resolve();
+          return settled();
+        });
+        initializing = buildProcessor({ runtime }).handleCellInitialize({
+          type: RequestType.CellInitialize,
+          cell: createCellRef(target),
+          value: 99,
+        });
+        expect(
+          await Promise.race([
+            initializing.then(() => "initialized"),
+            barrier.promise.then(() => "unknown-read-barrier"),
+          ]),
+        ).toBe("unknown-read-barrier");
+        expect(target.get()).toBe(6);
+        release.resolve();
+        await expect(initializing).resolves.toEqual({ value: 6 });
+      } finally {
+        release.resolve();
+        await committing;
+        await initializing;
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
     it("propagates an unexpected readiness failure without storing an initializer", async () => {
       const server = newLoopbackServer();
       const storageManager = EmulatedStorageManager.connectTo(server, {
