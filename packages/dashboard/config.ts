@@ -18,6 +18,10 @@ export const REPO = Deno.env.get("DASHBOARD_REPO") ?? "commonfabric/labs";
 export const CI_WORKFLOW = "deno.yml";
 export const TEST_SELECTION_WORKFLOW = "test-selection.yml";
 
+// Where the index of repository pages lives; a repository's own page adds
+// `?name=<its name>` (repo-page.ts).
+export const REPOS_PATH = "/repos";
+
 // How often the server looks for tiles that are due and tells every open page
 // it is still there.
 export const TICK_MS = 15_000;

@@ -221,8 +221,10 @@ export const LIVE_PAGE_CLIENT = `<script>{
 
 /** What one rendering of a live page shows, which `livePage` frames. */
 export interface LivePageContent {
-  /** The page's name, in its tab and at its top. */
+  /** The page's name, in its tab and, unless `heading` names it, at its top. */
   title: string;
+  /** The name at the top of the page, when it is not the page's own. */
+  heading?: string;
   /** The styles the page needs beyond those every drill-down page has. */
   styles: string;
   /** The markup beside the name: what the page shows, and its age. */
@@ -249,7 +251,7 @@ ${DETAIL_PAGE_STYLES}
 ${LIVE_PAGE_STYLES}
 ${content.styles}
 </style></head><body><main>
-  <div class="top"><a class="back" href="/">← dashboard</a><b>${content.title}</b>${LIVE_PAGE_BADGE}<span>${content.head}</span></div>
+  <div class="top"><a class="back" href="/">← dashboard</a><b>${content.heading ?? content.title}</b>${LIVE_PAGE_BADGE}<span>${content.head}</span></div>
   ${content.body}
 </main>
 ${dashboardThemeToggle()}

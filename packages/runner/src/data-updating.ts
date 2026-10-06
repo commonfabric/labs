@@ -198,8 +198,8 @@ export const schemaIfcOverlapsPath = (
   // whether a schema-policy input MIGHT cover the written path — a true
   // records and evaluates the input — so over-matching errs safe. That is
   // why `items`/`additionalProperties` keep unconditional `*` segments even
-  // beside prefixItems/properties (unlike walkIfcSchema's minted entries,
-  // where a `*` covering named positions would over-taint them), and why
+  // beside prefixItems/properties (unlike the entries `cfcSchemaEntries`
+  // yields, where a `*` covering named positions would over-taint them), and why
   // combinator branches and `not` descend at the same path. Tuple slots
   // overlap at their concrete index.
   const visit = (

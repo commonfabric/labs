@@ -462,6 +462,40 @@ describe("materialization-parity", () => {
     }
   });
 
+  it("reads a link's inherited default for an absent target within an object in both modes", async () => {
+    const write = runtime.edit();
+    const target = runtime.getCell<{ n?: number }>(
+      space,
+      "absent-field-target",
+      {
+        type: "object",
+        properties: { n: { type: "number", default: 7 } },
+      },
+      write,
+    );
+    target.setRaw({});
+    runtime.getCell(space, "absent-field-holder", undefined, write).setRaw({
+      n: target.key("n").getAsLink({ includeSchema: true }),
+    });
+    await write.commit().settled;
+    for (const lazy of [false, true]) {
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(lazy);
+      try {
+        const value = runtime.getCell<{ n: number }>(
+          space,
+          "absent-field-holder",
+          { type: "object", properties: { n: { type: "number" } } },
+          tx,
+        ).get();
+        expect(value.n).toBe(7);
+        expect(tx.takeSchemaRefusal()).toBeUndefined();
+      } finally {
+        await tx.commit().settled;
+      }
+    }
+  });
+
   describe("a union evaluated whole that succeeds by substituting for an unserved item", () => {
     // Two array branches accept the value, so the union is evaluated whole. The
     // item is a link to a document the replica cannot serve; the traverser

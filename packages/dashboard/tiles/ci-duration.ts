@@ -733,6 +733,7 @@ function makeCiDuration(
   const attempts = new CompletedAttempts(opts.source.repo);
   return {
     label: opts.label,
+    repo: opts.source.repo,
     intervalMs: 5 * 60_000,
     runSources: [opts.source],
     routes: opts.routes,
