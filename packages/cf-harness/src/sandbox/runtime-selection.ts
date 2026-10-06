@@ -151,8 +151,8 @@ const nonEmpty = (input: string | undefined): string | undefined => {
 };
 
 /**
- * Returns whether a regular file is at `path`. Only a path that is not there
- * reads as absent.
+ * Returns whether a regular file is at `path`. A path that is not there reads
+ * as absent, and so does one that runs through a file, where nothing can be.
  *
  * @throws The error of any other failure to look, which says nothing of
  * whether a file is there.
@@ -161,7 +161,12 @@ const regularFileExists = async (path: string): Promise<boolean> => {
   try {
     return (await Deno.stat(path)).isFile;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if (
+      error instanceof Deno.errors.NotFound ||
+      error instanceof Deno.errors.NotADirectory
+    ) {
+      return false;
+    }
     throw error;
   }
 };

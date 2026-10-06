@@ -918,6 +918,67 @@ describe("sandbox-runtime-default", () => {
         });
       });
 
+      describe("a policy path that runs through a file", () => {
+        // Nothing can be at a path whose parent is not a directory, so such
+        // a policy is known to be absent, as one that is simply not there is.
+        let store: string;
+
+        /** Puts a file where the directory of the home's policy goes. */
+        const fileForPolicyDirectory = async () => {
+          await Deno.mkdir(join(homePolicy(home), "..", ".."), {
+            recursive: true,
+          });
+          await Deno.writeTextFile(join(homePolicy(home), ".."), "");
+        };
+
+        beforeEach(async () => {
+          store = defaultStore(home);
+          await installStore(store);
+        });
+
+        it("returns a named `runsc` with no policy where a file is where the policy's directory goes", async () => {
+          await fileForPolicyDirectory();
+
+          expect(
+            await resolveSandboxRuntimeSelection(
+              { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: "runsc" },
+              {},
+              { platform: "darwin", flags: true },
+            ),
+          ).toEqual({
+            sandboxRuntimeKind: "runsc",
+            sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },
+          });
+        });
+
+        it("returns a named `runsc` with no policy where the home is a file", async () => {
+          const file = join(root, "a-file");
+          await Deno.writeTextFile(file, "");
+
+          expect(
+            await resolveSandboxRuntimeSelection(
+              { HOME: file, CF_HARNESS_SANDBOX_RUNTIME: "runsc" },
+              {},
+              { platform: "linux", flags: true },
+            ),
+          ).toEqual({
+            sandboxRuntimeKind: "runsc",
+            sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },
+          });
+        });
+
+        it("returns the default with the store's own policy where a file is where the home policy's directory goes", async () => {
+          await fileForPolicyDirectory();
+
+          expect(
+            await resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+              platform: "darwin",
+              flags: true,
+            }),
+          ).toEqual(fromStore(store, join(store, POLICY)));
+        });
+      });
+
       describe("a policy that cannot be examined", () => {
         let store: string;
 
