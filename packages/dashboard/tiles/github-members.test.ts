@@ -11,6 +11,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { REPO } from "../config.ts";
+import { staticGitHubCredential } from "../github-auth.ts";
 import { dashboardCacheFile } from "../history-files.ts";
 import type { Ctx } from "../types.ts";
 import { createGithubMembers, organizationUserIds } from "./github-members.ts";
@@ -130,7 +131,7 @@ Deno.test("github users: organization rosters read every page and deduplicate id
       throw new Error(`unexpected request ${url}`);
     },
   }, async (wire) => {
-    const ids = await organizationUserIds(ORG, "members", "secret");
+    const ids = await organizationUserIds(ORG, "members", staticGitHubCredential("secret"));
     assertEquals(ids.size, 101);
     assert(ids.has(1));
     assert(ids.has(101));

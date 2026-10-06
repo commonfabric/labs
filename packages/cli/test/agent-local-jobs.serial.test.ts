@@ -8,13 +8,13 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 
+import type { LocalJobsConfig } from "@commonfabric/agent-runner/local-jobs/service";
 import {
   type AgentRunnerCommandConfig,
   type AgentRunnerCommandDeps,
   createAgentCommand,
   resolveLocalJobsConfig,
 } from "../commands/agent.ts";
-import type { LocalJobsConfig } from "../lib/local-jobs/service.ts";
 
 const DID = "did:key:z6MkTestRequester";
 
@@ -23,6 +23,7 @@ const stubDeps = (
   options: {
     env?: Record<string, string>;
     fabricFails?: boolean;
+    localFailure?: Error | string;
   } = {},
 ) => {
   const events: string[] = [];
@@ -46,6 +47,7 @@ const stubDeps = (
     },
     startLocal: (config) => {
       local.push(config);
+      if (options.localFailure !== undefined) throw options.localFailure;
       events.push("local:start");
       return Promise.resolve({
         setFabricLane: (running: boolean) =>
@@ -156,6 +158,71 @@ describe("cf agent runner local jobs", () => {
   });
 
   describe("the runner", () => {
+    for (
+      const failure of [
+        new TypeError("path must be shorter than SUN_LEN"),
+        "invalid profiles file",
+      ]
+    ) {
+      it(`starts and stops the Fabric lane when local startup fails with ${String(failure)}`, async () => {
+        const { deps, events, local, fabric } = stubDeps({
+          localFailure: failure,
+        });
+
+        await run(deps, [
+          "runner",
+          ...LOCAL,
+          "--identity",
+          "/keys/me.key",
+          "--api-url",
+          "http://localhost:8100",
+        ]);
+
+        expect(local).toHaveLength(1);
+        expect(fabric).toHaveLength(1);
+        expect(events).toContain(
+          `report:agent runner: the local lane did not start, continuing with the Fabric lane: ${
+            failure instanceof Error ? failure.message : failure
+          }`,
+        );
+        expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
+          "fabric:start",
+          "wait",
+          "fabric:stop",
+        ]);
+      });
+    }
+
+    it("throws the local startup error with `--local-only` and starts no Fabric lane", async () => {
+      const failure = new Error("invalid profiles file");
+      const { deps, events, fabric } = stubDeps({ localFailure: failure });
+
+      await expect(run(deps, ["runner", ...LOCAL, "--local-only"]))
+        .rejects.toBe(failure);
+
+      expect(fabric).toEqual([]);
+      expect(events).toEqual([]);
+    });
+
+    it("throws the Fabric startup error when neither lane can start", async () => {
+      const failure = new Error("toolshed is down");
+      const { deps, events } = stubDeps({
+        localFailure: new Error("invalid profiles file"),
+      });
+      deps.start = () => Promise.reject(failure);
+
+      await expect(run(deps, [
+        "runner",
+        ...LOCAL,
+        "--identity",
+        "/keys/me.key",
+        "--api-url",
+        "http://localhost:8100",
+      ])).rejects.toBe(failure);
+
+      expect(events).not.toContain("wait");
+    });
+
     it("serves local jobs alone with `--local-only`, needing no identity or API URL", async () => {
       const { deps, events, local, fabric } = stubDeps();
 

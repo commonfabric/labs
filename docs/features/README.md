@@ -61,7 +61,8 @@ a line for each new document to the index below.
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
-  default-pattern reservation with the initial ACL.
+  default-pattern reservation with the initial ACL, or one leaving the root to
+  the space's creator, as `inSpace(..., { root: true })` does.
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read
@@ -97,7 +98,8 @@ a line for each new document to the index below.
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current
+  and how it stays current; and what `spaceOf(target)` returns, the DID of
+  that space
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`

@@ -1389,10 +1389,13 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * runtime's session there, and resolves once the server has decided. An
    * admission runs again every computation whose `spaceAccess(target)`
    * answer turned on the refusal, and repeats the loads the refusal failed; a
-   * refusal leaves the space refused. It is for a host with word that the
-   * runtime's principal was granted access, such as a notice naming the
-   * space, and does nothing for a space the runtime has not opened. It
-   * rejects on any failure other than a refusal.
+   * refusal leaves the space refused. It is for a host with reason to think
+   * the verdict changed, such as a notice naming the space or a person
+   * returning to a view of it, and does nothing for a space the runtime has
+   * not opened. A call made while a retry of the same space is in flight,
+   * whether this client's or a rendered retry control's, shares that retry
+   * rather than asking again, and a rendered retry control shows it in
+   * flight either way. It rejects on any failure other than a refusal.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({

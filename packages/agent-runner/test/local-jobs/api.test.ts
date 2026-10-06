@@ -2,9 +2,9 @@ import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { describe, it } from "@std/testing/bdd";
 
-import { createLocalJobApi } from "../../lib/local-jobs/api.ts";
-import type { LocalJobProfile } from "../../lib/local-jobs/profiles.ts";
-import { LocalJobStore } from "../../lib/local-jobs/store.ts";
+import { createLocalJobApi } from "../../src/local-jobs/api.ts";
+import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
+import { LocalJobStore } from "../../src/local-jobs/store.ts";
 
 const TOKEN = "t0ken";
 

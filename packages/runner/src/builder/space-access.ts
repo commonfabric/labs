@@ -95,6 +95,54 @@ export function spaceAccess(
 }
 
 /**
+ * Returns the DID of the space `target`'s value lives in, after following any
+ * links it holds, so that a pattern can name a space it holds a cell of: one a
+ * handler just created with `PatternFactory.inSpace()`, say, whose DID an
+ * invitation to it has to carry.
+ *
+ * `undefined` means the answer is not known yet. A `target` passed as
+ * `undefined` is one not known yet, as it is for {@link spaceAccess}. And a run
+ * that has named an `inSpace()` target its space has not resolved returns
+ * `undefined` for every `target`: the runner resolves the name once the run
+ * ends and runs it again, discarding what the first run wrote, and the child
+ * that run created has no space yet. The run after it returns the child's
+ * space.
+ *
+ * Unlike {@link spaceAccess}, the answer does not depend on who asks, so a call
+ * in a computation leaves its read scope as it is. It can be called where
+ * {@link spaceAccess} can. A pattern body builds its graph over references
+ * that name no space yet, so a call there throws.
+ *
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, or with a `target` that is neither a cell nor `undefined`.
+ */
+export function spaceOf(
+  // Optional here, though the declared API requires it, so that the runtime
+  // check below has a case to catch from untyped callers.
+  ...args: [target?: unknown]
+): MemorySpace | undefined {
+  const frame = topFrame();
+  const kind = frame?.frameKind;
+  if (kind !== "lift" && kind !== "handler") {
+    throw new Error(
+      "`spaceOf(target)` can only be called from a handler or a reactive " +
+        "computation; a pattern body's references name no space yet.",
+    );
+  }
+  if (args.length === 0) {
+    throw new Error(
+      "`spaceOf()` requires a `target`: a cell in the space to name.",
+    );
+  }
+  const [target] = args;
+
+  if (target === undefined) return undefined;
+  const cell = cellOfTarget(target, "spaceOf(target)");
+  if ((frame!.pendingSpaceNames?.size ?? 0) > 0) return undefined;
+  return spaceOfTarget(cell, "spaceOf(target)");
+}
+
+/**
  * Returns the space the value of the cell `target` lives in, after following
  * any links it holds. `call` names the call `target` was passed to, for the
  * error.

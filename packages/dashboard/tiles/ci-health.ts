@@ -64,6 +64,7 @@ import {
 } from "../ci-jobs-page.ts";
 import {
   compactSpan,
+  dashboardGitHubCredential,
   escapeHtml,
   friendlyError,
   github,
@@ -72,6 +73,7 @@ import {
   STATUS_RANK,
   worstStatus,
 } from "../lib.ts";
+import type { GitHubCredential } from "../github-auth.ts";
 import {
   type Ctx,
   type Run,
@@ -219,12 +221,12 @@ async function inParallel<T>(
  * ones. A token that cannot see a private repository is not shown it here, so
  * the tile covers what the token reaches and says nothing about the rest.
  */
-async function organizationRepos(token: string): Promise<OrgRepo[]> {
+async function organizationRepos(credential: GitHubCredential): Promise<OrgRepo[]> {
   const repos: OrgRepo[] = [];
   for (let page = 1;; page++) {
     const batch = await github<unknown>(
       `orgs/${ORG}/repos?per_page=100&page=${page}`,
-      token,
+      credential,
     );
     if (!Array.isArray(batch) || !batch.every(isOrgRepo)) {
       throw new Error("GitHub organization repositories returned invalid data");
@@ -236,7 +238,7 @@ async function organizationRepos(token: string): Promise<OrgRepo[]> {
 
 async function repoWorkflows(
   repo: OrgRepo,
-  token: string,
+  credential: GitHubCredential,
 ): Promise<RepoInventory> {
   const inventory: RepoInventory = {
     repo: repo.full_name,
@@ -247,7 +249,7 @@ async function repoWorkflows(
     for (let page = 1;; page++) {
       const answer = await github<{ workflows?: unknown }>(
         `repos/${repo.full_name}/actions/workflows?per_page=100&page=${page}`,
-        token,
+        credential,
       );
       const batch = answer.workflows;
       if (!Array.isArray(batch) || !batch.every(isWorkflow)) {
@@ -265,11 +267,11 @@ async function repoWorkflows(
 }
 
 /** Every readable repository in the organization, with its active workflows. */
-async function readInventory(token: string): Promise<RepoInventory[]> {
-  const repos = await organizationRepos(token);
+async function readInventory(credential: GitHubCredential): Promise<RepoInventory[]> {
+  const repos = await organizationRepos(credential);
   return await inParallel(
     REQUEST_CONCURRENCY,
-    repos.map((repo) => () => repoWorkflows(repo, token)),
+    repos.map((repo) => () => repoWorkflows(repo, credential)),
   );
 }
 
@@ -288,12 +290,12 @@ async function rerunSince(
   repo: string,
   settled: Settled,
   runs: readonly Run[],
-  token: string,
+  credential: GitHubCredential,
 ): Promise<boolean> {
   const deciding = settled.deciding?.run;
   if (deciding === undefined) return false;
   const now = runs.find((run) => run.id === deciding.id) ??
-    await github<Run>(`repos/${repo}/actions/runs/${deciding.id}`, token);
+    await github<Run>(`repos/${repo}/actions/runs/${deciding.id}`, credential);
   return now.run_attempt !== deciding.run_attempt;
 }
 
@@ -310,7 +312,7 @@ async function readRuns(
   inventory: RepoInventory,
   workflow: Workflow,
   settled: Settled | undefined,
-  token: string,
+  credential: GitHubCredential,
 ): Promise<Listing> {
   try {
     const runs = new Map<number, Run>();
@@ -320,7 +322,7 @@ async function readRuns(
         `repos/${inventory.repo}/actions/workflows/${workflow.id}/runs` +
           `?branch=${encodeURIComponent(inventory.branch)}` +
           `&per_page=${RUNS_PAGE}&page=${page}`,
-        token,
+        credential,
       );
       const batch = answer.workflow_runs ?? [];
       for (const run of batch) {
@@ -334,7 +336,7 @@ async function readRuns(
         )
       ) break;
       if (held !== undefined && read.some((run) => isSettled(run, held))) {
-        if (!await rerunSince(inventory.repo, held, read, token)) break;
+        if (!await rerunSince(inventory.repo, held, read, credential)) break;
         held = undefined;
       }
       if (batch.length < RUNS_PAGE) break;
@@ -419,13 +421,13 @@ async function redefinedSince(
   inventory: RepoInventory,
   workflow: Workflow,
   run: Run,
-  token: string,
+  credential: GitHubCredential,
 ): Promise<boolean> {
   const commits = await github<unknown>(
     `repos/${inventory.repo}/commits` +
       `?path=${encodeURIComponent(workflow.path)}` +
       `&sha=${encodeURIComponent(inventory.branch)}&per_page=1`,
-    token,
+    credential,
   );
   if (!Array.isArray(commits)) {
     throw new Error("GitHub commits returned invalid data");
@@ -664,8 +666,8 @@ export function createCiHealth(): CiHealthTile {
   let collectionsStarted = 0;
   let collectedFrom = 0;
   // One job-count cache per workflow, by workflow id, held across collections.
-  // It reads with the token the tile was given, like every other request the
-  // tile makes.
+  // It reads with the credential the tile was given, like every other request
+  // the tile makes.
   const attempts = new Map<number, CompletedAttempts>();
   // What each workflow's runs settled, by workflow, held across sweeps so a
   // verdict any number of runs back is read once rather than every time.
@@ -674,18 +676,18 @@ export function createCiHealth(): CiHealthTile {
   const judge = (
     listing: Listing,
     redefined: Map<number, Promise<boolean>>,
-    token: string,
+    credential: GitHubCredential,
   ): Promise<Judged> => {
     let held = attempts.get(listing.workflow.id);
     if (!held) {
-      held = new CompletedAttempts(listing.inventory.repo, token);
+      held = new CompletedAttempts(listing.inventory.repo, credential);
       attempts.set(listing.workflow.id, held);
     }
     held.observe(listing.runs);
     const changedSince = (failing: Listing, run: Run): Promise<boolean> => {
       let answer = redefined.get(run.id);
       if (!answer) {
-        answer = redefinedSince(failing.inventory, failing.workflow, run, token)
+        answer = redefinedSince(failing.inventory, failing.workflow, run, credential)
           .catch((error) => {
             // The failure stands, and the reason it could not be checked is
             // logged with the other unreadable reads.
@@ -702,8 +704,8 @@ export function createCiHealth(): CiHealthTile {
     return jobOf(listing, held, changedSince, Date.now());
   };
 
-  const readSweep = async (token: string): Promise<Sweep> => {
-    inventory ??= memo(INVENTORY_TTL_MS, () => readInventory(token));
+  const readSweep = async (credential: GitHubCredential): Promise<Sweep> => {
+    inventory ??= memo(INVENTORY_TTL_MS, () => readInventory(credential));
     const repos = await inventory();
     const readable = repos.filter((repo) => repo.error === undefined);
     for (const id of attempts.keys()) {
@@ -717,14 +719,14 @@ export function createCiHealth(): CiHealthTile {
         repo.workflows
           .filter((workflow) => !isPinned(repo.repo, workflow.path))
           .map((workflow) => () =>
-            readRuns(repo, workflow, settled.get(workflow.id), token)
+            readRuns(repo, workflow, settled.get(workflow.id), credential)
           )
       ),
     );
     const redefined = new Map<number, Promise<boolean>>();
     const judged = await inParallel(
       REQUEST_CONCURRENCY,
-      listings.map((listing) => () => judge(listing, redefined, token)),
+      listings.map((listing) => () => judge(listing, redefined, credential)),
     );
     settled.clear();
     listings.forEach((listing, index) => {
@@ -744,10 +746,10 @@ export function createCiHealth(): CiHealthTile {
   // Starts a sweep when one is due. Once it ends, the tile asks to be
   // collected again, so what the sweep found is shown without waiting for
   // the next snapshot.
-  const startSweep = (ctx: Ctx, token: string): void => {
+  const startSweep = (ctx: Ctx, credential: GitHubCredential): void => {
     if (sweep || Date.now() - sweepStartedAt < SWEEP_TTL_MS) return;
     sweepStartedAt = Date.now();
-    sweep = readSweep(token).then(
+    sweep = readSweep(credential).then(
       (result) => {
         swept = result;
         sweepFailure = undefined;
@@ -768,7 +770,7 @@ export function createCiHealth(): CiHealthTile {
   // The two main builds, judged from the snapshots of their runs the tile is
   // collected from. A snapshot that is missing or out of date makes its build
   // unreadable rather than graying the tile.
-  const judgePinned = (ctx: Ctx, from: Sweep, token: string): Promise<Job[]> =>
+  const judgePinned = (ctx: Ctx, from: Sweep, credential: GitHubCredential): Promise<Job[]> =>
     Promise.all(from.repos.flatMap((repo) =>
       repo.workflows
         .filter((workflow) => isPinned(repo.repo, workflow.path))
@@ -784,7 +786,7 @@ export function createCiHealth(): CiHealthTile {
                 !PULL_REQUEST_EVENTS.has(run.event)
               ),
             };
-          const { job } = await judge(listing, from.redefined, token);
+          const { job } = await judge(listing, from.redefined, credential);
           // A snapshot's own problem is logged where the snapshot is read.
           if (problem === undefined && isUnreadable(job)) {
             logUnreadable([jobName(job)]);
@@ -807,13 +809,13 @@ export function createCiHealth(): CiHealthTile {
     }],
     sweeping: () => sweep ?? Promise.resolve(),
     async collect(ctx): Promise<TileView> {
-      const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) {
+      const credential = dashboardGitHubCredential(ctx);
+      if (!credential) {
         return { status: "unknown", value: "—", sub: "set GH_TOKEN" };
       }
 
       const collection = ++collectionsStarted;
-      startSweep(ctx, token);
+      startSweep(ctx, credential);
       if (sweepFailure !== undefined) {
         return {
           status: "unknown",
@@ -826,7 +828,7 @@ export function createCiHealth(): CiHealthTile {
       }
 
       const jobs: CiJobs = {
-        jobs: [...await judgePinned(ctx, swept, token), ...swept.jobs],
+        jobs: [...await judgePinned(ctx, swept, credential), ...swept.jobs],
         repoCount: swept.repos.length,
         unreadableRepos: swept.repos
           .filter((repo) => repo.error !== undefined)

@@ -50,6 +50,7 @@
     "revokeSpaceAccess",
     "schema",
     "spaceAccess",
+    "spaceOf",
     "sqliteDatabase",
     "str",
     "table",

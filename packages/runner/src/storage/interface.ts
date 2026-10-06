@@ -656,7 +656,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * that the principal was granted access. The other trigger of the session
    * remount besides `noteSpaceAclChanged()`: it opens the session again
    * through the same `session.open` admission the first attempt went
-   * through, so it can admit only what that admission would.
+   * through, so it can admit only what that admission would. The v2
+   * StorageManager also calls it itself, on a `session/admissible` naming its
+   * principal.
    *
    * Resolves once the server has decided. An admission clears
    * `spaceAccessError()`, notifies `subscribeSpaceAccessChange()` observers,

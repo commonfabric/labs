@@ -52,6 +52,10 @@ import {
   LOOM_REPO,
   REPO,
 } from "./config.ts";
+import {
+  type GitHubCredential,
+  staticGitHubCredential,
+} from "./github-auth.ts";
 import { github, STALE_RUNS_ERROR } from "./lib.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import { PERFORMANCE_VIEW_STYLES } from "./performance-views.ts";
@@ -204,7 +208,7 @@ Deno.test("CI Gantt limits exact run selections before collecting", async () => 
     await assertRejects(
       () =>
         collector.gantt(
-          "selection-limit-token",
+          staticGitHubCredential("selection-limit-token"),
           CI_HISTORY_SOURCES.labs,
           {
             limit: 1,
@@ -784,7 +788,7 @@ Deno.test("CI job history response keeps a remembered failure in its idle panel"
   const response = await ciJobHistoryResponse(
     new URL("http://x/bench?view=ci"),
     provider,
-    "response-token",
+    staticGitHubCredential("response-token"),
   );
   const html = await response.text();
 
@@ -823,7 +827,7 @@ Deno.test("CI job history response uses a refresh that completed after its cache
   const response = await ciJobHistoryResponse(
     new URL("http://x/bench?view=ci"),
     provider,
-    "response-token",
+    staticGitHubCredential("response-token"),
   );
   const html = await response.text();
 
@@ -835,7 +839,7 @@ Deno.test("CI job history response uses a refresh that completed after its cache
   const fragmentResponse = await ciJobHistoryResponse(
     new URL("http://x/bench?view=ci&days=7&fragment=range"),
     provider,
-    "",
+    undefined,
   );
   const fragment = await fragmentResponse.text();
   assert(fragment.startsWith('<div id="range-content">'));
@@ -873,7 +877,7 @@ Deno.test("CI job history update check uses the selected repository and window",
     cached: (_source: CiHistorySource, _days: number) =>
       Promise.resolve(cached),
     startRefresh: (
-      _token: string,
+      _credential: GitHubCredential,
       source: CiHistorySource,
       days: number,
     ) => {
@@ -885,7 +889,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   const response = await ciJobHistoryCheckResponse(
     new URL("http://x/bench/check?view=ci&repo=loom&days=9"),
     provider,
-    "check-token",
+    staticGitHubCredential("check-token"),
   );
   const state = await response.json();
 
@@ -908,7 +912,7 @@ Deno.test("CI job history update checks freshness-gate a failed collection", asy
 
   try {
     const first = test.collector.startRefreshForCheck(
-      "check-token",
+      staticGitHubCredential("check-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -917,7 +921,7 @@ Deno.test("CI job history update checks freshness-gate a failed collection", asy
 
     assertEquals(
       test.collector.startRefreshForCheck(
-        "check-token",
+        staticGitHubCredential("check-token"),
         CI_HISTORY_SOURCES.labs,
         14,
       ),
@@ -926,7 +930,7 @@ Deno.test("CI job history update checks freshness-gate a failed collection", asy
     const checked = await ciJobHistoryCheckResponse(
       new URL("http://x/bench/check?view=ci&repo=labs&days=7"),
       test.collector,
-      "check-token",
+      staticGitHubCredential("check-token"),
     );
     const state = await checked.json();
     assertEquals(state.progress, null);
@@ -943,12 +947,12 @@ Deno.test("CI job history update checks freshness-gate a failed collection", asy
     });
     globalThis.fetch = () => recoveryResponse.then((response) => response.clone());
     const recovery = test.collector.startRefresh(
-      "check-token",
+      staticGitHubCredential("check-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
     const joinedRecovery = test.collector.startRefreshForCheck(
-      "check-token",
+      staticGitHubCredential("check-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -1000,7 +1004,7 @@ Deno.test("CI history retains a failed request until replacement data is persist
     globalThis.fetch = () =>
       Promise.resolve(new Response("unavailable", { status: 503 }));
     const failed = collector.startRefresh(
-      "failure-token",
+      staticGitHubCredential("failure-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -1017,7 +1021,7 @@ Deno.test("CI history retains a failed request until replacement data is persist
       }));
     blockSave = true;
     const recovery = collector.startRefresh(
-      "recovery-token",
+      staticGitHubCredential("recovery-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -1137,7 +1141,7 @@ Deno.test("CI duration history never loads the Gantt step detail", async () => {
     // A collection and every later read of the duration chart go through the
     // run index alone. Only a Gantt request opens a detail file.
     assertEquals(
-      (await collector.collect("token", now, CI_HISTORY_SOURCES.labs, 45))
+      (await collector.collect(staticGitHubCredential("token"), now, CI_HISTORY_SOURCES.labs, 45))
         .runCount,
       runs.length,
     );
@@ -1148,7 +1152,7 @@ Deno.test("CI duration history never loads the Gantt step detail", async () => {
     assertEquals(reads, []);
 
     const gantt = await collector.gantt(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 2, mainOnly: true },
       now,
@@ -1183,7 +1187,7 @@ Deno.test("the Gantt renderer's input file holds every run of the chart", async 
   );
   try {
     const selection = await collector.startGantt(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 2, mainOnly: true },
       NOW,
@@ -1270,7 +1274,7 @@ Deno.test("a selected run whose detail goes missing mid-chart is an error", asyn
     // the commit, so it fails instead.
     await assertRejects(
       () =>
-        collector.gantt("token", CI_HISTORY_SOURCES.labs, {
+        collector.gantt(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, {
           limit: 1,
           mainOnly: true,
           headSha: HEAD_SHA,
@@ -1315,7 +1319,7 @@ Deno.test("a run whose detail goes missing mid-chart is left out of it", async (
   );
   try {
     const selection = await collector.startGantt(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 2, mainOnly: true },
       NOW,
@@ -1357,7 +1361,7 @@ Deno.test("a chart is served even when its detail cannot be pruned", async () =>
     console.error = (...parts: unknown[]) =>
       void logged.push(parts.map(String).join(" "));
     const chart = await collector.gantt(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: true },
       NOW,
@@ -1451,7 +1455,7 @@ Deno.test("pruning keeps the detail of every attempt the run index holds", async
       }, jobs);
     }
 
-    await collector.collect("token", now, CI_HISTORY_SOURCES.labs, 45);
+    await collector.collect(staticGitHubCredential("token"), now, CI_HISTORY_SOURCES.labs, 45);
 
     // This is what makes pruning safe to run alongside chart assembly: a chart
     // draws the runs the index names, and every one of those still has its
@@ -1527,7 +1531,7 @@ Deno.test("CI Gantt collects an attempt whose detail cannot be read", async () =
     }
 
     const chart = await collector.gantt(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: true },
       NOW,
@@ -1574,7 +1578,7 @@ Deno.test("walking the range slider past the snapshot cache costs no requests or
   );
   try {
     for (const days of windows) {
-      await collector.startRefresh("token", CI_HISTORY_SOURCES.labs, days)
+      await collector.startRefresh(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, days)
         .result;
     }
     const settled = { requests, saves: store.saves };
@@ -1586,7 +1590,7 @@ Deno.test("walking the range slider past the snapshot cache costs no requests or
       assert(
         (await collector.cached(CI_HISTORY_SOURCES.labs, days, now))?.runCount,
       );
-      await collector.startRefresh("token", CI_HISTORY_SOURCES.labs, days)
+      await collector.startRefresh(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, days)
         .result;
     }
     assertEquals([requests, store.saves], [settled.requests, settled.saves]);
@@ -1671,7 +1675,7 @@ Deno.test("a slow run does not hold up the runs behind it", async () => {
   );
   try {
     const collection = collector.collect(
-      "token",
+      staticGitHubCredential("token"),
       now,
       CI_HISTORY_SOURCES.labs,
       45,
@@ -1731,11 +1735,11 @@ Deno.test("a window still collecting keeps its snapshot through an eviction", as
   );
   let collecting: Promise<unknown> = Promise.resolve();
   try {
-    await collector.startRefresh("token", CI_HISTORY_SOURCES.labs, 45).result;
+    await collector.startRefresh(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, 45).result;
 
     store.hold = true;
     collecting = collector.startRefresh(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       1,
       buildCiJobHistory([]),
@@ -1807,7 +1811,7 @@ Deno.test("CI job history reports shared workflow discovery progress", async () 
   let shortResult: Promise<unknown> | undefined;
   try {
     const wide = collector.startRefresh(
-      "discovery-token",
+      staticGitHubCredential("discovery-token"),
       CI_HISTORY_SOURCES.labs,
       45,
     );
@@ -1825,7 +1829,7 @@ Deno.test("CI job history reports shared workflow discovery progress", async () 
     );
 
     const short = collector.startRefresh(
-      "discovery-token",
+      staticGitHubCredential("discovery-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -1933,7 +1937,7 @@ Deno.test("CI job history reports progress and persists wider-window responses a
   let stopShort: (() => void) | null = null;
   try {
     const wide = test.collector.startRefresh(
-      "progress-token",
+      staticGitHubCredential("progress-token"),
       CI_HISTORY_SOURCES.labs,
       45,
     );
@@ -1975,7 +1979,7 @@ Deno.test("CI job history reports progress and persists wider-window responses a
     );
 
     const short = test.collector.startRefresh(
-      "progress-token",
+      staticGitHubCredential("progress-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -2021,7 +2025,7 @@ Deno.test("CI job history reports progress and persists wider-window responses a
     assert(widePhases.includes("saving"));
     assert(widePhases.includes("complete"));
     const cachedWindow = test.collector.startRefresh(
-      "progress-token",
+      staticGitHubCredential("progress-token"),
       CI_HISTORY_SOURCES.labs,
       14,
     );
@@ -2080,7 +2084,7 @@ Deno.test("CI job history reloads a short page when a wider collection populated
 
   try {
     const initial = await test.collector.collect(
-      "baseline-token",
+      staticGitHubCredential("baseline-token"),
       now,
       CI_HISTORY_SOURCES.labs,
       7,
@@ -2091,7 +2095,7 @@ Deno.test("CI job history reloads a short page when a wider collection populated
     const baseline = test.collector.snapshot(CI_HISTORY_SOURCES.labs, 7);
     assert(baseline);
     const wide = await test.collector.collect(
-      "baseline-token",
+      staticGitHubCredential("baseline-token"),
       now,
       CI_HISTORY_SOURCES.labs,
       45,
@@ -2100,7 +2104,7 @@ Deno.test("CI job history reloads a short page when a wider collection populated
     assertEquals(wide.runCount, 2);
 
     const refresh = test.collector.startRefresh(
-      "baseline-token",
+      staticGitHubCredential("baseline-token"),
       CI_HISTORY_SOURCES.labs,
       7,
       baseline,
@@ -2152,7 +2156,7 @@ Deno.test("CI job history rebuilds a fresh short range after a wider range repai
 
   try {
     const short = test.collector.startRefresh(
-      "repair-token",
+      staticGitHubCredential("repair-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -2161,14 +2165,14 @@ Deno.test("CI job history rebuilds a fresh short range after a wider range repai
 
     repairAvailable = true;
     const wide = await test.collector.startRefresh(
-      "repair-token",
+      staticGitHubCredential("repair-token"),
       CI_HISTORY_SOURCES.labs,
       45,
     ).result;
     assertEquals([wide.runCount, wide.failedRunCount], [2, 0]);
 
     const rebuilt = test.collector.startRefresh(
-      "repair-token",
+      staticGitHubCredential("repair-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -2233,14 +2237,14 @@ Deno.test("CI job history joins a wider repair before taking the short-range fre
   const pending: Promise<unknown>[] = [];
   try {
     const partial = await test.collector.startRefresh(
-      "active-repair-token",
+      staticGitHubCredential("active-repair-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     ).result;
     assertEquals([partial.runCount, partial.failedRunCount], [1, 1]);
 
     const wide = test.collector.startRefresh(
-      "active-repair-token",
+      staticGitHubCredential("active-repair-token"),
       CI_HISTORY_SOURCES.labs,
       45,
     );
@@ -2248,7 +2252,7 @@ Deno.test("CI job history joins a wider repair before taking the short-range fre
     await repairStarted;
 
     const lateShort = test.collector.startRefresh(
-      "active-repair-token",
+      staticGitHubCredential("active-repair-token"),
       CI_HISTORY_SOURCES.labs,
       7,
       partial,
@@ -2349,14 +2353,14 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
   const pending: Promise<unknown>[] = [];
   try {
     const labs = await collector.startRefresh(
-      "source-token",
+      staticGitHubCredential("source-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     ).result;
     assertEquals(labs.runCount, 1);
 
     const loom = collector.startRefresh(
-      "source-token",
+      staticGitHubCredential("source-token"),
       CI_HISTORY_SOURCES.loom,
       7,
     );
@@ -2364,7 +2368,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     await loomSaveStarted;
 
     const labsDuringLoom = collector.startRefresh(
-      "source-token",
+      staticGitHubCredential("source-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -2375,7 +2379,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     unblockLoomSave();
     await assertRejects(() => loom.result, Error, "loom save failed");
     const labsAfterFailure = collector.startRefresh(
-      "source-token",
+      staticGitHubCredential("source-token"),
       CI_HISTORY_SOURCES.labs,
       7,
     );
@@ -2431,7 +2435,7 @@ Deno.test("CI job history persists a shared job response once across active wind
   try {
     const refreshes = [7, 8, 9, 10, 11].map((days) =>
       collector.startRefresh(
-        "shared-save-token",
+        staticGitHubCredential("shared-save-token"),
         CI_HISTORY_SOURCES.labs,
         days,
         null,
@@ -2528,7 +2532,7 @@ Deno.test("CI job history joins persistence when a range starts after the respon
   const stops: (() => void)[] = [];
   try {
     const wide = collector.startRefresh(
-      "late-range-token",
+      staticGitHubCredential("late-range-token"),
       CI_HISTORY_SOURCES.labs,
       45,
       null,
@@ -2537,7 +2541,7 @@ Deno.test("CI job history joins persistence when a range starts after the respon
     await saveStarted;
 
     const short = collector.startRefresh(
-      "late-range-token",
+      staticGitHubCredential("late-range-token"),
       CI_HISTORY_SOURCES.labs,
       7,
       null,
@@ -2622,7 +2626,7 @@ Deno.test("CI job history fetches selected runs once and filters unusable jobs",
   };
 
   try {
-    const first = await test.collector.collect("test-token", NOW);
+    const first = await test.collector.collect(staticGitHubCredential("test-token"), NOW);
     assertEquals(first.runCount, 4);
     assertEquals(first.successfulRunTimes, [
       NOW - 2 * DAY,
@@ -2650,7 +2654,7 @@ Deno.test("CI job history fetches selected runs once and filters unusable jobs",
       call.includes("/jobs?")
     ).length;
     assertEquals(firstJobCalls, 4);
-    await test.collector.collect("test-token", NOW);
+    await test.collector.collect(staticGitHubCredential("test-token"), NOW);
     const secondJobCalls = calls.filter((call) =>
       call.includes("/jobs?")
     ).length;
@@ -2661,8 +2665,8 @@ Deno.test("CI job history fetches selected runs once and filters unusable jobs",
         call.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`) &&
         !isNewestPage(call)
       ).length;
-    await test.collector.refresh("test-token");
-    await test.collector.refresh("test-token");
+    await test.collector.refresh(staticGitHubCredential("test-token"));
+    await test.collector.refresh(staticGitHubCredential("test-token"));
     const runCallsAfterRefresh =
       calls.filter((call) =>
         call.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`) &&
@@ -2697,7 +2701,7 @@ Deno.test("CI job history reloads completed attempts from its server cache", asy
   };
 
   try {
-    const first = await test.collector.collect("cache-token", NOW);
+    const first = await test.collector.collect(staticGitHubCredential("cache-token"), NOW);
     assertEquals(first.overall?.points[0].seconds, 120);
     assertEquals([runCalls, jobCalls], [1, 1]);
 
@@ -2727,7 +2731,7 @@ Deno.test("CI job history reloads completed attempts from its server cache", asy
     assertEquals(expired?.axisStart, NOW + DAY);
     assertEquals(expired?.axisEnd, NOW + 8 * DAY);
 
-    await restarted.collect("cache-token", NOW);
+    await restarted.collect(staticGitHubCredential("cache-token"), NOW);
     assertEquals(runCalls, 2);
     assertEquals(jobCalls, 1);
   } finally {
@@ -2760,7 +2764,7 @@ Deno.test("CI job history reuses a fresh completed collection after a dashboard 
 
   try {
     const first = test.collector.startRefresh(
-      "restart-token",
+      staticGitHubCredential("restart-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     );
@@ -2792,7 +2796,7 @@ Deno.test("CI job history reuses a fresh completed collection after a dashboard 
     );
     assertEquals(cached?.successfulRunTimes, [now]);
     const refresh = restarted.startRefresh(
-      "restart-token",
+      staticGitHubCredential("restart-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
       cached,
@@ -2881,7 +2885,7 @@ Deno.test("CI job history does not rebuild a matching persisted manifest", async
       new CiJobHistoryStore(`${directory}/history.json`),
     );
     assertEquals(
-      (await collector.startRefresh("matching-manifest-token").result)
+      (await collector.startRefresh(staticGitHubCredential("matching-manifest-token")).result)
         .runCount,
       1,
     );
@@ -2907,7 +2911,7 @@ Deno.test("CI job history does not bless a preserved legacy sample", async () =>
   };
 
   try {
-    await test.collector.startRefresh("legacy-sample-token").result;
+    await test.collector.startRefresh(staticGitHubCredential("legacy-sample-token")).result;
     const persisted = JSON.parse(await Deno.readTextFile(test.file));
     delete persisted.refreshes[0].samplingVersion;
     const reruns = Array.from(
@@ -2942,7 +2946,7 @@ Deno.test("CI job history does not bless a preserved legacy sample", async () =>
     assertEquals(baseline?.runCount, 1);
 
     const result = await collector.startRefresh(
-      "legacy-sample-token",
+      staticGitHubCredential("legacy-sample-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
       baseline,
@@ -2978,7 +2982,7 @@ Deno.test("CI job history does not bless a preserved manifestless sample", async
   };
 
   try {
-    await test.collector.startRefresh("manifestless-sample-token").result;
+    await test.collector.startRefresh(staticGitHubCredential("manifestless-sample-token")).result;
     const persisted = JSON.parse(await Deno.readTextFile(test.file));
     persisted.refreshes = [];
     await Deno.writeTextFile(test.file, JSON.stringify(persisted));
@@ -3010,7 +3014,7 @@ Deno.test("CI job history does not bless a preserved manifestless sample", async
     assertEquals(baseline?.runCount, 1);
 
     const result = await collector.startRefresh(
-      "manifestless-sample-token",
+      staticGitHubCredential("manifestless-sample-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
       baseline,
@@ -3056,7 +3060,7 @@ Deno.test("CI job history preserves an all-failed refresh warning and retries af
 
   try {
     await test.collector.startRefresh(
-      "restart-failure-token",
+      staticGitHubCredential("restart-failure-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     ).result;
@@ -3068,7 +3072,7 @@ Deno.test("CI job history preserves an all-failed refresh warning and retries af
     const baseline = await second.cached(CI_HISTORY_SOURCES.labs, 7, now);
     assertEquals(baseline?.runCount, 1);
     const failed = await second.startRefresh(
-      "restart-failure-token",
+      staticGitHubCredential("restart-failure-token"),
       CI_HISTORY_SOURCES.labs,
       7,
       baseline,
@@ -3091,7 +3095,7 @@ Deno.test("CI job history preserves an all-failed refresh warning and retries af
     assertEquals(cached?.failedRunTimes, [Date.parse(run.run_started_at)]);
     assertEquals(cached?.stale, true);
     const refresh = restarted.startRefresh(
-      "restart-failure-token",
+      staticGitHubCredential("restart-failure-token"),
       CI_HISTORY_SOURCES.labs,
       7,
       cached,
@@ -3135,7 +3139,7 @@ Deno.test("CI job history preserves current sampling provenance after an all-fai
 
   try {
     await test.collector.startRefresh(
-      "current-sample-token",
+      staticGitHubCredential("current-sample-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     ).result;
@@ -3151,7 +3155,7 @@ Deno.test("CI job history preserves current sampling provenance after an all-fai
     );
     assertEquals(baseline?.runCount, 1);
     const failed = await second.startRefresh(
-      "current-sample-token",
+      staticGitHubCredential("current-sample-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
       baseline,
@@ -3173,7 +3177,7 @@ Deno.test("CI job history preserves current sampling provenance after an all-fai
       Date.now(),
     );
     const refresh = restarted.startRefresh(
-      "current-sample-token",
+      staticGitHubCredential("current-sample-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
       cached,
@@ -3203,7 +3207,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
     },
   );
   await warmed.startRefresh(
-    "rate-limited-token",
+    staticGitHubCredential("rate-limited-token"),
     CI_HISTORY_SOURCES.labs,
     CI_HISTORY_DAYS,
   ).result;
@@ -3223,7 +3227,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
   );
   try {
     const refresh = collector.startRefresh(
-      "rate-limited-token",
+      staticGitHubCredential("rate-limited-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     );
@@ -3267,7 +3271,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
     );
     await restarted.cached(CI_HISTORY_SOURCES.labs, CI_HISTORY_DAYS);
     const retry = restarted.startRefresh(
-      "rate-limited-token",
+      staticGitHubCredential("rate-limited-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     );
@@ -3295,7 +3299,7 @@ Deno.test("CI job history can replace an in-process future refresh", async () =>
   );
   try {
     await collector.startRefresh(
-      "future-refresh-token",
+      staticGitHubCredential("future-refresh-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     ).result;
@@ -3377,12 +3381,12 @@ Deno.test("CI Gantt reuses and reloads the CI history job cache", async () => {
 
   try {
     await test.collector.startRefresh(
-      "shared-cache-token",
+      staticGitHubCredential("shared-cache-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     ).result;
     const gantt = await test.collector.gantt(
-      "shared-cache-token",
+      staticGitHubCredential("shared-cache-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 10, mainOnly: true },
       now,
@@ -3462,7 +3466,7 @@ Deno.test("a selected-run Gantt reads only its run and then reuses the disk cach
 
   try {
     const first = await test.collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
@@ -3549,7 +3553,7 @@ Deno.test("a selected-run Gantt reuses fresh run metadata after a job failure", 
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           options,
           NOW,
@@ -3558,7 +3562,7 @@ Deno.test("a selected-run Gantt reuses fresh run metadata after a job failure", 
       "job response failed",
     );
     const result = await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
@@ -3611,7 +3615,7 @@ Deno.test("selected-run metadata keeps only the most recent Gantt selection", as
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           options(selections),
           NOW,
@@ -3622,7 +3626,7 @@ Deno.test("selected-run metadata keeps only the most recent Gantt selection", as
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           options([{ runId: 30_000, runAttempt: 1 }]),
           NOW,
@@ -3633,7 +3637,7 @@ Deno.test("selected-run metadata keeps only the most recent Gantt selection", as
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           options([selections[1]]),
           NOW,
@@ -3645,7 +3649,7 @@ Deno.test("selected-run metadata keeps only the most recent Gantt selection", as
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           options([selections[0]]),
           NOW,
@@ -3714,7 +3718,7 @@ async function overfillGanttProgressRecords(
   try {
     for (let index = 0; index < PROGRESS_RECORD_MAX + 1; index++) {
       const refresh = collector.startGantt(
-        "selected-run-token",
+        staticGitHubCredential("selected-run-token"),
         CI_HISTORY_SOURCES.labs,
         {
           limit: 1,
@@ -3830,7 +3834,7 @@ Deno.test("a selected-run Gantt repairs cached responses with no drawable jobs",
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           options,
           NOW,
@@ -3862,7 +3866,7 @@ Deno.test("a selected-run Gantt repairs cached responses with no drawable jobs",
     await store.save(NOW);
 
     const repaired = await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
@@ -3978,7 +3982,7 @@ Deno.test("a selected-run Gantt expands a collapsed rerun cache", async () => {
       "Set GH_TOKEN",
     );
     const result = await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       {
         limit: 1,
@@ -4059,7 +4063,7 @@ Deno.test("a selected-run Gantt validates the commit and workflow before fetchin
       await assertRejects(
         () =>
           collector.gantt(
-            "selected-run-token",
+            staticGitHubCredential("selected-run-token"),
             CI_HISTORY_SOURCES.labs,
             {
               limit: 1,
@@ -4097,7 +4101,7 @@ Deno.test("a selected-run Gantt requires a valid commit SHA", async () => {
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           {
             limit: 1,
@@ -4153,14 +4157,14 @@ Deno.test("a selected-run Gantt enriches a shared cached attempt with its commit
   };
   try {
     await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: true },
       NOW,
       [run],
     );
     const selected = await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
@@ -4235,7 +4239,7 @@ Deno.test("selected and aggregate Gantt requests do not join different job queri
   let aggregate: Promise<CiGanttInput> | undefined;
   try {
     aggregate = collector.gantt(
-      "gantt-token",
+      staticGitHubCredential("gantt-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: true },
       NOW,
@@ -4243,7 +4247,7 @@ Deno.test("selected and aggregate Gantt requests do not join different job queri
     );
     await aggregateStarted;
     const exact = await collector.gantt(
-      "gantt-token",
+      staticGitHubCredential("gantt-token"),
       CI_HISTORY_SOURCES.labs,
       {
         limit: 1,
@@ -4294,7 +4298,7 @@ Deno.test("a selected-run Gantt rejects timings outside cache retention", async 
     await assertRejects(
       () =>
         collector.gantt(
-          "selected-run-token",
+          staticGitHubCredential("selected-run-token"),
           CI_HISTORY_SOURCES.labs,
           {
             limit: 1,
@@ -4354,13 +4358,13 @@ Deno.test("a selected-run Gantt keeps each workflow attempt distinct", async () 
   });
   try {
     await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       options(1),
       NOW,
     );
     await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       options(2),
       NOW,
@@ -4414,7 +4418,7 @@ Deno.test("a selected-run Gantt does not render an incomplete cached selection",
   );
   try {
     await collector.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       {
         limit: 1,
@@ -4496,7 +4500,7 @@ Deno.test("selected-run discovery settles a failed batch before stopping", async
     },
   );
   const active = collector.startGantt(
-    "selected-run-token",
+    staticGitHubCredential("selected-run-token"),
     CI_HISTORY_SOURCES.labs,
     {
       limit: runs.length,
@@ -4556,7 +4560,7 @@ Deno.test("selected-run discovery settles a failed batch before stopping", async
       },
     );
     const recovered = await restarted.gantt(
-      "selected-run-token",
+      staticGitHubCredential("selected-run-token"),
       CI_HISTORY_SOURCES.labs,
       {
         limit: runs.length,
@@ -4619,14 +4623,14 @@ Deno.test("CI Gantt reports shared discovery and job-fetch progress", async () =
   let firstResult: Promise<GanttSelection> | undefined;
   try {
     const first = collector.startGantt(
-      "gantt-progress-token",
+      staticGitHubCredential("gantt-progress-token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
     );
     firstResult = first.result;
     const joined = collector.startGantt(
-      "gantt-progress-token",
+      staticGitHubCredential("gantt-progress-token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
@@ -4676,7 +4680,7 @@ Deno.test("CI Gantt reports shared discovery and job-fetch progress", async () =
     );
 
     const cached = collector.startGantt(
-      "gantt-progress-token",
+      staticGitHubCredential("gantt-progress-token"),
       CI_HISTORY_SOURCES.labs,
       { ...options, limit: 2 },
       NOW,
@@ -4743,7 +4747,7 @@ Deno.test("CI Gantt reuses a run cached while collection is starting", async () 
   try {
     await detailStoreFor(store).write(entry, entry.runId, entry.runAttempt, []);
     const refresh = collector.startGantt(
-      "concurrent-cache-token",
+      staticGitHubCredential("concurrent-cache-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: false, allConclusions: true },
       NOW,
@@ -4797,7 +4801,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
         "http://dashboard/bench/gantt-progress?repo=loom&limit=12&mainOnly=1&allConclusions=1",
       ),
       collector,
-      "",
+      undefined,
     );
     assertEquals(response.headers.get("content-type"), "text/event-stream");
     const events = await response.text();
@@ -4842,7 +4846,7 @@ Deno.test("CI Gantt progress reports a cached discovery fallback", async () => {
   );
   try {
     const refresh = collector.startGantt(
-      "cached-warning-token",
+      staticGitHubCredential("cached-warning-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: false, allConclusions: true },
       NOW,
@@ -4904,7 +4908,7 @@ Deno.test("CI Gantt progress reports partial job responses and rate limits", asy
   console.error = () => {};
   try {
     const refresh = collector.startGantt(
-      "partial-warning-token",
+      staticGitHubCredential("partial-warning-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 3, mainOnly: false, allConclusions: true },
       NOW,
@@ -4960,7 +4964,7 @@ Deno.test("CI Gantt preserves the quota error when no run can be rendered", asyn
   console.error = () => {};
   try {
     const refresh = collector.startGantt(
-      "quota-error-token",
+      staticGitHubCredential("quota-error-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 2, mainOnly: false, allConclusions: true },
       NOW,
@@ -5002,7 +5006,7 @@ Deno.test("CI Gantt preserves a specific job error when no run can be rendered",
   console.error = () => {};
   try {
     const refresh = collector.startGantt(
-      "job-error-token",
+      staticGitHubCredential("job-error-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: false, allConclusions: true },
       NOW,
@@ -5056,7 +5060,7 @@ Deno.test("CI Gantt persists a completed response before a discovery fallback re
     await assertRejects(
       () =>
         collector.gantt(
-          "shared-cache-token",
+          staticGitHubCredential("shared-cache-token"),
           CI_HISTORY_SOURCES.labs,
           { limit: 10, mainOnly: true },
           NOW,
@@ -5068,7 +5072,7 @@ Deno.test("CI Gantt persists a completed response before a discovery fallback re
     assertEquals([jobCalls, store.saveCalls, store.dirty], [1, 1, true]);
 
     const cached = await collector.gantt(
-      "shared-cache-token",
+      staticGitHubCredential("shared-cache-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 10, mainOnly: true },
       NOW,
@@ -5108,7 +5112,7 @@ Deno.test("CI Gantt includes failed main pushes when all conclusions are selecte
 
   try {
     const gantt = await test.collector.gantt(
-      "all-conclusions-token",
+      staticGitHubCredential("all-conclusions-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 10, mainOnly: true, allConclusions: true },
       NOW,
@@ -5158,7 +5162,7 @@ Deno.test("CI Gantt keeps a constant page size while collecting 150 runs", async
 
   try {
     const gantt = await test.collector.gantt(
-      "paging-token",
+      staticGitHubCredential("paging-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 150, mainOnly: false },
       NOW,
@@ -5220,7 +5224,7 @@ Deno.test("CI history excludes pull request runs cached by the Gantt", async () 
 
   try {
     const gantt = await test.collector.gantt(
-      "shared-cache-token",
+      staticGitHubCredential("shared-cache-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 10, mainOnly: false },
       NOW,
@@ -5269,7 +5273,7 @@ Deno.test("CI job history recomputes shard concurrency as layouts age out", asyn
 
   try {
     const initial = await test.collector.collect(
-      "layout-token",
+      staticGitHubCredential("layout-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       7,
@@ -5315,7 +5319,7 @@ Deno.test("CI job history keeps a newer partial refresh ahead of its disk cache"
 
   try {
     const initial = await test.collector.collect(
-      "partial-cache-token",
+      staticGitHubCredential("partial-cache-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
@@ -5325,7 +5329,7 @@ Deno.test("CI job history keeps a newer partial refresh ahead of its disk cache"
 
     attempt = 2;
     const partial = await test.collector.collect(
-      "partial-cache-token",
+      staticGitHubCredential("partial-cache-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
@@ -5389,7 +5393,7 @@ Deno.test("CI job history reports a cache write failure and retries without refe
 
   try {
     const first = collector.startRefresh(
-      "write-token",
+      staticGitHubCredential("write-token"),
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
     );
@@ -5408,7 +5412,7 @@ Deno.test("CI job history reports a cache write failure and retries without refe
     await Deno.mkdir(parent);
     const retries = [7, 14, 21, 30, 45].map((days) =>
       collector.startRefresh(
-        "write-token",
+        staticGitHubCredential("write-token"),
         CI_HISTORY_SOURCES.labs,
         days,
       )
@@ -5485,7 +5489,7 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
 
   try {
     const snapshot = await test.collector.collect(
-      "loom-token",
+      staticGitHubCredential("loom-token"),
       NOW,
       CI_HISTORY_SOURCES.loom,
     );
@@ -5533,7 +5537,7 @@ Deno.test("CI job history refuses a search that does not reach the workflow's ne
   );
   try {
     await assertRejects(
-      () => test.collector.collect("stale-token", NOW),
+      () => test.collector.collect(staticGitHubCredential("stale-token"), NOW),
       Error,
       STALE_RUNS_ERROR,
     );
@@ -5562,7 +5566,7 @@ Deno.test("CI job history takes the runs a search lags behind from the newest pa
     ],
   );
   try {
-    const snapshot = await test.collector.collect("lagging-token", NOW);
+    const snapshot = await test.collector.collect(staticGitHubCredential("lagging-token"), NOW);
     assertEquals(snapshot.successfulRunTimes, [
       NOW - DAY,
       NOW - 4 * HOUR,
@@ -5585,7 +5589,7 @@ Deno.test("CI job history holds a search only to newest-page runs inside its win
     [workflowRun(9_331, NOW - (CI_HISTORY_DAYS + 5) * DAY)],
   );
   try {
-    const snapshot = await test.collector.collect("quiet-token", NOW);
+    const snapshot = await test.collector.collect(staticGitHubCredential("quiet-token"), NOW);
     assertEquals(snapshot.runCount, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -5619,7 +5623,7 @@ Deno.test("CI Gantt picks main's pushes out of the unfiltered run list", async (
   };
   try {
     const gantt = await test.collector.gantt(
-      "main-token",
+      staticGitHubCredential("main-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 10, mainOnly: true, allConclusions: true },
       NOW,
@@ -5649,7 +5653,7 @@ Deno.test("CI Gantt leaves out runs past the history window on the last page it 
   };
   try {
     const gantt = await test.collector.gantt(
-      "window-edge-token",
+      staticGitHubCredential("window-edge-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 10, mainOnly: true, allConclusions: true },
       NOW,
@@ -5685,7 +5689,7 @@ Deno.test("CI Gantt counts a run two pages repeat once toward its limit", async 
   };
   try {
     const gantt = await test.collector.gantt(
-      "repeat-token",
+      staticGitHubCredential("repeat-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 150, mainOnly: true, allConclusions: true },
       NOW,
@@ -5725,7 +5729,7 @@ Deno.test("CI Gantt stops walking the unfiltered run list at the history window"
     await assertRejects(
       () =>
         test.collector.gantt(
-          "window-token",
+          staticGitHubCredential("window-token"),
           CI_HISTORY_SOURCES.labs,
           { limit: 10, mainOnly: true, allConclusions: true },
           NOW,
@@ -5761,7 +5765,7 @@ Deno.test("CI job history splits a saturated workflow-run search", async () => {
   };
 
   try {
-    const snapshot = await test.collector.collect("split-token", NOW);
+    const snapshot = await test.collector.collect(staticGitHubCredential("split-token"), NOW);
     assertEquals(snapshot.runCount, 0);
     assertEquals(ranges.length, 3);
     assert(ranges.every((range) => range.includes("..")));
@@ -5809,12 +5813,12 @@ Deno.test("CI job history refreshes the complete latest job set after a subset r
   };
 
   try {
-    const first = await test.collector.collect("rerun-token", NOW);
+    const first = await test.collector.collect(staticGitHubCredential("rerun-token"), NOW);
     attempt = 2;
-    const second = await test.collector.collect("rerun-token", NOW);
+    const second = await test.collector.collect(staticGitHubCredential("rerun-token"), NOW);
     attempt = 3;
-    const third = await test.collector.collect("rerun-token", NOW);
-    await test.collector.collect("rerun-token", NOW);
+    const third = await test.collector.collect(staticGitHubCredential("rerun-token"), NOW);
+    await test.collector.collect(staticGitHubCredential("rerun-token"), NOW);
     assertEquals(
       first.jobs.map((series) => [series.name, series.points[0].seconds]),
       [["Check", 100], ["Retried job", 100]],
@@ -5876,7 +5880,7 @@ Deno.test("CI Gantt keeps every execution of a rerun job", async () => {
   try {
     const run = workflowRun(runId, NOW, { run_attempt: 2 });
     const history = await test.collector.collect(
-      "rerun-gantt-token",
+      staticGitHubCredential("rerun-gantt-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
@@ -5889,7 +5893,7 @@ Deno.test("CI Gantt keeps every execution of a rerun job", async () => {
     );
 
     const gantt = await test.collector.gantt(
-      "rerun-gantt-token",
+      staticGitHubCredential("rerun-gantt-token"),
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: true },
       NOW,
@@ -5973,7 +5977,7 @@ Deno.test("CI job history keeps the higher attempt when requests finish out of o
 
   try {
     const lowerRequest = test.collector.collect(
-      "ordering-token",
+      staticGitHubCredential("ordering-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
@@ -5981,7 +5985,7 @@ Deno.test("CI job history keeps the higher attempt when requests finish out of o
     );
     await lowerRequested;
     const higher = await test.collector.collect(
-      "ordering-token",
+      staticGitHubCredential("ordering-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
@@ -5994,7 +5998,7 @@ Deno.test("CI job history keeps the higher attempt when requests finish out of o
     assertEquals(lower.jobs[0].points[0].seconds, 200);
     const callsBeforeCachedLower = calls.length;
     const cachedLower = await test.collector.collect(
-      "ordering-token",
+      staticGitHubCredential("ordering-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       CI_HISTORY_DAYS,
@@ -6039,7 +6043,7 @@ Deno.test("CI job history keeps successful samples when another run cannot be re
 
   try {
     const snapshot = await test.collector.collect(
-      "partial-token",
+      staticGitHubCredential("partial-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       7,
@@ -6118,14 +6122,14 @@ Deno.test("CI job history keeps the last snapshot when every refreshed attempt f
 
   try {
     const first = await test.collector.collect(
-      "stale-token",
+      staticGitHubCredential("stale-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       7,
     );
     attempt = 2;
     const stale = await test.collector.collect(
-      "stale-token",
+      staticGitHubCredential("stale-token"),
       NOW,
       CI_HISTORY_SOURCES.labs,
       7,
@@ -6147,7 +6151,7 @@ Deno.test("CI job history keeps the last snapshot when every refreshed attempt f
     assert(!html.includes("Showing partial data."));
 
     const expired = await test.collector.collect(
-      "stale-token",
+      staticGitHubCredential("stale-token"),
       NOW + 8 * DAY,
       CI_HISTORY_SOURCES.labs,
       7,
@@ -6192,7 +6196,7 @@ Deno.test("CI job history rejects a one-second workflow search with over 1,000 r
   );
   try {
     await assertRejects(
-      () => collector.collect("token", NOW),
+      () => collector.collect(staticGitHubCredential("token"), NOW),
       Error,
       "exceeded 1,000 results in one second",
     );
@@ -6229,7 +6233,7 @@ Deno.test("CI job history paginates workflow searches and honors the reported to
       },
     );
     try {
-      assertEquals((await collector.collect("token", NOW)).runCount, 0);
+      assertEquals((await collector.collect(staticGitHubCredential("token"), NOW)).runCount, 0);
       assertEquals(pages, reportsTotal ? [1] : [1, 2]);
     } finally {
       await Deno.remove(directory, { recursive: true });
@@ -6262,7 +6266,7 @@ Deno.test("CI job history ignores invalid job times and uses a timed rerun in th
     },
   );
   try {
-    const snapshot = await collector.collect("token", NOW, undefined, 45, [
+    const snapshot = await collector.collect(staticGitHubCredential("token"), NOW, undefined, 45, [
       run,
     ]);
     assertEquals(snapshot.jobs.map((series) => series.name), ["Retry"]);
@@ -6292,7 +6296,7 @@ Deno.test("CI job history removes progress listeners that throw", async () => {
     <T>() => pending as Promise<T>,
   );
   try {
-    const refresh = collector.startRefresh("token");
+    const refresh = collector.startRefresh(staticGitHubCredential("token"));
     assert(refresh.progress);
     assertEquals(collector.subscribeProgress("missing", () => {}), null);
     assertEquals(
@@ -6436,7 +6440,7 @@ Deno.test("the production CI Gantt wrapper writes the file it is given", async (
       CI_HISTORY_SOURCES.labs,
       { limit: 1, mainOnly: true },
       destination,
-      "token",
+      staticGitHubCredential("token"),
       collector,
     );
 
@@ -6465,7 +6469,7 @@ Deno.test("the production CI Gantt wrapper forwards a source with no cached data
             allConclusions: false,
           },
           `${directory}/input.json`,
-          "",
+          undefined,
         ),
       Error,
       "Set GH_TOKEN",
@@ -6489,13 +6493,13 @@ Deno.test("CI job history detects when its exact stale snapshot cannot be retain
   const run = workflowRun(10_500, NOW);
   try {
     assertEquals(
-      (await collector.collect("token", NOW, undefined, 45, [run])).runCount,
+      (await collector.collect(staticGitHubCredential("token"), NOW, undefined, 45, [run])).runCount,
       1,
     );
     await store.save(NOW + 100 * DAY);
     failJobs = true;
     await assertRejects(
-      () => collector.collect("token", NOW, undefined, 45, [run]),
+      () => collector.collect(staticGitHubCredential("token"), NOW, undefined, 45, [run]),
       Error,
       "could not preserve the exact previous run set",
     );
@@ -6521,12 +6525,12 @@ Deno.test("CI Gantt reuses recent discovery and reports discovery failure withou
   const options = { limit: 1, mainOnly: false, allConclusions: true };
   try {
     assertEquals(
-      (await collector.gantt("token", CI_HISTORY_SOURCES.labs, options, NOW))
+      (await collector.gantt(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, options, NOW))
         .runs.length,
       1,
     );
     assertEquals(
-      (await collector.gantt("token", CI_HISTORY_SOURCES.labs, options, NOW))
+      (await collector.gantt(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, options, NOW))
         .runs.length,
       1,
     );
@@ -6537,7 +6541,7 @@ Deno.test("CI Gantt reuses recent discovery and reports discovery failure withou
       () => Promise.reject(new Error("discovery failed")),
     );
     await assertRejects(
-      () => failed.gantt("token", CI_HISTORY_SOURCES.labs, options, NOW),
+      () => failed.gantt(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, options, NOW),
       Error,
       "discovery failed",
     );
@@ -6556,7 +6560,7 @@ Deno.test("CI Gantt reports job failures and falls back to an older cached attem
     await assertRejects(
       () =>
         noRuns.gantt(
-          "token",
+          staticGitHubCredential("token"),
           CI_HISTORY_SOURCES.labs,
           options,
           NOW,
@@ -6573,7 +6577,7 @@ Deno.test("CI Gantt reports job failures and falls back to an older cached attem
     await assertRejects(
       () =>
         empty.gantt(
-          "token",
+          staticGitHubCredential("token"),
           CI_HISTORY_SOURCES.labs,
           options,
           NOW,
@@ -6610,7 +6614,7 @@ Deno.test("CI Gantt reports job failures and falls back to an older cached attem
       () => Promise.reject(new Error("new attempt failed")),
     );
     const result = await cached.gantt(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       options,
       NOW,
@@ -6631,9 +6635,9 @@ Deno.test("CI job history joins an active refresh for the same window", async ()
     <T>() => runs as Promise<T>,
   );
   try {
-    const first = collector.startRefresh("token", CI_HISTORY_SOURCES.labs, 7);
+    const first = collector.startRefresh(staticGitHubCredential("token"), CI_HISTORY_SOURCES.labs, 7);
     const second = collector.startRefresh(
-      "token",
+      staticGitHubCredential("token"),
       CI_HISTORY_SOURCES.labs,
       7,
       buildCiJobHistory([]),
@@ -6680,7 +6684,7 @@ Deno.test("CI job history restores its prior manifest when the manifest write fa
   );
   try {
     await assertRejects(
-      () => collector.startRefresh("token").result,
+      () => collector.startRefresh(staticGitHubCredential("token")).result,
       Error,
       "manifest write failed",
     );
@@ -6704,7 +6708,7 @@ Deno.test("CI job history rejects a missing persisted refresh manifest", async (
   );
   try {
     await assertRejects(
-      () => collector.startRefresh("token").result,
+      () => collector.startRefresh(staticGitHubCredential("token")).result,
       Error,
       "refresh manifest was not persisted",
     );
@@ -6730,7 +6734,7 @@ Deno.test("CI job history reloads when concurrent persistence changes its manife
     <T>() => Promise.resolve({ workflow_runs: [] } as T),
   );
   try {
-    assertEquals((await collector.startRefresh("token").result).runCount, 0);
+    assertEquals((await collector.startRefresh(staticGitHubCredential("token")).result).runCount, 0);
     assertEquals(reads >= 2, true);
   } finally {
     await Deno.remove(directory, { recursive: true });
@@ -6746,7 +6750,7 @@ Deno.test("CI job history completes when a persisted manifest is immediately inv
     <T>() => Promise.resolve({ workflow_runs: [] } as T),
   );
   try {
-    assertEquals((await collector.startRefresh("token").result).runCount, 0);
+    assertEquals((await collector.startRefresh(staticGitHubCredential("token")).result).runCount, 0);
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
@@ -6761,7 +6765,7 @@ Deno.test("CI job history reports persistence failure while recording a rate lim
   );
   try {
     const error = await assertRejects(
-      () => collector.startRefresh("token").result,
+      () => collector.startRefresh(staticGitHubCredential("token")).result,
       Error,
     );
     assertStringIncludes(error.message, "No such file or directory");
@@ -6791,7 +6795,7 @@ Deno.test("CI job history progress responses close completed streams", async () 
       ).status,
       404,
     );
-    const refresh = collector.startRefresh("token");
+    const refresh = collector.startRefresh(staticGitHubCredential("token"));
     assert(refresh.progress);
     await refresh.result;
     const response = ciJobHistoryProgressResponse(
@@ -6877,7 +6881,7 @@ Deno.test("CI history endpoints handle immediate and background refreshes", asyn
   const checked = await ciJobHistoryCheckResponse(
     new URL("http://x/bench/check?view=ci"),
     immediate,
-    "token",
+    staticGitHubCredential("token"),
   );
   assertEquals(
     (await checked.json()).version,
@@ -6894,7 +6898,7 @@ Deno.test("CI history endpoints handle immediate and background refreshes", asyn
   const response = await ciJobHistoryResponse(
     new URL("http://x/bench?view=ci"),
     background,
-    "token",
+    staticGitHubCredential("token"),
   );
   assertStringIncludes(
     await response.text(),

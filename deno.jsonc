@@ -1,5 +1,6 @@
 {
   "workspace": [
+    "./packages/agent-runner",
     "./packages/api",
     "./packages/piece",
     "./packages/cli",
@@ -186,6 +187,7 @@
       "packages/cli/test/fixtures/view-language/",
       // Generated, and its bytes are compared with what generates it.
       "packages/data-model/test/fixtures/fvj1-conformance.json",
+      "packages/data-model/test/fixtures/hash-conformance.json",
       "packages/ui/src/v2/components/cf-chart/cf-chart.ts",
       "packages/ui/src/v2/components/cf-chart/lib/axes.ts",
       "packages/ui/src/v2/components/cf-chart/lib/render.ts",

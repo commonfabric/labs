@@ -69,7 +69,14 @@ each slot holding a link the read followed, which a dereference retains
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
-  of reach: a read that cannot complete is never taken for an empty one. The
+  of reach: a read that cannot complete is never taken for an empty one. While
+  a `cf-render` or `cf-picker` binding is withheld because the space of the
+  read refusing it is out of reach, the element holds the access placeholder
+  (`data-space-access-lost`) as its child, the one a cell child of an out of
+  reach space renders as, and the component shows its children while it holds
+  no value for the binding. The placeholder carries nothing read from the
+  space, and goes once the read completes and decides the binding again. A
+  binding withheld for any other reason leaves the element empty. The
   binding hands the host a live
   handle, and the worker answers the host's reads through it without the
   ceiling: a read that follows a link the worker's read did not, and the
@@ -152,7 +159,9 @@ The exceptions hold for every reference a nested render root decides:
   only where the read consumed no stored label. A `cf-render` or `cf-picker`
   whose binding is withheld shows nothing, and a `cf-map` whose binding is
   withheld shows no value, where opening a refused piece shows the
-  placeholder.
+  placeholder. A `cf-render` or `cf-picker` whose binding is withheld because
+  a space its read reaches is out of reach shows the access placeholder
+  instead, as the `$` binding item above says.
 - A nested render applies the root ceiling, and none of the declassification
   or text-integrity requirement of a boundary around the component. A
   boundary that only declassifies admits more than the root, so there the

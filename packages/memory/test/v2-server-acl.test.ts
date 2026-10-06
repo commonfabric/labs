@@ -348,6 +348,45 @@ describe("v2-server-acl", () => {
       }
     });
 
+    it("seals a creator-placed root reservation, which names no source, at genesis", async () => {
+      const server = createAclServer("memory://creator-root-genesis", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-creator-root-space";
+      const root = { cause: "in-space-root" };
+      try {
+        const authority = await connect(server);
+        const opened = await openSession(authority, space, space, {
+          genesisRoot: root,
+        });
+        expectExists(opened.ok);
+        await authority.connection.receive(
+          encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("creator-root"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              genesisRoot: root,
+              operations: [{
+                op: "set" as const,
+                id: `of:${space}`,
+                value: { value: { [ALICE]: "OWNER" } },
+              }],
+            },
+          }),
+        );
+        expect(nextResponse(authority.messages).error).toBeUndefined();
+        expect(readGenesisRoot(await server.engineForSpace(space))).toEqual(
+          root,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
     it("refuses a genesis transaction that differs from its authenticated root intent", async () => {
       const root = { source: "system:loom/main.tsx", cause: "signed-intent" };
       for (const variant of ["undeclared", "changed", "omitted"] as const) {

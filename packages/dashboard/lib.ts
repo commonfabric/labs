@@ -11,6 +11,12 @@ import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {
+  type GitHubAccount,
+  type GitHubCredential,
+  GitHubCredentials,
+  type GitHubEnv,
+} from "./github-auth.ts";
+import {
   type GitHubPrimaryRateLimit,
   performanceGitHubRateLimit,
 } from "./github-rate-limit.ts";
@@ -54,13 +60,43 @@ export const serviceName = (env: (k: string) => string | undefined): string => {
   return s && /^[A-Za-z0-9._-]+$/.test(s) ? s : PROD_SERVICE;
 };
 
-// Call the GitHub REST API and return parsed JSON. Pass an explicit `token` (e.g.
-// a higher-privilege org-billing token); otherwise it reads GH_TOKEN or
-// GITHUB_TOKEN from the environment. One of those must be set.
-function githubToken(path: string, token?: string): string {
-  const t = token ?? Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN");
-  if (!t) throw new Error(`GitHub API ${path}: set GH_TOKEN or GITHUB_TOKEN`);
-  return t;
+/** The process environment, as a source of configuration. */
+export const PROCESS_ENV: GitHubEnv = { env: (key) => Deno.env.get(key) };
+
+/** The dashboard's GitHub credentials, one instance of each. */
+export const githubCredentials = new GitHubCredentials();
+
+/** The organization the dashboard's repositories belong to. */
+export const GITHUB_ORGANIZATION: GitHubAccount = {
+  kind: "organization",
+  name: REPO.split("/")[0],
+};
+
+/**
+ * Returns the credential for reading the dashboard's repositories and
+ * organization, or `undefined` when `source` configures none.
+ */
+export function dashboardGitHubCredential(
+  source: GitHubEnv,
+): GitHubCredential | undefined {
+  return githubCredentials.for(source, GITHUB_ORGANIZATION);
+}
+
+// The credential a GitHub API call carries: `credential` when the caller
+// names one (e.g. a higher-privilege billing credential), and otherwise the
+// dashboard's own, which the environment has to configure.
+function githubCredential(
+  path: string,
+  credential?: GitHubCredential,
+): GitHubCredential {
+  const resolved = credential ?? dashboardGitHubCredential(PROCESS_ENV);
+  if (!resolved) {
+    throw new Error(
+      `GitHub API ${path}: set GH_TOKEN or GITHUB_TOKEN, or ` +
+        `GH_APP_CLIENT_ID and GH_APP_PRIVATE_KEY`,
+    );
+  }
+  return resolved;
 }
 
 type GitHubOperationStage =
@@ -295,10 +331,12 @@ function githubRequest(
 }
 
 async function githubPrimaryRateLimit(
-  token: string,
+  credential: GitHubCredential,
   operation: ActiveGitHubOperation,
 ): Promise<GitHubPrimaryRateLimit> {
+  const token = await credential.token();
   const response = await githubRequest("rate_limit", token, false);
+  if (response.status === 401) credential.refused(token);
   if (!response.ok) {
     discardGitHubErrorResponseBody(response, operation);
     throw new Error(
@@ -316,7 +354,7 @@ async function githubPrimaryRateLimit(
 
 async function githubResponse(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   performance: boolean,
   withTimeout: boolean,
   apiVersion?: string,
@@ -338,12 +376,14 @@ async function githubResponse(
   try {
     if (performance) {
       reservation = await performanceGitHubRateLimit.reserve(
-        token,
-        () => githubPrimaryRateLimit(token, operation),
+        credential.allowance,
+        () => githubPrimaryRateLimit(credential, operation),
       );
       operation.stage = "requesting GitHub";
     }
+    const token = await credential.token();
     response = await githubRequest(path, token, withTimeout, apiVersion);
+    if (response.status === 401) credential.refused(token);
   } catch (error) {
     failed = true;
     operationError = error;
@@ -369,13 +409,13 @@ async function githubResponse(
 
 async function githubJson<T>(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   performance: boolean,
   options: GitHubRequestOptions,
 ): Promise<T> {
   const { response: res, operation } = await githubResponse(
     path,
-    token,
+    credential,
     performance,
     true,
     options.apiVersion,
@@ -423,19 +463,19 @@ async function githubJson<T>(
 
 export async function github<T = unknown>(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<T> {
-  const t = githubToken(path, token);
+  const t = githubCredential(path, credential);
   return await githubJson<T>(path, t, false, options);
 }
 
 export async function githubDownload(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<GitHubDownload> {
-  const t = githubToken(path, token);
+  const t = githubCredential(path, credential);
   return await githubDownloadResponse(
     path,
     t,
@@ -446,19 +486,19 @@ export async function githubDownload(
 
 export async function performanceGithub<T = unknown>(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<T> {
-  const t = githubToken(path, token);
+  const t = githubCredential(path, credential);
   return await githubJson<T>(path, t, true, options);
 }
 
 export async function performanceGithubDownload(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<GitHubDownload> {
-  const t = githubToken(path, token);
+  const t = githubCredential(path, credential);
   return await githubDownloadResponse(
     path,
     t,
@@ -469,13 +509,13 @@ export async function performanceGithubDownload(
 
 async function githubDownloadResponse(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   performance: boolean,
   options: GitHubRequestOptions,
 ): Promise<GitHubDownload> {
   const { response, operation } = await githubResponse(
     path,
-    token,
+    credential,
     performance,
     false,
     options.apiVersion,
@@ -510,7 +550,7 @@ async function githubDownloadResponse(
 
 /** The GitHub JSON call a collection makes, so a test can supply its own. */
 export interface GitHubJson {
-  json<T>(path: string, token: string): Promise<T>;
+  json<T>(path: string, credential: GitHubCredential): Promise<T>;
 }
 
 /**
@@ -527,13 +567,13 @@ export async function runArtifactId(options: {
   github: GitHubJson;
   runId: number;
   name: string;
-  token: string;
+  credential: GitHubCredential;
 }): Promise<number | undefined> {
-  const { github, runId, name, token } = options;
+  const { github, runId, name, credential } = options;
   const params = new URLSearchParams({ name, per_page: "100" });
   const listed = await github.json<{
     artifacts?: { id: number; name: string; expired: boolean }[];
-  }>(`repos/${REPO}/actions/runs/${runId}/artifacts?${params}`, token);
+  }>(`repos/${REPO}/actions/runs/${runId}/artifacts?${params}`, credential);
   const ids = (listed.artifacts ?? [])
     .filter((artifact) => artifact.name === name && !artifact.expired)
     .map((artifact) => artifact.id);
@@ -645,6 +685,8 @@ export function friendlyError(msg: string): string {
   if (/\b404\b|not found/.test(m)) return "not found";
   if (/\b401\b|\b403\b|unauthor|forbidden|bad credentials/.test(m)) return "auth failed";
   if (/gh_token|github_token/.test(m)) return "set GH_TOKEN";
+  const appVariable = /\bset (GH_APP_[A-Z_]+)\b/.exec(msg);
+  if (appVariable) return `set ${appVariable[1]}`;
   return "temporarily unavailable";
 }
 

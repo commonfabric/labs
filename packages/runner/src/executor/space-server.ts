@@ -429,7 +429,12 @@ export type SpaceServerOptions = {
    * polled; a test that has to act once an attempt has landed waits on
    * this instead. */
   onRootEnsure?: (
-    outcome: "created" | "resolved" | "skipped-no-owner" | "failed",
+    outcome:
+      | "created"
+      | "resolved"
+      | "awaiting-creator"
+      | "skipped-no-owner"
+      | "failed",
   ) => void;
 };
 
@@ -5666,6 +5671,11 @@ export class SpaceServer implements TransactionSealDestination {
    * stays client-side until stage 2 moves it — the recorded stage-2
    * gate).
    *
+   * The exception is a space whose genesis reservation names no source:
+   * its creator places the root, so until a root is linked the ensure
+   * creates nothing and reports `awaiting-creator`, and the space serves
+   * with no root.
+   *
    * Identity, per the design's §4(b): the space's ACL OWNER, resolved
    * through the memory server's ruled service-identity ACL read
    * (`resolveSpaceOwner`) — self-owned = the space's own home. The
@@ -5768,7 +5778,9 @@ export class SpaceServer implements TransactionSealDestination {
       stats.runs += 1;
       if (result.outcome === "created") stats.created += 1;
       this.#options.onRootEnsure?.(
-        result.outcome === "created" ? "created" : "resolved",
+        result.outcome === "created" || result.outcome === "awaiting-creator"
+          ? result.outcome
+          : "resolved",
       );
       logger.info?.("space-root-ensure", () => [
         `space ${space}: root ensure ${result.outcome} ` +

@@ -150,6 +150,35 @@ export const isTrustedGestureOn = (event: unknown, surface: string): boolean =>
   isObjectNotArray(event.provenance.ui) &&
   event.provenance.ui.pattern === surface;
 
+/** The provenance a trusted gesture on a host surface carries. */
+export type HostGestureProvenance = {
+  /** Always `dom`, the one origin `isTrustedGesture()` admits. */
+  origin: "dom";
+
+  /** Always `true`: the event came from a trusted surface. */
+  trusted: true;
+
+  /** The host surface the gesture was made on. */
+  ui: {
+    /** The surface, which `isTrustedGestureOn()` compares to its own. */
+    pattern: string;
+  };
+};
+
+/**
+ * Builds the provenance of a trusted gesture on the host surface `surface`,
+ * which `isTrustedGestureOn()` accepts for that surface. It returns a fresh
+ * object on each call. The event it goes on is accepted only once it also
+ * carries the renderer-trust mark, which `markRendererTrustedEvent()` applies.
+ */
+export const hostGestureProvenance = (
+  surface: string,
+): HostGestureProvenance => ({
+  origin: "dom",
+  trusted: true,
+  ui: { pattern: surface },
+});
+
 /**
  * Whether atom pattern `pattern` holds a `{ var }` placeholder anywhere, or a
  * record carrying a `var` key in any arrangement: whether any part of it is

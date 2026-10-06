@@ -39,13 +39,13 @@ import {
 
 import { seedHomeAgentQueue } from "../../runner/test/support/agent-queue.ts";
 import { createTrustedBuilder } from "../../runner/test/support/trusted-builder.ts";
-import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
+import { createHarnessAgentRunExecutor } from "../src/agent-run-harness.ts";
 import {
   type AgentRunExecution,
   AgentRunner,
   type AgentRunnerOptions,
   type ClaimedAgentRun,
-} from "../lib/agent-runner.ts";
+} from "../src/agent-runner.ts";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const CLOUD = "https://cloud.example";
@@ -1514,6 +1514,8 @@ describe("agent runner", () => {
         requester: home,
         workRoot,
         allowedTools: ["describe_handle"],
+        readSpaceAcl: () =>
+          Promise.reject(new Error("The fixture identity key does not exist.")),
         report: options.report ??
           ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
         ...(options.omitHarnessArgs ? {} : { model: "scripted" }),
