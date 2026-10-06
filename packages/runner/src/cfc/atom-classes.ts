@@ -65,3 +65,27 @@ export const atomPropagationClass = (atom: unknown): PropagationClass => {
   // represents-principal) have no registered class — fail-safe.
   return "value-bound";
 };
+
+// The spec §15 registry's class for the families `CLASS_BY_TYPE` classes
+// differently. The registry has `TransformedBy`, `Builtin`, `ExternalIngest`
+// and `UserSurfaceInput` value-bound, each a claim about how the exact
+// current value was produced, and `PromptSlotBound` provenance, evidence of
+// one binding event. The hereditary meet asks only whether a class is
+// hereditary, which the two tables agree on.
+const REGISTRY_CLASS_BY_TYPE = new Map<string, PropagationClass>([
+  [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
+  [CFC_ATOM_TYPE.Builtin, "value-bound"],
+  [CFC_ATOM_TYPE.ExternalIngest, "value-bound"],
+  [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
+  [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
+]);
+
+/**
+ * Whether integrity atoms of `type` are claims bound to the exact current
+ * value they label: the families the spec §15 registry classes value-bound,
+ * an unregistered family included (§15.1.1's default). An exchange rule
+ * guarded only by such claims is value-intrinsic (§5.3).
+ */
+export const isValueBoundClaimType = (type: string): boolean =>
+  (REGISTRY_CLASS_BY_TYPE.get(type) ?? CLASS_BY_TYPE.get(type) ??
+    "value-bound") === "value-bound";

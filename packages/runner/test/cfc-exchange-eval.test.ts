@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_EXCHANGE_FUEL,
   evaluateExchangeRules,
+  isValueIntrinsicExchangeRule,
 } from "../src/cfc/exchange-eval.ts";
 import type { IFCLabel } from "../src/cfc/label-view-core.ts";
 import {
@@ -97,6 +98,7 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         clauseIndex: 0,
         kind: "add",
         added: [userAlice],
+        guardIntegrity: [roleAliceX],
       }]);
       expect(clauseSetsEqual(result.label.confidentiality!, [
         { anyOf: [spaceX, userAlice] },
@@ -174,6 +176,7 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         clauseIndex: 0,
         kind: "drop",
         dropped: cfcAtom.expires(1000),
+        guardIntegrity: [detected],
       }]);
       expect(singleton.label.confidentiality).toEqual([userOwner]);
 
@@ -851,12 +854,15 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         },
         shareSnapshot,
       );
+      // The guard matched the role in space X, the clause it rewrote; the
+      // role in space Y satisfies the same pattern under other bindings.
       expect(result.firings).toEqual([{
         recordId: "share-flow",
         ruleId: "space-reader-access",
         clauseIndex: 0,
         kind: "add",
         added: [userAlice],
+        guardIntegrity: [roleAliceX],
       }]);
       expect(clauseSetsEqual(result.label.confidentiality!, [
         { anyOf: [spaceX, shareRef, userAlice] },
@@ -1077,6 +1083,89 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         { anyOf: [spaceX, shareRef, userAlice] },
         spaceY,
       ])).toBe(true);
+    });
+  });
+
+  describe("value-intrinsic rules (§5.3)", () => {
+    const transformedBy = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "verified", moduleIdentity: "m", symbol: "project" },
+    };
+    const releaseRule = (
+      preCondition: ExchangeRule["preCondition"],
+    ): ExchangeRule => ({
+      id: "release",
+      appliesTo: { type: CFC_ATOM_TYPE.User, subject: { var: "$u" } },
+      preCondition,
+      post: { dropClause: true },
+    });
+
+    it("returns `true` for a rule guarded only by value-bound integrity", () => {
+      expect(isValueIntrinsicExchangeRule(releaseRule({
+        integrity: [transformedBy],
+      }))).toBe(true);
+      expect(isValueIntrinsicExchangeRule(releaseRule({
+        integrity: [{ type: "https://example.com/atoms/DetectedBy" }],
+      }))).toBe(true);
+      expect(isValueIntrinsicExchangeRule(releaseRule({
+        integrity: [transformedBy],
+        confidentiality: [{ type: CFC_ATOM_TYPE.Space }],
+      }))).toBe(true);
+    });
+
+    it("returns `false` for a rule with a boundary or grant guard", () => {
+      expect(isValueIntrinsicExchangeRule(releaseRule({
+        integrity: [transformedBy],
+        boundary: [{ type: CFC_ATOM_TYPE.BoundaryContext }],
+      }))).toBe(false);
+      expect(isValueIntrinsicExchangeRule(releaseRule({
+        integrity: [transformedBy],
+        policyState: [{ kind: "approved" }],
+      }))).toBe(false);
+    });
+
+    it("returns `false` for a rule whose evidence is not bound to the exact value", () => {
+      for (
+        const guard of [
+          { type: CFC_ATOM_TYPE.HasRole, role: "reader" },
+          { type: CFC_ATOM_TYPE.BoundaryContext },
+          { type: CFC_ATOM_TYPE.PromptSlotBound },
+          { type: CFC_ATOM_TYPE.PolicyCertified },
+          { type: CFC_ATOM_TYPE.Concept, uri: "https://example.com/c" },
+          { type: { var: "$t" } },
+          { var: "$any" },
+          "string-evidence",
+        ] as AtomPattern[]
+      ) {
+        expect(isValueIntrinsicExchangeRule(releaseRule({
+          integrity: [transformedBy, guard],
+        }))).toBe(false);
+      }
+      expect(isValueIntrinsicExchangeRule(releaseRule({ integrity: [] })))
+        .toBe(false);
+      expect(isValueIntrinsicExchangeRule(releaseRule(undefined))).toBe(false);
+    });
+
+    it("evaluates only the rules `admitsRule` admits", () => {
+      const label = {
+        confidentiality: [userAlice, cfcAtom.expires(1000)],
+        integrity: [transformedBy, roleAliceX, {
+          type: "https://example.com/atoms/DetectedBy",
+        }],
+      };
+      const rules = snapshot([
+        dropExpiresRule,
+        releaseRule({ integrity: [transformedBy, roleAliceX] }),
+      ]);
+      expect(evaluateExchangeRules(label, rules).label.confidentiality)
+        .toEqual([]);
+      const carried = evaluateExchangeRules(label, rules, {
+        admitsRule: isValueIntrinsicExchangeRule,
+      });
+      expect(carried.firings.map((firing) => firing.ruleId)).toEqual([
+        "drop-expires",
+      ]);
+      expect(carried.label.confidentiality).toEqual([userAlice]);
     });
   });
 });

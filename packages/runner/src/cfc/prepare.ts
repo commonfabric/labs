@@ -99,6 +99,7 @@ import type {
   MediaType,
 } from "../storage/interface.ts";
 import {
+  ignoreReadForCommit,
   internalVerifierRead,
   isInternalVerifierRead,
   isLinkResolutionProbe,
@@ -137,6 +138,8 @@ import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.t
 import {
   type CfcGrantConsumptionContext,
   evaluateExchangeRules,
+  type ExchangeEvalResult,
+  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
 import {
@@ -233,6 +236,16 @@ import {
 import { normalizeIdentitySource } from "./writer-claim-correspondence.ts";
 
 const INTERNAL_VERIFIER_META = stableInternalVerifierRead;
+
+// The flow join's reads of module policy manifests. A manifest is
+// content-addressed and verified against the reference that names it, so the
+// only change a later read could see is one arriving where none was, and
+// what the join measured without it is the unexchanged label. The read is
+// therefore neither a flow observation nor a commit precondition.
+const CARRY_MANIFEST_READ_META = {
+  ...INTERNAL_VERIFIER_META,
+  ...ignoreReadForCommit,
+};
 
 // The link-source schema read, which reactivity SEES. Prepare's other reads
 // carry `ignoreReadForScheduling` and are invisible to it. This one decides
@@ -826,6 +839,89 @@ const asWitnessEvidence = (entry: LabelMapEntry): LabelMapEntry =>
     : entry;
 
 /**
+ * The locations of one read, by path key: the read's own path and, for a
+ * recursive read, the path of each consumed entry below it. Any other
+ * position resolves exactly as its nearest enclosing location does, so these
+ * cover every position of the value read.
+ */
+const observationLocations = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+): Map<string, readonly string[]> => {
+  const locations = new Map<string, readonly string[]>([
+    [pathKey(path), path],
+  ]);
+  if (nonRecursive !== true) {
+    for (const entry of entries) {
+      if (entry.path.length <= path.length) continue;
+      if (!isPrefix(path, entry.path)) continue;
+      locations.set(pathKey(entry.path), entry.path);
+    }
+  }
+  return locations;
+};
+
+/**
+ * What one observation carries to the values derived from it (spec §5.3):
+ * the confidentiality left at each location it consumed once the
+ * value-intrinsic exchange rules have run over that location's own label,
+ * joined. Evaluating per location keeps evidence at one path from releasing
+ * a clause the read took from another. `undefined` when no rule fired at any
+ * location, which leaves the observation's label as it was read; otherwise
+ * `guards` holds, by location, the integrity the firings there rested on.
+ *
+ * `exchange` runs the value-intrinsic rules over one label. A location whose
+ * evaluation exhausted its fuel or could not resolve a policy keeps its
+ * label, which fails closed.
+ */
+const carriedObservationLabel = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+  read: readonly unknown[],
+  exchange: (label: IFCLabel) => ExchangeEvalResult,
+):
+  | { confidentiality: CfcConfClause[]; guards: Map<string, CfcAtom[]> }
+  | undefined => {
+  const consumed = witnessTrie(entries);
+  const carried: unknown[] = [];
+  const resolved: unknown[] = [];
+  const guards = new Map<string, CfcAtom[]>();
+  for (
+    const [key, location] of observationLocations(entries, path, nonRecursive)
+  ) {
+    const label = labelForEntriesAtPath(
+      entriesResolvingAtLocation(consumed, location),
+      location,
+    );
+    const confidentiality = label?.confidentiality ?? [];
+    if (confidentiality.length === 0) continue;
+    for (const atom of confidentiality) resolved.push(atom);
+    const result = exchange(label!);
+    if (
+      result.exhausted || result.resolutionFailures.length > 0 ||
+      result.firings.length === 0
+    ) {
+      for (const atom of confidentiality) carried.push(atom);
+      continue;
+    }
+    for (const atom of result.label.confidentiality ?? []) carried.push(atom);
+    guards.set(
+      key,
+      uniqueCfcAtoms(result.firings.flatMap((firing) => firing.guardIntegrity)),
+    );
+  }
+  if (guards.size === 0) return undefined;
+  // Every clause the read consumed resolves at one of its locations; one
+  // that did not would stay as it was read.
+  for (const atom of read) {
+    if (!resolved.some((other) => deepEqual(other, atom))) carried.push(atom);
+  }
+  return { confidentiality: uniqueCfcAtoms(carried), guards };
+};
+
+/**
  * The input witnesses one observation holds: the retained atoms common to
  * every confidential location it consumed (`input-witness.ts`), or
  * `undefined` when it consumed nothing confidential.
@@ -841,12 +937,19 @@ const asWitnessEvidence = (entry: LabelMapEntry): LabelMapEntry =>
  * schema traversal through which compiled code reads its arguments makes one
  * shallow read per node it visits, scalar leaves included, so without this
  * no location of such a read would carry a witness.
+ *
+ * `carriedGuards`, by location, is the integrity a value-intrinsic exchange
+ * at that location rested on (`carriedObservationLabel`). A location retains
+ * it beside its own evidence, so a derived value's `TransformedBy` records
+ * the release it carries whenever every confidential location held it (spec
+ * §5.3).
  */
 const observationInputWitnesses = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
   nonRecursive: boolean | undefined,
   evidence?: readonly LabelMapEntry[],
+  carriedGuards?: ReadonlyMap<string, readonly CfcAtom[]>,
 ): CfcAtom[] | undefined => {
   // A location's confidentiality comes only from these entries, so a read
   // none of them makes confidential has no confidential location.
@@ -855,20 +958,12 @@ const observationInputWitnesses = (
   ) {
     return undefined;
   }
-  const locations = new Map<string, readonly string[]>([
-    [pathKey(path), path],
-  ]);
-  if (nonRecursive !== true) {
-    for (const entry of entries) {
-      if (entry.path.length <= path.length) continue;
-      if (!isPrefix(path, entry.path)) continue;
-      locations.set(pathKey(entry.path), entry.path);
-    }
-  }
   const consumed = witnessTrie(entries);
   const held = evidence === undefined ? undefined : witnessTrie(evidence);
   let witnesses: CfcAtom[] | undefined;
-  for (const location of locations.values()) {
+  for (
+    const [key, location] of observationLocations(entries, path, nonRecursive)
+  ) {
     const resolved = entriesResolvingAtLocation(consumed, location);
     const label = labelForEntriesAtPath(resolved, location);
     if ((label?.confidentiality?.length ?? 0) === 0) continue;
@@ -886,7 +981,10 @@ const observationInputWitnesses = (
         evidenceAt.filter(isWitnessEvidence).map(asWitnessEvidence),
         location,
       )?.integrity;
-    const retained = retainedInputWitnesses(integrity);
+    const retained = [
+      ...retainedInputWitnesses(integrity),
+      ...retainedInputWitnesses(carriedGuards?.get(key)),
+    ];
     witnesses = witnesses === undefined
       ? retained
       : meetInputWitnesses(witnesses, retained);
@@ -4323,8 +4421,50 @@ const deriveFlowJoinImpl = (
   confidentiality: CfcConfClause[];
   integrity: CfcAtom[];
   labeledSpaces?: ReadonlySet<MemorySpace>;
+
+  /**
+   * Under the `observe` policy-evaluation dial, the confidentiality `enforce`
+   * would join, where the value-intrinsic exchange lowers it; the join itself
+   * stays unexchanged.
+   */
+  wouldCarry?: CfcConfClause[];
 } => {
+  // What each observation contributes as it was read, and what it carries
+  // to derived values once value-intrinsic exchange rules have run at it
+  // (spec §5.3). The policy-evaluation dial decides which the join takes:
+  // `enforce` the carried label, `observe` the read one, `off` evaluates
+  // nothing.
   const atoms: unknown[] = [];
+  const carriedAtoms: unknown[] = [];
+  const policyEvaluation = tx.getCfcState().policyEvaluationMode;
+  const policySnapshot = tx.getCfcState().policySnapshot;
+  const snapshotCarries =
+    policySnapshot?.records.some((record) =>
+      record.rules.some(isValueIntrinsicExchangeRule)
+    ) === true;
+  // A label selects module policies, and referenced snapshot records,
+  // through its policy-reference atoms; with neither, no rule can fire.
+  const mayCarry = (confidentiality: readonly unknown[]): boolean =>
+    policyEvaluation !== "off" &&
+    (snapshotCarries ||
+      confidentiality.some((clause) =>
+        clauseAlternatives(clause as CfcConfClause).some((alternative) =>
+          isObjectNotArray(alternative) &&
+          (alternative.type === CFC_ATOM_TYPE.Policy ||
+            alternative.type === CFC_ATOM_TYPE.Context)
+        )
+      ));
+  // The rules run against the manifest in the space the label was read
+  // from, where the commit that persisted the label installed it (§4.4.1).
+  const exchangeIn = (space: MemorySpace) => (label: IFCLabel) =>
+    evaluateExchangeRules(label, policySnapshot, {
+      admitsRule: isValueIntrinsicExchangeRule,
+      modulePolicyResolver: (reference) =>
+        tx.runWithAmbientReadMeta(
+          CARRY_MANIFEST_READ_META,
+          () => tx.resolveCfcPolicyManifest(reference, space, false),
+        ),
+    });
   // Class-aware integrity meet (§8.9.3 / §3.1.6.2): hereditary atoms
   // survive only when EVERY contributing observation carries them. An
   // observation with no resolved label has empty integrity and empties the
@@ -4357,6 +4497,7 @@ const deriveFlowJoinImpl = (
     metadata: CfcMetadata | undefined;
     indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
     labels: Map<string, IFCLabel | undefined>;
+    carried: Map<string, CfcConfClause[] | undefined>;
     witnesses: Map<string, CfcAtom[] | undefined>;
   }>();
   // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
@@ -4412,6 +4553,7 @@ const deriveFlowJoinImpl = (
           metadata: storedMetadataFor(tx, space, id, scope, type),
           indexes: new Map(),
           labels: new Map(),
+          carried: new Map(),
           witnesses: new Map(),
         };
         metadataByDoc.set(key, document);
@@ -4528,6 +4670,18 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        const read = label?.confidentiality ?? [];
+        const carried = entries === undefined || read.length === 0 ||
+            !mayCarry(read)
+          ? undefined
+          : carriedObservationLabel(
+            entries,
+            logicalPath,
+            observation.nonRecursive,
+            read,
+            exchangeIn(space),
+          );
+        document.carried.set(labelKey, carried?.confidentiality);
         // Skipped once the meet is empty, which no later observation can
         // refill; the `undefined` cached then is never read into a nonempty
         // meet.
@@ -4554,6 +4708,7 @@ const deriveFlowJoinImpl = (
                   indexFor("value"),
                 )
                 : undefined,
+              policyEvaluation === "enforce" ? carried?.guards : undefined,
             ),
         );
         // A read that stops at a container observes its membership: for a
@@ -4619,6 +4774,11 @@ const deriveFlowJoinImpl = (
       }
       if (label?.confidentiality?.length) {
         for (const atom of label.confidentiality) atoms.push(atom);
+        for (
+          const atom of document.carried.get(labelKey) ?? label.confidentiality
+        ) {
+          carriedAtoms.push(atom);
+        }
         let reads = confidentialReads.get(key);
         if (reads === undefined) {
           reads = [];
@@ -4664,7 +4824,10 @@ const deriveFlowJoinImpl = (
   for (const observation of tx.getCfcState().labelMetadataObservations) {
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
-    for (const atom of observation.confidentiality) atoms.push(atom);
+    for (const atom of observation.confidentiality) {
+      atoms.push(atom);
+      carriedAtoms.push(atom);
+    }
     // The input-witness meet is not the hereditary one: it quantifies over
     // every confidential input, so a confidential input that carries no
     // evidence, as label metadata does not, empties it
@@ -4681,7 +4844,10 @@ const deriveFlowJoinImpl = (
     ) {
       for (const space of observation.labeledSpaces) labeledSpaces.add(space);
     }
-    for (const atom of observation.flow.confidentiality ?? []) atoms.push(atom);
+    for (const atom of observation.flow.confidentiality ?? []) {
+      atoms.push(atom);
+      carriedAtoms.push(atom);
+    }
     // `observation.flow` is itself a flow join, whose integrity is a meet
     // over what the content consumed, so it overstates no input.
     if ((observation.flow.confidentiality?.length ?? 0) > 0) {
@@ -4832,7 +4998,9 @@ const deriveFlowJoinImpl = (
       if (inputWitnesses?.length === 0) break;
     }
   }
-  const confidentiality = uniqueCfcAtoms(atoms);
+  const read = uniqueCfcAtoms(atoms);
+  const carried = uniqueCfcAtoms(carriedAtoms);
+  const confidentiality = policyEvaluation === "enforce" ? carried : read;
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];
   // Derivation provenance (§8.9.3 TransformedBy): the identity that wrote,
   // and the input witnesses retained beside it (`input-witness.ts`). The
@@ -4842,11 +5010,14 @@ const deriveFlowJoinImpl = (
   // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
   // identity is current at prepare, which a later run in the same tx may
   // have changed and which an unattributed write must not borrow. Ambiguity
-  // omits the atoms (fail-safe under-claim). Minted only alongside an entry
-  // that exists anyway; runtime-minted (schema-forgery gated).
+  // omits the atoms (fail-safe under-claim). Minted only for a join with
+  // content, counting confidentiality as it was read: a transformation whose
+  // confidential inputs value-intrinsic exchanges released is stamped all the
+  // same, so its `TransformedBy` records the release it carries (§5.3).
+  // Runtime-minted (schema-forgery gated).
   if (
     identity !== undefined &&
-    (confidentiality.length > 0 || integrity.length > 0)
+    (read.length > 0 || integrity.length > 0)
   ) {
     for (const atom of mintTransformedBy(identity, inputWitnesses)) {
       integrity.push(atom);
@@ -4856,6 +5027,11 @@ const deriveFlowJoinImpl = (
     confidentiality,
     integrity: uniqueCfcAtoms(integrity),
     ...(labeledSpaces !== undefined ? { labeledSpaces } : {}),
+    ...(policyEvaluation === "observe" &&
+        (carried.length !== read.length ||
+          carried.some((atom) => !read.some((other) => deepEqual(atom, other))))
+      ? { wouldCarry: carried }
+      : {}),
   };
 };
 
@@ -10398,6 +10574,13 @@ export function* prepareBoundaryCommitSteps(
       `flow-labels(observe): would derive ${flowConfidentiality.length} ` +
         `confidentiality / ${flowIntegrity.length} integrity atom(s) onto ` +
         `${flowTargets.size} written doc(s)`,
+    );
+  }
+  if (flowJoin.wouldCarry !== undefined) {
+    tx.noteCfcDiagnostic(
+      `policy-evaluation(observe): value-intrinsic exchange would carry ` +
+        `${flowJoin.wouldCarry.length} of ${flowConfidentiality.length} ` +
+        `flow confidentiality atom(s) onto derived values`,
     );
   }
   for (const [key, target] of valueTargets) {

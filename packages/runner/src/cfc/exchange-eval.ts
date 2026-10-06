@@ -8,6 +8,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
+import { isValueBoundClaimType } from "./atom-classes.ts";
 import {
   type AtomPattern,
   type AtomPatternBindings,
@@ -112,6 +113,12 @@ export type RuleFiring = {
 
   /** The alternative removed by a `drop` firing. */
   readonly dropped?: unknown;
+
+  /**
+   * The available integrity atoms the rule's integrity guards matched under
+   * the bindings that fired it: the evidence the rewrite rests on.
+   */
+  readonly guardIntegrity: readonly CfcAtom[];
 };
 
 /**
@@ -208,6 +215,39 @@ export type ExchangeEvalContext = {
    * whole evaluation closed when the label selects a module policy.
    */
   readonly modulePolicyResolver?: CfcModulePolicyResolver;
+
+  /**
+   * Restricts evaluation to the rules this admits, snapshot and module
+   * policy rules alike; every rule is evaluated when it is absent. Given
+   * {@link isValueIntrinsicExchangeRule}, the result is the exchanged label
+   * an observation carries to the values derived from it (spec §5.3).
+   */
+  readonly admitsRule?: (rule: ExchangeRule) => boolean;
+};
+
+/**
+ * Whether `rule` is value-intrinsic (spec §5.3): its result carries to the
+ * values derived from the observation it fired at. It has no boundary guard,
+ * the form a sink or path restriction takes here, and no `policyState`
+ * guard, and it is guarded by integrity evidence alone, every pattern of
+ * which names a concrete atom family whose claims are bound to the exact
+ * current value. A concept guard does not qualify, since whether evidence
+ * satisfies a concept depends on the acting principal's trust closure, and
+ * neither does a family the registry classes hereditary or provenance, such
+ * as `HasRole`, which the runtime mints for an access.
+ */
+export const isValueIntrinsicExchangeRule = (rule: ExchangeRule): boolean => {
+  const guards = rule.preCondition;
+  if ((guards?.boundary?.length ?? 0) > 0) return false;
+  if (guards?.policyState !== undefined) return false;
+  const integrity = guards?.integrity ?? [];
+  return integrity.length > 0 &&
+    integrity.every((pattern) =>
+      isObjectNotArray(pattern) && !isAtomVarPlaceholder(pattern) &&
+      conceptGuard(pattern) === undefined &&
+      typeof (pattern as { type?: unknown }).type === "string" &&
+      isValueBoundClaimType((pattern as { type: string }).type)
+    );
 };
 
 export type ModulePolicyResolutionFailure = {
@@ -709,7 +749,7 @@ const applyRuleMatch = (
   rule: ExchangeRule,
 ): {
   confidentiality: readonly CfcConfClause[];
-  firing?: Omit<RuleFiring, "recordId" | "ruleId">;
+  firing?: Omit<RuleFiring, "recordId" | "ruleId" | "guardIntegrity">;
 } => {
   const clause = confidentiality[match.clauseIndex];
   const alternatives = clauseAlternatives(clause);
@@ -826,6 +866,7 @@ export const evaluateExchangeRules = (
       for (
         const rule of [...record.rules].sort((a, b) => utf8Compare(a.id, b.id))
       ) {
+        if (ctx.admitsRule?.(rule) === false) continue;
         rules.push({
           recordId: record.id,
           rule,
@@ -845,9 +886,11 @@ export const evaluateExchangeRules = (
         (a, b) => utf8Compare(a.id, b.id),
       )
     ) {
+      const bound = bindModuleRule(rule, policy.reference);
+      if (ctx.admitsRule?.(bound) === false) continue;
       rules.push({
         recordId: policy.recordId,
-        rule: bindModuleRule(rule, policy.reference),
+        rule: bound,
         homeClauses: (confidentiality: readonly CfcConfClause[]) =>
           modulePolicyRefHomeClauses(policy.reference, confidentiality),
       });
@@ -939,6 +982,12 @@ export const evaluateExchangeRules = (
           recordId,
           ruleId: rule.id,
           ...applied.firing!,
+          guardIntegrity: availableIntegrity.filter((atom) =>
+            (rule.preCondition?.integrity ?? []).some((pattern) =>
+              conceptGuard(pattern) === undefined &&
+              matchAtomPattern(pattern, atom, match.bindings) !== null
+            )
+          ),
         });
         changed = true;
       }

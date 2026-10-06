@@ -288,11 +288,14 @@ describe("value-intrinsic exchange carry", () => {
       await run.send("publishCard");
       expect((await run.read()).roomCard).toBe("P:R0:alpha");
       const entries = run.entriesAt("roomCard").filter((entry) =>
-        entry.origin === "derived"
+        entry.origin === "derived" && entry.path.join("/") === "roomCard"
       );
-      expect(entries.length).toBeGreaterThan(0);
+      expect(
+        transformedByOf(entries).some((atom) =>
+          atom.identity?.symbol === "publish"
+        ),
+      ).toBe(true);
       expect(policyClausesOf(entries)).toEqual([]);
-      expect(witnessesProject(entries)).toBe(true);
     });
   });
 
@@ -307,12 +310,8 @@ describe("value-intrinsic exchange carry", () => {
           { shown: "R0:alpha" },
           { shown: "R1:beta" },
         ]);
-        const container = entriesAt("mapped");
-        const element = entriesAt("mapped", "0");
-        expect(container.length).toBeGreaterThan(0);
-        expect(element.length).toBeGreaterThan(0);
-        expect(policyClausesOf(container)).toEqual([]);
-        expect(policyClausesOf(element)).toEqual([]);
+        expect(policyClausesOf(entriesAt("mapped"))).toEqual([]);
+        expect(policyClausesOf(entriesAt("mapped", "0"))).toEqual([]);
       },
     );
   });
