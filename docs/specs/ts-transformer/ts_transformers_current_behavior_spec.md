@@ -161,8 +161,12 @@ present; no stage handles a missing one.
      view; passed where a document is defined, it is reported
      (`cfc-write-authorized-by:unread`) when its type holds a writer policy. So
      is a schema that cannot be read back to its `toSchema` calls and
-     literals, such as a `let` binding or a call whose function cannot be
-     read. SchemaGeneration passes the flag to the
+     literals, such as a `let` binding, a call whose function cannot be
+     read, or a binding the program writes to or into: a parameter it
+     reassigns, or a `const` whose object an assignment, a `delete`, or a
+     standard call that writes into its argument (`Object.assign`, an array's
+     `push`) changes, directly or through a `const` bound to it, in the module
+     that declares it or the one that reads it. SchemaGeneration passes the flag to the
      schema generator as its `definesDocument` option, under which a writer it
      cannot read is an error. Like `patternResultAnchor`, a plain identity
      lookup with **no** `getOriginalNode` fallback. A result inferred from the

@@ -959,8 +959,9 @@ function markAuthoredDocumentSchema(
  * - a conditional or a `??`/`||` choice, both ways.
  *
  * Each is seen through `as`, `satisfies`, `!` and parentheses. Anything
- * else, such as a `let` binding or a call whose function cannot be read,
- * cannot be read back.
+ * else, such as a `let` binding, a binding the program writes to or into
+ * (`isWrittenBinding()`), or a call whose function cannot be read, cannot be
+ * read back.
  */
 function readSchemaSources(
   expression: ts.Expression,
@@ -1000,9 +1001,11 @@ function readSchemaSources(
     const symbol = ts.isShorthandPropertyAssignment(value.parent)
       ? checker.getShorthandAssignmentValueSymbol(value.parent)
       : checker.getSymbolAtLocation(value);
-    if (value.text === "undefined" || (!!symbol && bound.has(symbol))) {
-      return true;
-    }
+    if (value.text === "undefined") return true;
+    // A binding the program writes to or into may hold another schema by
+    // the time it is read, a parameter included.
+    if (isWrittenBinding(value, checker)) return false;
+    if (symbol && bound.has(symbol)) return true;
     // A binding is read through what it is bound to before its type is
     // trusted: an assertion can give a schema a primitive type.
     const initializer = constInitializer(value, checker);
@@ -1225,8 +1228,9 @@ function staticMemberOf(
 }
 
 /**
- * The object literal `expression` evaluates to, through `const` bindings,
- * imports, and static member accesses.
+ * The object literal `expression` evaluates to, through `const` bindings no
+ * code writes into (`isWrittenBinding()`), imports, and static member
+ * accesses.
  */
 function objectLiteralOf(
   expression: ts.Expression,
@@ -1237,7 +1241,9 @@ function objectLiteralOf(
   const value = unwrapExpression(expression);
   if (ts.isObjectLiteralExpression(value)) return value;
   const inner = ts.isIdentifier(value)
-    ? constInitializer(value, checker)
+    ? isWrittenBinding(value, checker)
+      ? undefined
+      : constInitializer(value, checker)
     : ts.isPropertyAccessExpression(value) ||
         ts.isElementAccessExpression(value)
     ? staticMemberOf(value, checker, depth)
@@ -1285,17 +1291,187 @@ function constInitializer(
   identifier: ts.Identifier,
   checker: ts.TypeChecker,
 ): ts.Expression | undefined {
-  let symbol = ts.isShorthandPropertyAssignment(identifier.parent)
-    ? checker.getShorthandAssignmentValueSymbol(identifier.parent)
-    : checker.getSymbolAtLocation(identifier);
-  if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
-    symbol = checker.getAliasedSymbol(symbol);
-  }
-  const declaration = symbol?.valueDeclaration;
+  const declaration = bindingSymbol(identifier, checker)?.valueDeclaration;
   return declaration && ts.isVariableDeclaration(declaration) &&
       (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
     ? declaration.initializer
     : undefined;
+}
+
+/**
+ * The binding `identifier` names: the value a shorthand property names, and
+ * the declaration an import names.
+ */
+function bindingSymbol(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const symbol = ts.isShorthandPropertyAssignment(identifier.parent)
+    ? checker.getShorthandAssignmentValueSymbol(identifier.parent)
+    : checker.getSymbolAtLocation(identifier);
+  return symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+}
+
+/**
+ * Whether code writes to or into the binding `identifier` names, in its
+ * module or the one `identifier` is read in (`writtenBindingsOf()`). A
+ * binding written that way may hold another schema by the time it is read,
+ * as a `let` binding may.
+ */
+function isWrittenBinding(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): boolean {
+  const symbol = bindingSymbol(identifier, checker);
+  if (!symbol) return false;
+  const modules = new Set<ts.SourceFile | undefined>([
+    identifier.getSourceFile(),
+    ...(symbol.declarations ?? []).map((declaration) =>
+      declaration.getSourceFile()
+    ),
+  ]);
+  return [...modules].some((module) =>
+    module !== undefined && writtenBindingsOf(module, checker).has(symbol)
+  );
+}
+
+/** The calls of the standard library that write into their first argument. */
+const OBJECT_MUTATORS = new Set([
+  "Object.assign",
+  "Object.defineProperties",
+  "Object.defineProperty",
+  "Object.setPrototypeOf",
+  "Reflect.defineProperty",
+  "Reflect.deleteProperty",
+  "Reflect.set",
+  "Reflect.setPrototypeOf",
+]);
+
+/** The methods of an array that write into the array they are called on. */
+const ARRAY_MUTATORS = new Set([
+  "copyWithin",
+  "fill",
+  "pop",
+  "push",
+  "reverse",
+  "shift",
+  "sort",
+  "splice",
+  "unshift",
+]);
+
+const writtenBindingsByModule = new WeakMap<ts.SourceFile, Set<ts.Symbol>>();
+
+/**
+ * The bindings code in `module` writes to or into: the target of an
+ * assignment, compound or destructuring, an increment or decrement, or a
+ * `delete`, or the object whose member is that target, and what a standard
+ * library call that writes into its argument (`Object.assign`, an array's
+ * `push`) is given (`bindingsWrittenBy()`). Writes through a function that
+ * an object is passed to are not seen.
+ */
+function writtenBindingsOf(
+  module: ts.SourceFile,
+  checker: ts.TypeChecker,
+): ReadonlySet<ts.Symbol> {
+  const cached = writtenBindingsByModule.get(module);
+  if (cached) return cached;
+  const written = new Set<ts.Symbol>();
+  const writeTo = (target: ts.Expression): void => {
+    const value = unwrapExpression(target);
+    if (ts.isObjectLiteralExpression(value)) {
+      for (const property of value.properties) {
+        if (ts.isPropertyAssignment(property)) writeTo(property.initializer);
+        else if (ts.isShorthandPropertyAssignment(property)) {
+          writeTo(property.name);
+        } else if (ts.isSpreadAssignment(property)) {
+          writeTo(property.expression);
+        }
+      }
+    } else if (ts.isArrayLiteralExpression(value)) {
+      for (const element of value.elements) {
+        if (ts.isOmittedExpression(element)) continue;
+        writeTo(ts.isSpreadElement(element) ? element.expression : element);
+      }
+    } else if (
+      ts.isBinaryExpression(value) &&
+      value.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      writeTo(value.left);
+    } else {
+      for (const symbol of bindingsWrittenBy(value, checker)) {
+        written.add(symbol);
+      }
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      writeTo(node.left);
+    } else if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken)
+    ) {
+      writeTo(node.operand);
+    } else if (ts.isDeleteExpression(node)) {
+      writeTo(node.expression);
+    } else if (
+      (ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer)
+    ) {
+      writeTo(node.initializer);
+    } else if (ts.isCallExpression(node)) {
+      const callee = unwrapExpression(node.expression);
+      if (ts.isPropertyAccessExpression(callee)) {
+        const holder = unwrapExpression(callee.expression);
+        if (
+          ts.isIdentifier(holder) &&
+          OBJECT_MUTATORS.has(`${holder.text}.${callee.name.text}`)
+        ) {
+          if (node.arguments[0]) writeTo(node.arguments[0]);
+        } else if (ARRAY_MUTATORS.has(callee.name.text)) {
+          writeTo(callee.expression);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(module);
+  writtenBindingsByModule.set(module, written);
+  return written;
+}
+
+/**
+ * The bindings a write to `target` writes to or into: the binding at the root
+ * of its member accesses, and, where that is a `const` bound to another
+ * binding or to a member of one, that binding in turn, since both hold the
+ * same object.
+ */
+function bindingsWrittenBy(
+  target: ts.Expression,
+  checker: ts.TypeChecker,
+  depth = 0,
+): ts.Symbol[] {
+  let root = unwrapExpression(target);
+  while (
+    ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)
+  ) {
+    root = unwrapExpression(root.expression);
+  }
+  if (!ts.isIdentifier(root) || depth >= 32) return [];
+  const symbol = bindingSymbol(root, checker);
+  if (!symbol) return [];
+  const initializer = constInitializer(root, checker);
+  return [
+    symbol,
+    ...(initializer ? bindingsWrittenBy(initializer, checker, depth + 1) : []),
+  ];
 }
 
 /**

@@ -449,6 +449,56 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
           "schemas.input",
         ],
         [
+          "a parameter the function reassigns",
+          `function make(schema: Schema) {\n  schema = toSchema<${UNREAD}>();\n  return schema;\n}`,
+          'make({ type: "object" })',
+        ],
+        [
+          "a parameter the function writes into",
+          `function make(schemas: { input?: Schema }) {\n  schemas.input = toSchema<${UNREAD}>();\n  return schemas.input;\n}`,
+          "make({})",
+        ],
+        [
+          "a parameter written through a constant bound to it",
+          `function make(schemas: { input?: Schema }) {\n  const alias = schemas;\n  alias.input = toSchema<${UNREAD}>();\n  return schemas.input!;\n}`,
+          "make({})",
+        ],
+        [
+          "a constant's property the program reassigns",
+          `const schemas = { input: toSchema<{ value: string }>() };\nschemas.input = toSchema<${UNREAD}>();`,
+          "schemas.input",
+        ],
+        [
+          "a constant `Object.assign` writes into",
+          `const schemas = { input: toSchema<{ value: string }>() };\nObject.assign(schemas, { input: toSchema<${UNREAD}>() });`,
+          "schemas.input",
+        ],
+        [
+          "a constant's property a destructuring assignment writes",
+          `const schemas = { input: toSchema<{ value: string }>() };\n({ input: schemas.input } = { input: toSchema<${UNREAD}>() });`,
+          "schemas.input",
+        ],
+        [
+          "a constant written through a constant bound to it",
+          `const schemas = { input: toSchema<{ value: string }>() };\nconst alias = schemas;\nalias.input = toSchema<${UNREAD}>();`,
+          "schemas.input",
+        ],
+        [
+          "a constant's nested object the program writes into",
+          `const schemas = { outer: { input: toSchema<{ value: string }>() } };\nschemas.outer.input = toSchema<${UNREAD}>();`,
+          "schemas.outer.input",
+        ],
+        [
+          "an array element the program reassigns",
+          `const schemas = [toSchema<{ value: string }>()];\nschemas[0] = toSchema<${UNREAD}>();`,
+          "schemas[0]!",
+        ],
+        [
+          "an array a mutating method writes into",
+          `const schemas: Schema[] = [];\nschemas.push(toSchema<${UNREAD}>());`,
+          "schemas[0]!",
+        ],
+        [
           "a method the default library declares",
           "",
           `[toSchema<${UNREAD}>()].map((schema) => schema)[0]!`,
@@ -716,6 +766,23 @@ export default pattern<{}>(() => {
           .toBe("refused");
       });
     }
+
+    it("refuses a writer read from the type of fresh data an inferred result returns beside a view of a type named as its definition would be", async () => {
+      // An authored name cannot take the name of the fresh data's definition,
+      // so the fresh data cannot reuse the view's.
+      const result = await transform(
+        `interface Item { value: Erased<${POLICY}> }
+interface Item_document { value: Erased<${POLICY}> }
+export default pattern<{}>(() => {
+  const viewed = computed(() => ({ value: { value: "" } }) as Item_document);
+  const fresh = { value: { value: "" } } as Item;
+  return { viewed, fresh };
+});`,
+      );
+
+      expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
+        .toBe("refused");
+    });
 
     for (
       const returned of ["{ viewed, fresh }", "{ fresh, viewed }"] as const

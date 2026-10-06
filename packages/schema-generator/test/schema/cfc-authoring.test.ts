@@ -4357,7 +4357,34 @@ describe("Schema: CFC authoring aliases", () => {
       expect(JSON.stringify(schema.$defs.Item)).toContain(
         '"writeAuthorizedBy"',
       );
-      expect(schema.$defs.Item_document).toEqual(schema.$defs.Item);
+      expect(schema.$defs["Item:document"]).toEqual(schema.$defs.Item);
+    });
+
+    it("reports a writer unread in a named type the `definesDocument` hint marks, read beside a view of a type named as its definition would be", async () => {
+      // No authored name can take the definition's, so the document's reading
+      // cannot reuse the view's.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${DECLARATIONS}
+        interface Item { value: Erased<WriteAuthorizedBy<string, typeof save>> }
+        interface Item_document { value: Erased<WriteAuthorizedBy<string, typeof save>> }
+        type SchemaRoot = { viewed: Item_document; fresh: Item };`,
+        "SchemaRoot",
+      );
+      const [, fresh] = (typeNode as ts.TypeLiteralNode).members;
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+        new WeakMap([[(fresh as ts.PropertySignature).type!, {
+          definesDocument: true,
+        }]]),
+      );
+
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+        "cfc-write-authorized-by:unread",
+      ]);
     });
 
     it("leaves an owner policy's principal claims out of a view with the writer it cannot read", async () => {

@@ -333,6 +333,25 @@ export default pattern<{ initial: string }>((input) => {`,
       });
     }
 
+    it("refuses it beside a view of a type named as its definition would be", async () => {
+      const tx = runtime.edit();
+      await expect(
+        runtime.patternManager.compilePattern(
+          program(
+            `interface Erased<T> { value: [T][0] }
+interface Item { box: Erased<Owned<string, typeof writerA>> }
+interface Item_document { box: Erased<Owned<string, typeof writerA>> }
+export default pattern<{ initial: string }>((input) => {`,
+            `const viewed = computed(() => ({ box: { value: "seed" } }) as Item_document);
+  const fresh = { box: { value: "seed" } } as Item;`,
+            "{ viewed, fresh }",
+          ),
+          { space, tx },
+        ),
+      ).rejects.toThrow("could not be read");
+      tx.abort();
+    });
+
     it("stores the whole policy through a constant whose declared type is an index signature, which refuses other writers", async () => {
       expect(
         await memberWriteError(
@@ -388,6 +407,51 @@ export default pattern((input: In) => ({ value: input.value }), ${reference});
       ).rejects.toThrow(
         "The writer binding of `WriteAuthorizedBy` could not be read",
       );
+      tx.abort();
+    });
+  }
+
+  for (
+    const [how, declaration, argument] of [
+      [
+        "reassigns",
+        "function make(schema: Schema) {\n  schema = toSchema<In>();\n  return schema;\n}",
+        '{ type: "object" }',
+      ],
+      [
+        "writes into",
+        "function make(schemas: { input?: Schema }) {\n  schemas.input = toSchema<In>();\n  return schemas.input;\n}",
+        "{}",
+      ],
+    ] as const
+  ) {
+    it(`refuses a created cell's schema a function returns from a parameter it ${how}`, async () => {
+      // The parameter no longer holds what the call passed it, so the
+      // schema cannot be read back to the `toSchema` call that makes it.
+      const source: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
+import { handler, pattern, toSchema, Writable, type WriteAuthorizedBy } from "commonfabric";
+export const writerA = handler<{ v: string }, { value: Writable<string> }>(
+  ({ v }, { value }) => { value.set(v); },
+);
+type Schema = ReturnType<typeof toSchema>;
+interface Erased<W> { value: [W][0] }
+type In = { byId: Erased<WriteAuthorizedBy<string, typeof writerA>> };
+${declaration}
+export default pattern<{}>(() => {
+  const x = new Writable<In>({ byId: { value: "seed" } }, make(${argument})).for("x");
+  return { x };
+});
+`,
+        }],
+      };
+      const tx = runtime.edit();
+      await expect(
+        runtime.patternManager.compilePattern(source, { space, tx }),
+      ).rejects.toThrow("could not be read back");
       tx.abort();
     });
   }

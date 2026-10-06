@@ -2233,10 +2233,12 @@ export class SchemaGenerator {
    * The name a reading of a type named `name` is stored under in
    * `$defs`. A reading that defines a document inside a schema that views
    * others (`GenerationContext.documentWithinView`) stores its own, since the
-   * view's reading of the same type leaves out a writer it cannot read.
+   * view's reading of the same type leaves out a writer it cannot read. Its
+   * name holds a `:`, which no TypeScript name does, so no type's name can
+   * take it.
    */
   #definitionKey(name: string, context: GenerationContext): string {
-    return context.documentWithinView ? `${name}_document` : name;
+    return context.documentWithinView ? `${name}:document` : name;
   }
 
   /**
