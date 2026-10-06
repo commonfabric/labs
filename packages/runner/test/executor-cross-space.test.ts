@@ -531,7 +531,7 @@ describe("Phase 5 cross-space serving", () => {
         serving.runner.accessForTestingOnly.resolvePendingSpaceNamesAndRetry(
           {
             space: homeSpace,
-            pendingSpaceNames: new Map([[name, grants]]),
+            pendingSpaceNames: new Map([[name, { grants }]]),
           } as Frame,
           actingTx,
         ),
