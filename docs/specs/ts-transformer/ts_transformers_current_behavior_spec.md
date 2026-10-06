@@ -141,7 +141,9 @@ present; no stage handles a missing one.
      a document: an authored pattern's argument (not one lowered from an
      array method's callback, whose argument is captures and an element), its
      result where the author wrote the result type (`pattern<In, Out>`, or the
-     callback's return annotation), or a cell `new Writable(…)`,
+     callback's return annotation; for a pattern lowered from an array
+     method's callback, whose type arguments the lowering writes, the
+     annotation alone), or a cell `new Writable(…)`,
      `Writable.of(…)`, `cell(…)` and the other cell factories create.
      SchemaInjection sets it on the call it creates, and on the `toSchema`
      calls that generate a schema the author passes in that call's place:
@@ -181,6 +183,8 @@ present; no stage handles a missing one.
      carries the `definesDocument` schema hint, which the generator reads the
      same way for that member alone. A returned value the rebuild cannot read
      member by member, such as one holding a spread, marks the whole result.
+     A pattern lowered from an array method's callback has a result document
+     of its own, read the same way.
    - `printedFrom` — for a type node printed from a type, that type. Both
      printers record it: `typeToTypeNodeWithRegistry()`, including the
      `unknown` it puts in place of a type the checker will not print, and the

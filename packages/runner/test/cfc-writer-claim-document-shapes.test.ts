@@ -333,6 +333,37 @@ export default pattern<{ initial: string }>((input) => {`,
       });
     }
 
+    for (
+      const [where, body, returned] of [
+        [
+          "in the result a map callback returns",
+          "",
+          '{ list: items.map((item) => ({ item, value: "seed" as Owned<string, typeof writerA> })) }',
+        ],
+        [
+          "in the result a map callback returns, where a computed reads the list",
+          'const list = items.map((item) => ({ item, value: "seed" as Owned<string, typeof writerA> }));',
+          "{ first: computed(() => list[0]) }",
+        ],
+      ] as const
+    ) {
+      it(`refuses it ${where}`, async () => {
+        // The element pattern's result is a document of its own.
+        const tx = runtime.edit();
+        await expect(
+          runtime.patternManager.compilePattern(
+            program(
+              "export default pattern<{ items: string[] }>(({ items }) => {",
+              body,
+              returned,
+            ),
+            { space, tx },
+          ),
+        ).rejects.toThrow("could not be read");
+        tx.abort();
+      });
+    }
+
     it("refuses it beside a view of a type named as its definition would be", async () => {
       const tx = runtime.edit();
       await expect(

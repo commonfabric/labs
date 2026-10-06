@@ -260,7 +260,11 @@ Normative behavior:
    whose stored envelope already binds its writers, so a writer such a view
    reads from a type alone is left out of it and not reported. A result
    inferred from the pattern's callback is such a view: its fields link to the
-   documents they come from, which store their own envelopes. Anything else it
+   documents they come from, which store their own envelopes. So is the
+   result of a pattern lowered from an array method's callback, whose
+   argument, the element and the captures, views the documents they come
+   from; its type arguments are the lowering's, so only the callback's return
+   annotation makes its result authored. Anything else it
    returns under a writer policy — a literal, an object or array literal, a
    spread, a constant, a plain call's result: any value that is not a reactive
    reference — is the exception: the result document holds that data itself,

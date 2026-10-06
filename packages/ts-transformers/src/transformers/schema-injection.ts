@@ -3847,7 +3847,8 @@ function handlePatternSchemaInjection(
     : undefined;
 
   // A pattern lowered from an array method's callback takes captures and an
-  // element as its argument: views of documents that exist already.
+  // element as its argument: views of documents that exist already. Its
+  // result is a document like any pattern's.
   const lowersArrayCallback = context.isArrayMethodCallback(builderFunction) ||
     isMapWithPatternCallbackPatternCall(node);
   const argumentCapabilityMode: CapabilitySummaryApplicationMode =
@@ -3857,21 +3858,21 @@ function handlePatternSchemaInjection(
   // return annotation, defines the result document. An inferred result views
   // the documents its fields link to, except where it returns fresh data
   // carrying a writer policy, which the result document holds itself
-  // (`freshResultTypeNode()`).
-  const resultAuthored = (typeArgs?.length ?? 0) >= 2 ||
-    builderFunction.type !== undefined;
-  const freshResult = lowersArrayCallback || resultAuthored
-    ? undefined
-    : freshResultTypeNode(
-      unwrappedPatternReturnExpr,
-      checker,
-      sourceFile,
-      factory,
-      typeRegistry,
-      context,
-    );
-  const resultDefinesDocument = !lowersArrayCallback &&
-    (resultAuthored || freshResult === "whole");
+  // (`freshResultTypeNode()`). A lowered callback's result is its element
+  // pattern's own document, read the same way; its type arguments are the
+  // lowering's, printed from what the callback infers, so only its return
+  // annotation is the author's.
+  const resultAuthored = builderFunction.type !== undefined ||
+    (!lowersArrayCallback && (typeArgs?.length ?? 0) >= 2);
+  const freshResult = resultAuthored ? undefined : freshResultTypeNode(
+    unwrappedPatternReturnExpr,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
+    context,
+  );
+  const resultDefinesDocument = resultAuthored || freshResult === "whole";
   const freshResultNode = freshResult === "whole" ? undefined : freshResult;
 
   // Helper to build final call with function-first argument order
@@ -3915,9 +3916,11 @@ function handlePatternSchemaInjection(
   let resultType: ts.Type | undefined;
 
   if (typeArgs && typeArgs.length >= 2) {
-    // Case 1: Two or more type arguments → both schemas from type args
+    // Case 1: Two or more type arguments → both schemas from type args, the
+    // result's rebuilt where a lowered callback returns fresh data
+    // (`freshResultTypeNode()`)
     inputTypeNode = typeArgs[0]!;
-    resultTypeNode = typeArgs[1]!;
+    resultTypeNode = freshResultNode ?? typeArgs[1]!;
 
     // Check TypeRegistry for closure-captured types
     if (typeRegistry) {

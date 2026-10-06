@@ -941,6 +941,89 @@ export default pattern<{ value: ${POLICY} }>(({ value }) => ({ box: { value } as
     });
   });
 
+  describe("the result of a pattern lowered from an array method's callback", () => {
+    // The element pattern's result is a document of its own, which holds
+    // fresh data the callback returns itself. Its argument, the element and
+    // the captures, views documents that exist already.
+
+    for (
+      const [what, body, returned] of [
+        [
+          "beside the element",
+          "",
+          `{ list: items.map((item) => ({ item, value: "" as ${POLICY} })) }`,
+        ],
+        [
+          "under an owner policy",
+          "",
+          `{ list: items.map((item) => ({ item, value: "" as Owned<string, typeof setName> })) }`,
+        ],
+        [
+          "where a computed reads the list",
+          `const list = items.map((item) => ({ item, value: "" as Owned<string, typeof setName> }));`,
+          "{ first: computed(() => list[0]) }",
+        ],
+      ] as const
+    ) {
+      it(`refuses a writer read from the type of fresh data the callback returns ${what}`, async () => {
+        const result = await transform(
+          `export default pattern<{ items: string[] }>(({ items }) => {
+  ${body}
+  return ${returned};
+});`,
+        );
+
+        expect(result.diagnostics.filter(isUnreadWriter)).not.toEqual([]);
+      });
+    }
+
+    for (
+      const [what, items, callback] of [
+        [
+          "the element",
+          "Owned<string, typeof setName>[]",
+          "(item) => ({ item })",
+        ],
+        [
+          "a member of the element",
+          "{ value: Owned<string, typeof setName> }[]",
+          "(item) => ({ value: item.value })",
+        ],
+        [
+          "the element whole",
+          "Owned<string, typeof setName>[]",
+          "(item) => item",
+        ],
+        [
+          "the element beside its index and a capture",
+          "Owned<string, typeof setName>[]",
+          "(item, index) => ({ item, index, label })",
+        ],
+      ] as const
+    ) {
+      it(`reports nothing for a callback that returns ${what}`, async () => {
+        const result = await transform(
+          `export default pattern<{ items: ${items}; label: Owned<string, typeof setName> }>(({ items, label }) => {
+  return { list: items.map(${callback}) };
+});`,
+        );
+
+        expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+      });
+    }
+
+    it("keeps the claim on fresh data whose writer the callback's return annotation names", async () => {
+      const result = await transform(
+        `export default pattern<{ items: string[] }>(({ items }) => {
+  return { list: items.map((item): { value: Owned<string, typeof setName> } => ({ value: "" as never })) };
+});`,
+      );
+
+      expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+      expect(result.root.text).toContain("writeAuthorizedBy");
+    });
+  });
+
   describe("a created cell", () => {
     // A cell's schema is what its document stores its policy envelope from.
 
