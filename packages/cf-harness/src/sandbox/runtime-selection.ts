@@ -61,8 +61,11 @@ export interface SandboxRuntimeSelection {
 /**
  * Values a caller received explicitly (a flag), which win over the
  * environment. A present value takes part even when it is empty: an empty
- * runtime is refused, and an empty rootfs or policy means "none" (for the
- * policy that includes every default).
+ * runtime is refused, an empty policy means "none", every default included,
+ * and an empty rootfs names none, which the macOS default refuses, since its
+ * runtime runs only from one. A named `runsc` given an empty rootfs is left
+ * to its driver's own default. An empty variable names nothing, and the
+ * default applies as though it were unset.
  */
 export interface ExplicitSandboxRuntimeSelection {
   sandboxRuntime?: string;
@@ -213,8 +216,11 @@ export type SandboxRuntimeSelectionOptions = UnnamedSandboxRuntime & {
    */
   pathExists?: (path: string) => Promise<boolean>;
 
-  /** Looks at one piece of the macOS store; `Deno.stat` when absent. */
-  stat?: (path: string) => Promise<Deno.FileInfo>;
+  /**
+   * Looks at one piece of the macOS store without following a link;
+   * `Deno.lstat` when absent.
+   */
+  lstat?: (path: string) => Promise<Deno.FileInfo>;
 };
 
 /** The default CFC policy, which the docker path's installer puts under `home`. */
@@ -281,32 +287,59 @@ const nativeStorePieces = (
   ]),
 ];
 
+/** What one piece of the macOS store is, as its check found it. */
+type NativeStorePieceReading =
+  /** It is there, and is what it has to be. */
+  | { there: true }
+  /** It is not, and `problem` says why. */
+  | { there: false; problem: string }
+  /** It is a link rather than the thing itself; `problem` names its target. */
+  | { there: false; problem: string; linked: true };
+
 /**
- * Helper for `resolveSandboxRuntimeSelection()`, which returns what keeps
- * `piece` of `store` from being there, or `undefined` where it is there. A
- * piece that cannot be looked at is not there, and the reason is returned.
+ * Helper for `resolveSandboxRuntimeSelection()`, which reads what `piece` of
+ * `store` is. A piece that cannot be looked at is not there, and the reason
+ * is returned. A piece that is a symbolic link is not there either, whatever
+ * it leads to: the driver hands the macOS `runsc` the rootfs and the binary by
+ * the paths the file system resolves them to, while that `runsc` knows the
+ * store's pieces by their paths in the store, and none of gVisor's installer
+ * scripts makes one a link.
  */
-const nativeStorePieceProblem = async (
+const readNativeStorePiece = async (
   store: string,
   piece: NativeStorePiece,
-  stat: (path: string) => Promise<Deno.FileInfo>,
-): Promise<string | undefined> => {
+  lstat: (path: string) => Promise<Deno.FileInfo>,
+): Promise<NativeStorePieceReading> => {
   const named = `\`${piece.path}\`, ${piece.what},`;
+  const path = join(store, piece.path);
   let info: Deno.FileInfo;
+  let target: string | undefined;
   try {
-    info = await stat(join(store, piece.path));
+    info = await lstat(path);
+    if (info.isSymlink) target = await Deno.readLink(path);
   } catch (error) {
-    return error instanceof Deno.errors.NotFound
-      ? `${named} is missing`
-      : `${named} could not be examined (${error})`;
+    return {
+      there: false,
+      problem: error instanceof Deno.errors.NotFound
+        ? `${named} is missing`
+        : `${named} could not be examined (${error})`,
+    };
+  }
+  if (target !== undefined) {
+    return {
+      there: false,
+      problem: `${named} is a symbolic link to \`${target}\``,
+      linked: true,
+    };
   }
   const there = piece.kind === "directory" ? info.isDirectory : info.isFile &&
     (piece.kind === "file" || ((info.mode ?? 0) & 0o111) !== 0);
-  return there
-    ? undefined
-    : `${named} is not ${
+  return there ? { there: true } : {
+    there: false,
+    problem: `${named} is not ${
       piece.kind === "executable file" ? "an" : "a"
-    } ${piece.kind}`;
+    } ${piece.kind}`,
+  };
 };
 
 /**
@@ -493,6 +526,19 @@ export const resolveSandboxRuntimeSelection = async (
       ? nonEmpty(explicit.sandboxRootfs)
       : nonEmpty(env[SANDBOX_ROOTFS_ENV]),
   );
+  if (
+    nativeStore !== undefined && explicit.sandboxRootfs !== undefined &&
+    namedRootfs === undefined
+  ) {
+    // Named, and named as nothing: the store's image does not stand in for
+    // a rootfs someone said there is none of.
+    throw nativeDefaultRefusal(
+      "`--sandbox-rootfs` is given empty, which names no rootfs, where that " +
+        "runtime runs only from one",
+      "Name a rootfs, or leave the flag out to run from the store's own image",
+      options.flags,
+    );
+  }
   const policyNamed = explicit.sandboxCfcPolicy !== undefined;
   const namedPolicy = atCwd(
     policyNamed
@@ -535,16 +581,26 @@ export const resolveSandboxRuntimeSelection = async (
   }
 
   if (nativeStore !== undefined) {
-    const stat = options.stat ?? Deno.stat;
+    const lstat = options.lstat ?? Deno.lstat;
+    const pieces = nativeStorePieces(
+      namedBinary !== undefined,
+      namedRootfs !== undefined,
+    );
     const problems: string[] = [];
-    for (
-      const piece of nativeStorePieces(
-        namedBinary !== undefined,
-        namedRootfs !== undefined,
-      )
-    ) {
-      const problem = await nativeStorePieceProblem(nativeStore, piece, stat);
-      if (problem !== undefined) problems.push(problem);
+    let linked = false;
+    for (const piece of pieces) {
+      const reading = await readNativeStorePiece(nativeStore, piece, lstat);
+      if (reading.there) continue;
+      problems.push(reading.problem);
+      if ("linked" in reading) linked = true;
+    }
+    if (linked) {
+      problems.push(
+        `each of ${
+          listed(pieces.map((piece) => `\`${piece.path}\``))
+        } has to be the file or directory itself, as gVisor's installer ` +
+          "writes it, and not a link to one",
+      );
     }
     if (sandboxCfcPolicy === undefined && !policyNamed) {
       // The default has to be one a run can start on, and an enforcing run

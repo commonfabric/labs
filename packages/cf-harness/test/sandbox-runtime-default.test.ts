@@ -516,7 +516,7 @@ describe("sandbox-runtime-default", () => {
           platform: "linux",
           flags: true,
           pathExists: counted(true),
-          stat: counted(await Deno.stat(home)),
+          lstat: counted(await Deno.lstat(home)),
         });
 
         expect(looks).toBe(0);
@@ -707,6 +707,230 @@ describe("sandbox-runtime-default", () => {
         ).toEqual(fromStore(store, homePolicy(home)));
       });
 
+      describe("a rootfs named empty", () => {
+        it("throws for `--sandbox-rootfs` given empty, which names no rootfs, with a store set up", async () => {
+          await installStore(defaultStore(home));
+
+          const refusal = await rejection(
+            resolveSandboxRuntimeSelection(
+              { HOME: home },
+              { sandboxRootfs: "" },
+              { platform: "darwin", flags: true },
+            ),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            code: "invalid-request",
+            message: "No sandbox runtime is named, so the default applies, " +
+              "which on macOS is the native `runsc` runtime, and " +
+              "`--sandbox-rootfs` is given empty, which names no rootfs, " +
+              "where that runtime runs only from one. Name a rootfs, or " +
+              "leave the flag out to run from the store's own image, or " +
+              DOCKER_BY_FLAG_OR_VARIABLE,
+          });
+        });
+
+        it("returns a named `runsc` with no rootfs for `--sandbox-rootfs` given empty, leaving it to the driver's default", async () => {
+          await installStore(defaultStore(home));
+
+          expect(
+            await resolveSandboxRuntimeSelection(
+              { HOME: home },
+              { sandboxRuntime: "runsc", sandboxRootfs: "" },
+              { platform: "darwin", flags: true },
+            ),
+          ).toEqual({
+            sandboxRuntimeKind: "runsc",
+            sandboxRuntimeChoice: { runtime: "runsc", source: "flag" },
+          });
+        });
+
+        it("returns the store's own image for `CF_HARNESS_SANDBOX_ROOTFS` set empty, which names nothing", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+
+          expect(
+            await resolveSandboxRuntimeSelection(
+              { HOME: home, CF_HARNESS_SANDBOX_ROOTFS: "" },
+              {},
+              { platform: "darwin", flags: true },
+            ),
+          ).toEqual(fromStore(store, join(store, POLICY)));
+        });
+
+        it("refuses a batch run given `--sandbox-rootfs` empty with no runtime named on macOS", async () => {
+          await installStore(defaultStore(home));
+          const stderr: string[] = [];
+
+          const exitCode = await runCfHarnessCli(
+            [
+              "--model-provider",
+              "openai-compatible-gateway",
+              "--gateway-auth-mode",
+              "none",
+              "--sandbox-rootfs",
+              "",
+              "--prompt",
+              "hello",
+            ],
+            {
+              io: { stdout: () => {}, stderr: (text) => stderr.push(text) },
+              env: { HOME: home },
+              platform: "darwin",
+              cwd: root,
+              registerSignalHandler: () => () => {},
+              createPromptLoop: () => {
+                throw new Error("no loop is built for a refused run");
+              },
+            },
+          );
+
+          expect(exitCode).toBe(1);
+          expect(stderr.join("")).toContain(
+            "`--sandbox-rootfs` is given empty, which names no rootfs",
+          );
+        });
+      });
+
+      describe("a piece of the store that is a link", () => {
+        /** Each piece of an installed store, and what a link to it holds. */
+        const PIECES = [
+          { piece: SHIM, what: "the `runsc` shim", directory: false },
+          {
+            piece: DAEMON,
+            what: "the VM daemon the shim starts",
+            directory: false,
+          },
+          { piece: CONFIG, what: "the VM's configuration", directory: false },
+          {
+            piece: ROOTFS,
+            what: "the rootfs a container names",
+            directory: true,
+          },
+          {
+            piece: IMAGE,
+            what: "the image that rootfs runs from",
+            directory: false,
+          },
+        ];
+
+        /** What the refusal says each linked piece has to be instead. */
+        const MUST_BE_ITSELF = "each of `bin/runsc`, `bin/cfc-vm`, " +
+          "`config.json`, `images/kitchensink` and `ext4/kitchensink.ext4` " +
+          "has to be the file or directory itself, as gVisor's installer " +
+          "writes it, and not a link to one";
+
+        for (const { piece, what, directory } of PIECES) {
+          it(`throws for \`${piece}\` that is a link to a ${directory ? "directory" : "file"} of the right kind, naming the piece and its target`, async () => {
+            const store = defaultStore(home);
+            await installStore(store);
+            // The real thing, moved out of the store and linked back in.
+            const target = join(root, "elsewhere");
+            await Deno.rename(join(store, piece), target);
+            await Deno.symlink(target, join(store, piece));
+
+            const refusal = await rejection(
+              resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                platform: "darwin",
+                flags: true,
+              }),
+            );
+
+            expect(refusal).toBeInstanceOf(HarnessControlError);
+            expect(refusal).toMatchObject({
+              message: notSetUp(
+                store,
+                `\`${piece}\`, ${what}, is a symbolic link to ` +
+                  `\`${target}\`; ${MUST_BE_ITSELF}`,
+                DOCKER_BY_FLAG_OR_VARIABLE,
+              ),
+            });
+          });
+        }
+
+        it("names every piece that is a link, and says once what they have to be", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+          for (const piece of [CONFIG, ROOTFS]) {
+            const target = join(
+              root,
+              `elsewhere-${piece.replaceAll("/", "-")}`,
+            );
+            await Deno.rename(join(store, piece), target);
+            await Deno.symlink(target, join(store, piece));
+          }
+
+          expect(
+            messageOf(
+              await rejection(
+                resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                  platform: "darwin",
+                  flags: true,
+                }),
+              ),
+            ),
+          ).toBe(
+            notSetUp(
+              store,
+              "`config.json`, the VM's configuration, is a symbolic link to " +
+                `\`${join(root, "elsewhere-config.json")}\`; ` +
+                "`images/kitchensink`, the rootfs a container names, is a " +
+                "symbolic link to " +
+                `\`${join(root, "elsewhere-images-kitchensink")}\`; ` +
+                MUST_BE_ITSELF,
+              DOCKER_BY_FLAG_OR_VARIABLE,
+            ),
+          );
+        });
+
+        it("says what has to be itself of the pieces it takes from the store alone, where a named binary replaces the shim and the daemon", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+          const target = join(root, "elsewhere");
+          await Deno.rename(join(store, CONFIG), target);
+          await Deno.symlink(target, join(store, CONFIG));
+
+          expect(
+            messageOf(
+              await rejection(
+                resolveSandboxRuntimeSelection(
+                  { HOME: home, CF_HARNESS_RUNSC_BINARY: "/named/runsc" },
+                  {},
+                  { platform: "darwin", flags: true },
+                ),
+              ),
+            ),
+          ).toBe(
+            notSetUp(
+              store,
+              "`config.json`, the VM's configuration, is a symbolic link to " +
+                `\`${target}\`; each of \`config.json\`, ` +
+                "`images/kitchensink` and `ext4/kitchensink.ext4` has to be " +
+                "the file or directory itself, as gVisor's installer writes " +
+                "it, and not a link to one",
+              DOCKER_BY_FLAG_OR_VARIABLE,
+            ),
+          );
+        });
+
+        it("returns the native runtime where a link is in a piece a named setting replaces", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+          const target = join(root, "elsewhere");
+          await Deno.rename(join(store, ROOTFS), target);
+          await Deno.symlink(target, join(store, ROOTFS));
+
+          const selected = await resolveSandboxRuntimeSelection(
+            { HOME: home, CF_HARNESS_SANDBOX_ROOTFS: "/named/rootfs" },
+            {},
+            { platform: "darwin", flags: true },
+          );
+
+          expect(selected.sandboxRootfs).toBe("/named/rootfs");
+        });
+      });
+
       it("throws for a piece of the store that cannot be examined, with the reason", async () => {
         const store = defaultStore(home);
         await installStore(store);
@@ -715,10 +939,10 @@ describe("sandbox-runtime-default", () => {
           resolveSandboxRuntimeSelection({ HOME: home }, {}, {
             platform: "darwin",
             flags: true,
-            stat: (path) =>
+            lstat: (path) =>
               path === join(store, CONFIG)
                 ? Promise.reject(new Deno.errors.PermissionDenied("locked"))
-                : Deno.stat(path),
+                : Deno.lstat(path),
           }),
         );
 
