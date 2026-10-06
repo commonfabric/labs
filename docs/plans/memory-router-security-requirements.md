@@ -264,6 +264,10 @@ certificate private key, compromise exposes that key too.
   lease expires. Renewing with the same proof cannot extend a backend context.
 - Disconnecting a client or killing its router eventually removes its backend
   authority within the documented lease; an expired proof cannot reopen it.
+- A toolshed restart does not end client sessions: the router treats a refusal
+  that rests on a passing condition, such as a down toolshed, an unreadable
+  directory or a placement or topology change, as temporary, so clients
+  reconnect and replay their pending commits. Other refusals stay permanent.
 - Without an `unlisted` rule the router denies spaces the directory does not
   list. With one, a client creates a space only by holding its key, and only
   where the rule places it: a routed open of a DID with no store creates nothing

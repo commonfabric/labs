@@ -1840,6 +1840,11 @@ finally:
     session: {},
   });
   assert(refusedOpen.error !== undefined, JSON.stringify(refusedOpen));
+  // The toolshed will come back, so the refusal is retriable.
+  assertEquals(
+    (refusedOpen.error as { retriable?: boolean }).retriable,
+    true,
+  );
   assert(
     (await otherShed.request({
       type: "session.watch.set",
@@ -1913,6 +1918,43 @@ finally:
   toolsheds[1].signal("SIGCONT");
   await opened("127.0.0.29", 1, 30000);
   pass("a link stalled past its request deadline is replaced and recovers");
+
+  // An SDK session survives its toolshed restarting: the refusals it meets
+  // while the toolshed is down are retriable, so it reconnects and replays its
+  // pending commit instead of ending the session and dropping the commit.
+  {
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      bob,
+      (address) => socketFactory(address, "127.0.0.37"),
+    );
+    try {
+      const { client: connection, session } = await factory.create(
+        spaces[1] as MemorySpace,
+        bob,
+      );
+      try {
+        await toolsheds[1].stop();
+        const write = session.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:survives-restart",
+            value: { value: 1 },
+          }],
+        });
+        await pause(2000);
+        await toolsheds[1].start();
+        await Promise.race([write, deadline(60000)]);
+      } finally {
+        await connection.close();
+      }
+    } finally {
+      await factory.close();
+    }
+  }
+  pass("an SDK session commits across its toolshed's restart");
 
   // Creation. An `unlisted` rule places every DID the directory does not
   // list, here alternately across both toolsheds by last character, and a
