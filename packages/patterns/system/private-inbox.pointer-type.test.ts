@@ -4,11 +4,11 @@
  * that reads a profile's pointer as an untyped link joins that label from
  * another space: its sends are then refused, and, when the event drain
  * delivers it, so is its record that it handled the event. Read as a typed
- * link, the pointer joins no confidentiality. Every reader, Home's ensure
- * step, both the profiles' pointers and the inbox the host names for it to
- * adopt, Home's pointing step, the seed step that points a profile once it is
- * created, and a sender reading through `profile-home.tsx`'s own types,
- * therefore reads it as a typed link.
+ * link, the pointer joins no confidentiality. Every reader, the host vetting
+ * the inbox a profile advertises, Home's ensure step, both the profiles'
+ * pointers and the inbox the host names for it to adopt, Home's pointing step,
+ * the seed step that points a profile once it is created, and a sender reading
+ * through `profile-home.tsx`'s own types, therefore reads it as a typed link.
  *
  * The check is made by the type checker. A pointee that is `unknown` or `any`
  * fails to compile here under `deno task check`, and so does one naming a
@@ -21,6 +21,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell, NAME } from "commonfabric";
+import type { inboxPieceLinkSchema } from "@commonfabric/piece/ops";
+import type { Schema } from "@commonfabric/runner";
 import type {
   advertisesInbox,
   EnsurePrivateInboxEvent,
@@ -58,6 +60,12 @@ const adoptedInboxReachesOnlyTheName: ReachesOnlyTheName<
   PointeeOf<{ piece?: EnsurePrivateInboxEvent["adopt"] }>
 > = true;
 
+/** The pointee the host reads an advertised inbox's link as. */
+type HostPointee = Schema<typeof inboxPieceLinkSchema> extends Cell<infer T> ? T
+  : Schema<typeof inboxPieceLinkSchema>;
+
+const hostReachesOnlyTheName: ReachesOnlyTheName<HostPointee> = true;
+
 const pointingStepReachesOnlyTheName: ReachesOnlyTheName<
   PointeeOf<NonNullable<PointTarget["inbox"]>>
 > = true;
@@ -71,6 +79,10 @@ const seedStepReachesOnlyTheName: ReachesOnlyTheName<
 > = true;
 
 describe("private-inbox pointer type", () => {
+  it("types the host's pointer as a link naming only the inbox's name", () => {
+    expect(hostReachesOnlyTheName).toBe(true);
+  });
+
   it("types the ensure step's pointer as a link naming only the inbox's name", () => {
     expect(ensureStepReachesOnlyTheName).toBe(true);
   });

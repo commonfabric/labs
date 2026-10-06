@@ -6,7 +6,9 @@
  * do; `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
+import type { JSONSchema } from "@commonfabric/api";
 import type { DID } from "@commonfabric/identity";
+import { hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
 import {
   ACLManager,
   type Cell,
@@ -41,10 +43,23 @@ const profilesSchema = {
   items: { type: "unknown", asCell: ["cell"] },
 } as const;
 
+/**
+ * The link the host reads an inbox pointer through: a link to a piece naming
+ * its name and nothing else, as `ShareInboxPiece` in
+ * `packages/patterns/system/profile-home.tsx` types it. A pointer read through
+ * an untyped link joins the inbox's confidentiality label, which is what
+ * `docs/features/private-inbox.md` says every reader avoids.
+ */
+export const inboxPieceLinkSchema = {
+  type: "object",
+  properties: { $NAME: { type: "string" } },
+  asCell: ["cell"],
+} as const satisfies JSONSchema;
+
 const pointerSchema = {
   type: "object",
-  properties: { piece: { type: "unknown", asCell: ["cell"] } },
-} as const;
+  properties: { piece: inboxPieceLinkSchema },
+} as const satisfies JSONSchema;
 
 /**
  * Sends `home`'s `ensurePrivateInbox`, after vetting the inbox the first of
@@ -142,11 +157,11 @@ async function refusalOf(
     return "inbox-home-space";
   }
   if (inbox.space === spaces.profile) return "inbox-profile-space";
-  let acl;
+  let stored;
   let offers;
   let receive;
   try {
-    acl = await new ACLManager(runtime, inbox.space).get();
+    stored = await new ACLManager(runtime, inbox.space).getStored();
     // The stored list rather than a projection of it: an array schema would
     // project malformed data into an empty list. A stream is read without a
     // schema, since a stream schema answers a stream at any path.
@@ -157,6 +172,9 @@ async function refusalOf(
     throw error;
   }
   if (accessRefused(runtime, inbox.space)) return "inbox-access-refused";
+  // An access list that is malformed or names no concrete owner is one this
+  // identity does not own.
+  const acl = isACL(stored) && hasConcreteOwner(stored) ? stored : undefined;
   if (acl?.[spaces.identity] !== "OWNER" || acl?.["*"] !== "WRITE") {
     return "inbox-adoption-acl-mismatch";
   }

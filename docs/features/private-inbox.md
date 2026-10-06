@@ -46,8 +46,12 @@ inbox is usable when:
 
 - its space is neither the Home space nor the advertising profile's own space;
 - that space grants the identity `OWNER` and every principal, `"*"`, `WRITE`,
-  as the host reads its access list;
+  as the host reads its access list; a list that is malformed or names no
+  concrete owner grants neither;
 - the piece holds a list of `offers` and a `receive` stream.
+
+A failure to read the inbox's space that is not a refusal of access, such as
+a lost connection, rejects the ensure, and the next bring-up tries again.
 
 The host then sends Home's `ensurePrivateInbox` stream, naming the inbox to
 adopt when it is usable, and no inbox otherwise. A Home pattern without the
@@ -126,19 +130,20 @@ the list as a value too, for the same reason. A profile of any vintage with a
 `setInbox` is pointed this way; one predating `setInbox` drops the event, and
 the runtime logs a warning that no handler took it.
 
-The handler, the pointing step and the seed step read each profile's pointer,
-and the handler reads the inbox the event names, as a typed link,
-`Cell<ShareInboxPiece>`. The link carries the label of what it reaches, and
-the inbox labels its offers confidential to its owner. Read as an untyped link,
-`Cell<unknown>`, the pointer joins that label, from another space, into the
-reading run. Writer-fit then refuses the run's own sends, whichever path
-delivered it. When the event drain, rather than the wave that queued it,
-delivered the run, it also refuses the run's record that it handled the event,
-and the event is lost. Read as the typed link, the pointer joins no
-confidentiality. `private-inbox.pointer-type.test.ts` fails to compile if any
-reader's pointer type, the ensure's and the pointing step's, the seed step's or
-the profile's own, becomes unconstrained, or names a member of the inbox's
-result other than its name.
+The host, the handler, the pointing step and the seed step read each profile's
+pointer, and the handler reads the inbox the event names, as a typed link,
+`Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema` in
+`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. The link
+carries the label of what it reaches, and the inbox labels its offers
+confidential to its owner. Read as an untyped link, `Cell<unknown>`, the pointer
+joins that label, from another space, into the reading run. Writer-fit then
+refuses the run's own sends, whichever path delivered it. When the event drain,
+rather than the wave that queued it, delivered the run, it also refuses the
+run's record that it handled the event, and the event is lost. Read as the typed
+link, the pointer joins no confidentiality. `private-inbox.pointer-type.test.ts`
+fails to compile if any reader's pointer type, the host's, the ensure's and the
+pointing step's, the seed step's or the profile's own, becomes unconstrained, or
+names a member of the inbox's result other than its name.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them

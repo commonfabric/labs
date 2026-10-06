@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
+  ACLManager,
   type Cell,
   type MemorySpace,
   Runtime,
@@ -333,6 +335,51 @@ describe("ensurePrivateInboxOf()", () => {
       expect(result.outcome === "refused" && result.reason).toBe(
         "inbox-receive-missing",
       );
+    });
+
+    it("refuses an inbox whose stored access list is malformed", async () => {
+      const inbox = await usableInbox();
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.resolve("not an access list"),
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+    });
+
+    it("refuses an inbox whose stored access list names no concrete owner", async () => {
+      const inbox = await usableInbox();
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.resolve({ "*": "WRITE" }),
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+    });
+
+    it("rejects, sending nothing, when reading the access list fails", async () => {
+      const inbox = await usableInbox();
+      await listProfiles([await profilePointingAt(inbox)]);
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.reject(new Error("transport failed")),
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("transport failed");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
     });
 
     it("names no inbox for Home to adopt, and logs the refusal", async () => {

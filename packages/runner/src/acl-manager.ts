@@ -34,12 +34,19 @@ export class ACLManager {
   }
 
   async get(): Promise<ACL | null> {
+    return validateStoredAcl(await this.getStored());
+  }
+
+  /**
+   * The access list as stored, unvalidated, or `undefined` when there is none.
+   * {@link get} makes the same read and validates what it finds.
+   */
+  async getStored(): Promise<unknown> {
     const aclCell = this.#getCell();
     await aclCell.sync();
     const aclData = aclCell.get();
     await this.#runtime.storageManager.synced();
-
-    return validateStoredAcl(aclData);
+    return aclData;
   }
 
   async set(user: ACLUser, capability: Capability): Promise<ACL> {
