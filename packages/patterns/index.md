@@ -143,6 +143,13 @@ System patterns: `system/` — live, load-bearing product patterns (home,
 default-app, suggestions). They run the product but are of mixed idiom vintage;
 not a style reference.
 
+`system/summary-index.tsx` propagates unavailable mentionable discovery through
+its entries and search results. `system/space-overview.tsx` and
+`cheeseboard.tsx` propagate unavailable dialog and fetch results through their
+derived views. Their exported presentation patterns accept native results
+independently of the provider, and their availability tests exercise waiting,
+failure, empty data, and recovery through those production views.
+
 ## fixture
 
 Every fixture pattern source carries the fixture marker, so the file says so

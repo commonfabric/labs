@@ -1,27 +1,23 @@
+/**
+ * Fetches the Cheeseboard pizza schedule through Toolshed's web-read endpoint
+ * and presents dated pizza descriptions.
+ */
+
 import {
-  computed,
+  type AsyncResult,
   fetchJson,
-  hasError,
-  hasSchemaMismatch,
-  isPending,
-  isSyncing,
   lift,
   NAME,
-  observeAvailability,
   pattern,
   resultOf,
   UI,
+  type VNode,
 } from "commonfabric";
 
-/**
- * Fetch the Cheeseboard pizza schedule via Toolshed's web-read endpoint and
- * display a list of pizza descriptions inside the piece.
- *
- * Uses: fetchJson, lift, map built-in, toolshed web-read endpoint
- */
 const DATE_LINE_REGEX = /^[A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}$/;
 
-type CheeseboardEntry = [date: string, pizza: string];
+/** One dated pizza description from the published schedule. */
+export type CheeseboardEntry = [date: string, pizza: string];
 
 /** Extract pizza descriptions from a web-read content blob. */
 function extractPizzas(content: string): CheeseboardEntry[] {
@@ -74,7 +70,7 @@ function extractPizzas(content: string): CheeseboardEntry[] {
 }
 
 /** Shape of the Toolshed web-read response we care about. */
-type WebReadResult = {
+export type WebReadResult = {
   content: string;
   metadata: {
     title?: string;
@@ -84,42 +80,22 @@ type WebReadResult = {
   };
 };
 
-/** Reactive system will call this lift when the fetched data
-  is updated. it also allows us to call our pure function
-  `extractPizzas` and return the results
-*/
+/** Parses the content of a usable web-read response. */
 const createPizzaListCell = lift<{ result: WebReadResult }, CheeseboardEntry[]>(
   ({ result }) => {
     return extractPizzas(result.content);
   },
 );
 
-export default pattern(() => {
-  const cheeseBoardUrl =
-    "https://cheeseboardcollective.coop/home/pizza/pizza-schedule/";
-  const request = fetchJson<WebReadResult>({
-    url: "/api/agent-tools/web-read",
-    options: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: {
-        url: cheeseBoardUrl,
-        max_tokens: 4000,
-      },
-    },
-  });
-  const observedRequest = observeAvailability(request);
-  const result = computed<WebReadResult>(() => {
-    if (
-      isPending(observedRequest) || hasError(observedRequest) ||
-      isSyncing(observedRequest) || hasSchemaMismatch(observedRequest)
-    ) {
-      return { content: "", metadata: { word_count: 0 } };
-    }
-    return resultOf(observedRequest);
-  });
+const cheeseBoardUrl =
+  "https://cheeseboardcollective.coop/home/pizza/pizza-schedule/";
+
+/** Presents the current web-read result as a dated pizza schedule. */
+export const CheeseboardPresentation = pattern<
+  { responseRequest: AsyncResult<WebReadResult> },
+  { [NAME]: string; [UI]: VNode; pizzaList: CheeseboardEntry[] }
+>(({ responseRequest }) => {
+  const result = resultOf(responseRequest);
 
   const pizzaList = createPizzaListCell({ result });
 
@@ -149,5 +125,23 @@ export default pattern(() => {
         </div>
       </div>
     ),
+    pizzaList,
   };
+});
+
+export default pattern(() => {
+  const request = fetchJson<WebReadResult>({
+    url: "/api/agent-tools/web-read",
+    options: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: {
+        url: cheeseBoardUrl,
+        max_tokens: 4000,
+      },
+    },
+  });
+  return CheeseboardPresentation({ responseRequest: request });
 });

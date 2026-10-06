@@ -1,15 +1,16 @@
+/** Indexes mentionable piece summaries for reactive search and table views. */
+
 import {
+  type AsyncResult,
   computed,
   type Default,
-  hasError,
-  isPending,
-  isSyncing,
   NAME,
   pattern,
   patternTool,
   type PatternToolResult,
   resultOf,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -79,17 +80,14 @@ export const searchPattern = pattern<
   });
 });
 
-const SummaryIndex = pattern<Input, Output>(() => {
-  const mentionableWish = wish<Default<Writable<SummarizablePiece>[], []>>({
-    query: "#mentionable",
-  });
-  const mentionable = computed(() => {
-    const result = mentionableWish.result;
-    return isPending(result) || hasError(result) ||
-        isSyncing(result)
-      ? []
-      : resultOf(result);
-  });
+/** Builds and renders the index from the current mentionable discovery result. */
+export const SummaryIndexPresentation = pattern<
+  {
+    mentionableRequest?: AsyncResult<Writable<SummarizablePiece>[]>;
+  },
+  Output & { [NAME]: string; [UI]: VNode }
+>(({ mentionableRequest }) => {
+  const mentionable = resultOf(mentionableRequest);
 
   const query = new Writable("");
 
@@ -163,6 +161,15 @@ const SummaryIndex = pattern<Input, Output>(() => {
     entries,
     search: patternTool(searchPattern, { entries }),
   };
+});
+
+const SummaryIndex = pattern<Input, Output>(() => {
+  const mentionableWish = wish<Default<Writable<SummarizablePiece>[], []>>({
+    query: "#mentionable",
+  });
+  return SummaryIndexPresentation({
+    mentionableRequest: mentionableWish.result,
+  });
 });
 
 export default SummaryIndex;

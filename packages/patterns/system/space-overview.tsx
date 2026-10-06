@@ -1,9 +1,10 @@
+/** Explores a space with a tool-enabled dialog and presents its findings. */
+
 import {
+  type AsyncResult,
   type BuiltInLLMMessage,
   computed,
   handler,
-  hasError,
-  isPending,
   llmDialog,
   NAME,
   pattern,
@@ -24,7 +25,8 @@ import { listMentionable } from "./common-fabric.tsx";
 
 // ===== Types =====
 
-type SpaceOverviewResult = {
+/** Structured findings returned by the space exploration dialog. */
+export type SpaceOverviewResult = {
   headline: string;
   themes: Array<{ name: string; description: string; relatedPieces: string[] }>;
   connections: Array<{ description: string; pieceNames: string[] }>;
@@ -54,73 +56,17 @@ const triggerAnalysis = handler<
   });
 });
 
-// ===== Main Pattern =====
-
-export default pattern<SpaceOverviewInput, SpaceOverviewOutput>(() => {
-  // Fetch space data references for tools
-  const mentionableWish = wish<MentionablePiece[]>({
-    query: "#mentionable",
-  });
-  const mentionable = resultOf(mentionableWish.result);
-  const summaryWish = wish<{ entries: SummaryIndexEntry[] }>({
-    query: "#summaryIndex",
-  });
-  const { entries: summaryEntries } = resultOf(summaryWish.result);
-  const profileWish = wish<string>({ query: "#learnedSummary" });
-  const profileText = resultOf(profileWish.result);
-
-  const systemPrompt = computed(() => {
-    const profile = profileText;
-    const profileSection = profile
-      ? `\n\n--- User Context ---\n${profile}\n---`
-      : "";
-
-    return `You are a space orientation assistant. When activated, you explore the user's knowledge space using your tools and produce a clear, insightful overview of what's going on.
-
-Process:
-1. Use searchSpace to browse the space contents — search for broad terms and specific topics
-2. Use listMentionable to get a full inventory
-3. Synthesize what you find into a structured overview
-
-After exploring, call the finalResult tool with your structured findings:
-- headline: A punchy one-sentence summary of the space
-- themes: 2-4 active themes or topic clusters you identified (each with name, description, and relatedPieces)
-- connections: Notable connections between pieces (each with description and pieceNames)
-- suggestions: 2-3 suggested next actions or things to explore
-
-Conventions:
-- Notes are prefixed with "📝 ", notebooks with "📓 "
-- "Transcript:" notes contain raw voice memo captures
-- "Capture Summary:" notes are reflections on ingestion sessions
-- The "📓 Capture Log" notebook groups transcripts and summaries
-- [[Wiki-links]] in note content indicate intentional connections
-
-Be concise and insightful. Focus on patterns and connections, not just listing things. Reference actual piece names.${profileSection}`;
-  });
-
-  const messages = new Writable<BuiltInLLMMessage[]>([]);
-
-  const llmTools = {
-    searchSpace: patternTool(summarySearchPattern, {
-      entries: summaryEntries,
-    }),
-    listMentionable: patternTool(listMentionable, { mentionable }),
-  };
-
-  const dialogParams = {
-    system: systemPrompt,
-    messages,
-    tools: llmTools,
-    model: "anthropic:claude-haiku-4-5" as const,
-    builtinTools: false,
-  };
-  const dialog = llmDialog<SpaceOverviewResult>(dialogParams);
-  const { addMessage, pending } = dialog;
-  const overview = computed(() =>
-    isPending(dialog.result) || hasError(dialog.result)
-      ? undefined
-      : resultOf(dialog.result)
-  );
+/** Renders the exploration dialog and its current structured result. */
+export const SpaceOverviewPresentation = pattern<
+  {
+    overviewRequest?: AsyncResult<SpaceOverviewResult>;
+    messages: Writable<BuiltInLLMMessage[]>;
+    addMessage: Stream<BuiltInLLMMessage>;
+    pending: boolean;
+  },
+  SpaceOverviewOutput
+>(({ overviewRequest, messages, addMessage, pending }) => {
+  const overview = resultOf(overviewRequest);
 
   const hasResult = computed(() => !!overview);
   const summary = computed(() => overview?.headline ?? "Space Overview");
@@ -259,4 +205,74 @@ Be concise and insightful. Focus on patterns and connections, not just listing t
     ),
     summary,
   };
+});
+
+// ===== Main Pattern =====
+
+export default pattern<SpaceOverviewInput, SpaceOverviewOutput>(() => {
+  // Fetch space data references for tools
+  const mentionableWish = wish<MentionablePiece[]>({
+    query: "#mentionable",
+  });
+  const mentionable = resultOf(mentionableWish.result);
+  const summaryWish = wish<{ entries: SummaryIndexEntry[] }>({
+    query: "#summaryIndex",
+  });
+  const { entries: summaryEntries } = resultOf(summaryWish.result);
+  const profileWish = wish<string>({ query: "#learnedSummary" });
+  const profileText = resultOf(profileWish.result);
+
+  const systemPrompt = computed(() => {
+    const profile = profileText;
+    const profileSection = profile
+      ? `\n\n--- User Context ---\n${profile}\n---`
+      : "";
+
+    return `You are a space orientation assistant. When activated, you explore the user's knowledge space using your tools and produce a clear, insightful overview of what's going on.
+
+Process:
+1. Use searchSpace to browse the space contents — search for broad terms and specific topics
+2. Use listMentionable to get a full inventory
+3. Synthesize what you find into a structured overview
+
+After exploring, call the finalResult tool with your structured findings:
+- headline: A punchy one-sentence summary of the space
+- themes: 2-4 active themes or topic clusters you identified (each with name, description, and relatedPieces)
+- connections: Notable connections between pieces (each with description and pieceNames)
+- suggestions: 2-3 suggested next actions or things to explore
+
+Conventions:
+- Notes are prefixed with "📝 ", notebooks with "📓 "
+- "Transcript:" notes contain raw voice memo captures
+- "Capture Summary:" notes are reflections on ingestion sessions
+- The "📓 Capture Log" notebook groups transcripts and summaries
+- [[Wiki-links]] in note content indicate intentional connections
+
+Be concise and insightful. Focus on patterns and connections, not just listing things. Reference actual piece names.${profileSection}`;
+  });
+
+  const messages = new Writable<BuiltInLLMMessage[]>([]);
+
+  const llmTools = {
+    searchSpace: patternTool(summarySearchPattern, {
+      entries: summaryEntries,
+    }),
+    listMentionable: patternTool(listMentionable, { mentionable }),
+  };
+
+  const dialogParams = {
+    system: systemPrompt,
+    messages,
+    tools: llmTools,
+    model: "anthropic:claude-haiku-4-5" as const,
+    builtinTools: false,
+  };
+  const dialog = llmDialog<SpaceOverviewResult>(dialogParams);
+  const { addMessage, pending } = dialog;
+  return SpaceOverviewPresentation({
+    overviewRequest: dialog.result,
+    messages,
+    addMessage,
+    pending,
+  });
 });
