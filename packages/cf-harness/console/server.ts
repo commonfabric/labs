@@ -728,21 +728,34 @@ export const parseConsoleArgs = (args: readonly string[]) => {
 };
 
 /**
+ * What a console is told of where it runs. `platform` is the platform whose
+ * default sandbox runtime applies where the environment names none, as
+ * `Deno.build.os` writes it, which it is when absent. `sandboxRuntimeNamedBy`
+ * is set for a console that takes no such default, and names whoever started
+ * it and has to name the runtime: a console launched for a Loom instance
+ * serves on the runtime Loom chose for that instance, or not at all.
+ */
+export interface ConsoleHost {
+  platform?: SandboxPlatform;
+  sandboxRuntimeNamedBy?: string;
+}
+
+/**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
  * and never hand back an address for it, which is the one outcome this surface
- * exists to avoid. `host.platform` is the platform whose default sandbox
- * runtime applies where `env` names none, as `Deno.build.os` writes it, which
- * it is when absent.
+ * exists to avoid. `host` says what applies where `env` names no sandbox
+ * runtime.
  *
- * @throws HarnessControlError where `env` names no sandbox runtime on macOS
- * and the native runtime cannot be provided.
+ * @throws HarnessControlError where `env` names no sandbox runtime and
+ * `host` says its caller must name one; and where it names none on macOS and
+ * the native runtime cannot be provided.
  */
 export const resolveConsoleConfig = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   cwd: string,
-  host: { platform?: SandboxPlatform } = {},
+  host: ConsoleHost = {},
 ): Promise<ConsoleConfig> => {
   const parsed = parseConsoleArgs(args);
   // A flag written with an empty value is refused rather than read as unset,
@@ -762,7 +775,9 @@ export const resolveConsoleConfig = async (
   // the runtime is runsc, so a console on Docker hands the engine no setting
   // of the sandbox, and the engine builds the Docker driver.
   const sandbox = await resolveSandboxRuntimeSelection(env, {}, {
-    platform: host.platform ?? Deno.build.os,
+    ...(host.sandboxRuntimeNamedBy !== undefined
+      ? { namedBy: host.sandboxRuntimeNamedBy }
+      : { platform: host.platform ?? Deno.build.os }),
     flags: false,
     cwd,
   });
@@ -2817,16 +2832,15 @@ export const consoleStartupBanner = (
  * and the engine builds both lazily-cached client factories from it. A flag
  * that takes a value but was given none is refused first, so `--port --help`
  * throws; only then, where `args` ask for help, it prints the usage instead
- * and serves nothing. `host.platform` is the platform whose default sandbox
- * runtime applies where `env` names none, as `Deno.build.os` writes it, which
- * it is when absent.
+ * and serves nothing. `host` says what applies where `env` names no sandbox
+ * runtime, as it does for `resolveConsoleConfig()`.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
   env: Record<string, string | undefined> = Deno.env.toObject(),
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
-  host: { platform?: SandboxPlatform } = {},
+  host: ConsoleHost = {},
 ): Promise<void> => {
   // A flag with no value first: the `-h` it leaves behind is not a question.
   refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);

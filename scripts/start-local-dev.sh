@@ -397,10 +397,12 @@ wait_for_http \
 # written to its log, and none of them stops the servers that did come up.
 #
 # The console's sandbox runtime is not this script's to choose. It is the one
-# `CF_HARNESS_SANDBOX_RUNTIME` names in this script's environment, which loom
-# sets for the instances it starts. With none named, a Mac serves on its native
-# runtime and refuses to start where that is not set up, and every other
-# platform serves on Docker.
+# `CF_HARNESS_SANDBOX_RUNTIME` names in this script's environment. With none
+# named, the console of a loom instance (`LOOM_INSTANCE_ID` set, so
+# `--instance` below) does not start, and says that loom must name one: loom
+# chooses each instance's runtime, and a default could be another. Any other
+# console takes its platform's: a Mac serves on its native runtime and refuses
+# to start where that is not set up, and every other platform serves on Docker.
 CONSOLE_STATUS=""
 
 console_unavailable() {

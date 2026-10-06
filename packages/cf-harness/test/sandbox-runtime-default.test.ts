@@ -2321,6 +2321,75 @@ describe("sandbox-runtime-default", () => {
       });
     });
 
+    describe("told that its launcher's caller names the runtime", () => {
+      const LOOM_MUST_NAME =
+        "No sandbox runtime is named, and this entrypoint takes no default: " +
+        "Loom must name `docker` or `runsc`, with " +
+        "`CF_HARNESS_SANDBOX_RUNTIME`.";
+
+      for (
+        const [platform, where] of [
+          ["darwin", "on macOS with a store set up"],
+          ["linux", "on Linux"],
+        ] as const
+      ) {
+        it(`refuses a configuration with no runtime named, ${where}`, async () => {
+          await installStore(defaultStore(home));
+
+          const refusal = await rejection(
+            resolveConsoleConfig(ARGS, { HOME: home }, root, {
+              platform,
+              sandboxRuntimeNamedBy: "Loom",
+            }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            code: "invalid-request",
+            message: LOOM_MUST_NAME,
+          });
+        });
+
+        it(`refuses to serve with no runtime named, ${where}, before it makes anything`, async () => {
+          await installStore(defaultStore(home));
+
+          const refusal = await rejection(
+            startConsoleServer(ARGS, { HOME: home }, root, undefined, {
+              platform,
+              sandboxRuntimeNamedBy: "Loom",
+            }),
+          );
+
+          expect(messageOf(refusal)).toBe(LOOM_MUST_NAME);
+          expect([...Deno.readDirSync(root)].map((entry) => entry.name))
+            .toEqual(["home"]);
+        });
+      }
+
+      it("resolves the runtime the environment names, as a console told nothing does", async () => {
+        await installStore(defaultStore(home));
+
+        for (const runtime of ["docker", "runsc"] as const) {
+          const env = { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: runtime };
+
+          expect(
+            sandboxOf(
+              await resolveConsoleConfig(ARGS, env, root, {
+                platform: "darwin",
+                sandboxRuntimeNamedBy: "Loom",
+              }),
+            ),
+          ).toEqual(
+            sandboxOf(
+              await resolveConsoleConfig(ARGS, env, root, {
+                platform: "darwin",
+              }),
+            ),
+          );
+        }
+      });
+    });
+
     describe("startConsoleServer()", () => {
       it("refuses to serve, naming the variable alone, with no runtime named on macOS and no store", async () => {
         const refusal = await rejection(
@@ -2402,6 +2471,26 @@ describe("sandbox-runtime-default", () => {
       return counted;
     };
 
+    /**
+     * Runs `body`, which launches, and restores whatever the process held
+     * for the keys a launch decides. Returns what `body` resolves to.
+     */
+    const withEnvironmentRestored = async <T>(
+      body: () => Promise<T>,
+    ): Promise<T> => {
+      const before = LAUNCHER_OWNED_VARIABLES.map((name) =>
+        [name, Deno.env.get(name)] as const
+      );
+      try {
+        return await body();
+      } finally {
+        for (const [name, value] of before) {
+          if (value === undefined) Deno.env.delete(name);
+          else Deno.env.set(name, value);
+        }
+      }
+    };
+
     /** The rows of a launch's report that describe its sandbox. */
     const sandboxRows = (
       plan: Awaited<ReturnType<typeof prepareConsoleLaunch>>["plan"],
@@ -2444,6 +2533,166 @@ describe("sandbox-runtime-default", () => {
       // sidecar directory is exported.
       expect(launchIo.dockerReads).toBe(0);
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBeUndefined();
+    });
+
+    describe("for a Loom instance", () => {
+      // Loom chooses a runtime for each instance. A console launched for one
+      // that names none is one Loom did not choose for, so it is refused on
+      // every platform rather than put on whichever default applies.
+      const INSTANCE_ARGS = [
+        "--instance",
+        "loom",
+        "--fabric-api-url",
+        "http://localhost:8000",
+      ];
+
+      /** What a launch for an instance says of a runtime nobody named. */
+      const LOOM_MUST_NAME =
+        "No sandbox runtime is named, and this entrypoint takes no default: " +
+        "Loom must name `docker` or `runsc`, with " +
+        "`CF_HARNESS_SANDBOX_RUNTIME`.";
+
+      /** Launch IO whose instance `loom` records an identity and a space. */
+      const instanceIo = (): ConsoleLaunchIo & { dockerReads: number } => {
+        const base = io();
+        return Object.assign(base, {
+          readTextFile: (path: string) =>
+            Promise.resolve(
+              path.endsWith("pieces.json")
+                ? JSON.stringify({
+                  defaults: {
+                    identity: "/keys/instance.key",
+                    local_space: "loom-dev",
+                  },
+                })
+                : undefined,
+            ),
+          readToolshedStoreDir: () => Promise.resolve("file:///store/memory/"),
+        });
+      };
+
+      for (
+        const [platform, where] of [
+          ["darwin", "on macOS with a store set up"],
+          ["linux", "on Linux"],
+        ] as const
+      ) {
+        it(`refuses to launch with no runtime named, ${where}, saying Loom must name one`, async () => {
+          await installStore(defaultStore(home));
+          const launchIo = instanceIo();
+
+          const refusal = await rejection(
+            prepareConsoleLaunch(
+              INSTANCE_ARGS,
+              { HOME: home },
+              launchIo,
+              { platform },
+            ),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({
+            code: "invalid-request",
+            message: LOOM_MUST_NAME,
+          });
+          expect(launchIo.dockerReads).toBe(0);
+        });
+
+        it(`serves nothing with no runtime named, ${where}`, async () => {
+          await installStore(defaultStore(home));
+          let served = false;
+
+          const refusal = await withEnvironmentRestored(() =>
+            rejection(launchConsole(
+              INSTANCE_ARGS,
+              { HOME: home },
+              () => {
+                served = true;
+                return Promise.resolve();
+              },
+              instanceIo(),
+              { platform },
+            ))
+          );
+
+          expect(messageOf(refusal)).toBe(LOOM_MUST_NAME);
+          expect(served).toBe(false);
+        });
+      }
+
+      it("launches on Docker where the environment names it, on macOS with a store set up", async () => {
+        await installStore(defaultStore(home));
+        const launchIo = instanceIo();
+
+        const { plan } = await prepareConsoleLaunch(
+          INSTANCE_ARGS,
+          { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+          launchIo,
+          { platform: "darwin" },
+        );
+
+        expect(sandboxRows(plan)).toEqual([{
+          name: "sandbox",
+          value: "docker",
+          source: "`CF_HARNESS_SANDBOX_RUNTIME`, inherited",
+        }]);
+        expect(launchIo.dockerReads).toBe(1);
+      });
+
+      it("launches on `runsc` where the environment names it, with the settings named beside it", async () => {
+        const store = defaultStore(home);
+        await installStore(store);
+        const launchIo = instanceIo();
+
+        const { plan } = await prepareConsoleLaunch(
+          INSTANCE_ARGS,
+          {
+            HOME: home,
+            CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+            CF_HARNESS_SANDBOX_ROOTFS: join(store, ROOTFS),
+            CF_HARNESS_RUNSC_BINARY: join(store, SHIM),
+            CF_HARNESS_RUNSC_CFC_POLICY: join(store, POLICY),
+          },
+          launchIo,
+          { platform: "linux" },
+        );
+
+        expect(sandboxRows(plan).map(({ name, value }) => [name, value]))
+          .toEqual([
+            ["sandbox", "runsc"],
+            ["runsc", join(store, SHIM)],
+            ["rootfs", join(store, ROOTFS)],
+            ["cfc policy", join(store, POLICY)],
+          ]);
+        expect(launchIo.dockerReads).toBe(0);
+      });
+
+      it("tells the console it serves that Loom names its runtime, and a console launched for no instance nothing of the kind", async () => {
+        await installStore(defaultStore(home));
+        const hosts: unknown[] = [];
+        const serve = (_args: string[], _health: unknown, host: unknown) => {
+          hosts.push(host);
+          return Promise.resolve();
+        };
+
+        await withEnvironmentRestored(async () => {
+          await launchConsole(
+            INSTANCE_ARGS,
+            { HOME: home, CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+            serve,
+            instanceIo(),
+            { platform: "darwin" },
+          );
+          await launchConsole(ARGS, { HOME: home }, serve, io(), {
+            platform: "darwin",
+          });
+        });
+
+        expect(hosts).toEqual([
+          { platform: "darwin", sandboxRuntimeNamedBy: "Loom" },
+          { platform: "darwin" },
+        ]);
+      });
     });
 
     it("attributes a setting the environment named, and the policy under the home, to their own sources", async () => {
@@ -2563,23 +2812,6 @@ describe("sandbox-runtime-default", () => {
     });
 
     describe("launchConsole()", () => {
-      /** Restores whatever the process held for the keys a launch decides. */
-      const withEnvironmentRestored = async (
-        body: () => Promise<void>,
-      ): Promise<void> => {
-        const before = LAUNCHER_OWNED_VARIABLES.map((name) =>
-          [name, Deno.env.get(name)] as const
-        );
-        try {
-          await body();
-        } finally {
-          for (const [name, value] of before) {
-            if (value === undefined) Deno.env.delete(name);
-            else Deno.env.set(name, value);
-          }
-        }
-      };
-
       it("refuses to launch, and serves nothing, with no runtime named on macOS and no store", async () => {
         let served = false;
 

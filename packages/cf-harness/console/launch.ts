@@ -25,7 +25,9 @@
  * reads the same variables the same way. A console on the direct runsc driver
  * reads no Docker runtime table and needs no sidecar directory; the launch
  * prints the `runsc` binary, rootfs and CFC policy the environment named in
- * their place.
+ * their place. Where the environment names no driver, a launch by hand takes
+ * its platform's default, and a launch with `--instance` is refused: loom
+ * chooses the driver of each instance, and names it for the console it starts.
  *
  * A loom instance is one source among several rather than the shape of this
  * module: `--instance` reads the identity, space and toolshed URL off that
@@ -87,6 +89,7 @@ import {
   CONSOLE_FLAGS,
   CONSOLE_STRING_FLAGS,
   consoleHelpText,
+  type ConsoleHost,
   parseConsoleArgs,
   refuseBatchSandboxFlags,
   runscWithoutPolicyRefusesTurns,
@@ -984,21 +987,37 @@ export const consoleLaunchHelpText = (
 };
 
 /**
+ * Who names the sandbox runtime of a console launched with `--instance`. Loom
+ * chooses a runtime for each of its instances and starts their consoles, so a
+ * console launched for an instance in an environment that names none is one
+ * Loom did not choose for. It is refused on every platform, instead of being
+ * put on a default that need not be the runtime the instance's runs are on.
+ */
+const INSTANCE_RUNTIME_NAMED_BY = "Loom";
+
+/**
  * Reads what the fabric records and resolves the console's environment from
  * it, stopping short of serving: the plan, and the arguments after `--` that
  * belong to the console rather than to this launcher. `host.platform` is the
  * platform whose default sandbox runtime applies where `env` names none, as
- * `Deno.build.os` writes it, which it is when absent.
+ * `Deno.build.os` writes it, which it is when absent. A launch with
+ * `--instance` takes no such default, and returns in `sandboxRuntimeNamedBy`
+ * who has to name the runtime, for the console it serves to hold to as well.
  *
- * @throws HarnessControlError where `env` names no sandbox runtime on macOS
- * and the native runtime cannot be provided.
+ * @throws HarnessControlError where `env` names no sandbox runtime and the
+ * launch is for a Loom instance; and where it names none on macOS and the
+ * native runtime cannot be provided.
  */
 export const prepareConsoleLaunch = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   io: ConsoleLaunchIo = REAL_IO,
   host: { platform?: SandboxPlatform } = {},
-): Promise<{ plan: ConsoleLaunchPlan; consoleArgs: string[] }> => {
+): Promise<{
+  plan: ConsoleLaunchPlan;
+  consoleArgs: string[];
+  sandboxRuntimeNamedBy?: string;
+}> => {
   const undeclared: string[] = [];
   const parsed = parseArgs([...args], {
     string: [...LAUNCH_STRING_FLAGS],
@@ -1099,8 +1118,13 @@ export const prepareConsoleLaunch = async (
 
   // Read the way the server reads it, from the same environment, so the
   // launch and the console describe one sandbox.
+  const sandboxRuntimeNamedBy = instance === undefined
+    ? undefined
+    : INSTANCE_RUNTIME_NAMED_BY;
   const selection = await resolveSandboxRuntimeSelection(env, {}, {
-    platform: host.platform ?? Deno.build.os,
+    ...(sandboxRuntimeNamedBy !== undefined
+      ? { namedBy: sandboxRuntimeNamedBy }
+      : { platform: host.platform ?? Deno.build.os }),
     flags: false,
     cwd: Deno.cwd(),
   });
@@ -1206,7 +1230,11 @@ export const prepareConsoleLaunch = async (
     );
   }
 
-  return { plan, consoleArgs };
+  return {
+    plan,
+    consoleArgs,
+    ...(sandboxRuntimeNamedBy !== undefined ? { sandboxRuntimeNamedBy } : {}),
+  };
 };
 
 /**
@@ -1214,7 +1242,9 @@ export const prepareConsoleLaunch = async (
  * and serves under it. Where `args` ask for help it prints the usage instead,
  * and reads and serves nothing. `host.platform` is the platform whose default
  * sandbox runtime applies to the launch and to the console it serves, as
- * `Deno.build.os` writes it, which it is when absent.
+ * `Deno.build.os` writes it, which it is when absent. `serve` is handed what
+ * the console is to be told of where it runs: that platform, and, for a
+ * launch with `--instance`, who has to name the runtime.
  */
 export const launchConsole = async (
   args: readonly string[] = Deno.args,
@@ -1222,8 +1252,9 @@ export const launchConsole = async (
   serve: (
     consoleArgs: string[],
     health: ConsoleObservedLaunchHealth,
-  ) => Promise<void> = (consoleArgs, health) =>
-    startConsoleServer(consoleArgs, undefined, undefined, health, host),
+    consoleHost: ConsoleHost,
+  ) => Promise<void> = (consoleArgs, health, consoleHost) =>
+    startConsoleServer(consoleArgs, undefined, undefined, health, consoleHost),
   io: ConsoleLaunchIo = REAL_IO,
   host: { platform?: SandboxPlatform } = {},
 ): Promise<void> => {
@@ -1239,12 +1270,8 @@ export const launchConsole = async (
     console.log(help);
     return;
   }
-  const { plan, consoleArgs } = await prepareConsoleLaunch(
-    args,
-    env,
-    io,
-    host,
-  );
+  const { plan, consoleArgs, sandboxRuntimeNamedBy } =
+    await prepareConsoleLaunch(args, env, io, host);
   const health = { ...plan.health, checkedAt: new Date().toISOString() };
 
   console.log("");
@@ -1260,7 +1287,10 @@ export const launchConsole = async (
   }
   // These are the decisions that produced the running console's grants. A
   // status request reports this observation even if the files later change.
-  await serve(consoleArgs, health);
+  await serve(consoleArgs, health, {
+    ...host,
+    ...(sandboxRuntimeNamedBy !== undefined ? { sandboxRuntimeNamedBy } : {}),
+  });
 };
 
 /**

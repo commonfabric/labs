@@ -6,10 +6,10 @@
  * the native runtime from that machine's own cfc-vm store, or a refusal where
  * it has none. Each export here is the entrypoint of the same name with the
  * platform set to `linux` unless the case names another, so a case reads the
- * same wherever it runs. The Loom local host takes no platform default, so
- * its export names Docker instead, unless the case's environment names a
- * runtime. A case about the default, or about a host given no runtime, calls
- * the source module.
+ * same wherever it runs. The Loom local host takes no platform default, and
+ * neither does a console launched for a Loom instance, so their exports name
+ * Docker instead, unless the case's environment names a runtime. A case about
+ * the default, or about a host given no runtime, calls the source module.
  */
 
 import {
@@ -95,19 +95,47 @@ export const startConsoleServer: typeof startConsoleServerOnHost = (
 ) =>
   startConsoleServerOnHost(args, env, cwd, launchHealth, { ...LINUX, ...host });
 
-/** Like `prepareConsoleLaunch()` of `console/launch.ts`, except on Linux. */
+/**
+ * Returns `env` for a launch with `args`: naming Docker ahead of whatever it
+ * names where the launch is for a Loom instance, as a Loom that runs on
+ * Docker launches one, and as it is otherwise.
+ */
+const launchEnvironment = (
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> =>
+  args.some((arg) => arg === "--instance" || arg.startsWith("--instance="))
+    ? { ...NAMES_DOCKER, ...env }
+    : env;
+
+/**
+ * Like `prepareConsoleLaunch()` of `console/launch.ts`, except on Linux, and
+ * with Docker named for a launch for a Loom instance.
+ */
 export const prepareConsoleLaunch: typeof prepareConsoleLaunchOnHost = (
   args,
   env,
   io,
   host,
-) => prepareConsoleLaunchOnHost(args, env, io, { ...LINUX, ...host });
+) =>
+  prepareConsoleLaunchOnHost(args, launchEnvironment(args, env), io, {
+    ...LINUX,
+    ...host,
+  });
 
-/** Like `launchConsole()` of `console/launch.ts`, except on Linux. */
+/**
+ * Like `launchConsole()` of `console/launch.ts`, except on Linux, and with
+ * Docker named for a launch for a Loom instance. The environment is the
+ * process's own where the case gives none.
+ */
 export const launchConsole: typeof launchConsoleOnHost = (
-  args,
-  env,
+  args = Deno.args,
+  env = Deno.env.toObject(),
   serve,
   io,
   host,
-) => launchConsoleOnHost(args, env, serve, io, { ...LINUX, ...host });
+) =>
+  launchConsoleOnHost(args, launchEnvironment(args, env), serve, io, {
+    ...LINUX,
+    ...host,
+  });
