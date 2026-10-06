@@ -47,6 +47,7 @@ import type { ProcessRunner } from "../src/sandbox/process-runner.ts";
 import { resolveRunscSandboxConfig } from "../src/sandbox/runsc.ts";
 import {
   describeSandboxRuntimeChoice,
+  processSandboxSelectionEnv,
   resolveSandboxRuntimeSelection,
   type SandboxPlatform,
   type SandboxRuntimeChoice,
@@ -1395,6 +1396,44 @@ describe("sandbox-runtime-default", () => {
     ...(options?.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: options.sandboxRuntimeChoice }
       : {}),
+  });
+
+  describe("processSandboxSelectionEnv()", () => {
+    it("returns the home and every setting of either sandbox driver as the process's environment has them", () => {
+      // Each variable the batch CLI takes for its sandbox from the process
+      // it runs in. A name missing here is a setting the CLI stops reading.
+      const names = [
+        "HOME",
+        "CFC_VM_HOME",
+        "CF_HARNESS_SANDBOX_RUNTIME",
+        "CF_HARNESS_SANDBOX_ROOTFS",
+        "CF_HARNESS_RUNSC_CFC_POLICY",
+        "CF_HARNESS_RUNSC_BINARY",
+        "CF_HARNESS_DOCKER_NETWORK_MODE",
+        "CF_HARNESS_SANDBOX_IMAGE",
+        "CF_HARNESS_SANDBOX_DOCKER_RUNTIME",
+        "CF_HARNESS_RUNSC_CFC_RESULT_DIR",
+        "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR",
+      ];
+      const before = names.map((name) => [name, Deno.env.get(name)] as const);
+      const put = (name: string, value: string | undefined) =>
+        value === undefined ? Deno.env.delete(name) : Deno.env.set(name, value);
+      let read: Record<string, string | undefined>;
+      // Nothing is awaited between the two loops, so nothing else in the
+      // process sees these values.
+      for (const name of names) put(name, `the process's ${name}`);
+      try {
+        read = processSandboxSelectionEnv();
+      } finally {
+        for (const [name, value] of before) put(name, value);
+      }
+
+      expect(read).toEqual(
+        Object.fromEntries(
+          names.map((name) => [name, `the process's ${name}`]),
+        ),
+      );
+    });
   });
 
   describe("the batch CLI", () => {
