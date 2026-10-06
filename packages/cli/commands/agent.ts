@@ -478,6 +478,15 @@ export async function agentRunnerAction(
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
 ): Promise<void> {
   const localConfig = resolveLocalJobsConfig(options, deps);
+  // Every job of either lane goes to the harness's sandbox. A runtime
+  // selection the harness would refuse each of them for refuses the runner
+  // here, with the harness's own message, before either lane connects to
+  // anything, listens or registers.
+  await deps.selectSandboxRuntime().catch((error: unknown) => {
+    throw error instanceof HarnessControlError
+      ? new ValidationError(error.message, { exitCode: 1 })
+      : error;
+  });
   if (localConfig === undefined) return await runFabricLane(options, deps);
   const local = await (deps.startLocal ?? startLocalJobs)(
     localConfig,
@@ -522,14 +531,6 @@ async function runFabricLane(
   deps: AgentRunnerCommandDeps,
 ): Promise<void> {
   const config = await resolveAgentRunnerConfig(options, deps);
-  // Every run goes to the harness's sandbox. A runtime selection the harness
-  // would refuse each of them for refuses the runner here, with the harness's
-  // own message, before it connects to anything or registers.
-  await deps.selectSandboxRuntime().catch((error: unknown) => {
-    throw error instanceof HarnessControlError
-      ? new ValidationError(error.message, { exitCode: 1 })
-      : error;
-  });
   const running = await deps.start(config, deps.report);
   deps.report(
     `agent runner: following ${config.home} on ${config.homeHost}, offering ${

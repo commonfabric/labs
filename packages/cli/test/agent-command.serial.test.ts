@@ -119,8 +119,8 @@ describe("cf agent runner", () => {
       model: "scripted",
     }]);
     expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
-      "identity:/keys/me.key",
       "sandbox",
+      "identity:/keys/me.key",
       "start",
       "wait",
       "stop",
