@@ -5,7 +5,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
-import { nothing } from "lit";
 
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
@@ -89,14 +88,16 @@ describe("CFPicker", () => {
     expect(element.minHeight).toBe("300px");
   });
 
-  it("shows nothing while no items are bound, and its empty state for an empty list", () => {
+  it("shows only its children while no items are bound, and its empty state for an empty list", () => {
     // A view's render policy withholds an `items` binding the viewer may not
-    // see, and then no items arrive.
+    // see, and then no items arrive. The view puts the access placeholder in
+    // the picker's children while the list's space is out of reach.
     const element = new CFPicker();
-    expect(element.render()).toBe(nothing);
+    expect(templateText(element.render())).toBe("<slot></slot>");
     element.items = [];
     element.willUpdate(new Map([["items", undefined]]));
     expect(templateText(element.render())).toContain("No items");
+    expect(templateText(element.render())).not.toContain("<slot>");
   });
 
   it("reads its items as its component read contract says it does", () => {

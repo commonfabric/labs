@@ -1243,6 +1243,17 @@ export type MemoryProtocolFlags = {
    * false, and a client then signs each `session.open`.
    */
   connectionAuth?: boolean;
+
+  /**
+   * The peer takes part in `session/admissible` (04-protocol.md §4.2.2). A
+   * client advertising it may be sent the notice; a server advertising it
+   * sends one to such a client, on any connection but a routed one.
+   * Build-inherent, so a peer of this version always advertises it. Absent
+   * (an older peer) parses to false, and the server then sends that
+   * connection none.
+   */
+  admissionNotice?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 };
@@ -1275,6 +1286,7 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
+  admissionNotice?: boolean;
   routedAuthV1?: boolean;
 };
 
@@ -2088,6 +2100,17 @@ export type SessionRevokedMessage = {
   reason: "taken-over" | "unauthorized";
 };
 
+/**
+ * Tells a connection that `principal`, refused `space` on it, now holds `READ`
+ * there, so that a `session.open` would be admitted. A hint only: the
+ * recipient opens the session through ordinary admission.
+ */
+export type SessionAdmissibleMessage = {
+  type: "session/admissible";
+  space: string;
+  principal: string;
+};
+
 export type V2Error = {
   name: string;
   message: string;
@@ -2150,6 +2173,7 @@ export type ServerMessage =
   | ResponseMessage<FabricValue>
   | SessionEffectMessage
   | SessionRevokedMessage
+  | SessionAdmissibleMessage
   | PresenceUpsertMessage
   | PresenceRemoveMessage;
 
@@ -2371,6 +2395,11 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
+  // Build-inherent: this build's server tells a connection it refused a
+  // space once a grant admits the refused principal, and its client acts on
+  // the notice. A routed connection records no refusal, so it is told
+  // nothing whatever both peers advertise.
+  admissionNotice: true,
   routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
@@ -2554,6 +2583,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const admissionNotice = value.admissionNotice;
+  if (admissionNotice !== undefined && typeof admissionNotice !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2596,6 +2630,9 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client no `session/admissible`.
+    admissionNotice: admissionNotice === true,
     routedAuthV1: value.routedAuthV1 === true,
   };
 };
@@ -2629,6 +2666,7 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
+  admissionNotice: flags.admissionNotice,
   routedAuthV1: flags.routedAuthV1,
 });
 
