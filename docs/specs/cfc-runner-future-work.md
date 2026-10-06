@@ -33,6 +33,33 @@ over-restricts); the edges that are soundness holes are called out below.
 
 The epic bodies below were written on 2026-07-01, before Epics A to E and H shipped, and several of their claims about the runner (that it has no exchange-rule machinery, that `cfcFlowLabels` defaults to `off`, that `cfcTriggerReadGating` is `false`) are no longer true. Where a body and the conformance statement disagree, the statement is current; re-deriving the bodies against it is a stage 2 follow-up of the correspondence plan.
 
+## Conformance statement follow-ups
+
+Each item the conformance statement marks "not established" is a question a
+test or a code reading settles, listed here so it has a tracker. The section
+numbers are the statement's.
+
+1. §1: whether every write to a labeled document by a path other than `Cell`
+   and `data-updating.ts` is marked relevant under `cfcFlowLabels: off`.
+2. §2: whether a module load lands a source read in a handler's journal; the
+   write-set residual by observer level; whether pattern code can read the
+   SQLite `requestHash` untyped; a test that verifier reads stay freshness
+   dependencies.
+3. §3: whether a declared covering `ifc` entry at a reference slot reaches the
+   dereferencing transaction's flow join; whether non-`followRef`
+   derived-selection entries exist at slots; the remaining §18.7 rows at every
+   boundary.
+4. §4: whether the release-gate composition under a witnessed guard
+   under-taints.
+5. §5: whether write floor, policy evaluation and label-metadata protection
+   each passed through `observe` in deployment; a check refusing
+   `enforce-strict` with flow labels below `persist`.
+6. §6: a test that a skipped envelope produces no version advance and no
+   replication.
+7. §7: whether every non-scheduler entry point carries its gating reads.
+8. §8: whether an explicit `undefined` write at a recorded deleted path counts
+   as a re-creation, and so whether the un-minted join under-taints.
+
 ---
 
 # Tier 1 — Big chunks (close these first)

@@ -26,6 +26,20 @@ changing any of it is
 [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md);
 this document changes in the same pull request as the behavior it describes.
 
+## Maintaining this statement
+
+This is a live document pinned to the specs commit
+`packages/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
+and changed in the same pull request, whenever an adapter symbol it cites is
+renamed, moved or changes what it decides; whenever a dial default in
+`RUNTIME_CFC_DIAL_DEFAULTS` or a preset's pin moves; whenever a §18.6.4 bullet
+changes in the specification; and whenever the snapshot is regenerated, at
+which point every section is checked against the specification at the new
+commit and the pin above is updated. Each item marked "not established" below
+is a follow-up tracked under "Conformance statement follow-ups" in
+[`cfc-runner-future-work.md`](cfc-runner-future-work.md); establishing one
+replaces the sentence here with what was found, in which direction.
+
 ## 1. The relevance mechanism (§18.6.1)
 
 The specification lets a transaction skip boundary evaluation only when no
