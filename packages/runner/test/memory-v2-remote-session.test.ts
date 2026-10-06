@@ -996,26 +996,45 @@ describe("WebSocketTransport failure signaling", () => {
     }, () => write.promise);
   });
 
-  it("propagates an asynchronous write failure without poisoning the send queue", async () => {
+  it("reports a failed write as a lost connection and sends later frames on a new socket", async () => {
     const write = Promise.withResolvers<void>();
     await withTransport(async (transport, socket) => {
+      let closeError: Error | undefined;
+      transport.setCloseReceiver((error) => {
+        closeError = error;
+      });
       const writeFailure = new Error("TLS write failed");
       const first = transport.send("first").then(
         () => undefined,
         (error: unknown) => error,
       );
-      const second = transport.send("second");
-      const activeSocket = socket();
-      activeSocket.openConnection();
-      await activeSocket.whenSent(1);
+      const second = transport.send("second").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const failed = socket();
+      failed.openConnection();
+      await failed.whenSent(1);
       write.reject(writeFailure);
+
       const failure = await first;
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).name).toBe("ConnectionError");
       expect((failure as Error).message).toBe("TLS write failed");
       expect((failure as Error).cause).toBe(writeFailure);
-      await second;
-      expect(activeSocket.sent).toEqual(["first", "second"]);
+      // The transport reports the loss itself; the socket has reported nothing.
+      expect(closeError).toBe(failure);
+      // A frame queued behind the failed write is lost with the connection.
+      expect(((await second) as Error).name).toBe("ConnectionError");
+      expect(failed.sent).toEqual(["first"]);
+
+      // The send queue is not poisoned: the next send opens a new socket.
+      const third = transport.send("third");
+      const replacement = socket();
+      expect(replacement).not.toBe(failed);
+      replacement.openConnection();
+      await third;
+      expect(replacement.sent).toEqual(["third"]);
       await transport.close();
     }, (frame) => frame === "first" ? write.promise : Promise.resolve());
   });
@@ -1893,6 +1912,125 @@ describe("WebSocketTransport failure signaling", () => {
         "fulfilled",
       ]);
       expect(DrivableWebSocket.instances.at(-1)).not.toBe(closing);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+  it("resolves a commit whose write fails on a socket that reports nothing, ahead of the commit after it", async () => {
+    // The first commit's write fails, but the socket neither closes nor errors
+    // and goes on carrying frames. The transport reported the write as a lost
+    // connection, so it must also start the reconnect that replays the commit,
+    // and must not deliver the second commit on the old socket ahead of it.
+
+    DrivableWebSocket.instances.length = 0;
+    const server = newSharedServer();
+    let failNextTransact = false;
+    const transport = new TextOnlyTransport(
+      new URL("wss://memory.test/api/storage/memory"),
+      true,
+      () => {},
+      serverWiredSockets(server, (frame) => {
+        if (!failNextTransact || frameType(frame) !== "transact") return;
+        failNextTransact = false;
+        return Promise.reject(new Error("write failed"));
+      }),
+    );
+    const client = await MemoryClient.connect({ transport });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-silent-write-failure",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const silent = DrivableWebSocket.instances.at(-1)!;
+      failNextTransact = true;
+      const settled = { first: false, second: false };
+      const first = session.transact(commitAt(1, "of:first"));
+      const second = session.transact(commitAt(2, "of:second"));
+      first.then(() => settled.first = true, () => settled.first = true);
+      second.then(() => settled.second = true, () => settled.second = true);
+
+      await clock.settle();
+      await clock.tick(120_000);
+      await clock.settle();
+
+      expect(settled).toEqual({ first: true, second: true });
+      expect((await first).seq).toBe(1);
+      expect((await second).seq).toBe(2);
+      expect(DrivableWebSocket.instances.at(-1)).not.toBe(silent);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("resolves a commit the server applied before its write reported failure, without applying it twice", async () => {
+    // The frame reaches the server, which applies the commit, but the closing
+    // socket drops the response and reports the write as failed. The replay on
+    // the next connection is a duplicate the server answers from its record.
+
+    DrivableWebSocket.instances.length = 0;
+    const server = newSharedServer();
+    let duplicateNextTransact = false;
+    const localSeqsSeenByServer: number[] = [];
+    const transport = new TextOnlyTransport(
+      new URL("wss://memory.test/api/storage/memory"),
+      true,
+      () => {},
+      (address) => {
+        const socket = new DrivableWebSocket(address);
+        const peer = server.connect((message) => {
+          if (socket.readyState === DrivableWebSocket.OPEN) {
+            socket.receive(encodeMemoryBoundary(message));
+          }
+        });
+        socket.addEventListener("close", () => peer.close());
+        queueMicrotask(() => socket.openConnection());
+        return {
+          socket: socket as unknown as MemorySocket,
+          send: async (frame) => {
+            socket.send(frame);
+            const text = requireTextFrame(frame);
+            if (frameType(frame) !== "transact") {
+              void peer.receive(text);
+              return;
+            }
+            localSeqsSeenByServer.push(
+              (decodeMemoryBoundary(text) as { commit: { localSeq: number } })
+                .commit.localSeq,
+            );
+            if (!duplicateNextTransact) {
+              void peer.receive(text);
+              return;
+            }
+            duplicateNextTransact = false;
+            socket.readyState = DrivableWebSocket.CLOSING;
+            await peer.receive(text);
+            throw new Error("WebSocket is not open: readyState 2 (CLOSING)");
+          },
+        };
+      },
+    );
+    const client = await MemoryClient.connect({ transport });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-duplicate-commit",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const closing = DrivableWebSocket.instances.at(-1)!;
+      duplicateNextTransact = true;
+      const first = session.transact(commitAt(1, "of:duplicate"));
+      first.catch(() => {});
+      await clock.settle();
+      closing.close();
+      await client.restoreConnection();
+
+      expect(await first).toMatchObject({ seq: 1, replayed: true });
+      // Applied twice, the first commit would have taken seq 2 as well.
+      expect((await session.transact(commitAt(2, "of:after"))).seq).toBe(2);
+      expect(localSeqsSeenByServer).toEqual([1, 1, 2]);
     } finally {
       await client.close();
       await server.close();

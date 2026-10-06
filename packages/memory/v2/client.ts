@@ -108,8 +108,9 @@ export type Transport = {
    * Hands `payload` to the connection, opening one first when there is none.
    *
    * Rejects with an error named `ConnectionError` (see `connectionError()`)
-   * when the payload never reached the connection because the connection was
-   * lost or could not be opened. The client keeps a commit rejected that way
+   * when the connection was lost or could not be opened before the write was
+   * confirmed. The payload may still have reached the peer, so the request
+   * has no verdict either way. The client keeps a commit rejected that way
    * for replay on the next connection, so the transport must report the same
    * loss to its close receiver, which starts the reconnect that replays it;
    * `reset()` and `close()` are the exceptions, as the client calls them

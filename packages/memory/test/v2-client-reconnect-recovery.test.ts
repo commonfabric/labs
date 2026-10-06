@@ -3,7 +3,12 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
-import { connect, connectionError, type Transport } from "../v2/client.ts";
+import {
+  connect,
+  connectionError,
+  loopback,
+  type Transport,
+} from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
   testSessionOpenAuthFactory,
@@ -396,6 +401,57 @@ describe("v2-client-reconnect-recovery", () => {
     } finally {
       await client.close();
       await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+  it("returns the stored verdict for an exact replay without overwriting a later write, and refuses an altered one", async () => {
+    // A retained commit can reach the server twice: its write can fail after
+    // its bytes have left, or its response can be lost after the server
+    // applied it. Replaying it is safe only because the server answers a
+    // repeated commit from its record.
+
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://replay-cannot-overwrite"),
+    });
+    const first = await connect({ transport: loopback(server) });
+    const second = await connect({ transport: loopback(server) });
+    const space = "did:key:z6Mk-replay-cannot-overwrite";
+    const setX = (localSeq: number, value: string) => ({
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set" as const, id: "of:x", value: { value } }],
+    });
+    try {
+      const writer = await first.mount(space, {}, testSessionOpenAuthFactory);
+      const other = await second.mount(space, {}, testSessionOpenAuthFactory);
+      expect((await writer.transact(setX(1, "A"))).seq).toBe(1);
+
+      // The same session and `localSeq` with different content is refused.
+      await expect(writer.transact(setX(1, "ALTERED"))).rejects.toThrow(
+        "commit replay mismatch",
+      );
+
+      // Another session overwrites the document with a commit of its own.
+      expect((await other.transact(setX(1, "B"))).seq).toBe(2);
+
+      // The exact original again gets its stored verdict and writes nothing.
+      expect(await writer.transact(setX(1, "A"))).toMatchObject({
+        seq: 1,
+        replayed: true,
+      });
+      const view = await other.watchSet([{
+        id: "x",
+        kind: "graph",
+        query: {
+          roots: [{ id: "of:x", selector: { path: [], schema: false } }],
+        },
+      }]);
+      expect(view.entities.find((entity) => entity.id === "of:x"))
+        .toMatchObject({ seq: 2, document: { value: "B" } });
+    } finally {
+      await first.close();
+      await second.close();
       await server.close();
     }
   });

@@ -532,10 +532,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
 
   /**
    * Helper for `send()` and `#sendCompressionControl()`, which writes `frame`
-   * to `connection`. The socket backends in `memory-socket.ts` refuse a write
-   * on an open socket only once it is failing or closing, and its own error or
-   * close event then reports the loss to the close receiver, so a failed write
-   * rejects with a `ConnectionError` carrying the socket's error as its cause.
+   * to `connection`. A failed write rejects with a `ConnectionError` carrying
+   * the socket's error as its cause. The transport then abandons the socket and
+   * reports the loss to the close receiver itself, without waiting for the
+   * socket's own close or error event, so the reconnect that replays the
+   * payload always starts.
    */
   async #write(
     connection: MemorySocketConnection,
@@ -544,12 +545,24 @@ export class WebSocketTransport implements MemoryClient.Transport {
     try {
       await connection.send(frame);
     } catch (cause) {
-      throw MemoryClient.connectionError(
+      const error = MemoryClient.connectionError(
         cause instanceof Error
           ? cause.message
           : "Memory websocket write failed",
         cause,
       );
+      const { socket } = connection;
+      if (this.#socket === socket) {
+        this.#detachSocket(error);
+        this.#closeReceiver(error);
+        if (
+          socket.readyState === WebSocket.CONNECTING ||
+          socket.readyState === WebSocket.OPEN
+        ) {
+          socket.close();
+        }
+      }
+      throw error;
     }
   }
 
