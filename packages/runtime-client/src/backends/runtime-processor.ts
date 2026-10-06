@@ -2165,12 +2165,11 @@ export class RuntimeProcessor {
     const handled = wait === "handling"
       ? Promise.withResolvers<IExtendedStorageTransaction>()
       : undefined;
-    try {
-      deliver((event) => sendEvent(cell, event, handled?.resolve));
-    } catch (error) {
-      tx.abort(error);
-      throw error;
-    }
+    deliver(
+      handled === undefined
+        ? (event) => cell.send(event)
+        : (event) => sendEvent(cell, event, handled.resolve),
+    );
     this.#runtime.prepareTxForCommit(tx);
     const commit = tx.commit().settled;
     if (handled !== undefined) {
