@@ -1223,8 +1223,10 @@ vocabulary and live run ids from the home queue.
 
 `cf agent` groups the commands over agent requests, and prints its help when
 given no subcommand. `cf agent runner` is the per-user process that runs agent
-requests. A pattern's `agent()` call becomes an `AgentRun` record in the
-requesting space, listed in the requester's home-space agent queue
+requests through independent local and Fabric lanes. The local lane serves a
+host-owned Unix socket; `--local-only` needs neither an identity nor a toolshed
+connection. On the Fabric lane, a pattern's `agent()` call becomes an `AgentRun`
+record in the requesting space, listed in the requester's home-space agent queue
 (`wish '#agent_queue'`,
 [`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md#agent-queue)). The
 runner holds the requester's identity, sits on the machine where their Loom
@@ -1255,11 +1257,11 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
 The model provider is the one `cf-harness` is configured with under its harness
-home directory. The runner uses the `context` prompt role, so the default
+home directory. The Fabric lane uses the `context` prompt role, so the default
 `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
-What the runner does, in order:
+What the Fabric lane does, in order:
 
 1. Connects to the home toolshed as the identity, creates the home pattern if
    the home space has none, and writes the queue's `agentRunner` entry
@@ -1310,6 +1312,13 @@ local jobs: work a local caller hands it directly, which never enters the
 fabric. It serves them first and on its own, so they run whether or not the
 Fabric lane starts; a Fabric lane that fails to start is reported and leaves the
 local jobs served. With `--local-only` there is no Fabric lane.
+
+The service exclusively locks both its socket and store for its lifetime. An
+active listener is refused; a socket whose listener is gone is reclaimed.
+Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
+the kernel releases ownership on shutdown or crash. Startup failure cancels and
+settles jobs, closes the store and listener, and removes its token. Requests
+receive 503 until initialization completes.
 
 The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the

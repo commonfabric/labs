@@ -5,6 +5,7 @@
  * and whatever becomes of, its Fabric lane.
  */
 
+import { encodeHex } from "@std/encoding/hex";
 import { dirname, join } from "@std/path";
 
 import type { HarnessJobOptions } from "../harness-job.ts";
@@ -51,10 +52,31 @@ export interface LocalJobsService {
 
 /** Helper for the token, which mints 32 random bytes as hex. */
 const newToken = (): string =>
-  Array.from(
-    crypto.getRandomValues(new Uint8Array(32)),
-    (byte) => byte.toString(16).padStart(2, "0"),
-  ).join("");
+  encodeHex(crypto.getRandomValues(new Uint8Array(32)));
+
+/** Reclaims only a Unix socket whose listener is gone. */
+const reclaimSocket = async (path: string): Promise<void> => {
+  try {
+    if (!(await Deno.lstat(path)).isSocket) {
+      throw new Error(`The local jobs socket path is occupied: ${path}`);
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return;
+    throw error;
+  }
+  try {
+    const connection = await Deno.connect({ transport: "unix", path });
+    connection.close();
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return;
+    if (error instanceof Deno.errors.ConnectionRefused) {
+      await Deno.remove(path);
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`A listener already owns the local jobs socket: ${path}`);
+};
 
 /**
  * Starts serving local jobs as `config` says.
@@ -68,83 +90,138 @@ export const startLocalJobs = async (
   deps: {
     runJob?: LocalJobLaneOptions["runJob"];
     harnessDeps?: HarnessJobOptions["harnessDeps"];
+    chmod?: typeof Deno.chmod;
   } = {},
 ): Promise<LocalJobsService> => {
   const profiles = await readLocalJobProfiles(config.profilesPath);
   const storePath = config.storePath ??
     join(dirname(config.socketPath), "jobs.sqlite");
-  // The store holds what callers asked and what jobs answered, so it is as
-  // private as the socket. SQLite gives its journal files the database
-  // file's mode, so creating that file 0600 first covers all three.
-  await Deno.writeFile(storePath, new Uint8Array(), {
-    append: true,
-    mode: 0o600,
-  });
-  await Deno.chmod(storePath, 0o600);
-  const store = LocalJobStore.open(storePath);
-  const lane = new LocalJobLane({
-    store,
-    profiles,
-    maxConcurrent: config.maxConcurrent,
-    workRoot: config.workRoot,
-    ...(config.loomRetrievalConfigPath !== undefined
-      ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
-      : {}),
-    ...(config.model !== undefined ? { model: config.model } : {}),
-    ...(deps.runJob !== undefined ? { runJob: deps.runJob } : {}),
-    ...(deps.harnessDeps !== undefined
-      ? { harnessDeps: deps.harnessDeps }
-      : {}),
-    report,
-  });
-  let fabricLane = false;
-  const stopping = new AbortController();
-  const token = newToken();
+  const guards: Deno.FsFile[] = [];
   const tokenPath = `${config.socketPath}.token`;
-  // A socket file a stopped runner left behind is replaced; a listener can
-  // only be created where no file is.
-  await Deno.remove(config.socketPath).catch((error) => {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  });
-  await Deno.writeTextFile(tokenPath, token, { mode: 0o600 });
-  await Deno.chmod(tokenPath, 0o600);
-  const server = Deno.serve(
-    {
-      path: config.socketPath,
-      transport: "unix",
-      onListen: () => {},
-    },
-    createLocalJobApi({
+  const stopping = new AbortController();
+  let store: LocalJobStore | undefined;
+  let lane: LocalJobLane | undefined;
+  let server: Deno.HttpServer<Deno.UnixAddr> | undefined;
+  let tokenOwned = false;
+  let socketOwned = false;
+  let ready = false;
+  let fabricLane = false;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> =>
+    cleanupPromise ??= (async () => {
+      ready = false;
+      stopping.abort();
+      const errors: unknown[] = [];
+      const attempt = async (action: () => unknown) => {
+        try {
+          await action();
+        } catch (error) {
+          errors.push(error);
+        }
+      };
+      await attempt(() => server?.shutdown());
+      await attempt(() => lane?.stop());
+      await attempt(() => store?.close());
+      for (
+        const path of [
+          ...(socketOwned ? [config.socketPath] : []),
+          ...(tokenOwned ? [tokenPath] : []),
+        ]
+      ) {
+        await attempt(async () => {
+          try {
+            await Deno.remove(path);
+          } catch (error) {
+            if (!(error instanceof Deno.errors.NotFound)) throw error;
+          }
+        });
+      }
+      for (const guard of guards) await attempt(() => guard.close());
+      if (errors.length) {
+        throw new AggregateError(
+          errors,
+          "Local jobs cleanup failed",
+        );
+      }
+    })();
+  try {
+    // Persistent guard files keep one inode for every contender. Kernel
+    // locks release on close or crash; unlinking them would split ownership.
+    for (const path of [...new Set([config.socketPath, storePath])].sort()) {
+      const guard = await Deno.open(`${path}.lock`, {
+        read: true,
+        write: true,
+        create: true,
+        mode: 0o600,
+      });
+      guards.push(guard);
+      if (!await guard.tryLock(true)) {
+        throw new Error(`Local jobs resource is already owned: ${path}`);
+      }
+    }
+    await reclaimSocket(config.socketPath);
+    // SQLite gives its journals the database file's mode.
+    await Deno.writeFile(storePath, new Uint8Array(), {
+      append: true,
+      mode: 0o600,
+    });
+    await Deno.chmod(storePath, 0o600);
+    store = LocalJobStore.open(storePath);
+    lane = new LocalJobLane({
+      store,
+      profiles,
+      maxConcurrent: config.maxConcurrent,
+      workRoot: config.workRoot,
+      ...(config.loomRetrievalConfigPath !== undefined
+        ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
+        : {}),
+      ...(config.model !== undefined ? { model: config.model } : {}),
+      ...(deps.runJob !== undefined ? { runJob: deps.runJob } : {}),
+      ...(deps.harnessDeps !== undefined
+        ? { harnessDeps: deps.harnessDeps }
+        : {}),
+      report,
+    });
+    const token = newToken();
+    tokenOwned = true;
+    await Deno.writeTextFile(tokenPath, token, { mode: 0o600 });
+    await Deno.chmod(tokenPath, 0o600);
+    const api = createLocalJobApi({
       store,
       profiles,
       token,
-      kick: () => lane.kick(),
-      cancel: (id) => lane.cancel(id),
+      kick: () => lane!.kick(),
+      cancel: (id) => lane!.cancel(id),
       fabricLane: () => fabricLane,
       stopping: stopping.signal,
-    }),
-  );
-  await Deno.chmod(config.socketPath, 0o600);
-  lane.start();
-  report(
-    `agent runner: serving local jobs on ${config.socketPath} (profiles: ${
-      [...profiles.keys()].join(", ")
-    }; at most ${config.maxConcurrent} at once)`,
-  );
-  return {
-    tokenPath,
-    setFabricLane(running) {
-      fabricLane = running;
-    },
-    async stop() {
-      try {
-        stopping.abort();
-        await server.shutdown();
-        await lane.stop();
-      } finally {
-        store.close();
-        await Deno.remove(tokenPath).catch(() => {});
-      }
-    },
-  };
+    });
+    server = Deno.serve(
+      { path: config.socketPath, transport: "unix", onListen: () => {} },
+      (request) =>
+        ready
+          ? api(request)
+          : Response.json({ ok: false, code: "starting" }, { status: 503 }),
+    );
+    socketOwned = true;
+    await (deps.chmod ?? Deno.chmod)(config.socketPath, 0o600);
+    lane.start();
+    report(
+      `agent runner: serving local jobs on ${config.socketPath} (profiles: ${
+        [...profiles.keys()].join(", ")
+      }; at most ${config.maxConcurrent} at once)`,
+    );
+    ready = true;
+    return {
+      tokenPath,
+      setFabricLane(running) {
+        fabricLane = running;
+      },
+      stop: cleanup,
+    };
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch { /* The startup error is the cause the caller needs. */ }
+    throw error;
+  }
 };

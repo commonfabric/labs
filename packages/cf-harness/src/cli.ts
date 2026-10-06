@@ -844,7 +844,8 @@ const parseModelProvider = (
     ? input
     : undefined;
 
-const parseBuiltinToolId = (
+/** Parses a tool name accepted by the cf-harness CLI, including aliases. */
+export const parseCfHarnessCliToolId = (
   input: string,
 ): BuiltinToolId | undefined =>
   input === "query_docs"
@@ -863,7 +864,7 @@ const parseBuiltinToolIds = (
   if (values.length === 0) {
     return undefined;
   }
-  const parsed = values.map((value) => parseBuiltinToolId(value));
+  const parsed = values.map((value) => parseCfHarnessCliToolId(value));
   if (parsed.some((value) => value === undefined)) {
     throw new Error(
       `allowed tools must be one or more of ${CLI_PARENT_TOOL_IDS.join(", ")}`,

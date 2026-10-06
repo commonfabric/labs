@@ -47,6 +47,13 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("accepts the CLI research alias", async () => {
+      expect(
+        (await read({ ask: { ...ASK, tools: ["query_docs"] } })).get("ask")!
+          .tools,
+      ).toEqual(["query_docs"]);
+    });
+
     it("throws for a relative path before reading anything", async () => {
       await expect(
         readLocalJobProfiles("profiles.json", () => {
@@ -62,6 +69,12 @@ describe("local-jobs/profiles", () => {
     const broken: [string, unknown, string][] = [
       ["a profile that is not an object", "ask", "it is not an object"],
       ["tools that are not names", { ...ASK, tools: [1] }, "`tools`"],
+      ["an unknown tool", { ...ASK, tools: ["loom_serach"] }, "`tools`"],
+      [
+        "a tool outside the CLI",
+        { ...ASK, tools: ["read_piece_source"] },
+        "`tools`",
+      ],
       ["a missing tool list", { ...ASK, tools: undefined }, "`tools`"],
       ["a turn cap below one", { ...ASK, maxModelTurns: 0 }, "`maxModelTurns`"],
       [

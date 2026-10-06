@@ -15,6 +15,7 @@
  * them twice.
  */
 
+import { hashStringOf } from "@commonfabric/data-model";
 import { Database } from "@db/sqlite";
 
 /** A job's state. */
@@ -156,21 +157,6 @@ interface EventRow {
   body_json: string;
 }
 
-/**
- * Helper for idempotency, which writes a JSON value with its object keys
- * sorted, so two requests that differ only in key order compare equal.
- */
-const canonicalJson = (value: unknown): string =>
-  JSON.stringify(
-    value,
-    (_key, inner) =>
-      inner !== null && typeof inner === "object" && !Array.isArray(inner)
-        ? Object.fromEntries(
-          Object.keys(inner).sort().map((key) => [key, inner[key]]),
-        )
-        : inner,
-  );
-
 /** The store, over one SQLite database it owns. */
 export class LocalJobStore {
   #database: Database;
@@ -238,13 +224,15 @@ export class LocalJobStore {
     idempotencyKey: string,
     request: LocalJobRequest,
   ): { job: LocalJob; created: boolean } | { conflict: string } {
-    const requestJson = canonicalJson(request);
+    const requestJson = JSON.stringify(request);
     const existing = this.#database.prepare(`
       SELECT * FROM jobs WHERE caller = :caller AND idempotency_key = :key
     `).get({ caller, key: idempotencyKey }) as JobRow | undefined;
     if (existing !== undefined) {
       if (
-        existing.profile !== profile || existing.request_json !== requestJson
+        existing.profile !== profile ||
+        hashStringOf(JSON.parse(existing.request_json)) !==
+          hashStringOf(JSON.parse(requestJson))
       ) {
         return {
           conflict:

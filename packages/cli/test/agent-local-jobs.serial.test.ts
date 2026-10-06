@@ -86,6 +86,16 @@ describe("cf agent runner local jobs", () => {
       }, { env: () => undefined })).toBeUndefined();
     });
 
+    it("refuses local concurrency without a local socket", () => {
+      expect(() =>
+        resolveLocalJobsConfig({
+          maxConcurrent: 1,
+          leaseSeconds: 300,
+          maxConcurrentLocal: 2,
+        }, { env: () => undefined })
+      ).toThrow(`"--max-concurrent-local" needs "--local-jobs-socket".`);
+    });
+
     it("resolves the socket, profiles, store, concurrency and work root", () => {
       expect(resolveLocalJobsConfig({
         maxConcurrent: 1,

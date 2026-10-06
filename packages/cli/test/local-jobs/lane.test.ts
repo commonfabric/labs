@@ -507,6 +507,46 @@ describe("local-jobs/lane", () => {
       expect((await reached(store, id, "cancelled")).errorCode).toBeUndefined();
     });
 
+    it("waits for every aborted job when one run fails during reporting", async () => {
+      const failed = Promise.withResolvers<void>();
+      const { store, lane, nextRun, enqueue } = laneWith({
+        report: () => {
+          failed.resolve();
+          throw new Error("report failed");
+        },
+      });
+      lane.start();
+      enqueue("a");
+      enqueue("b");
+      const first = await nextRun(0);
+      const second = await nextRun(1);
+      let settled = false;
+      const stopped = lane.stop().then(() => {
+        settled = true;
+      }, (error) => {
+        settled = true;
+        return error;
+      });
+      const channel = new MessageChannel();
+      let error: unknown;
+      try {
+        first.fail(new Error("job failed"));
+        await failed.promise;
+        await new Promise<void>((resolve) => {
+          channel.port1.onmessage = () => resolve();
+          channel.port2.postMessage("observe");
+        });
+        expect(settled).toBe(false);
+      } finally {
+        channel.port1.close();
+        channel.port2.close();
+        second.settle({ outcome: "cancelled" });
+        error = await stopped;
+        store.close();
+      }
+      expect(error).toBeInstanceOf(AggregateError);
+    });
+
     it("leaves the jobs its stop aborted running, for the next start to end interrupted", async () => {
       const reported: string[] = [];
       const { store, lane, nextRun, enqueue } = laneWith({

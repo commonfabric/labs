@@ -143,6 +143,32 @@ describe("runHarnessJob()", () => {
       return loopResult(runRoot);
     };
 
+  it("passes the trusted job identity through the commands config into the harness", async () => {
+    const configPath = join(runRoot, "commands.json");
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        cliPath: "/trusted/loom",
+        transport: { kind: "broker", queuePath: "/trusted/queue" },
+        jobIdEnvVar: "HOST_JOB_ID",
+        jobId: "untrusted-file-id",
+      }),
+    );
+    const { result, seen } = await runScripted(
+      plainSpec({
+        tools: ["list_commands", "run_command"],
+        loomCommandsConfigPath: configPath,
+        commandJobId: "job-own-id",
+      }),
+      answering("Titan"),
+    );
+    expect(result.outcome).toBe("completed");
+    expect(seen.loopOptions!.loomCommands).toMatchObject({
+      jobIdEnvVar: "HOST_JOB_ID",
+      jobId: "job-own-id",
+    });
+  });
+
   describe("with plain inputs and no fabric", () => {
     it("returns the submitted value, the job's handles, and its report", async () => {
       const { result, seen } = await runScripted(
