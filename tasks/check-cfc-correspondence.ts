@@ -321,9 +321,25 @@ export function valueImports(
   return found.sort((a, b) => a.at - b.at);
 }
 
-/** Whether `specifier` stays inside the kernel directory. */
+/**
+ * Whether `specifier` stays inside the kernel directory.
+ *
+ * The specifier is percent-decoded before its segments are read, so an
+ * encoded `..` (`./%2e%2e/prepare.ts`) is the parent reference it resolves
+ * to, not a sibling whose name happens to contain a percent sign. A specifier
+ * that does not decode, or that uses a backslash as a separator, is treated
+ * as leaving the kernel: the rule errs toward reporting.
+ */
 function staysInKernel(specifier: string): boolean {
-  return specifier.startsWith("./") && !specifier.includes("/../");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(specifier);
+  } catch {
+    return false;
+  }
+  if (decoded.includes("\\")) return false;
+  return decoded.startsWith("./") &&
+    !decoded.split("/").some((segment) => segment === "..");
 }
 
 //

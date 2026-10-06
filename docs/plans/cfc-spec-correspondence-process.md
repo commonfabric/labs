@@ -308,8 +308,8 @@ sections define beside them; the `@spec` header format and its parser;
 `deno task check-cfc-correspondence` as a repository gate, green on first
 run with one exempted citation; and the conformance statement at
 `docs/specs/cfc-conformance-statement.md`. Still owed to this stage: the
-specs-side job that runs the check from the specification's side, and the
-migration of the open entries to specs pull requests. Done when
+migration of the open entries to specs pull requests (the specs-side job that
+runs the check from the specification's side is stage 4 work). Done when
 `cfc-spec-changes.md` is an index.
 
 **Stage 3: the kernel.** Critical functions move into the chapter files under

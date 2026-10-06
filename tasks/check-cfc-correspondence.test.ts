@@ -462,6 +462,7 @@ export { le as atomLe };
         const file = kernelFile(
           `export { x } from "../clause.ts";\n` +
             `export * from "@commonfabric/runner/cfc/trust";\n` +
+            `export { w } from "./%2e%2e/prepare.ts";\n` +
             `export type { T } from "../types.ts";\n` +
             `export { y } from "./label.ts";\n` +
             atomLeSource.text.replace(
@@ -485,7 +486,13 @@ export { le as atomLe };
               "takes no transaction, reads no dial and calls no hook",
             ],
             [
-              12,
+              3,
+              "imports `./%2e%2e/prepare.ts`, which is outside the kernel " +
+              "and not a shared type module; a kernel function takes no " +
+              "transaction, reads no dial and calls no hook",
+            ],
+            [
+              13,
               "imports `../prepare.ts`, which is outside the kernel and not " +
               "a shared type module; a kernel function takes no " +
               "transaction, reads no dial and calls no hook",

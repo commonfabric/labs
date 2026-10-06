@@ -28,12 +28,17 @@ do then.
 `deno task check-cfc-correspondence` reads the specification snapshot at
 `packages/runner/src/cfc/kernel/spec-snapshot.json` and fails on: a `§`
 citation in `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts` naming
-a section it does not list; a function exported under
+a section it does not list, unless the task's `EXEMPTIONS` table names that
+file, citation and reason; a function exported under
 `packages/runner/src/cfc/kernel/` without a `@spec` header, with a hash the
-snapshot does not record, or importing past the kernel; a row of
-`packages/runner/src/cfc/kernel/manifest.ts` the snapshot or the kernel
-contradicts; and more than three `SPEC-PENDING` markers across the files this
-rule's `paths` list, or one naming no specs pull request. Citations elsewhere
-on that list are not checked. `deno task cfc-spec-snapshot` regenerates the
-snapshot from a specs checkout, and the manifest row is what you update when a
-critical function moves into the kernel.
+snapshot does not record, or with a value import from outside the kernel other
+than the shared type module `@commonfabric/api/cfc` (type-only imports are
+free); a critical pseudocode function in the snapshot that no manifest row or
+companion entry in `packages/runner/src/cfc/kernel/manifest.ts` covers, or a
+row the snapshot or the kernel contradicts; and more than three `SPEC-PENDING`
+markers in the governed source files (the runner CFC sources and tests, the
+two html worker modules, the harness's CFC sources), or one naming no specs
+pull request. Citations in documents are not checked. `deno task
+cfc-spec-snapshot` regenerates the snapshot from a specs checkout, and the
+manifest row is what you update when a critical function moves into the
+kernel.
