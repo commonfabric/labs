@@ -1070,12 +1070,14 @@ Three more things refuse the default, each before anything executes:
   `--cfc-invocation-context-dir`, and the variables that set the same things,
   `CF_HARNESS_SANDBOX_IMAGE`, `CF_HARNESS_SANDBOX_DOCKER_RUNTIME`,
   `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
-  `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR`, are read by Docker alone.
-  Whoever gives one with no runtime named means Docker, so the run is refused,
-  naming the setting and never its value, until Docker is named or the setting
-  is removed. The selection does not refuse a named `runsc` for them, and the
-  direct driver reads none of them; `console:launch` still refuses its two
-  sidecar directory flags under any direct driver.
+  `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR`, are read by Docker alone. On
+  macOS, where an unnamed runtime is the native one, whoever gives one with no
+  runtime named means Docker, so the run is refused, naming the setting and
+  never its value, until Docker is named or the setting is removed. On other
+  platforms the unnamed runtime is Docker, which reads these settings as before.
+  The selection does not refuse a named `runsc` for them, and the direct driver
+  reads none of them; `console:launch` still refuses its two sidecar directory
+  flags under any direct driver.
 - **A policy that cannot be read.** A default policy the harness could not look
   at, or that is there and could not be opened, is not known to be one a run can
   use, so the next default does not stand in for it. The refusal names the file
