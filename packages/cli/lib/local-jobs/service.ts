@@ -183,8 +183,8 @@ export const startLocalJobs = async (
       report,
     });
     const token = newToken();
-    tokenOwned = true;
     await Deno.writeTextFile(tokenPath, token, { mode: 0o600 });
+    tokenOwned = true;
     await Deno.chmod(tokenPath, 0o600);
     const api = createLocalJobApi({
       store,
