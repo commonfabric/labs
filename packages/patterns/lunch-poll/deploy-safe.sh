@@ -30,6 +30,7 @@ root="packages/patterns"
 main="$root/lunch-poll/main.tsx"
 tests=(
   "$root/lunch-poll/art-sync.test.tsx"
+  "$root/lunch-poll/day-rollover.test.tsx"
   "$root/lunch-poll/generated-art.test.tsx"
   "$root/lunch-poll/lunch-stats.test.tsx"
   "$root/lunch-poll/main.test.tsx"

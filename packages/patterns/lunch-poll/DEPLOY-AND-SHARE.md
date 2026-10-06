@@ -123,12 +123,14 @@ SPACE=team-lunch
 # Keep this complete set on every source deployment in this guide.
 LUNCH_POLL_TEST_ARGS=(
   --test packages/patterns/lunch-poll/art-sync.test.tsx
+  --test packages/patterns/lunch-poll/day-rollover.test.tsx
   --test packages/patterns/lunch-poll/generated-art.test.tsx
   --test packages/patterns/lunch-poll/lunch-stats.test.tsx
   --test packages/patterns/lunch-poll/main.test.tsx
   --test packages/patterns/lunch-poll/multi-user.test.tsx
   --test packages/patterns/lunch-poll/participant-identity-card.test.tsx
   --test packages/patterns/lunch-poll/poll-option-card.test.tsx
+  --test packages/patterns/lunch-poll/read-cost.test.tsx
 )
 ```
 
@@ -143,12 +145,14 @@ pattern test and stop if one fails:
 
 ```bash
 deno task cf test packages/patterns/lunch-poll/art-sync.test.tsx --root packages/patterns
+deno task cf test packages/patterns/lunch-poll/day-rollover.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/generated-art.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/lunch-stats.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/main.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/multi-user.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/participant-identity-card.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/poll-option-card.test.tsx --root packages/patterns
+deno task cf test packages/patterns/lunch-poll/read-cost.test.tsx --root packages/patterns
 ```
 
 The quoted `"${LUNCH_POLL_TEST_ARGS[@]}"` expansion below repeats every `--test`
@@ -196,7 +200,7 @@ mints a fresh, empty instance. Run the exact update once with `--check`; only a
 clean, zero-exit preflight authorizes the apply:
 
 ```bash
-# Runs all seven tests and the dry-run compatibility check;
+# Runs all attached tests and the dry-run compatibility check;
 # leaves the piece unchanged.
 packages/patterns/lunch-poll/deploy-safe.sh
 
