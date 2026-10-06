@@ -113,6 +113,23 @@ describe("LocalJobBrowserHost", () => {
     await stream.cancel();
   });
 
+  it("takes any answer to a withdrawn operation as its acknowledgment, as the console does", async () => {
+    const host = new LocalJobBrowserHost();
+    const stream = reader(host.attach());
+    const abort = new AbortController();
+    const click = host.perform({ action: "click", ref: "@e3" }, abort.signal);
+    await stream.next();
+    abort.abort(new Error("moved on"));
+    await expect(click).rejects.toThrow("moved on");
+    await stream.next();
+    const next = host.perform({ action: "back" });
+    expect(host.acceptResult("1", { status: "not a result" })).toBe("accepted");
+    expect((await stream.next())?.data.id).toBe("2");
+    host.acceptResult("2", OK);
+    expect(await next).toEqual(OK);
+    await stream.cancel();
+  });
+
   it("drops an operation the run withdraws before the host has it", async () => {
     const host = new LocalJobBrowserHost();
     const abort = new AbortController();

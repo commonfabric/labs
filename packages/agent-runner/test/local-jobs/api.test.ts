@@ -579,6 +579,31 @@ describe("local-jobs/api", () => {
       );
       expect(oversized.status).toBe(413);
 
+      // Counted in bytes as they arrive, whatever length is declared: a
+      // two-byte character each counts twice.
+      const multibyte = await post(
+        `/jobs/${id}/browser/result`,
+        "\u00e9".repeat(LOCAL_BROWSER_RESULT_MAX_BYTES / 2 + 1),
+      );
+      expect(multibyte.status).toBe(413);
+      const streamed = await call(`/jobs/${id}/browser/result`, {
+        method: "POST",
+        body: new ReadableStream({
+          start(controller) {
+            const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+            for (
+              let i = 0;
+              i <= LOCAL_BROWSER_RESULT_MAX_BYTES / chunk.length;
+              i++
+            ) {
+              controller.enqueue(chunk);
+            }
+            controller.close();
+          },
+        }),
+      });
+      expect(streamed.status).toBe(413);
+
       const invalid = await post(`/jobs/${id}/browser/result`, {
         id: "1",
         result: { status: "fine" },

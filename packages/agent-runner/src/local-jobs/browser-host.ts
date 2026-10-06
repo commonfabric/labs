@@ -190,8 +190,8 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
   /**
    * Hands in the host's answer to operation `id`. The answer to a withdrawn
    * operation acknowledges the withdrawal and lets the next operation reach
-   * the host. A second answer to an answered operation is `duplicate`, and
-   * the first stands. An answer for an operation the host was never sent is
+   * the host, whatever it holds. A second answer to an answered operation is
+   * `duplicate`, and the first stands. An answer for an operation the host was never sent is
    * `unknown`. One that is not a result is `invalid`, and settles the
    * operation as `failed` rather than leaving it waiting.
    */
@@ -202,6 +202,12 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
     if (outstanding === undefined) return "unknown";
     this.#outstanding.delete(id);
     this.#answered.add(id);
+    // A withdrawn operation's answer is the acknowledgment, whatever it
+    // holds: nobody reads it, as on the console.
+    if (outstanding.settle === undefined) {
+      this.#flush();
+      return "accepted";
+    }
     const valid = isBrowserHostResult(result);
     outstanding.settle?.(
       valid ? result : {

@@ -318,6 +318,28 @@ const browserStream = (
 };
 
 /**
+ * Helper for a browser result, which reads `request`'s body as text, or
+ * answers `undefined` once it runs past `limit` bytes as they arrive, and
+ * stops reading it there, whatever length the request declared. The
+ * console's `boundedBodyText`.
+ */
+const boundedBodyText = async (
+  request: Request,
+  limit: number,
+): Promise<string | undefined> => {
+  if (request.body === null) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  for await (const chunk of request.body) {
+    bytes += chunk.byteLength;
+    if (bytes > limit) return undefined;
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return text + decoder.decode();
+};
+
+/**
  * Helper for `POST /jobs/<id>/browser/result`, which hands the host one
  * answer.
  */
@@ -329,13 +351,13 @@ const browserResult = async (
   if (declared > LOCAL_BROWSER_RESULT_MAX_BYTES) {
     return refuse(413, "too_large", "The result is too large.");
   }
-  let text: string;
+  let text: string | undefined;
   try {
-    text = await request.text();
+    text = await boundedBodyText(request, LOCAL_BROWSER_RESULT_MAX_BYTES);
   } catch {
     return refuse(400, "invalid_request", "The body could not be read.");
   }
-  if (text.length > LOCAL_BROWSER_RESULT_MAX_BYTES) {
+  if (text === undefined) {
     return refuse(413, "too_large", "The result is too large.");
   }
   let body: unknown;
