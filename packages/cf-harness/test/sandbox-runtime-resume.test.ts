@@ -340,6 +340,80 @@ describe("sandbox-runtime-resume", () => {
         "runsc",
       ]);
     });
+
+    it("records how its runtime was chosen beside it, for a run refused before its sandbox is described", async () => {
+      // The native runtime macOS defaulted to, with no CFC policy: an
+      // enforcing run on it is refused before its sandbox is probed, so its
+      // capability snapshot, which also holds the choice, is never taken.
+      const choice = {
+        runtime: "runsc",
+        source: "default",
+        platform: "darwin",
+        nativeStore: store,
+      } as const;
+      const engine = new CfHarnessEngine({
+        ...on("runsc"),
+        cfcEnforcementMode: "enforce-strict",
+        artifactRoot: join(root, "artifacts"),
+        runId: "run-refused",
+        sandboxRuntimeChoice: choice,
+      });
+
+      const refusal = await engine.ensureDiagnosticsInitialized().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await engine.persistRunState();
+      const recorded = await readHarnessRunState(
+        join(root, "artifacts", "run-refused", "run-state.json"),
+      );
+
+      expect(refusal).toBeInstanceOf(Error);
+      expect([
+        recorded.capabilitySnapshot,
+        recorded.sandboxRuntime,
+        recorded.sandboxRuntimeChoice,
+      ]).toEqual([undefined, "runsc", choice]);
+    });
+
+    it("keeps how the runtime was chosen when the run started, through a resume that chose it another way", async () => {
+      const started = new CfHarnessEngine({
+        ...on("runsc"),
+        sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },
+      }).getRunState();
+
+      const resumed = new CfHarnessEngine({
+        ...on("runsc"),
+        runState: started,
+        sandboxRuntimeChoice: { runtime: "runsc", source: "flag" },
+      }).getRunState();
+
+      expect(resumed.sandboxRuntimeChoice).toEqual({
+        runtime: "runsc",
+        source: "environment",
+      });
+    });
+
+    it("records how a resume chose its runtime in a record that holds none", () => {
+      const { sandboxRuntimeChoice: _, ...older } = new CfHarnessEngine(
+        on("docker"),
+      ).getRunState();
+
+      expect(
+        new CfHarnessEngine({
+          ...on("docker"),
+          runState: older,
+          sandboxRuntimeChoice: { runtime: "docker", source: "flag" },
+        }).getRunState().sandboxRuntimeChoice,
+      ).toEqual({ runtime: "docker", source: "flag" });
+    });
+
+    it("records no choice for an engine its caller built with none", () => {
+      expect(new CfHarnessEngine(on("docker")).getRunState()).not
+        .toHaveProperty(
+          "sandboxRuntimeChoice",
+        );
+    });
   });
 
   describe("an engine built to resume a run", () => {

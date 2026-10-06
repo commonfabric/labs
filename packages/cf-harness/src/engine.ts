@@ -1294,12 +1294,21 @@ export class CfHarnessEngine {
     }
     // Written here, before anything runs in the sandbox and whatever a first
     // probe of it comes to, so that no later state of the run lacks it.
+    // How the runtime was chosen is the run's first start's, as its runtime
+    // description is; a record that holds none takes this engine's.
+    const sandboxRuntimeChoice = options.runState?.sandboxRuntimeChoice ??
+      options.sandboxRuntimeChoice;
     this.#runState = options.runState !== undefined
-      ? { ...options.runState, sandboxRuntime }
+      ? {
+        ...options.runState,
+        sandboxRuntime,
+        ...(sandboxRuntimeChoice !== undefined ? { sandboxRuntimeChoice } : {}),
+      }
       : createHarnessRunState({
         runId,
         cfcEnforcementMode: this.config.cfcEnforcementMode,
         sandboxRuntime,
+        ...(sandboxRuntimeChoice !== undefined ? { sandboxRuntimeChoice } : {}),
         ...(fabricSessionCfc !== undefined ? { fabricSessionCfc } : {}),
         currentDir,
         model: this.config.model,

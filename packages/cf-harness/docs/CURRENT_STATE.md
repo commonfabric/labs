@@ -232,11 +232,16 @@ hosts agree, so on every platform:
   refused before anything runs. The driver the run started on is
   `sandboxRuntime` in its state, `docker` or `runsc`, which the engine writes as
   it is built, before it probes the sandbox, so a run whose first probe failed
-  records it too. The batch CLI refuses first, and an engine built to resume
-  refuses whatever built it. The message names the recorded driver and how to
-  name it: `--sandbox-runtime <driver>` or `CF_HARNESS_SANDBOX_RUNTIME=<driver>`
-  from the batch CLI, and the variable alone from the engine, and from the batch
-  CLI where its embedder's operator can pass no flag.
+  records it too. Beside it the state records how the driver was chosen when the
+  run started, as `sandboxRuntimeChoice`, in the shape of the runtime
+  description's `selection`, so that a run refused before its sandbox is
+  described still says whether its driver was named or the default. A record
+  written before runs recorded the choice takes the one of the engine that
+  resumes it. The batch CLI refuses first, and an engine built to resume refuses
+  whatever built it. The message names the recorded driver and how to name it:
+  `--sandbox-runtime <driver>` or `CF_HARNESS_SANDBOX_RUNTIME=<driver>` from the
+  batch CLI, and the variable alone from the engine, and from the batch CLI
+  where its embedder's operator can pass no flag.
 - **An interactive session** records the driver of the host that started it, as
   `sandboxRuntime` in its status, `docker` or `runsc`. A turn of that session on
   a host running the other is refused, saying to restart the host with

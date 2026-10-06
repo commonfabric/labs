@@ -49,7 +49,10 @@ import type {
   HarnessFailureRecord,
 } from "./diagnostics.ts";
 import { selectPrimaryHarnessFailure } from "./diagnostics.ts";
-import type { SandboxRuntimeKind } from "./sandbox/types.ts";
+import type {
+  SandboxRuntimeChoice,
+  SandboxRuntimeKind,
+} from "./sandbox/types.ts";
 import type {
   HarnessFabricCfcFlowLabelsSource,
   HarnessModelAuthSource,
@@ -192,6 +195,15 @@ export interface HarnessRunState {
    */
   sandboxRuntime?: SandboxRuntimeKind;
 
+  /**
+   * How an entrypoint chose that runtime when the run started: named, and by
+   * what, or its platform's default, written beside it, so that a run refused
+   * before its sandbox is described still says. Absent for a run whose engine
+   * was given no choice, and from a record written before runs recorded it,
+   * which takes the choice of the engine that next resumes it.
+   */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
+
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
   currentDir: string;
@@ -309,6 +321,7 @@ export interface CreateHarnessRunStateOptions {
 
   cfcEnforcementMode: CfcEnforcementMode;
   sandboxRuntime?: SandboxRuntimeKind;
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
   currentDir: string;
@@ -393,6 +406,9 @@ export const createHarnessRunState = (
     cfcEnforcementMode: options.cfcEnforcementMode,
     ...(options.sandboxRuntime !== undefined
       ? { sandboxRuntime: options.sandboxRuntime }
+      : {}),
+    ...(options.sandboxRuntimeChoice !== undefined
+      ? { sandboxRuntimeChoice: structuredClone(options.sandboxRuntimeChoice) }
       : {}),
     ...(options.fabricSessionCfc !== undefined
       ? { fabricSessionCfc: options.fabricSessionCfc }
