@@ -469,6 +469,15 @@ export class Client {
   #closed = false;
 
   /**
+   * The connection restarts held sessions have asked for since none was
+   * held (see `restartConnection()`), and the wait the next reconnect
+   * attempt makes first after one. Each restart waits longer, so a restore
+   * that keeps failing cannot reopen the connection as fast as it fails.
+   */
+  #restarts = 0;
+  #restartDelayMs = 0;
+
+  /**
    * The error that ended reconnection, set when a reconnect handshake fails
    * for a reason retrying cannot change (a protocol-flag mismatch — the
    * transport is fundamentally incompatible). The client stops reconnecting
@@ -1066,7 +1075,39 @@ export class Client {
     this.#renewals.clear();
   }
 
-  /** Waits for the transport handshake and restoration of existing sessions. */
+  /**
+   * Discards the connection for a held session whose retried restore failed
+   * with `error`, a reason only a new connection heals, as the reconnect loop
+   * does when a restore fails: every session restores again on the next
+   * connection, after a backoff that grows with each restart until no
+   * session is held.
+   *
+   * @internal For `SpaceSession`.
+   */
+  restartConnection(error: Error): void {
+    // A closed or failed client is never connected.
+    if (!this.#connected) return;
+    if (!this.#discardConnection(error)) return;
+    this.#restartDelayMs = reconnectDelayMs(this.#restarts++);
+    // A discarded connection reports no close, so the reconnect starts here.
+    void this.#reconnect().catch(() => undefined);
+  }
+
+  /**
+   * Notes that a session's hold ended other than by a drop: it reopened, or
+   * it closed, ended or lost its route. Once no session is held, restarts
+   * back off from the start again.
+   *
+   * @internal For `SpaceSession`.
+   */
+  noteHoldEnded(): void {
+    if (![...this.#spaces].some((session) => session.held)) this.#restarts = 0;
+  }
+
+  /**
+   * Waits for the transport handshake and restoration of existing sessions,
+   * except those a retriable denial holds: each restores on its own.
+   */
   async restoreConnection(): Promise<void> {
     await this.#ensureConnected();
     await this.#reconnecting;
@@ -1333,6 +1374,12 @@ export class Client {
     }
     this.#connected = false;
     this.#noteStateChange();
+    // A drop while a session is held counts as a restart: a peer that denies
+    // a reopen and then drops the connection would otherwise be reconnected
+    // to at once, every time.
+    if ([...this.#spaces].some((session) => session.held)) {
+      this.#restartDelayMs = reconnectDelayMs(this.#restarts++);
+    }
     for (const session of this.#spaces) {
       session.handleDisconnect();
     }
@@ -1350,69 +1397,94 @@ export class Client {
     if (this.#reconnecting) {
       return await this.#reconnecting;
     }
+    // The loop always waits before it ends, so `#reconnecting` holds it by
+    // the time its `finally` runs, and nothing else starts a loop while it
+    // runs. The `finally` clears it in the same turn as the loop's last
+    // check, so a restart or a drop from then on starts a new loop.
     this.#reconnecting = (async () => {
-      let attempt = 0;
-      while (!this.#closed) {
-        try {
-          await this.#hello();
-          // Every session restores at once. A failure is thrown only after
-          // all of them have settled, so a retry starts from a connection
-          // nothing is still using.
-          const restored = await Promise.allSettled(
-            [...this.#spaces].map((session) => session.restore()),
-          );
-          for (const outcome of restored) {
-            if (outcome.status === "rejected") throw outcome.reason;
+      try {
+        let attempt = 0;
+        while (!this.#closed && this.#fatalError === null) {
+          const restartDelayMs = this.#restartDelayMs;
+          this.#restartDelayMs = 0;
+          if (restartDelayMs > 0) {
+            await this.#waitForReconnectDelay(restartDelayMs);
+            if (this.#closed) return;
           }
-          return;
-        } catch (error) {
-          this.#connected = false;
-          this.#noteStateChange();
-          const err = error instanceof Error ? error : new Error(String(error));
-          if (
-            isPermanentConnectionFailure(err) ||
-            this.#transport.reset === undefined
-          ) {
-            // A permanent failure, or a transport unable to discard the
-            // failed connection, cannot recover by repeating this handshake.
-            // Preserve the cause for every present and future request.
-            this.#fatalError = err;
-            // Redundant today: the notification at the top of this catch
-            // has already woken every waiter, and none of them resumes
-            // until this block finishes, so each reads the state this
-            // line settles. It stays because no write to a field
-            // `.connectionState` reads leaves its block without a
-            // notification covering it, and that rule is what lets the
-            // write sites be checked rather than reasoned about one by
-            // one.
-            this.#noteStateChange();
-            this.#rejectPending(err);
-            for (const session of this.#spaces) {
-              session.handleConnectionFailure(err);
+          try {
+            await this.#hello();
+            // Every session restores at once. A failure is thrown only after
+            // all of them have settled, so a retry starts from a connection
+            // nothing is still using.
+            const restored = await Promise.allSettled(
+              [...this.#spaces].map((session) => session.restore()),
+            );
+            for (const outcome of restored) {
+              if (outcome.status === "rejected") throw outcome.reason;
+            }
+            // A restart or a drop that landed while the restores settled
+            // discarded this connection, so go round again: the loop ends
+            // only connected, closed or failed, and nothing waiting on it
+            // resumes on a discarded connection.
+            if (!this.#connected) continue;
+            if (![...this.#spaces].some((session) => session.held)) {
+              this.#restarts = 0;
             }
             return;
+          } catch (error) {
+            const err = error instanceof Error
+              ? error
+              : new Error(String(error));
+            if (!this.#discardConnection(err)) return;
+            await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
+            attempt += 1;
           }
-          // Requests lost with this connection have no server verdict. Keep
-          // their commits outstanding for replay, regardless of which error
-          // caused a session's restore to fail.
-          this.#rejectPending(toConnectionError(err));
-          for (const session of this.#spaces) {
-            session.handleDisconnect();
-          }
-          // A restore can fail after hello succeeded while the socket stays
-          // open. The next hello needs a new connection and auth challenge.
-          this.#transport.reset();
-          await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
-          attempt += 1;
         }
+      } finally {
+        this.#reconnecting = null;
       }
     })();
+    await this.#reconnecting;
+  }
 
-    try {
-      await this.#reconnecting;
-    } finally {
-      this.#reconnecting = null;
+  /**
+   * Helper for the reconnect loop and `restartConnection()`, which discards
+   * the connection after `err` and reports whether a reconnect can follow.
+   */
+  #discardConnection(err: Error): boolean {
+    this.#connected = false;
+    this.#noteStateChange();
+    if (
+      isPermanentConnectionFailure(err) || this.#transport.reset === undefined
+    ) {
+      // A permanent failure, or a transport unable to discard the failed
+      // connection, cannot recover by repeating the handshake. Preserve the
+      // cause for every present and future request.
+      this.#fatalError = err;
+      // Redundant today: the notification above has already woken every
+      // waiter, and none of them resumes until this block finishes, so each
+      // reads the state this line settles. It stays because no write to a
+      // field `.connectionState` reads leaves its block without a
+      // notification covering it, and that rule is what lets the write
+      // sites be checked rather than reasoned about one by one.
+      this.#noteStateChange();
+      this.#rejectPending(err);
+      for (const session of this.#spaces) {
+        session.handleConnectionFailure(err);
+      }
+      return false;
     }
+    // Requests lost with this connection have no server verdict. Keep their
+    // commits outstanding for replay, regardless of which error caused a
+    // session's restore to fail.
+    this.#rejectPending(toConnectionError(err));
+    for (const session of this.#spaces) {
+      session.handleDisconnect();
+    }
+    // A restore can fail after hello succeeded while the socket stays open.
+    // The next hello needs a new connection and auth challenge.
+    this.#transport.reset();
+    return true;
   }
 
   /**
@@ -1518,6 +1590,28 @@ export class SpaceSession {
   #closeError: Error | null = null;
   #readyOnConnection = true;
   #restoring = false;
+  /** Counts `restore()` calls, so only the latest one ends the restoring state. */
+  #restoreRun = 0;
+
+  /**
+   * Whether this session waits on its own restore after a retriable denial
+   * (see `restore`), on a connection its other sessions use.
+   */
+  #held = false;
+
+  /** Cancels the pending retry of a held restore. */
+  #heldRestore: (() => void) | undefined;
+
+  /** How many restores this session has held since it last restored. */
+  #heldRestores = 0;
+
+  /**
+   * Whether this session's watch set must be sent again: set when a reopen
+   * starts a new server session, cleared only once the watch set is
+   * re-established. A held restore can reopen the new session as resumed,
+   * and must still send the watch set the denied attempt did not.
+   */
+  #watchSetOwed = false;
   #caughtUpLocalSeq = 0;
   #presenceRooms = new Map<string, PresenceRoomState>();
 
@@ -1627,6 +1721,15 @@ export class SpaceSession {
    *  result to carry it. */
   get closeError(): Error | undefined {
     return this.#closeError ?? undefined;
+  }
+
+  /**
+   * Whether this session is waiting on its own restore after a retriable
+   * denial, such as the router's while its space's toolshed is down. Its
+   * requests wait meanwhile, while the connection's other sessions work.
+   */
+  get held(): boolean {
+    return this.#held;
   }
 
   #assertOpen(): void {
@@ -2322,6 +2425,8 @@ export class SpaceSession {
       this.#viewsDirty = true;
       for (const observer of this.#viewCapabilityLostObservers) observer();
     }
+    const run = ++this.#restoreRun;
+    this.#cancelHeldRestore();
     this.#restoring = true;
     this.#readyOnConnection = false;
     let replayedThroughLocalSeq = 0;
@@ -2339,6 +2444,12 @@ export class SpaceSession {
       if (this.#closed) {
         return;
       }
+      // Reopened, the session no longer waits on its own retry. The restart
+      // backoff starts over only once the whole restore succeeds: the watch
+      // set can still be refused and hold the session again.
+      const wasHeld = this.#held;
+      this.#cancelHeldRestore();
+      this.#held = false;
       this.#readyOnConnection = true;
       replayedThroughLocalSeq = Math.max(
         0,
@@ -2381,10 +2492,12 @@ export class SpaceSession {
       // real sync already carried it.
       this.#forwardCaughtUpLocalSeqToWatchers(restored.caughtUpLocalSeq);
       if (
-        this.#viewsDirty ||
-        (restored.resumed !== true &&
-          (this.#watchSpecs.length > 0 || this.#viewInterests.length > 0))
+        restored.resumed !== true &&
+        (this.#watchSpecs.length > 0 || this.#viewInterests.length > 0)
       ) {
+        this.#watchSetOwed = true;
+      }
+      if (this.#viewsDirty || this.#watchSetOwed) {
         // The server forgot this session (or never had it): re-establish
         // the watch set, declaring what the replica still holds so the
         // response carries the difference rather than the whole union.
@@ -2396,6 +2509,7 @@ export class SpaceSession {
             : undefined,
           RESTORE_WATCH_SET,
         );
+        this.#watchSetOwed = false;
         if (!isEmptySync(sync)) {
           view.emit(sync);
         }
@@ -2404,6 +2518,8 @@ export class SpaceSession {
       await Promise.all(replayTasks);
       this.#restoreComplete?.resolve();
       this.#restoreComplete = undefined;
+      this.#heldRestores = 0;
+      if (wasHeld) this.#client.noteHoldEnded();
     } catch (error) {
       // A permanent authorization denial ANYWHERE in the reopen — the initial
       // session.open OR the watch re-establishment (watchSetSync) that follows a
@@ -2416,13 +2532,100 @@ export class SpaceSession {
         this.#terminateSession(error as Error);
         return;
       }
+      // A retriable denial of a session authenticated on the connection,
+      // such as the router's while this space's toolshed is down, holds
+      // this session alone: it retries on this connection with its own
+      // backoff, keeping its commits and waiters, while the connection's
+      // other sessions restore and new mounts proceed. A signed open's
+      // retriable denial is an anti-replay race only a new connection's
+      // challenge heals, so it still propagates.
+      if (this.#holdsRestore(error)) {
+        this.#holdRestore();
+        return;
+      }
+      // A route cancelled during this restore ends the hold, as the abort
+      // listener the restore removed would have.
+      if (this.#routeSignal?.aborted) this.#endHold();
       throw error;
     } finally {
-      this.#restoring = false;
-      if (!this.#closed && this.#outstandingCommits.size > 0) {
-        this.#replayOutstandingCommits(replayedThroughLocalSeq);
+      if (run === this.#restoreRun) {
+        this.#restoring = false;
+        if (!this.#closed && this.#outstandingCommits.size > 0) {
+          this.#replayOutstandingCommits(replayedThroughLocalSeq);
+        }
       }
     }
+  }
+
+  /** Whether `restore()` holds this session on `error` rather than throwing. */
+  #holdsRestore(error: unknown): boolean {
+    return isRetriableAuthorizationError(error) &&
+      typeof this.#auth === "object" &&
+      this.#client.serverFlags?.connectionAuth === true;
+  }
+
+  /**
+   * Helper for `restore()`, which retries this session's restore after the
+   * reconnect backoff. A drop in the meantime cancels the retry, and the
+   * client's reconnect restores the session instead.
+   */
+  #holdRestore(): void {
+    // After a denial in the watch phase the reopen has already made this
+    // session ready. Only this keeps `restore()`'s `finally` from replaying
+    // its commits, and `transact()` from sending new ones, before the
+    // session is restored.
+    this.#readyOnConnection = false;
+    const signal = this.#routeSignal;
+    // A route already cancelled, as it can be while the watch set is
+    // re-established, ends the hold now, as a later cancellation would.
+    if (signal?.aborted) {
+      this.#endHold();
+      return;
+    }
+    this.#held = true;
+    // Closing the session or dropping the connection cancels this retry,
+    // and `restore()` cancels it as it starts. `restore()` also does nothing
+    // for a closed session and fails while disconnected, so the retry
+    // checks neither.
+    const timer = setTimeout(() => {
+      void this.restore().catch((error) => {
+        // A closed session needs no connection, and a cancelled route is
+        // its owner's. Any other failure is what the reconnect loop
+        // answers with a new connection, except a lost connection: a drop
+        // has already started one, and a retry whose signer outlived its
+        // connection must not discard the connection that replaced it.
+        if (!this.#closed && !signal?.aborted && !isConnectionError(error)) {
+          this.#client.restartConnection(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+      });
+    }, reconnectDelayMs(this.#heldRestores++));
+    // A route cancelled while the session waits ends the wait.
+    const abort = () => this.#endHold();
+    signal?.addEventListener("abort", abort, { once: true });
+    this.#heldRestore = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    };
+  }
+
+  #cancelHeldRestore(): void {
+    const cancel = this.#heldRestore;
+    this.#heldRestore = undefined;
+    cancel?.();
+  }
+
+  /**
+   * Ends a hold other than by a drop: the session reopened, closed, ended or
+   * lost its route. Once no session is held, the client's restarts back off
+   * from the start again.
+   */
+  #endHold(): void {
+    this.#cancelHeldRestore();
+    if (!this.#held) return;
+    this.#held = false;
+    this.#client.noteHoldEnded();
   }
 
   async close(): Promise<void> {
@@ -2431,6 +2634,7 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
+    this.#endHold();
     if (
       this.#client.serverFlags?.sessionClose === true &&
       this.#client.isConnected() && this.#readyOnConnection
@@ -2502,6 +2706,7 @@ export class SpaceSession {
   #terminateSession(error: Error): void {
     this.#closed = true;
     this.#closeError = error;
+    this.#endHold();
     this.#restoreComplete?.reject(error);
     this.#restoreComplete = undefined;
     this.#readyOnConnection = false;
@@ -2540,6 +2745,11 @@ export class SpaceSession {
     if (this.#closed) {
       return;
     }
+    // The next connection restores this session; a held retry belongs to
+    // the connection that is gone.
+    this.#held = false;
+    this.#cancelHeldRestore();
+    this.#heldRestores = 0;
     this.#readyOnConnection = false;
     // The restore this session now needs is pending from here on, so a
     // request made before the reconnect reaches it waits for it.

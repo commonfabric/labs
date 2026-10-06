@@ -485,7 +485,14 @@ Rules:
   forever. A `retriable` authorization race (an expired, used, or mismatched
   challenge; a stale signed `exp`) or a transport-level disconnect can recover
   through retries on a transport that can discard its failed connection. A
-  permanent protocol-flag mismatch at `hello` ends the whole connection. See
+  `retriable` denial of a session that authenticates through `connection.auth`,
+  such as a router's while that space's toolshed is down, holds that session
+  alone: it keeps its watch intent and unconfirmed commits and retries its open
+  on the same connection with the reconnect backoff, while the connection's
+  other sessions restore. If a retry fails for a reason only a new connection
+  heals, the client discards the connection, after a backoff that grows with
+  each such restart. A permanent protocol-flag mismatch at `hello` ends the
+  whole connection. See
   [`../../features/authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md)
   for how the client, the runner storage layer, and the CLI act on this
   classification end to end.

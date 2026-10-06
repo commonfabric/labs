@@ -41,10 +41,11 @@ generic request denial after authentication. The upgrade does not reveal
 directory membership. A refusal that rests on a condition that passes, such as a
 toolshed that is down, an unreadable directory, a placement change or a topology
 change awaiting a router restart, is temporary: a refused open is marked
-`retriable`, and a refused frame of an open session closes the connection, so
-the SDK reconnects and replays its pending commits rather than ending the
-session. The marker shows whether the toolshed a DID maps to is down or
-saturated, not whether a space exists or what its ACL grants; without an
+`retriable`, so the SDK holds that session and retries its open on the same
+connection, and a refused frame of an open session closes the connection, so the
+SDK reconnects; either way it replays the session's pending commits rather than
+ending the session. The marker shows whether the toolshed a DID maps to is down
+or saturated, not whether a space exists or what its ACL grants; without an
 `unlisted` rule it also shows that a DID is listed while its toolshed is down.
 
 `sharedMemoryConnection` controls the runner's socket topology. Both topologies
@@ -55,9 +56,9 @@ install routed-capable clients and toolsheds with sharing off, move Memory
 WebSockets from nginx to this router, verify dedicated connections, then enable
 sharing. Clients that only sign direct session opens require an SDK update
 before that switch. Each dedicated socket consumes its own isolated worker and
-source-admission slot. Enabling sharing also needs the SDK to hold a retriable
-reopen denial for that session alone: today it reconnects the whole connection,
-which on a shared socket stalls every space while one toolshed is down.
+source-admission slot. A retriable reopen denial holds only its session, which
+retries on the same connection, so on a shared socket one toolshed that is down
+does not stall the other spaces.
 
 The router issues a challenge through its link agent's channel-assigned context.
 A client completes it within 60 seconds. The agent verifies the fixed-format

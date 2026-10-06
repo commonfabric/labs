@@ -1920,8 +1920,9 @@ finally:
   pass("a link stalled past its request deadline is replaced and recovers");
 
   // An SDK session survives its toolshed restarting: the refusals it meets
-  // while the toolshed is down are retriable, so it reconnects and replays its
-  // pending commit instead of ending the session and dropping the commit.
+  // while the toolshed is down are retriable, so it holds the session, retries
+  // the open and replays its pending commit instead of ending the session and
+  // dropping the commit.
   {
     const factory = new RemoteSessionFactory(
       createStorageAddressResolver(new URL("https://localhost:8443")),
@@ -1955,6 +1956,61 @@ finally:
     }
   }
   pass("an SDK session commits across its toolshed's restart");
+
+  // With sharing on, one toolshed down holds only its own space: the shared
+  // connection's other space keeps committing, the client opens no further
+  // sockets while the toolshed stays down, and the held space commits once
+  // its toolshed is back.
+  {
+    let sockets = 0;
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      alice,
+      (address) => {
+        sockets++;
+        return socketFactory(address, "127.0.0.38");
+      },
+    );
+    factory.setSharedConnections(true);
+    try {
+      const [up, down] = await Promise.all([
+        factory.create(spaces[0] as MemorySpace, alice),
+        factory.create(spaces[1] as MemorySpace, bob),
+      ]);
+      const write = (session: typeof up.session, id: string) =>
+        session.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id, value: { value: 1 } }],
+        });
+      try {
+        await toolsheds[1].stop();
+        const held = write(down.session, "of:held-while-down");
+        await Promise.race([
+          write(up.session, "of:shared-while-down"),
+          deadline(30000),
+        ]);
+        // The held space retries on this connection rather than reopening
+        // the connection, which would interrupt the other space each time.
+        // The router closes the socket after the stop on its own schedule,
+        // so the count is taken once the reconnect has held the space.
+        await until(() => down.session.held, 30000);
+        const opened = sockets;
+        await pause(3000);
+        assertEquals(sockets, opened);
+        await toolsheds[1].start();
+        await Promise.race([held, deadline(60000)]);
+      } finally {
+        await up.client.close();
+        await down.client.close();
+      }
+    } finally {
+      await factory.close();
+    }
+  }
+  pass(
+    "a shared connection keeps committing to other spaces while one toolshed is down",
+  );
 
   // Creation. An `unlisted` rule places every DID the directory does not
   // list, here alternately across both toolsheds by last character, and a
