@@ -1541,12 +1541,14 @@ export class RuntimeProcessor {
   }
 
   /**
-   * Returns whether every recorded read is free of an unpromoted local write.
+   * Classifies whether recorded reads depend on pending local writes.
    * Missing read observations retain the full initialization barrier.
    */
-  #initializationReadsAreConfirmed(tx: IExtendedStorageTransaction): boolean {
+  #initializationReadState(
+    tx: IExtendedStorageTransaction,
+  ): "confirmed" | "pending" | "unknown" {
     const reads = tx.tx.getReadActivities?.();
-    if (reads === undefined) return false;
+    if (reads === undefined) return "unknown";
     for (const read of reads) {
       if (
         this.#runtime.storageManager.open(read.space).replica.hasPendingWrite(
@@ -1554,9 +1556,9 @@ export class RuntimeProcessor {
           read.scope,
           tx.tx.scopeKeyIdentity,
         )
-      ) return false;
+      ) return "pending";
     }
-    return true;
+    return "confirmed";
   }
 
   /** Atomically stores a default only while the target has no backing value. */
@@ -1568,22 +1570,33 @@ export class RuntimeProcessor {
     }
     const initial = mapCellRefsToSigilLinks(request.value);
     const target = getCell(this.#runtime, request.cell);
-    try {
-      await target.pull();
-      const existing = await this.#runtime.editWithRetry((tx) => {
-        const cell = target.withTx(tx);
-        if (
-          cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
-          cell.get() === undefined
-        ) return undefined;
-        const value = this.#hostReadGate.read(cell);
-        return this.#initializationReadsAreConfirmed(tx) ? value : undefined;
-      });
-      if (existing.ok !== undefined) return existing.ok;
-    } catch {
-      // A malformed optimistic value can make readiness or projection fail.
-      // The durable selection below owns errors from the confirmed value.
-    }
+    const readinessFailure = await target.pull().then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+    const existing = await this.#runtime.editWithRetry((tx) => {
+      const cell = target.withTx(tx);
+      try {
+        const value = (
+            cell.getRaw({ lastNode: "writeRedirect" }) === undefined ||
+            cell.get() === undefined
+          )
+          ? undefined
+          : this.#hostReadGate.read(cell);
+        const state = this.#initializationReadState(tx);
+        if (readinessFailure !== undefined && state !== "pending") {
+          throw readinessFailure.error;
+        }
+        return state === "confirmed" ? value : undefined;
+      } catch (error) {
+        // Only a recorded pending write justifies retrying a failed read
+        // after repair. Other readiness and projection failures propagate.
+        if (this.#initializationReadState(tx) !== "pending") throw error;
+        return undefined;
+      }
+    });
+    if (existing.error) throw new Error(existing.error.message);
+    if (existing.ok !== undefined) return existing.ok;
 
     // A pending commit or its retry can install a producer for an absent
     // value. Keep demand active through the full barrier before storing a

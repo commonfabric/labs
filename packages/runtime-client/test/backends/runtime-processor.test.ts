@@ -508,6 +508,45 @@ describe("runtime-processor", () => {
       }
     });
 
+    it("propagates an unexpected readiness failure without storing an initializer", async () => {
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const target = runtime.getCell<number>(
+          cfcSigner.did(),
+          "initialize-readiness-failure",
+        );
+        await target.sync();
+        const idle = runtime.scheduler.idle.bind(runtime.scheduler);
+        let failNext = true;
+        using _idle = stub(runtime.scheduler, "idle", (...args) => {
+          if (failNext) {
+            failNext = false;
+            return Promise.reject(new Error("unexpected readiness failure"));
+          }
+          return idle(...args);
+        });
+        await expect(
+          buildProcessor({ runtime }).handleCellInitialize({
+            type: RequestType.CellInitialize,
+            cell: createCellRef(target),
+            value: 99,
+          }),
+        ).rejects.toThrow("unexpected readiness failure");
+        expect(target.getRaw()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
     for (
       const shape of ["number", "incompatible", "cyclic-redirect"] as const
     ) {
