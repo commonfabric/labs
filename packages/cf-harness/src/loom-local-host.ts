@@ -689,8 +689,10 @@ const defaultHostIo = (): CfHarnessCliIO => ({
 /**
  * A startup blocker as the chat protocol states it. This answers a failure
  * raised before the host was serving: a provider code, `internal-error`, or
- * the one `invalid-request` raised that early, a default sandbox runtime this
- * machine cannot provide. The provider codes carry across by name, and
+ * an `invalid-request` raised that early, which is a sandbox runtime the host
+ * could not settle on: none named, where this host takes no default, or a
+ * named `runsc` whose default CFC policy could not be examined. The provider
+ * codes carry across by name, and
  * everything else is `internal_error` with its message, so the remaining
  * branch totals the mapping rather than choosing between codes. Any other
  * `invalid-request`, and `operation-canceled`, belong to the batch and

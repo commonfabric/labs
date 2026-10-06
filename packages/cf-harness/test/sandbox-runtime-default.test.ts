@@ -1150,6 +1150,26 @@ describe("sandbox-runtime-default", () => {
           });
         });
 
+        it("names the path past a link in the middle of the way to the home, as root's `/var/root` is", async () => {
+          // `/var` on macOS is a link to `private/var`, and root's home is
+          // under it, so root's default store is behind a link.
+          const home = join(root, "private", "var", "root");
+          await installStore(defaultStore(home));
+          await Deno.symlink(join("private", "var"), join(root, "var"));
+          const written = join(root, "var", "root");
+
+          expect(
+            await rejection(
+              resolveSandboxRuntimeSelection({ HOME: written }, {}, {
+                platform: "darwin",
+                flags: false,
+              }),
+            ),
+          ).toMatchObject({
+            message: linked(defaultStore(written), defaultStore(home)),
+          });
+        });
+
         it("throws for a link on the way to a store that is not there yet", async () => {
           const linkedHome = join(root, "home-link");
           await Deno.symlink(home, linkedHome);
