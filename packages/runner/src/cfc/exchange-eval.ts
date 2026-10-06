@@ -8,7 +8,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import { isValueBoundClaimType } from "./atom-classes.ts";
+import { matchesOnlyValueBoundClaims } from "./atom-classes.ts";
 import {
   type AtomPattern,
   type AtomPatternBindings,
@@ -243,10 +243,8 @@ export const isValueIntrinsicExchangeRule = (rule: ExchangeRule): boolean => {
   const integrity = guards?.integrity ?? [];
   return integrity.length > 0 &&
     integrity.every((pattern) =>
-      isObjectNotArray(pattern) && !isAtomVarPlaceholder(pattern) &&
-      conceptGuard(pattern) === undefined &&
-      typeof (pattern as { type?: unknown }).type === "string" &&
-      isValueBoundClaimType((pattern as { type: string }).type)
+      !isAtomVarPlaceholder(pattern) && conceptGuard(pattern) === undefined &&
+      matchesOnlyValueBoundClaims(pattern)
     );
 };
 

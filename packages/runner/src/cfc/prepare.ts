@@ -183,6 +183,7 @@ import {
 import {
   meetInputWitnesses,
   mintTransformedBy,
+  retainedGuardWitnesses,
   retainedInputWitnesses,
 } from "./input-witness.ts";
 import {
@@ -867,13 +868,14 @@ const observationLocations = (
  * the confidentiality left at each location it consumed once the
  * value-intrinsic exchange rules have run over that location's own label,
  * joined. Evaluating per location keeps evidence at one path from releasing
- * a clause the read took from another. `undefined` when no rule fired at any
- * location, which leaves the observation's label as it was read; otherwise
- * `guards` holds, by location, the integrity the firings there rested on.
+ * a clause the read took from another. `confidentiality` is `undefined` when
+ * no rule fired at any location, which leaves the observation's label as it
+ * was read; `guards` holds, by location, the integrity the firings there
+ * rested on.
  *
  * `exchange` runs the value-intrinsic rules over one label. A location whose
  * evaluation exhausted its fuel or could not resolve a policy keeps its
- * label, which fails closed.
+ * label, which fails closed; `failedClosed` counts them.
  */
 const carriedObservationLabel = (
   entries: readonly LabelMapEntry[],
@@ -881,13 +883,16 @@ const carriedObservationLabel = (
   nonRecursive: boolean | undefined,
   read: readonly unknown[],
   exchange: (label: IFCLabel) => ExchangeEvalResult,
-):
-  | { confidentiality: CfcConfClause[]; guards: Map<string, CfcAtom[]> }
-  | undefined => {
+): {
+  confidentiality: CfcConfClause[] | undefined;
+  guards: Map<string, CfcAtom[]>;
+  failedClosed: number;
+} => {
   const consumed = witnessTrie(entries);
   const carried: unknown[] = [];
   const resolved: unknown[] = [];
   const guards = new Map<string, CfcAtom[]>();
+  let failedClosed = 0;
   for (
     const [key, location] of observationLocations(entries, path, nonRecursive)
   ) {
@@ -899,10 +904,9 @@ const carriedObservationLabel = (
     if (confidentiality.length === 0) continue;
     for (const atom of confidentiality) resolved.push(atom);
     const result = exchange(label!);
-    if (
-      result.exhausted || result.resolutionFailures.length > 0 ||
-      result.firings.length === 0
-    ) {
+    const failed = result.exhausted || result.resolutionFailures.length > 0;
+    if (failed) failedClosed += 1;
+    if (failed || result.firings.length === 0) {
       for (const atom of confidentiality) carried.push(atom);
       continue;
     }
@@ -912,13 +916,15 @@ const carriedObservationLabel = (
       uniqueCfcAtoms(result.firings.flatMap((firing) => firing.guardIntegrity)),
     );
   }
-  if (guards.size === 0) return undefined;
+  if (guards.size === 0) {
+    return { confidentiality: undefined, guards, failedClosed };
+  }
   // Every clause the read consumed resolves at one of its locations; one
   // that did not would stay as it was read.
   for (const atom of read) {
     if (!resolved.some((other) => deepEqual(other, atom))) carried.push(atom);
   }
-  return { confidentiality: uniqueCfcAtoms(carried), guards };
+  return { confidentiality: uniqueCfcAtoms(carried), guards, failedClosed };
 };
 
 /**
@@ -983,7 +989,7 @@ const observationInputWitnesses = (
       )?.integrity;
     const retained = [
       ...retainedInputWitnesses(integrity),
-      ...retainedInputWitnesses(carriedGuards?.get(key)),
+      ...retainedGuardWitnesses(carriedGuards?.get(key)),
     ];
     witnesses = witnesses === undefined
       ? retained
@@ -4428,6 +4434,12 @@ const deriveFlowJoinImpl = (
    * stays unexchanged.
    */
   wouldCarry?: CfcConfClause[];
+
+  /**
+   * How many observed locations kept their label because the value-intrinsic
+   * exchange there exhausted its fuel or could not resolve a policy.
+   */
+  carryFailedClosed: number;
 } => {
   // What each observation contributes as it was read, and what it carries
   // to derived values once value-intrinsic exchange rules have run at it
@@ -4436,6 +4448,7 @@ const deriveFlowJoinImpl = (
   // nothing.
   const atoms: unknown[] = [];
   const carriedAtoms: unknown[] = [];
+  let carryFailedClosed = 0;
   const policyEvaluation = tx.getCfcState().policyEvaluationMode;
   const policySnapshot = tx.getCfcState().policySnapshot;
   const snapshotCarries =
@@ -4682,6 +4695,7 @@ const deriveFlowJoinImpl = (
             exchangeIn(space),
           );
         document.carried.set(labelKey, carried?.confidentiality);
+        carryFailedClosed += carried?.failedClosed ?? 0;
         // Skipped once the meet is empty, which no later observation can
         // refill; the `undefined` cached then is never read into a nonempty
         // meet.
@@ -5027,6 +5041,7 @@ const deriveFlowJoinImpl = (
     confidentiality,
     integrity: uniqueCfcAtoms(integrity),
     ...(labeledSpaces !== undefined ? { labeledSpaces } : {}),
+    carryFailedClosed,
     ...(policyEvaluation === "observe" &&
         (carried.length !== read.length ||
           carried.some((atom) => !read.some((other) => deepEqual(atom, other))))
@@ -10533,8 +10548,8 @@ export function* prepareBoundaryCommitSteps(
   const labelProtectionMode = state.labelMetadataProtectionMode;
   const valueTargets = valueWriteTargets(tx);
   const flowTargets = flowMode === "off" ? undefined : valueTargets;
-  const flowJoin = flowMode === "off"
-    ? { confidentiality: [], integrity: [] }
+  const flowJoin: ReturnType<typeof deriveFlowJoin> = flowMode === "off"
+    ? { confidentiality: [], integrity: [], carryFailedClosed: 0 }
     : deriveFlowJoin(tx, { collectLabeledSpaces: true });
   const flowConfidentiality = flowJoin.confidentiality;
   // Read provenance for a refusal's remedy channel, computed only if a gate
@@ -10574,6 +10589,13 @@ export function* prepareBoundaryCommitSteps(
       `flow-labels(observe): would derive ${flowConfidentiality.length} ` +
         `confidentiality / ${flowIntegrity.length} integrity atom(s) onto ` +
         `${flowTargets.size} written doc(s)`,
+    );
+  }
+  if (flowJoin.carryFailedClosed > 0) {
+    tx.noteCfcDiagnostic(
+      `policy-evaluation: value-intrinsic exchange kept the read label at ` +
+        `${flowJoin.carryFailedClosed} observed location(s): fuel exhausted ` +
+        `or a policy did not resolve`,
     );
   }
   if (flowJoin.wouldCarry !== undefined) {

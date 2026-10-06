@@ -64,6 +64,19 @@ export const retainedInputWitnesses = (
   );
 
 /**
+ * The atoms of `guards`, the integrity a value-intrinsic exchange at an input
+ * location rested on, that the location retains as input witnesses: every
+ * family, since spec §5.3 records the evidence behind a carried release
+ * whatever it is, and a `TransformedBy` only within the nesting cap.
+ */
+export const retainedGuardWitnesses = (
+  guards: readonly CfcAtom[] | undefined,
+): CfcAtom[] =>
+  (guards ?? []).filter((atom) =>
+    !isTransformedBy(atom) || inputWitnessDepth(atom) < INPUT_WITNESS_MAX_DEPTH
+  );
+
+/**
  * The atoms common to `left` and `right`, by structural equality: the meet
  * that makes a retained witness a claim about every input.
  */

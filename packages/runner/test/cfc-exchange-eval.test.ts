@@ -1111,6 +1111,12 @@ describe("CFC exchange-rule evaluation (B4)", () => {
         integrity: [transformedBy],
         confidentiality: [{ type: CFC_ATOM_TYPE.Space }],
       }))).toBe(true);
+      expect(isValueIntrinsicExchangeRule(releaseRule({
+        integrity: [{
+          type: "https://commonfabric.org/cfc/atom/IntegritySummary",
+          basis: "surviving-content",
+        }],
+      }))).toBe(true);
     });
 
     it("returns `false` for a rule with a boundary or grant guard", () => {
@@ -1131,6 +1137,12 @@ describe("CFC exchange-rule evaluation (B4)", () => {
           { type: CFC_ATOM_TYPE.BoundaryContext },
           { type: CFC_ATOM_TYPE.PromptSlotBound },
           { type: CFC_ATOM_TYPE.PolicyCertified },
+          { type: "https://commonfabric.org/cfc/atom/UIIntent" },
+          {
+            type: "https://commonfabric.org/cfc/atom/IntegritySummary",
+            basis: "consumed-inputs",
+          },
+          { type: "https://commonfabric.org/cfc/atom/IntegritySummary" },
           { type: CFC_ATOM_TYPE.Concept, uri: "https://example.com/c" },
           { type: { var: "$t" } },
           { var: "$any" },

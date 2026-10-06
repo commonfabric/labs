@@ -66,26 +66,63 @@ export const atomPropagationClass = (atom: unknown): PropagationClass => {
   return "value-bound";
 };
 
-// The spec §15 registry's class for the families `CLASS_BY_TYPE` classes
-// differently. The registry has `TransformedBy`, `Builtin`, `ExternalIngest`
-// and `UserSurfaceInput` value-bound, each a claim about how the exact
-// current value was produced, and `PromptSlotBound` provenance, evidence of
-// one binding event. The hereditary meet asks only whether a class is
-// hereditary, which the two tables agree on.
+const REGISTRY_ATOM_URI = "https://commonfabric.org/cfc/atom/";
+
+// The spec §15 registry's class for the families `CLASS_BY_TYPE` either
+// classes differently or does not list. The registry has `TransformedBy`,
+// `Builtin`, `ExternalIngest` and `UserSurfaceInput` value-bound, each a
+// claim about how the exact current value was produced, where
+// `CLASS_BY_TYPE` has them provenance. The provenance families are evidence
+// of an event, an environment or an access rather than claims about a value.
+// The hereditary meet asks only whether a class is hereditary, which the two
+// tables agree on.
 const REGISTRY_CLASS_BY_TYPE = new Map<string, PropagationClass>([
   [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
   [CFC_ATOM_TYPE.Builtin, "value-bound"],
   [CFC_ATOM_TYPE.ExternalIngest, "value-bound"],
   [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
-  [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
+  ...[
+    "AddMemberIntent",
+    "Attestation",
+    "AudienceRepresents",
+    "AudioTrigger",
+    "CaveatWarningRendered",
+    "ClientAppAttested",
+    "DeviceTier",
+    "GestureProvenance",
+    "PromptInfluenceVerified",
+    "PromptSlotBound",
+    "RuntimeImage",
+    "RuntimeObservationLimited",
+    "RuntimeObservationProfile",
+    "RuntimeProfile",
+    "RuntimeProvider",
+    "RuntimeTEE",
+    "SinkContentDisclaimerAttached",
+    "TrustedProvider",
+    "UIIntent",
+    "UserAcknowledgedCaveat",
+  ].map((name): [string, PropagationClass] => [
+    `${REGISTRY_ATOM_URI}${name}`,
+    "provenance",
+  ]),
 ]);
 
 /**
- * Whether integrity atoms of `type` are claims bound to the exact current
- * value they label: the families the spec §15 registry classes value-bound,
- * an unregistered family included (§15.1.1's default). An exchange rule
- * guarded only by such claims is value-intrinsic (§5.3).
+ * Whether every atom `pattern` can match is a claim bound to the exact current
+ * value it labels: a record naming a concrete family the spec §15 registry
+ * classes value-bound, an unregistered family included (§15.1.1's default).
+ * `IntegritySummary` is value-bound only for a `surviving-content` basis, so a
+ * pattern on it qualifies only when it names that basis. An exchange rule
+ * guarded only by such patterns is value-intrinsic (§5.3).
  */
-export const isValueBoundClaimType = (type: string): boolean =>
-  (REGISTRY_CLASS_BY_TYPE.get(type) ?? CLASS_BY_TYPE.get(type) ??
+export const matchesOnlyValueBoundClaims = (pattern: unknown): boolean => {
+  if (!isObjectOrArray(pattern) || Array.isArray(pattern)) return false;
+  const type = pattern.type;
+  if (typeof type !== "string") return false;
+  if (type === `${REGISTRY_ATOM_URI}IntegritySummary`) {
+    return pattern.basis === "surviving-content";
+  }
+  return (REGISTRY_CLASS_BY_TYPE.get(type) ?? CLASS_BY_TYPE.get(type) ??
     "value-bound") === "value-bound";
+};
