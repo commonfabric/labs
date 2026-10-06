@@ -3647,6 +3647,9 @@ describe("Schema: CFC authoring aliases", () => {
             'Omit<Sec<One> | Confidential<Two, readonly ["b"]>, "z">',
             { confidentiality: ["a", "b"] },
           ],
+          // `Omit` keeps the carrier every member holds, folding their policies
+          // into one carrier, though the value is only one of the members.
+          ['Omit<Integrity<One, readonly ["i"]> | Sec<One>, never>', secret],
           [
             'Pick<Integrity<One, readonly ["i"]> | Integrity<Two, readonly ["i"]>, "x">',
             { integrity: ["i"] },
@@ -3672,6 +3675,63 @@ describe("Schema: CFC authoring aliases", () => {
           expect(diagnostics).toEqual([]);
         });
       }
+
+      it("keeps a label on a member of the value where every member places it there or on the whole value", async () => {
+        // The first member's integrity was written around `One`, so it lands
+        // on `x` alone; the second's around both members, so it lands on the
+        // whole value.
+        const { schema, diagnostics } = await generate(
+          'Pick<(Integrity<One, readonly ["i"]> & { y: number }) | Integrity<{ x: string; y: number }, readonly ["i"]>, "x" | "y">',
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { x: { ...x, ifc: { integrity: ["i"] } }, y },
+          required: ["x", "y"],
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("labels a value by a member that is a lone carrier", async () => {
+        // `Confidential<unknown, …>` is its carrier alone, labeled like any
+        // other member. The value holds no member of `One`, around which `a`
+        // was written, so `a` lands nowhere.
+        const { schema, diagnostics } = await generate(
+          'Omit<Confidential<unknown, readonly ["b"]> | Sec<One>, never>',
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: {},
+          ifc: { confidentiality: ["b"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("places a policy written around a union with a member that lists no members on the whole value, past the members its other members name", async () => {
+        // `w` is no member of `{} | One`, though `{}` may hold its data there.
+        const { schema, diagnostics } = await generate(
+          "Omit<Sec<{} | One> & { w: number }, never>",
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { w: y },
+          required: ["w"],
+          ifc: secret,
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("places a policy written around a union with a member that lists no members on the whole value", async () => {
+        // `a` was written around `Confidential<unknown, …> | Two`, whose first
+        // member may hold its data under any key.
+        const { schema, diagnostics } = await generate(
+          'Omit<Sec<Confidential<unknown, readonly ["b"]> | Two>, never>',
+        );
+        const { confidentiality } = (schema as {
+          ifc: { confidentiality: string[] };
+        }).ifc;
+        expect([...confidentiality].sort()).toEqual(["a", "b"]);
+        expect(diagnostics).toEqual([]);
+      });
 
       it("reads an alias the checker distributes over a union operand as a union of its members, each with its own labels", async () => {
         const { schema, diagnostics } = await generate(
@@ -3762,6 +3822,11 @@ describe("Schema: CFC authoring aliases", () => {
             'SelectPair<Confidential<{ x?: string }, readonly ["b"]>>',
             'Pick<Sec<Confidential<{ x?: string }, readonly ["b"]> & { y: number }>, "x">',
             { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectPair<Confidential<{ x?: string }, readonly ["b"]> | Confidential<{ x?: string; z: 1 }, readonly ["c"]>>',
+            'Pick<Sec<(Confidential<{ x?: string }, readonly ["b"]> | Confidential<{ x?: string; z: 1 }, readonly ["c"]>) & { y: number }>, "x">',
+            { confidentiality: ["b", "a", "c"] },
           ],
           [
             "SelectPair<never>",
@@ -3863,6 +3928,11 @@ describe("Schema: CFC authoring aliases", () => {
           ],
           ["SelectSecOr<any>", 'Pick<Sec<any | Two>, "x">', undefined],
           ["View<unknown>", "Omit<unknown | Sec<Two>, never>", undefined],
+          [
+            'OmitSec<Confidential<unknown, readonly ["b"]> | Two>',
+            'Omit<Sec<Confidential<unknown, readonly ["b"]> | Two>, never>',
+            { confidentiality: ["b", "a"] },
+          ],
           [
             "OmitSecOr<unknown>",
             'Omit<Sec<unknown | Confidential<Two, readonly ["b"]>>, never>',
