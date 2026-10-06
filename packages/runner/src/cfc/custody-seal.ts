@@ -1902,7 +1902,7 @@ export async function commitCustodySeal(
     });
     receiptTx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
     signal?.throwIfAborted();
-    const result = await receiptTx.commit();
+    const result = await receiptTx.commit().settled;
     if (result.error) {
       throw new Error(`Custody seal receipt failed: ${result.error.message}`);
     }

@@ -139,7 +139,7 @@ describe("list builtin resume input-settle", () => {
       tx0,
     );
     rt1.run(tx0, compiled, { items }, rc1);
-    await tx0.commit();
+    await tx0.commit().settled;
     for (let k = 0; k < 10; k++) {
       await rc1.pull();
       await rt1.idle();
@@ -154,7 +154,7 @@ describe("list builtin resume input-settle", () => {
     rt1.scheduler.dispose();
     const tx1 = rt1.edit();
     rc1.withTx(tx1).key("items").set([]);
-    await tx1.commit();
+    await tx1.commit().settled;
     await rt1.patternManager.flushCompileCacheWrites();
     await sm1.synced();
     await rt1.dispose();
@@ -173,7 +173,7 @@ describe("list builtin resume input-settle", () => {
         compiled.resultSchema,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
       const started = await rt2.start(rc2);
       expect(started).toBe(true);
       for (let k = 0; k < 20; k++) {

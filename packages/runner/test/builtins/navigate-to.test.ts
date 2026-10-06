@@ -57,7 +57,7 @@ describe("navigate-to", () => {
       undefined,
       setupTx,
     );
-    expect((await setupTx.commit()).error).toBeUndefined();
+    expect((await setupTx.commit().settled).error).toBeUndefined();
 
     let resultCell: Cell<boolean> | undefined;
     const sendResult = (_tx: IExtendedStorageTransaction, result: unknown) => {
@@ -74,7 +74,7 @@ describe("navigate-to", () => {
 
     const firstTx = runtime.edit();
     builtin.action(firstTx);
-    expect((await firstTx.commit()).error).toBeUndefined();
+    expect((await firstTx.commit().settled).error).toBeUndefined();
     await runtime.settled();
     expect(navigations).toEqual([entityRefToString(target.entityId)]);
 
@@ -84,16 +84,16 @@ describe("navigate-to", () => {
     // result.
     const clearTx = runtime.edit();
     resultCell!.withTx(clearTx).set(false);
-    expect((await clearTx.commit()).error).toBeUndefined();
+    expect((await clearTx.commit().settled).error).toBeUndefined();
 
     const secondTx = runtime.edit();
     builtin.action(secondTx);
-    expect((await secondTx.commit()).error).toBeUndefined();
+    expect((await secondTx.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     expect(navigations.length).toBe(1);
     const readTx = runtime.edit();
     expect(resultCell!.withTx(readTx).get()).toBe(true);
-    await readTx.commit();
+    await readTx.commit().settled;
   });
 });

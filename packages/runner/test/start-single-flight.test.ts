@@ -53,7 +53,7 @@ describe("start()", () => {
       tx,
     );
     runtime.run(tx, doubler, { source: 3 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     runtime.runner.stop(resultCell);
     return resultCell;

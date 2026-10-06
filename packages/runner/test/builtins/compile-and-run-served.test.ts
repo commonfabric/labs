@@ -131,7 +131,7 @@ async function fixture(
       const hadEffect = tx.getCfcState().outbox.some((effect) =>
         effect.kind !== RUNNER_ACCEPTANCE_EFFECT_KIND
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       return hadEffect;
     },
@@ -248,7 +248,7 @@ describe("compile-and-run-served", () => {
         requestHash: hashOf(PROGRAM).toString(),
         phase: "resolved",
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       // Hiding the result is the child body's last act, so a result that is
       // there and not yet hidden is a child still starting up.
@@ -257,7 +257,7 @@ describe("compile-and-run-served", () => {
 
       const hide = f.runtime.edit();
       f.outputs.result.withTx(hide).key("isHidden").set(true);
-      expect((await hide.commit()).error).toBeUndefined();
+      expect((await hide.commit().settled).error).toBeUndefined();
 
       expect(await f.run(PROGRAM)).toBe(false);
       expect(f.created).toHaveLength(1);
@@ -275,7 +275,7 @@ describe("compile-and-run-served", () => {
         requestHash: hashOf(SECOND_PROGRAM).toString(),
         phase: "resolved",
       });
-      expect((await replacement.commit()).error).toBeUndefined();
+      expect((await replacement.commit().settled).error).toBeUndefined();
 
       expect(await f.run(SECOND_PROGRAM)).toBe(false);
       expect(f.created).toHaveLength(2);
@@ -307,7 +307,7 @@ describe("compile-and-run-served", () => {
         hashOf(PROGRAM).toString(),
       );
       expect(f.outputs.pending.withTx(tx).get()).toBe(true);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       expect(launches).toBe(1);
       expect(await f.run(PROGRAM)).toBe(false);
@@ -372,7 +372,7 @@ describe("compile-and-run-served", () => {
       );
       runtime.run(tx, parent, {}, result);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const value = await waitForCellValue<
         { pending: boolean; error?: string }
       >(
@@ -454,7 +454,7 @@ describe("compile-and-run-served", () => {
       );
       runtime.run(tx, parent, {}, result);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       // Either outcome ends the wait. A refused write never reaches the
       // result cell, so waiting on that cell alone would hang on exactly the
       // regression these assertions are written to name; the scheduler
@@ -496,7 +496,7 @@ describe("compile-and-run-served", () => {
       const hash = hashOf(PROGRAM).toString();
       f.inputs.withTx(seed).set(PROGRAM);
       f.memo.withTx(seed).set({ requestHash: hash, phase: "compiled" });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       expect(await f.run(PROGRAM)).toBe(true);
       expect(spaces).toEqual([f.inputs.space]);
@@ -529,7 +529,7 @@ describe("compile-and-run-served", () => {
       const seed = f.runtime.edit();
       f.inputs.withTx(seed).set(PROGRAM);
       f.memo.withTx(seed).set({ requestHash: hash, phase: "pending" });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const deferredRequests: Array<() => Promise<void>> = [];
       f.runtime.installSealDestination({
@@ -550,7 +550,7 @@ describe("compile-and-run-served", () => {
         kind: "derivation",
       });
       f.action(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(deferredRequests).toHaveLength(1);
       expect(launches).toBe(0);
       const settlement = waveSettlementOf(tx);
@@ -591,7 +591,7 @@ describe("compile-and-run-served", () => {
     try {
       const seed = f.runtime.edit();
       f.inputs.withTx(seed).set(PROGRAM);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const tx = f.runtime.edit();
       f.action(tx);
       const refusal = {
@@ -627,7 +627,7 @@ describe("compile-and-run-served", () => {
       const empty = { files: [], main: "" };
       const edit = f.runtime.edit();
       f.inputs.withTx(edit).set(empty);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
 
       compilation.resolve(child);
       await f.runtime.settled();
@@ -680,7 +680,7 @@ describe("compile-and-run-served", () => {
         const empty = { files: [], main: "", ...extra };
         const edit = f.runtime.edit();
         f.inputs.withTx(edit).set(empty);
-        expect((await edit.commit()).error).toBeUndefined();
+        expect((await edit.commit().settled).error).toBeUndefined();
         expect(f.inputs.get()).toEqual(empty);
         expect(await f.run(empty)).toBe(false);
         expect(f.outputs.pending.get()).toBe(false);
@@ -774,7 +774,7 @@ describe("compile-and-run-served", () => {
       });
       f.inputs.withTx(tx).set(newer);
       f.action(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const settlement = waveSettlementOf(tx);
       expect(settlement).toBeDefined();
       expect(f.memo.get()?.requestHash).toBe(hashOf(newer).toString());
@@ -834,7 +834,7 @@ describe("compile-and-run-served", () => {
           },
         },
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     /** Reads the confidentiality stored on the builtin's durable state. */

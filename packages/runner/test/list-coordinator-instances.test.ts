@@ -180,7 +180,7 @@ describe("list-coordinator-instances", () => {
                 undefined,
                 tx,
               ).set({ list: [element], op });
-              expect((await tx.commit()).error).toBeUndefined();
+              expect((await tx.commit().settled).error).toBeUndefined();
               await actorStorage.synced();
               await storage.syncInstance(
                 inputs.getAsNormalizedFullLink(),
@@ -248,7 +248,7 @@ describe("list-coordinator-instances", () => {
               }`,
             ).toBeDefined();
             runtime.prepareTxForCommit(tx);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
           }
           expect(childNames[0]).toBe(childNames[1]);
         } finally {

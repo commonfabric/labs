@@ -140,7 +140,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return sourceId;
   };
 
@@ -195,7 +195,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       },
     });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return { targetId, tx };
   };
 
@@ -240,7 +240,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             ]);
           }
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const entries = persistedEntriesFor(
             storageManager,
             spaceB,
@@ -411,7 +411,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             detail.address.path[0] === "cfc",
         );
         expect(cfcWrites).toEqual([]);
-        expect((await tx2.commit()).ok).toBeDefined();
+        expect((await tx2.commit().settled).ok).toBeDefined();
         const after2 = persistedEntriesFor(storageManager, spaceB, targetId);
         expect(after2).toEqual(after1);
       } finally {
@@ -458,7 +458,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           },
         });
         tx1.prepareCfc();
-        expect((await tx1.commit()).ok).toBeDefined();
+        expect((await tx1.commit().settled).ok).toBeDefined();
 
         // tx2: RAISE the dial (raising below the pin is allowed) and add a
         // second cross-space link write at ["field"].
@@ -487,7 +487,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           },
         });
         tx2.prepareCfc();
-        expect((await tx2.commit()).ok).toBeDefined();
+        expect((await tx2.commit().settled).ok).toBeDefined();
 
         const entries = persistedEntriesFor(storageManager, spaceB, targetId);
         const linkEntries = entries.filter((e) => e.origin === "link");
@@ -528,7 +528,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         );
         derived.set({ copied: `${raw.secret}!` });
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const derivedId = derived.getAsNormalizedFullLink().id;
         const entries = persistedEntriesFor(storageManager, spaceB, derivedId);
@@ -606,7 +606,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         }, runtimeWritePolicyAuthorization);
         substrate.set({ copied: `${raw.secret}!` });
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const entries = persistedEntriesFor(
           storageManager,
@@ -655,7 +655,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         );
         derived.set({ copied: `${raw.secret}!` });
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const derivedId = derived.getAsNormalizedFullLink().id;
         const entries = persistedEntriesFor(storageManager, spaceB, derivedId);
@@ -775,7 +775,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const { targetId } = await commitLinkWrite(
         runtime,
@@ -823,7 +823,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         valueDigest: "digest",
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const entries = persistedEntriesFor(storageManager, spaceB, targetId);
       const mark = entries.find((e) => e.origin === "external-ingest");
       expect(mark).toBeDefined();
@@ -871,7 +871,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
     };
 
     const writeUnderCeiling = async (
@@ -911,7 +911,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       );
       target.set({ out: "derived" });
       tx.prepareCfc();
-      return await tx.commit();
+      return await tx.commit().settled;
     };
 
     it("fits a committed User clause under a plaintext ceiling naming the same principal", async () => {

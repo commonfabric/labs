@@ -35,7 +35,7 @@ describe("createQueryResultProxy()", () => {
       seed,
     );
     cell.set([3, 5, 8]);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     try {
       const rows = createQueryResultProxy<number[]>(

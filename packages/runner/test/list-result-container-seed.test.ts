@@ -12,6 +12,7 @@ import {
 import type { Cell } from "../src/cell.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 // The seed is the list coordinators' recovery for a result container that was
 // never persisted: the resume reconcile defers on an undefined container and
@@ -93,7 +94,9 @@ describe("list-result-container-seed", () => {
       const tx: IExtendedStorageTransaction = openTransaction();
       (tx as any).commit = () => {
         tx.abort(rejection);
-        return Promise.resolve({ error: rejection });
+        return createTransactionCommitReceipt(
+          Promise.resolve({ error: rejection }),
+        );
       };
       return tx;
     };
@@ -117,7 +120,9 @@ describe("list-result-container-seed", () => {
         commits++;
         if (commits > 1) return commit();
         tx.abort(rejection);
-        return Promise.resolve({ error: rejection });
+        return createTransactionCommitReceipt(
+          Promise.resolve({ error: rejection }),
+        );
       };
       return tx;
     };

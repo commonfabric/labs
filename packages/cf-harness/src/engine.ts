@@ -15,6 +15,12 @@ import type {
 import type { JSONSchema } from "@commonfabric/api";
 import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
 import type {
+  ListCommandsInput,
+  ListCommandsOutput,
+  RunCommandInput,
+  RunCommandOutput,
+} from "./tools/loom-commands.ts";
+import type {
   SubmitResultInput,
   SubmitResultOutput,
 } from "./tools/submit-result.ts";
@@ -350,6 +356,8 @@ export interface BuiltinToolInputMap {
   loom_calendar_list: LoomCalendarListInput;
   loom_context: LoomContextInput;
   loom_profile: LoomProfileInput;
+  list_commands: ListCommandsInput;
+  run_command: RunCommandInput;
   submit_result: SubmitResultInput;
 }
 
@@ -388,6 +396,8 @@ export interface BuiltinToolOutputMap {
   loom_calendar_list: LoomRetrievalToolOutput;
   loom_context: LoomRetrievalToolOutput;
   loom_profile: LoomRetrievalToolOutput;
+  list_commands: ListCommandsOutput;
+  run_command: RunCommandOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -3059,6 +3069,7 @@ export class CfHarnessEngine {
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
+      loomCommands: this.config.loomCommands,
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
         this.mintReferentHandle(referent),
       mintResearchHandle: (

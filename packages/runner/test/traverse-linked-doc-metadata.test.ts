@@ -91,7 +91,7 @@ describe("traverse-linked-doc-metadata", () => {
         rawMetaWriteAuthorization,
       );
       source.withTx(seed).set({ ref: target });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const value = source.withTx(tx).asSchema(sourceSchema).get({

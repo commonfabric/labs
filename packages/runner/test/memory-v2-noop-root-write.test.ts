@@ -23,7 +23,7 @@ Deno.test("memory v2 treats an identical root write as a no-op", async () => {
 
   const tx1 = runtime.edit();
   tx1.writeValueOrThrow({ ...address, space }, { foo: "bar" });
-  assert((await tx1.commit()).ok);
+  assert((await tx1.commit().settled).ok);
 
   const provider = storage.open(space);
   const initialState = provider.replica.get(address) as
@@ -43,7 +43,7 @@ Deno.test("memory v2 treats an identical root write as a no-op", async () => {
   tx2.writeValueOrThrow({ ...address, space }, { foo: "bar" });
   assertEquals(Array.from(tx2.getWriteDetails?.(space) ?? []), []);
   assertEquals(txToReactivityLog(tx2).writes, []);
-  assert((await tx2.commit()).ok);
+  assert((await tx2.commit().settled).ok);
 
   const finalState = provider.replica.get(address) as
     | { since?: number }
@@ -74,7 +74,7 @@ Deno.test("memory v2 no-op commits do not reopen storage for an empty native com
 
   const seed = runtime.edit();
   seed.writeValueOrThrow({ ...address, space }, { foo: "bar" });
-  assert((await seed.commit()).ok);
+  assert((await seed.commit().settled).ok);
 
   const tx = runtime.edit();
   tx.writeValueOrThrow({ ...address, space }, { foo: "bar" });
@@ -88,7 +88,7 @@ Deno.test("memory v2 no-op commits do not reopen storage for an empty native com
   }) as typeof storage.open;
 
   try {
-    assert((await tx.commit()).ok);
+    assert((await tx.commit().settled).ok);
     assertEquals(openCalls, 0);
   } finally {
     storage.open = originalOpen;
@@ -117,7 +117,7 @@ Deno.test("memory v2 no-op commits skip stale-read validation when there are no 
   try {
     const seed = runtime.edit();
     seed.writeValueOrThrow({ ...address, space }, { foo: "bar" });
-    assert((await seed.commit()).ok);
+    assert((await seed.commit().settled).ok);
 
     const staleNoop = runtime.edit();
     assertEquals(
@@ -129,9 +129,9 @@ Deno.test("memory v2 no-op commits skip stale-read validation when there are no 
 
     const concurrent = runtime.edit();
     concurrent.writeValueOrThrow({ ...address, space }, { foo: "baz" });
-    assert((await concurrent.commit()).ok);
+    assert((await concurrent.commit().settled).ok);
 
-    assert((await staleNoop.commit()).ok);
+    assert((await staleNoop.commit().settled).ok);
   } finally {
     await runtime.dispose();
     await storage.close();
@@ -161,7 +161,7 @@ Deno.test("memory v2 treats an identical nested write as a no-op", async () => {
       profile: { name: "Ada" },
       stats: { visits: 1 },
     });
-    assert((await seed.commit()).ok);
+    assert((await seed.commit().settled).ok);
 
     const provider = storage.open(space);
     const initialState = provider.replica.get(address) as
@@ -184,7 +184,7 @@ Deno.test("memory v2 treats an identical nested write as a no-op", async () => {
       path: ["stats", "visits"],
     }, 1);
     assertEquals(Array.from(tx.getWriteDetails?.(space) ?? []), []);
-    assert((await tx.commit()).ok);
+    assert((await tx.commit().settled).ok);
 
     const finalState = provider.replica.get(address) as
       | { since?: number }

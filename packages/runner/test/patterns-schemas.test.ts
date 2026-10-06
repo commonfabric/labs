@@ -39,7 +39,7 @@ describe("Pattern Runner - Schemas", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -79,7 +79,7 @@ describe("Pattern Runner - Schemas", () => {
       tx,
     );
     settingsCell.withTx(tx).set({ value: 5 });
-    await tx.commit();
+    await tx.commit().settled;
     await settingsCell.pull();
     tx = runtime.edit();
 

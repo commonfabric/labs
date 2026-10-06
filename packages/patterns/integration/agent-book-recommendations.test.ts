@@ -268,7 +268,7 @@ describe("agent book recommendations", () => {
           ),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const state = result.key("recommendation");
         await waitForCellValue(
           runtime,

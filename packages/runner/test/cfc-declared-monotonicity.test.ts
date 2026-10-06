@@ -210,7 +210,7 @@ const commitWrite = async (
   const docId = cell.getAsNormalizedFullLink().id;
   cell.set(value as never);
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   return {
     ...(result.error !== undefined ? { error: result.error } : {}),
     docId,
@@ -256,7 +256,7 @@ const rewriteStoredEntries = async (
     type: "application/json",
     path: [],
   }, cloned as never);
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   expect(result.error).toBeUndefined();
 };
 
@@ -510,7 +510,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         // Re-asserting enforce is fine.
         tx.setCfcDeclaredMonotonicityMode("enforce");
         expect(tx.getCfcState().declaredMonotonicityMode).toBe("enforce");
-        await tx.commit();
+        await tx.commit().settled;
       } finally {
         await runtime.dispose({ closeStorage: false });
         await storageManager.close();
@@ -770,7 +770,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       cell.set({ out: "v2" } as never);
       opts.beforeSecondCommit?.(tx, first.docId);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       return {
         docId: first.docId,
         error: result.error,
@@ -878,7 +878,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         );
         cell.key("out").set("v2");
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
         const entry = declaredEntryAt(
           persistedEntriesFor(storageManager, first.docId),
@@ -951,7 +951,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
           },
         });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
         const entries = persistedEntriesFor(storageManager, first.docId);
         // The stored (stronger) declared entry carried forward; the weakened
@@ -1582,7 +1582,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
           first.docId,
         );
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         const message = String((result.error as Error | undefined)?.message);
         // /out is exempted; /aux still fails closed.
         expect(message).toContain("at /aux");

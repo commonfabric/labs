@@ -94,7 +94,7 @@ describe("llm-dialog-special-objects", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });

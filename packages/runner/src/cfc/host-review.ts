@@ -1,6 +1,6 @@
 /**
- * What the trusted host's reviewed operations share: the snapshot copy, the
- * custody seal, and the reviewed intent each inspect what they will show,
+ * What the trusted host's reviewed operations share: the snapshot copy and the
+ * custody seal each inspect what they will show,
  * hand the host a preview, and write only if what they read still holds when
  * a trusted gesture commits. This module holds the pieces of that pattern
  * that do not depend on what is reviewed: recording a review's reads and
@@ -149,6 +149,35 @@ export const isTrustedGestureOn = (event: unknown, surface: string): boolean =>
   isObjectNotArray(event.provenance) &&
   isObjectNotArray(event.provenance.ui) &&
   event.provenance.ui.pattern === surface;
+
+/** The provenance a trusted gesture on a host surface carries. */
+export type HostGestureProvenance = {
+  /** Always `dom`, the one origin `isTrustedGesture()` admits. */
+  origin: "dom";
+
+  /** Always `true`: the event came from a trusted surface. */
+  trusted: true;
+
+  /** The host surface the gesture was made on. */
+  ui: {
+    /** The surface, which `isTrustedGestureOn()` compares to its own. */
+    pattern: string;
+  };
+};
+
+/**
+ * Builds the provenance of a trusted gesture on the host surface `surface`,
+ * which `isTrustedGestureOn()` accepts for that surface. It returns a fresh
+ * object on each call. The event it goes on is accepted only once it also
+ * carries the renderer-trust mark, which `markRendererTrustedEvent()` applies.
+ */
+export const hostGestureProvenance = (
+  surface: string,
+): HostGestureProvenance => ({
+  origin: "dom",
+  trusted: true,
+  ui: { pattern: surface },
+});
 
 /**
  * Whether atom pattern `pattern` holds a `{ var }` placeholder anywhere, or a

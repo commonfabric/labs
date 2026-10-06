@@ -233,7 +233,7 @@ Deno.test("debug deployment refuses a pre-created unprotected piece", async () =
     );
     const seed = runtime.edit();
     squattedPiece.withTx(seed).setRawUntyped({ spoofed: true });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
 
     await assertRejects(
@@ -287,7 +287,7 @@ Deno.test("debug deployment refuses an unprotected registration", async () => {
     };
     const seed = runtime.edit();
     registration.withTx(seed).setRawUntyped(squattedRegistration);
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
 
     await assertRejects(
@@ -366,7 +366,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       retiredCauses: [],
     });
     attack.prepareCfc();
-    const result = await attack.commit();
+    const result = await attack.commit().settled;
     assertEquals(result.error !== undefined, true);
 
     const debugPiece = await readerManager.getPieceCell(
@@ -400,7 +400,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       ownerDid: "did:key:other-owner",
     });
     argumentAttack.prepareCfc();
-    const argumentAttackResult = await argumentAttack.commit();
+    const argumentAttackResult = await argumentAttack.commit().settled;
     assertEquals(argumentAttackResult.error !== undefined, true);
     assertEquals(argument.getRaw(), originalArgument);
 
@@ -414,7 +414,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       ownerDid: "did:key:other-owner",
     });
     ownerUpdate.prepareCfc();
-    const ownerUpdateResult = await ownerUpdate.commit();
+    const ownerUpdateResult = await ownerUpdate.commit().settled;
     if (ownerUpdateResult.error) throw ownerUpdateResult.error;
     await assertRejects(
       () => deployAgentSessionsDebugView(readerManager, target),
@@ -477,7 +477,7 @@ Deno.test("debug registration rejects another owner-scoped writer", async () => 
     });
     registration.withTx(seed).applyCfcSchemaToExistingValue();
     seed.prepareCfc();
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
     assertEquals(
       cellHasOwnerProtection(runtime.readTx(), registration, session.as.did()),

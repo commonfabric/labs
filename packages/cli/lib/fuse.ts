@@ -9,6 +9,7 @@ import {
   SEPARATOR,
 } from "@std/path";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { CF_PERMISSION_FLAGS } from "./cf-permissions.ts";
 import { cliName } from "./cli-name.ts";
 import {
   type FuseMountFlags,
@@ -577,7 +578,7 @@ exec "${Deno.execPath()}" "$@"
     : `#!/usr/bin/env bash
 export CF_EXEC_SHEBANG=1
 export CF_CLI_NAME=${displayCliName}
-exec "${Deno.execPath()}" run --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run "${
+exec "${Deno.execPath()}" run ${CF_PERMISSION_FLAGS.join(" ")} "${
       cliMod(importMetaUrl)
     }" "$@"
 `;

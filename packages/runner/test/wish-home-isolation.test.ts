@@ -60,7 +60,7 @@ describe("wish-home-isolation", () => {
             favorites: [{ cell: provider, tags: ["loom_resources_v1"] }],
           },
         });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const setup = runtime.edit();
       const parent = runtime.getCell(
@@ -92,7 +92,7 @@ describe("wish-home-isolation", () => {
           },
         },
       });
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       const observed: unknown[] = [];
       const action = wish(
         inputs as Cell<[unknown, unknown]>,
@@ -115,7 +115,7 @@ describe("wish-home-isolation", () => {
           scopeKeyIdentity: { principal: user.did(), sessionId: user.did() },
         });
         action.action(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       expect(observed.map((state) => (state as { name: string }).name))
         .toEqual([users[0].did(), users[1].did(), users[0].did()]);

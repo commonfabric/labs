@@ -290,7 +290,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     });
     resultCell.withTx(resultAttack).setRawUntyped({ compromised: true });
     resultAttack.prepareCfc();
-    const resultAttackCommit = await resultAttack.commit();
+    const resultAttackCommit = await resultAttack.commit().settled;
     assertEquals(resultAttackCommit.error !== undefined, true);
 
     let result = await piece.result.get() as Record<string, unknown>;
@@ -321,7 +321,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     (promptCell as Cell<string>).withTx(promptTx).set(
       "Continue from the deployed debug view",
     );
-    const promptCommit = await promptTx.commit();
+    const promptCommit = await promptTx.commit().settled;
     if (promptCommit.error) throw promptCommit.error;
     await runtime.settled();
 
@@ -718,7 +718,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
       .asSchema(agentOwnerSchema(session.as.did(), false)).withTx(commandTx)
       .setRawUntyped(pageCommands);
     commandTx.prepareCfc();
-    let commandCommit = await commandTx.commit();
+    let commandCommit = await commandTx.commit().settled;
     if (commandCommit.error) throw commandCommit.error;
     await runtime.settled();
 
@@ -758,7 +758,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
         }),
       ]);
     commandTx.prepareCfc();
-    commandCommit = await commandTx.commit();
+    commandCommit = await commandTx.commit().settled;
     if (commandCommit.error) throw commandCommit.error;
     await runtime.settled();
 
@@ -795,7 +795,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     });
     attack.writeValueOrThrow(commandLink, []);
     attack.prepareCfc();
-    const attackResult = await attack.commit();
+    const attackResult = await attack.commit().settled;
     assertEquals(attackResult.error !== undefined, true);
   } finally {
     await runtime.dispose();
@@ -865,7 +865,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
       "claude-agent-sdk",
     );
     staleIndexTx.prepareCfc();
-    const staleIndexCommit = await staleIndexTx.commit();
+    const staleIndexCommit = await staleIndexTx.commit().settled;
     if (staleIndexCommit.error) throw staleIndexCommit.error;
     const piece = await deployDebugPiece(manager, target);
     await runtime.settled();
@@ -1072,7 +1072,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
     );
     const filterTx = runtime.edit();
     (filter as Cell<string>).withTx(filterTx).set("No matching session");
-    await filterTx.commit();
+    await filterTx.commit().settled;
     await runtime.settled();
 
     const filteredResult = await piece.result.get();
@@ -1104,7 +1104,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
     );
     const clearFilterTx = runtime.edit();
     (filter as Cell<string>).withTx(clearFilterTx).set("");
-    await clearFilterTx.commit();
+    await clearFilterTx.commit().settled;
     await runtime.settled();
 
     const unfilteredResult = await piece.result.get();

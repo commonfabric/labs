@@ -96,7 +96,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -162,7 +162,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     } else {
       tx.prepareCfc();
     }
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const outId = out.getAsNormalizedFullLink().id;
     // The stored value pins the document the join is read from, so a caller
     // finding no join is finding a document with no derived entry.
@@ -432,7 +432,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
       { copied: true },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     // C2 splits the derived stamp into a value + shape pair (integrity
     // rides the value entry) — collect across the pair.
@@ -523,7 +523,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
       id: `cid:${guarded.taggedHashString}`,
       path: [],
     }, { value: guarded.schema });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     const taintId = await seedDoc(rt, "occ-carry-forward-taint", { n: 1 }, [
       { path: [], label: { confidentiality: [audience("taint")] } },
     ]);
@@ -533,7 +533,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     const cell = rt.getCell(space, "occ-carry-forward", undefined, tx);
     cell.key("other").set(2);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const stored = entriesOf(id);
     // The write really did rewrite the labelMap (the flow stamp landed) —

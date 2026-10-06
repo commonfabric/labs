@@ -102,7 +102,7 @@ describe("createProfile()", () => {
     // deno-lint-ignore no-explicit-any
     host = runtime.run(tx, parent as any, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    const setup = await tx.commit();
+    const setup = await tx.commit().settled;
     expect(setup.error).toBeUndefined();
     await host.pull();
     // The connections the command would open: to the home space, answering
@@ -222,7 +222,7 @@ describe("createProfile()", () => {
       redirectTx,
     );
     slot.set(picked![1]);
-    expect((await redirectTx.commit()).error).toBeUndefined();
+    expect((await redirectTx.commit().settled).error).toBeUndefined();
     for (
       const redirectedCandidates of [
         [[signer.did(), slot.withTx()]] as [string, Cell<unknown>][],
