@@ -537,6 +537,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
    * reports the loss to the close receiver itself, without waiting for the
    * socket's own close or error event, so the reconnect that replays the
    * payload always starts.
+   *
+   * The failure is the payload's own, made with `writeFailedError()`, only
+   * when the socket was current and open: a write refused because the socket
+   * is closing, or because it was already replaced, says nothing about the
+   * payload.
    */
   async #write(
     connection: MemorySocketConnection,
@@ -545,13 +550,17 @@ export class WebSocketTransport implements MemoryClient.Transport {
     try {
       await connection.send(frame);
     } catch (cause) {
-      const error = MemoryClient.connectionError(
-        cause instanceof Error
-          ? cause.message
-          : "Memory websocket write failed",
-        cause,
-      );
       const { socket } = connection;
+      const ownFailure = this.#socket === socket &&
+        socket.readyState === WebSocket.OPEN;
+      const error = (ownFailure
+        ? MemoryClient.writeFailedError
+        : MemoryClient.connectionError)(
+          cause instanceof Error
+            ? cause.message
+            : "Memory websocket write failed",
+          cause,
+        );
       if (this.#socket === socket) {
         this.#detachSocket(error);
         this.#closeReceiver(error);

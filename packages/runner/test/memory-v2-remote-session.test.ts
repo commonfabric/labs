@@ -2036,4 +2036,102 @@ describe("WebSocketTransport failure signaling", () => {
       await server.close();
     }
   });
+  it("rejects a commit whose own write fails on one connection after another, and lands the commit behind it", async () => {
+    // The first commit's write fails on every socket, so each replay takes the
+    // new connection down with it. After a bounded number of connections the
+    // client rejects that commit with the write's error, and the commit behind
+    // it lands.
+
+    DrivableWebSocket.instances.length = 0;
+    const server = newSharedServer();
+    const writeFailure = new Error("frame refused by socket");
+    let refusedWrites = 0;
+    const transport = new TextOnlyTransport(
+      new URL("wss://memory.test/api/storage/memory"),
+      true,
+      () => {},
+      serverWiredSockets(server, (frame) => {
+        if (frameType(frame) !== "transact") return;
+        const { commit } = decodeMemoryBoundary(requireTextFrame(frame)) as {
+          commit: { localSeq: number };
+        };
+        if (commit.localSeq !== 1) return;
+        refusedWrites += 1;
+        return Promise.reject(writeFailure);
+      }),
+    );
+    const client = await MemoryClient.connect({ transport });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-refused-write",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const settled = { first: false, second: false };
+      const first = session.transact(commitAt(1, "of:refused"));
+      const second = session.transact(commitAt(2, "of:behind"));
+      first.then(() => settled.first = true, () => settled.first = true);
+      second.then(() => settled.second = true, () => settled.second = true);
+
+      await clock.settle();
+      await clock.tick(600_000);
+      await clock.settle();
+
+      expect(settled).toEqual({ first: true, second: true });
+      await expect(first).rejects.toBe(writeFailure);
+      expect((await second).seq).toBe(1);
+      expect(refusedWrites).toBe(5);
+      expect(client.isConnected()).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+  it("keeps replaying a commit that closing sockets refuse, and lands it once a socket accepts it", async () => {
+    // Each socket has started closing when the commit's write reaches it, as
+    // a peer restarting over and over would leave it. A refusal from a closing
+    // socket says nothing about the commit, so none counts against it, however
+    // many there are in a row.
+
+    DrivableWebSocket.instances.length = 0;
+    const server = newSharedServer();
+    let refusedWrites = 0;
+    const transport = new TextOnlyTransport(
+      new URL("wss://memory.test/api/storage/memory"),
+      true,
+      () => {},
+      serverWiredSockets(server, (frame) => {
+        if (frameType(frame) !== "transact" || refusedWrites === 6) return;
+        refusedWrites += 1;
+        DrivableWebSocket.instances.at(-1)!.readyState =
+          DrivableWebSocket.CLOSING;
+        return Promise.reject(
+          new Error("WebSocket is not open: readyState 2 (CLOSING)"),
+        );
+      }),
+    );
+    const client = await MemoryClient.connect({ transport });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-closing-refusals",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const outcome = Promise.allSettled([
+        session.transact(commitAt(1, "of:refused-while-closing")),
+      ]);
+
+      await clock.settle();
+      await clock.tick(600_000);
+      await clock.settle();
+
+      const [result] = await outcome;
+      expect(result.status).toBe("fulfilled");
+      expect(refusedWrites).toBe(6);
+      expect(client.isConnected()).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

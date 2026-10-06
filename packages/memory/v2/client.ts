@@ -114,7 +114,10 @@ export type Transport = {
    * for replay on the next connection, so the transport must report the same
    * loss to its close receiver, which starts the reconnect that replays it;
    * `reset()` and `close()` are the exceptions, as the client calls them
-   * itself. Any other rejection fails the request with that error.
+   * itself. A transport whose write of this very payload failed on an open
+   * connection rejects with `writeFailedError()` instead, so that the client
+   * stops replaying a commit whose own write keeps failing. Any other
+   * rejection fails the request with that error.
    */
   send(payload: string): Promise<void>;
 
@@ -291,6 +294,25 @@ type PresenceRoomState = {
 
   /** Settles when the relay has responded to the current join. */
   joined: Promise<void>;
+};
+
+/**
+ * A commit a session has issued and not yet seen answered, kept for replay on
+ * the next connection while its outcome is unknown.
+ */
+type OutstandingCommit = {
+  /** The commit, sent unchanged on every attempt. */
+  commit: ClientCommit;
+
+  /** Settles with the server's verdict on the commit. */
+  pending: PromiseWithResolvers<AppliedCommit>;
+
+  /**
+   * How many attempts failed because the commit's own write failed on an open
+   * connection. The client stops replaying the commit once this reaches
+   * `MAX_COMMIT_WRITE_FAILURES`.
+   */
+  writeFailures?: number;
 };
 
 export type WatchMutationResult = {
@@ -627,6 +649,7 @@ export class Client {
         (error as Error & { aclRevision?: number }).aclRevision =
           result.error.aclRevision;
       }
+      serverVerdicts.add(error);
       throw error;
     }
     return result.ok as Result;
@@ -1375,10 +1398,7 @@ export class Client {
 }
 
 export class SpaceSession {
-  #outstandingCommits = new Map<number, {
-    commit: ClientCommit;
-    pending: PromiseWithResolvers<AppliedCommit>;
-  }>();
+  #outstandingCommits = new Map<number, OutstandingCommit>();
   #watchSpecs: WatchSpec[] = [];
   #viewInterests: ViewInterest[] = [];
   #viewsDirty = false;
@@ -3012,10 +3032,7 @@ export class SpaceSession {
 
   #sendOutstandingCommit(
     localSeq: number,
-    pendingCommit: {
-      commit: ClientCommit;
-      pending: PromiseWithResolvers<AppliedCommit>;
-    },
+    pendingCommit: OutstandingCommit,
     options: {
       throwOnConnectionError?: boolean;
     } = {},
@@ -3047,6 +3064,25 @@ export class SpaceSession {
         }
       } catch (error) {
         if (isConnectionError(error) || isSessionRevokedError(error)) {
+          // A commit whose own write fails on one new connection after
+          // another is at fault itself, and replaying it again would only take
+          // the next connection down with it. It is rejected with the write's
+          // error rather than a `ConnectionError`, which a caller would retry.
+          if (isOwnWriteFailure(error)) {
+            pendingCommit.writeFailures = (pendingCommit.writeFailures ?? 0) +
+              1;
+          }
+          if ((pendingCommit.writeFailures ?? 0) >= MAX_COMMIT_WRITE_FAILURES) {
+            if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
+              this.#outstandingCommits.delete(localSeq);
+            }
+            const cause = (error as Error).cause;
+            pendingCommit.pending.reject(
+              cause instanceof Error
+                ? cause
+                : new Error((error as Error).message, { cause }),
+            );
+          }
           if (options.throwOnConnectionError) {
             throw error;
           }
@@ -3406,11 +3442,37 @@ export const connectionError = (message: string, cause?: unknown): Error => {
   return error;
 };
 
+/**
+ * Like `connectionError()`, except that it also marks the payload's own write
+ * as what failed, on a connection that was open until then, as opposed to a
+ * payload lost because the connection closed under it. The client counts such
+ * failures against a commit, and stops replaying a commit whose own write has
+ * failed `MAX_COMMIT_WRITE_FAILURES` times.
+ */
+export const writeFailedError = (message: string, cause?: unknown): Error =>
+  Object.assign(connectionError(message, cause), { ownWriteFailed: true });
+
+/**
+ * How many attempts may fail because one commit's own write failed before the
+ * client stops replaying it and rejects it with the write's error.
+ */
+const MAX_COMMIT_WRITE_FAILURES = 5;
+
+const isOwnWriteFailure = (error: unknown): boolean =>
+  (error as { ownWriteFailed?: unknown } | null)?.ownWriteFailed === true;
+
 const toConnectionError = (error?: Error): Error =>
   connectionError(error?.message ?? "memory transport closed", error);
 
+/**
+ * The errors `Client.request()` built from a server response. Each is the
+ * server's verdict on a request, whatever its message says, so none of them is
+ * a lost connection.
+ */
+const serverVerdicts = new WeakSet<Error>();
+
 const isConnectionError = (error: unknown): boolean =>
-  error instanceof Error &&
+  error instanceof Error && !serverVerdicts.has(error) &&
   (error.name === "ConnectionError" ||
     error.message.includes("transport closed") ||
     error.message.includes("disconnect"));
