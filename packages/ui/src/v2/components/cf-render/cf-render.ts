@@ -131,6 +131,9 @@ export function hasVariantValue(value: unknown, key: string): boolean {
  *   [TILE_UI]) when exported, otherwise the per-variant platform default. The
  *   full [UI] is the universal floor, so every piece renders at every variant.
  *
+ * @slot - Shown only while there is no `cell`, which is where a view puts the
+ *   access placeholder while a space the cell is read from is out of reach.
+ *
  * @example
  * // Full standalone rendering (default)
  * <cf-render .cell=${myPieceCell}></cf-render>
@@ -420,8 +423,11 @@ export class CFRender extends BaseElement {
     // Chip is inline and resolves to a lightweight default fast — a full-size
     // spinner would reserve the wrong space, so skip it for chip. A cell the
     // view's render policy withholds never arrives, so with no cell there is
-    // nothing loading and nothing to show.
+    // nothing loading, and what shows is the element's own children: the
+    // access placeholder the view puts there while the cell's space is out of
+    // reach, or nothing.
     return html`
+      ${this.cell === undefined ? html`<slot></slot>` : null}
       ${this.cell !== undefined && !this._hasRendered &&
           this.variant !== "chip"
         ? html`

@@ -277,6 +277,87 @@ Deno.test("github spend: enterprise summary includes all cost centers and enterp
   );
 });
 
+Deno.test("github spend: a GitHub App reads enterprise billing with its enterprise installation's token", async () => {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign"],
+  );
+  const pkcs8 = new Uint8Array(
+    await crypto.subtle.exportKey("pkcs8", pair.privateKey),
+  );
+  const privateKey = `-----BEGIN PRIVATE KEY-----\n${
+    btoa(Array.from(pkcs8, (byte) => String.fromCharCode(byte)).join(""))
+  }\n-----END PRIVATE KEY-----\n`;
+  const requests: { path: string; authorization: string }[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      ...enterpriseSummaryRoutes(2026, 1, 20, {
+        5: [{ product: "actions", netAmount: 18 }],
+        18: [{ product: "actions", netAmount: 0 }],
+      }),
+      "app/installations?per_page=100&page=1": [
+        { id: 3, target_type: "Organization", account: { login: ORG } },
+        { id: 9, target_type: "Enterprise", account: { slug: ENTERPRISE } },
+      ],
+      "app/installations/9/access_tokens": {
+        token: "enterprise-installation",
+        expires_at: "2999-01-01T00:00:00Z",
+      },
+    },
+    {
+      GH_APP_CLIENT_ID: "Iv23spend",
+      GH_APP_PRIVATE_KEY: privateKey,
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+    },
+    (path, init) => {
+      requests.push({
+        path,
+        authorization: new Headers(init?.headers).get("authorization") ?? "",
+      });
+    },
+  );
+
+  assertEquals(v.value, "~$31/mo");
+  const app = requests.filter(({ path }) => path.startsWith("app/"));
+  assertEquals(app.map(({ path }) => path), [
+    "app/installations?per_page=100&page=1",
+    "app/installations/9/access_tokens",
+  ]);
+  assert(app.every(({ authorization }) => authorization.split(".").length === 3));
+  const billing = requests.filter(({ path }) => path.startsWith("enterprises/"));
+  assert(billing.length > 0);
+  assert(
+    billing.every(({ authorization }) =>
+      authorization === "Bearer enterprise-installation"
+    ),
+  );
+});
+
+Deno.test("github spend: an organization's billing is not read through a GitHub App", async () => {
+  const requests: string[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {},
+    {
+      GH_APP_CLIENT_ID: "Iv23spend",
+      GH_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
+      GH_BILLING_ORG: ORG,
+    },
+    (path) => requests.push(path),
+  );
+
+  assertEquals(v.status, "unknown");
+  assertEquals(v.sub, "set GH_BILLING_TOKEN or GH_TOKEN");
+  assertEquals(requests, []);
+});
+
 Deno.test("github spend: an unavailable enterprise day leaves a partial, gray projection", async () => {
   const routes = enterpriseSummaryRoutes(2026, 1, 20, {
     1: [{ product: "actions", netAmount: 18 }],

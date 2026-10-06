@@ -747,6 +747,36 @@ Both calls throw on a serving runtime for now.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
 details.
 
+### Naming a space
+
+`spaceOf(target)` returns the DID of the space `target`'s value lives in: the
+pattern's own space for a cell there, or a new one for a child a handler just
+created with `inSpace()`. Write it into data that has to name a space, such as
+an invitation, and have the reader check it with `isWellFormedDID()`.
+
+```tsx
+// Shown at module scope.
+const Bakery = pattern<{ name: string }>(({ name }) => ({ name }));
+
+const openBakery = handler<
+  { baker: DID },
+  { invitations: Writable<{ space: DID; baker: DID }[]> }
+>(({ baker }, { invitations }) => {
+  const bakery = Bakery.inSpace(undefined, {
+    grants: { [baker]: "WRITE" as const },
+  })({ name: "Cruller Corner" });
+  const space = spaceOf(bakery);
+  if (space !== undefined) invitations.push({ space, baker });
+});
+```
+
+Call it where `spaceAccess(target)` can be called. It returns `undefined` for
+a `target` of `undefined`, and throughout a run that names a space `inSpace()`
+has not resolved yet: the runtime creates the space once that run ends,
+discards what it wrote, and runs it again, and that next run gets the DID.
+[`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
+details.
+
 ## Mapping Shared Lists
 
 `map` is the normal way to render shared lists. Pass object references or cell

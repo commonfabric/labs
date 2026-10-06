@@ -1,7 +1,7 @@
 /** Shares the publisher's current activity between its two dashboard tiles. */
 
 import { REPO, TEST_SELECTION_WORKFLOW } from "./config.ts";
-import { github, memo } from "./lib.ts";
+import { dashboardGitHubCredential, github, memo } from "./lib.ts";
 import type { Ctx } from "./types.ts";
 
 interface ActivityRun {
@@ -28,8 +28,8 @@ export function publisherRunning(ctx: Ctx): Promise<boolean | undefined> {
   let read = readers.get(ctx);
   if (!read) {
     read = memo(20_000, async () => {
-      const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) return undefined;
+      const credential = dashboardGitHubCredential(ctx);
+      if (!credential) return undefined;
       const [newest, ...byStatus] = await Promise.all(
         [
           `${RUNS}?per_page=10`,
@@ -37,7 +37,7 @@ export function publisherRunning(ctx: Ctx): Promise<boolean | undefined> {
             (status) => `${RUNS}?branch=main&status=${status}&per_page=10`,
           ),
         ].map((path) =>
-          github<{ workflow_runs: ActivityRun[] }>(path, token)
+          github<{ workflow_runs: ActivityRun[] }>(path, credential)
         ),
       );
       if (newest.workflow_runs.some(unfinishedOnMain)) return true;
@@ -49,7 +49,7 @@ export function publisherRunning(ctx: Ctx): Promise<boolean | undefined> {
       );
       const current = await Promise.all(
         [...older].map((id) =>
-          github<ActivityRun>(`repos/${REPO}/actions/runs/${id}`, token)
+          github<ActivityRun>(`repos/${REPO}/actions/runs/${id}`, credential)
         ),
       );
       return current.some(unfinishedOnMain);

@@ -404,6 +404,10 @@ the policy placeholder in the same places. The exceptions:
 
 - A piece whose own document the viewer may not see shows nothing at all, where
   opening it shows the placeholder.
+- A piece in a space the viewer cannot reach right now, as after being removed
+  from it or before a grant arrives, shows the "Access unavailable"
+  placeholder that any content of that space shows, and shows the piece again
+  once the space is back in reach.
 - A `cf-cfc-render-boundary` that only declassifies does not reach into the
   piece: what it would release shows as the placeholder. A boundary that also
   lowers the ceiling falls under the next item.
@@ -417,7 +421,9 @@ the policy placeholder in the same places. The exceptions:
 `cf-picker` shows each of its `$items` through a `cf-render` of its own, so
 each item passes the same gates as a piece bound to `cf-render`, with the same
 exceptions. Where a `cf-render` would show nothing for one item, the picker
-shows nothing at all, since it is handed the whole list or none of it.
+shows nothing at all, since it is handed the whole list or none of it, and
+where the list or an item lies in a space out of reach, the picker shows the
+"Access unavailable" placeholder in its place.
 `cf-map` shows each marker's and circle's `popup` the same way. Where the
 `$value`'s type holds each popup as a cell, each popup passes the gates of a
 piece bound to `cf-render`; otherwise the map reads everything its popups
@@ -465,8 +471,9 @@ A piece exports a variant when its own document holds any value at the key,
 what it holds, so a key holding `null` renders as an empty variant rather than
 the default. Leave the key out to get the default.
 
-A `cf-render` with no cell shows nothing; it shows its loading state only while
-the cell it holds is rendering.
+A `cf-render` with no cell shows nothing of its own, only the "Access
+unavailable" placeholder while its cell's space is out of reach; it shows its
+loading state only while the cell it holds is rendering.
 
 A pattern exports the spectrum by returning the sibling keys:
 

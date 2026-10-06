@@ -163,6 +163,7 @@ describe("memory v2 flags", () => {
       presenceV1: true,
       sessionClose: true,
       connectionAuth: true,
+      admissionNotice: true,
       routedAuthV1: false,
       syncSchemaTableV2: false,
     });
@@ -193,6 +194,7 @@ describe("memory v2 flags", () => {
       presenceV1: true,
       sessionClose: true,
       connectionAuth: true,
+      admissionNotice: true,
       routedAuthV1: false,
       syncSchemaTableV2: true,
     });
@@ -226,6 +228,7 @@ describe("memory v2 flags", () => {
         presenceV1: true,
         sessionClose: true,
         connectionAuth: true,
+        admissionNotice: true,
         routedAuthV1: false,
       },
       {
@@ -253,6 +256,7 @@ describe("memory v2 flags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     ));
@@ -334,6 +338,7 @@ describe("parseMemoryProtocolFlags", () => {
       presenceV1: false,
       sessionClose: false,
       connectionAuth: false,
+      admissionNotice: false,
       routedAuthV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
@@ -357,6 +362,7 @@ describe("parseMemoryProtocolFlags", () => {
       presenceV1: false,
       sessionClose: false,
       connectionAuth: false,
+      admissionNotice: false,
       routedAuthV1: false,
     });
   });
@@ -387,6 +393,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -429,6 +436,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -465,6 +473,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -496,6 +505,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -535,6 +545,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -567,6 +578,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -596,6 +608,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
@@ -612,6 +625,7 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       }),
       {
@@ -635,9 +649,19 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
+        admissionNotice: false,
         routedAuthV1: false,
       },
     );
+  });
+
+  it("accepts the admissionNotice capability key", () => {
+    assertEquals(
+      parseMemoryProtocolFlags({ admissionNotice: true })?.admissionNotice,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({})?.admissionNotice, false);
+    assertEquals(parseMemoryProtocolFlags({ admissionNotice: "true" }), null);
   });
 
   it("rejects values that are not a recognizable flags shape", () => {

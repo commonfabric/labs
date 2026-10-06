@@ -19,14 +19,17 @@ import { CiGanttDetailStore, ganttDetailDirectory } from "./ci-gantt-detail.ts";
 import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "./config.ts";
 import {
   clampInt,
+  dashboardGitHubCredential,
   durationTag,
   escapeHtml,
   friendlyError,
   github,
   performanceGithub,
+  PROCESS_ENV,
   sparkline,
   STALE_RUNS_ERROR,
 } from "./lib.ts";
+import type { GitHubCredential } from "./github-auth.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import {
   distinctTrendDays,
@@ -69,7 +72,7 @@ export const SNAPSHOT_CACHE_MAX = 8;
 
 type GitHubRequest = <T = unknown>(
   path: string,
-  token?: string,
+  credential?: GitHubCredential,
 ) => Promise<T>;
 
 export interface WorkflowRun {
@@ -540,20 +543,20 @@ function isSuccessfulPush(run: WorkflowRun): boolean {
 // serves this listing current. A listing narrowed by branch, event, or status
 // is served from an index that can be days behind it.
 async function fetchUnfilteredWorkflowRuns(
-  token: string,
+  credential: GitHubCredential,
   source: CiHistorySource,
   request: GitHubRequest,
   page = 1,
 ): Promise<WorkflowRun[]> {
   const response = await request<{ workflow_runs?: WorkflowRun[] }>(
     `repos/${source.repo}/actions/workflows/${source.workflow}/runs?per_page=100&page=${page}`,
-    token,
+    credential,
   );
   return (response.workflow_runs ?? []).map(projectWorkflowRun);
 }
 
 async function fetchWorkflowRuns(
-  token: string,
+  credential: GitHubCredential,
   now: number,
   source: CiHistorySource,
   request: GitHubRequest,
@@ -583,7 +586,7 @@ async function fetchWorkflowRuns(
         workflow_runs?: WorkflowRun[];
       }>(
         `repos/${source.repo}/actions/workflows/${source.workflow}/runs?${params}`,
-        token,
+        credential,
       );
     };
 
@@ -616,7 +619,7 @@ async function fetchWorkflowRuns(
   };
 
   const searched = await searchRange(cutoff - DAY_MS, now);
-  const newest = await fetchUnfilteredWorkflowRuns(token, source, request);
+  const newest = await fetchUnfilteredWorkflowRuns(credential, source, request);
   // The search has to reach the oldest successful first attempt of a main push
   // in the window on the newest page, read after it, so that no run falls
   // between the two. A search that does not was served from a moment before
@@ -645,7 +648,7 @@ async function fetchWorkflowRuns(
 // here, since GitHub serves that listing current. A run that pages repeat as
 // runs land is kept once, at its latest attempt.
 async function fetchRecentWorkflowRuns(
-  token: string,
+  credential: GitHubCredential,
   source: CiHistorySource,
   mainOnly: boolean,
   request: GitHubRequest,
@@ -654,7 +657,7 @@ async function fetchRecentWorkflowRuns(
   const cutoff = now - CI_HISTORY_DAYS * DAY_MS;
   const runs = new Map<number, WorkflowRun>();
   for (let page = 1; runs.size < GANTT_MAX_RUNS; page++) {
-    const batch = await fetchUnfilteredWorkflowRuns(token, source, request, page);
+    const batch = await fetchUnfilteredWorkflowRuns(credential, source, request, page);
     for (const run of batch) {
       if (
         runTime(run) < cutoff ||
@@ -719,7 +722,7 @@ function ganttJob(job: ApiJob, attempt: number): CachedCiGanttJob {
 
 async function fetchJobPage(
   path: string,
-  token: string,
+  credential: GitHubCredential,
   source: CiHistorySource,
   request: GitHubRequest,
 ): Promise<ApiJob[]> {
@@ -729,7 +732,7 @@ async function fetchJobPage(
       `repos/${source.repo}/${path}${
         path.includes("?") ? "&" : "?"
       }per_page=${JOBS_PER_PAGE}&page=${page}`,
-      token,
+      credential,
     );
     const batch = response.jobs ?? [];
     for (const job of batch) jobs.push(job);
@@ -740,7 +743,7 @@ async function fetchJobPage(
 
 async function fetchRunJobs(
   run: WorkflowRun,
-  token: string,
+  credential: GitHubCredential,
   source: CiHistorySource,
   request: GitHubRequest,
 ): Promise<CiRunTiming> {
@@ -752,7 +755,7 @@ async function fetchRunJobs(
   for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
     const attempted = await fetchJobPage(
       `actions/runs/${run.id}/attempts/${attempt}/jobs`,
-      token,
+      credential,
       source,
       request,
     );
@@ -1405,7 +1408,7 @@ export class CiJobHistoryCollector {
 
   #jobsForRun(
     run: WorkflowRun,
-    token: string,
+    credential: GitHubCredential,
     source: CiHistorySource,
     now: number,
     options: {
@@ -1461,7 +1464,7 @@ export class CiJobHistoryCollector {
       }`;
     let request = this.#jobRequests.get(key);
     if (!request) {
-      request = fetchRunJobs(run, token, source, this.#github)
+      request = fetchRunJobs(run, credential, source, this.#github)
         .then(async (timing): Promise<CachedCiRun> => {
           const entry = {
             repo: source.repo,
@@ -1591,7 +1594,7 @@ export class CiJobHistoryCollector {
   }
 
   async collect(
-    token: string,
+    credential: GitHubCredential,
     now = Date.now(),
     source = CI_HISTORY_SOURCES.labs,
     days = CI_HISTORY_DAYS,
@@ -1602,7 +1605,7 @@ export class CiJobHistoryCollector {
     const previous = this.snapshot(source, days) ??
       await this.cached(source, days, now);
     const workflowRunHistory = workflowRuns ??
-      await fetchWorkflowRuns(token, now, source, this.#github);
+      await fetchWorkflowRuns(credential, now, source, this.#github);
     const successfulRuns = successfulMainWorkflowRuns(
       workflowRunHistory,
       now,
@@ -1657,7 +1660,7 @@ export class CiJobHistoryCollector {
       missing,
       JOB_FETCH_CONCURRENCY,
       async (run): Promise<CiJobFetchOutcome> => {
-        const load = this.#jobsForRun(run, token, source, now);
+        const load = this.#jobsForRun(run, credential, source, now);
         if (progress) this.#startJobLoadProgress(progress, load.kind);
         try {
           const entry = await load.result;
@@ -1812,12 +1815,12 @@ export class CiJobHistoryCollector {
       };
       const request: GitHubRequest = async <T>(
         path: string,
-        token?: string,
+        credential?: GitHubCredential,
       ) => {
         activeDiscovery.requestsMade++;
         updateProgress();
         try {
-          return await this.#github<T>(path, token);
+          return await this.#github<T>(path, credential);
         } finally {
           activeDiscovery.responsesReceived++;
           updateProgress();
@@ -1847,7 +1850,7 @@ export class CiJobHistoryCollector {
   }
 
   async #runsForRefresh(
-    token: string,
+    credential: GitHubCredential,
     source: CiHistorySource,
     now: number,
     progress?: CiJobProgressRecord,
@@ -1858,7 +1861,7 @@ export class CiJobHistoryCollector {
       this.#workflowRequests,
       source.key,
       (request) =>
-        fetchWorkflowRuns(token, now, source, request).then((runs) => {
+        fetchWorkflowRuns(credential, now, source, request).then((runs) => {
           this.#workflowRuns.set(source.key, { at: Date.now(), runs });
           return runs;
         }),
@@ -1886,7 +1889,7 @@ export class CiJobHistoryCollector {
   }
 
   async #selectedRunsForGantt(
-    token: string,
+    credential: GitHubCredential,
     source: CiHistorySource,
     options: Required<CiGanttOptions>,
     progress?: CiJobProgressRecord,
@@ -1949,7 +1952,7 @@ export class CiJobHistoryCollector {
                   run: validateSelectedWorkflowRun(
                     await request<WorkflowRun>(
                       `repos/${source.repo}/actions/runs/${selected.runId}/attempts/${selected.runAttempt}`,
-                      token,
+                      credential,
                     ),
                     selected,
                     source,
@@ -1997,7 +2000,7 @@ export class CiJobHistoryCollector {
   }
 
   async #runsForGantt(
-    token: string,
+    credential: GitHubCredential,
     source: CiHistorySource,
     options: Required<CiGanttOptions>,
     now: number,
@@ -2005,7 +2008,7 @@ export class CiJobHistoryCollector {
   ): Promise<SelectedWorkflowRuns> {
     if (options.selectedRuns.length) {
       return await this.#selectedRunsForGantt(
-        token,
+        credential,
         source,
         options,
         progress,
@@ -2014,7 +2017,7 @@ export class CiJobHistoryCollector {
     if (options.mainOnly && !options.allConclusions) {
       return {
         runs: successfulMainWorkflowRuns(
-          await this.#runsForRefresh(token, source, now, progress),
+          await this.#runsForRefresh(credential, source, now, progress),
           now,
           CI_HISTORY_DAYS,
         ),
@@ -2031,7 +2034,7 @@ export class CiJobHistoryCollector {
         key,
         (request) =>
           fetchRecentWorkflowRuns(
-            token,
+            credential,
             source,
             options.mainOnly,
             request,
@@ -2160,7 +2163,7 @@ export class CiJobHistoryCollector {
    * uses `writeGanttInput()` instead.
    */
   async gantt(
-    token: string | undefined,
+    credential: GitHubCredential | undefined,
     source: CiHistorySource,
     options: CiGanttOptions,
     now = Date.now(),
@@ -2169,7 +2172,7 @@ export class CiJobHistoryCollector {
     return await this.ganttRuns(
       source,
       await this.#collectGantt(
-        token,
+        credential,
         source,
         normalizedGanttOptions(options),
         now,
@@ -2240,7 +2243,7 @@ export class CiJobHistoryCollector {
   }
 
   async #collectGantt(
-    token: string | undefined,
+    credential: GitHubCredential | undefined,
     source: CiHistorySource,
     normalized: Required<CiGanttOptions>,
     now: number,
@@ -2249,7 +2252,7 @@ export class CiJobHistoryCollector {
   ): Promise<GanttSelection> {
     try {
       return await this.#assembleGantt(
-        token,
+        credential,
         source,
         normalized,
         now,
@@ -2267,7 +2270,7 @@ export class CiJobHistoryCollector {
   }
 
   async #assembleGantt(
-    token: string | undefined,
+    credential: GitHubCredential | undefined,
     source: CiHistorySource,
     normalized: Required<CiGanttOptions>,
     now: number,
@@ -2294,7 +2297,7 @@ export class CiJobHistoryCollector {
       );
       if (hasEverySelectedRun) return { entries: drawable, exactSelection };
     }
-    if (!token) {
+    if (!credential) {
       if (!exactSelection && cachedRuns.length) {
         const drawable = await drawableFromCache();
         if (drawable.length) {
@@ -2315,7 +2318,7 @@ export class CiJobHistoryCollector {
       discovery = workflowRuns
         ? { runs: workflowRuns }
         : await this.#runsForGantt(
-          token,
+          credential,
           source,
           normalized,
           now,
@@ -2417,7 +2420,7 @@ export class CiJobHistoryCollector {
         | { run: WorkflowRun; entry: CachedCiRun }
         | { run: WorkflowRun; error: unknown }
       > => {
-        const load = this.#jobsForRun(run, token, source, now, {
+        const load = this.#jobsForRun(run, credential, source, now, {
           exactAttempt: exactSelection,
           expectedHeadSha: normalized.headSha,
           hasGanttDetail: detailAvailable.has(run.id),
@@ -2530,7 +2533,7 @@ export class CiJobHistoryCollector {
   }
 
   startGantt(
-    token: string | undefined,
+    credential: GitHubCredential | undefined,
     source: CiHistorySource,
     options: CiGanttOptions,
     now = Date.now(),
@@ -2566,7 +2569,7 @@ export class CiJobHistoryCollector {
     request.result = Promise.resolve()
       .then(() =>
         this.#collectGantt(
-          token,
+          credential,
           source,
           normalized,
           now,
@@ -2596,7 +2599,7 @@ export class CiJobHistoryCollector {
   }
 
   startRefresh(
-    token: string,
+    credential: GitHubCredential,
     source = CI_HISTORY_SOURCES.labs,
     days = CI_HISTORY_DAYS,
     baseline?: CiJobHistorySnapshot | null,
@@ -2648,8 +2651,8 @@ export class CiJobHistoryCollector {
     }
     const now = Date.now();
     const progress = this.#newProgress(source, days, baseline);
-    request = this.#runsForRefresh(token, source, now, progress)
-      .then((runs) => this.collect(token, now, source, days, runs, progress))
+    request = this.#runsForRefresh(credential, source, now, progress)
+      .then((runs) => this.collect(credential, now, source, days, runs, progress))
       .then(async (collectedValue) => {
         let value = collectedValue;
         const refreshedAt = Date.now();
@@ -2774,20 +2777,20 @@ export class CiJobHistoryCollector {
   }
 
   startRefreshForCheck(
-    token: string,
+    credential: GitHubCredential,
     source = CI_HISTORY_SOURCES.labs,
     days = CI_HISTORY_DAYS,
     baseline?: CiJobHistorySnapshot | null,
   ): CiJobRefresh | null {
     if (this.#refreshRequests.has(snapshotKey(source, days))) {
-      return this.startRefresh(token, source, days, baseline);
+      return this.startRefresh(credential, source, days, baseline);
     }
     const failedAt = this.#refreshFailureAt.get(source.key);
     const age = failedAt === undefined ? -1 : Date.now() - failedAt;
     if (
       failedAt !== undefined && age >= 0 && age < REFRESH_MS
     ) return null;
-    return this.startRefresh(token, source, days, baseline);
+    return this.startRefresh(credential, source, days, baseline);
   }
 
   lastRefreshError(
@@ -2798,11 +2801,11 @@ export class CiJobHistoryCollector {
   }
 
   async refresh(
-    token: string,
+    credential: GitHubCredential,
     source = CI_HISTORY_SOURCES.labs,
     days = CI_HISTORY_DAYS,
   ): Promise<CiJobHistorySnapshot> {
-    return await this.startRefresh(token, source, days).result;
+    return await this.startRefresh(credential, source, days).result;
   }
 }
 
@@ -2829,9 +2832,9 @@ async function writeGanttInput(
   source: CiHistorySource,
   options: CiGanttOptions,
   destination: string,
-  token: string | undefined,
+  credential: GitHubCredential | undefined,
 ): Promise<number> {
-  const selection = await collector.startGantt(token, source, options).result;
+  const selection = await collector.startGantt(credential, source, options).result;
   return await collector.writeGanttInput(source, selection, destination);
 }
 
@@ -2839,20 +2842,20 @@ export function collectCiGanttInput(
   source: CiHistorySource,
   options: CiGanttOptions,
   destination: string,
-  token = Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN"),
+  credential = dashboardGitHubCredential(PROCESS_ENV),
   collector: CiGanttProvider = productionCollector,
 ): Promise<number> {
-  return writeGanttInput(collector, source, options, destination, token);
+  return writeGanttInput(collector, source, options, destination, credential);
 }
 
 export function collectCommitCiGanttInput(
   source: CiHistorySource,
   options: CiGanttOptions,
   destination: string,
-  token = Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN"),
+  credential = dashboardGitHubCredential(PROCESS_ENV),
   collector: CiGanttProvider = commitGanttCollector,
 ): Promise<number> {
-  return writeGanttInput(collector, source, options, destination, token);
+  return writeGanttInput(collector, source, options, destination, credential);
 }
 
 function formatDuration(seconds: number): string {
@@ -3634,10 +3637,10 @@ function ganttProgressResponse(
   _request: Request,
   url: URL,
   collector: CiJobHistoryCollector,
-  token: string | undefined,
+  credential: GitHubCredential | undefined,
 ): Response {
   const refresh = collector.startGantt(
-    token,
+    credential,
     ciHistorySource(url.searchParams.get("repo")),
     ciGanttOptions(url.searchParams),
   );
@@ -3651,18 +3654,18 @@ export function ciGanttProgressResponse(
   request: Request,
   url: URL,
   collector = productionCollector,
-  token = Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN"),
+  credential = dashboardGitHubCredential(PROCESS_ENV),
 ): Response {
-  return ganttProgressResponse(request, url, collector, token);
+  return ganttProgressResponse(request, url, collector, credential);
 }
 
 export function ciCommitGanttProgressResponse(
   request: Request,
   url: URL,
   collector = commitGanttCollector,
-  token = Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN"),
+  credential = dashboardGitHubCredential(PROCESS_ENV),
 ): Response {
-  return ganttProgressResponse(request, url, collector, token);
+  return ganttProgressResponse(request, url, collector, credential);
 }
 
 // What the Gantt image routes need of a collector.
@@ -3686,16 +3689,16 @@ type CiJobHistoryProvider =
 export async function ciJobHistoryCheckResponse(
   url: URL,
   collector: CiJobHistoryProvider = productionCollector,
-  token = Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN"),
+  credential = dashboardGitHubCredential(PROCESS_ENV),
 ): Promise<Response> {
   const source = ciHistorySource(url.searchParams.get("repo"));
   const days = ciHistoryDays(url.searchParams.get("days"));
   let snapshot = await collector.cached(source, days);
   let progress: CiJobFetchProgress | null = null;
-  if (token) {
+  if (credential) {
     const refresh = collector.startRefreshForCheck
-      ? collector.startRefreshForCheck(token, source, days, snapshot)
-      : collector.startRefresh(token, source, days, snapshot);
+      ? collector.startRefreshForCheck(credential, source, days, snapshot)
+      : collector.startRefresh(credential, source, days, snapshot);
     if (refresh) {
       progress = refresh.progress;
       if (progress) void refresh.result.catch(() => {});
@@ -3718,7 +3721,7 @@ export async function ciJobHistoryCheckResponse(
 export async function ciJobHistoryResponse(
   url: URL,
   collector: CiJobHistoryProvider = productionCollector,
-  token = Deno.env.get("GH_TOKEN") ?? Deno.env.get("GITHUB_TOKEN"),
+  credential = dashboardGitHubCredential(PROCESS_ENV),
 ): Promise<Response> {
   const source = ciHistorySource(url.searchParams.get("repo"));
   const days = ciHistoryDays(url.searchParams.get("days"));
@@ -3726,12 +3729,12 @@ export async function ciJobHistoryResponse(
   let refreshError: string | undefined;
   let progress: CiJobFetchProgress | undefined;
   let lastRequestError: string | undefined;
-  if (!token) {
+  if (!credential) {
     refreshError = snapshot?.runCount
       ? "Set GH_TOKEN to refresh CI job history."
       : "Set GH_TOKEN to collect CI job history.";
   } else {
-    const refresh = collector.startRefresh(token, source, days, snapshot);
+    const refresh = collector.startRefresh(credential, source, days, snapshot);
     progress = refresh.progress ?? undefined;
     if (progress) void refresh.result.catch(() => {});
     else snapshot = await refresh.result;

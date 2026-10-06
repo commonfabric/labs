@@ -9,7 +9,7 @@ import type {
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
-import { type HarnessJobSpec, runHarnessJob } from "../lib/harness-job.ts";
+import { type HarnessJobSpec, runHarnessJob } from "../src/harness-job.ts";
 
 /** The space a fabric job names. */
 const SPACE = "did:key:z6MkgUiiZvP3qYQqr1NWyS2uCpny8dejAvyuBZh2PAVACs97";

@@ -149,7 +149,7 @@ the room is created from the same settings the handlers read.
 
 - **A private space, created from a pattern.** The manager's
   `FabriChatRoom.inSpace()` creates a space with a random DID whose genesis
-  document names its creator as the only OWNER, plus the grants it names
+  document names its creator an OWNER, plus the grants it names
   ([random space identities](../random-space-identities.md)).
 - **The space's participants.** The room reads them from its space's default
   pattern, which a host creates the first time someone opens the space. Until
