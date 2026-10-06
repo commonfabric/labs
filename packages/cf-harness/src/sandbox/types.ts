@@ -257,15 +257,24 @@ export type SandboxRuntimeKind = "docker" | "runsc";
  */
 export type SandboxPlatform = typeof Deno.build.os;
 
+/** The platform whose default sandbox runtime is the native one. */
+export type NativeRuntimePlatform = "darwin";
+
 /**
  * How a selection came to its runtime, kept so that a run and the console can
- * tell a runtime someone named from one the platform defaulted to.
+ * tell a runtime someone named from one the platform defaulted to. Each
+ * default is its platform's, so a defaulted Docker on macOS, and a defaulted
+ * native runtime anywhere else, are not choices there can be.
  */
 export type SandboxRuntimeChoice =
   /** A flag or the environment named the runtime. */
   | { runtime: SandboxRuntimeKind; source: "flag" | "environment" }
   /** Nothing named one, on a platform whose default is Docker. */
-  | { runtime: "docker"; source: "default"; platform: SandboxPlatform }
+  | {
+    runtime: "docker";
+    source: "default";
+    platform: Exclude<SandboxPlatform, NativeRuntimePlatform>;
+  }
   /**
    * Nothing named one, on the platform whose default is the native runtime,
    * which runs from the cfc-vm store at `nativeStore`.
@@ -273,7 +282,7 @@ export type SandboxRuntimeChoice =
   | {
     runtime: "runsc";
     source: "default";
-    platform: SandboxPlatform;
+    platform: NativeRuntimePlatform;
     nativeStore: string;
   };
 

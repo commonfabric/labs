@@ -37,6 +37,7 @@ import {
   type RunscNetworkMode,
 } from "./runsc.ts";
 import type {
+  NativeRuntimePlatform,
   SandboxPlatform,
   SandboxRuntimeChoice,
   SandboxRuntimeKind,
@@ -161,7 +162,7 @@ export const sandboxRuntimeNamed = (
   name === "docker" ? "docker" : name === "runsc" ? "runsc" : undefined;
 
 /** The platform whose default is the native runtime. */
-export const NATIVE_RUNTIME_PLATFORM: SandboxPlatform = "darwin";
+export const NATIVE_RUNTIME_PLATFORM: NativeRuntimePlatform = "darwin";
 
 const nonEmpty = (input: string | undefined): string | undefined => {
   const trimmed = input?.trim();
@@ -457,13 +458,16 @@ export const resolveSandboxRuntimeSelection = async (
   // The platform is the whole of the reason: the native runtime is the macOS
   // `runsc`, and no other platform has the VM it runs in.
   const platform = "platform" in options ? options.platform : undefined;
-  const nativeDefault = named === undefined &&
-    platform === NATIVE_RUNTIME_PLATFORM;
-  if (named === undefined && platform !== undefined && !nativeDefault) {
+  if (
+    named === undefined && platform !== undefined &&
+    platform !== NATIVE_RUNTIME_PLATFORM
+  ) {
     return {
       sandboxRuntimeChoice: { runtime: "docker", source: "default", platform },
     };
   }
+  const nativeDefault = named === undefined &&
+    platform === NATIVE_RUNTIME_PLATFORM;
 
   const home = nonEmpty(options.homeDir) ?? nonEmpty(env.HOME);
   let nativeStore: string | undefined;
