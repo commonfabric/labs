@@ -29,7 +29,20 @@
  * Nothing here waits on a clock. An operation waits until the host answers
  * it, the job ends, or the run aborts it — a hand-off waits for the owner,
  * however long that takes, and a host that never comes back leaves the job
- * waiting until it is cancelled.
+ * waiting until it is cancelled. *
+ * SHORTCUT (2026-10-06): the wire is a server-sent event stream down and a
+ * separate POST per result up (`api.ts`), a channel of its own beside the
+ * job's `events`. Simplified: no request/response pairing on one
+ * connection, so a result's status comes back on its own request and every
+ * relay repeats the bookkeeping; and it is a different wire from the
+ * cf-harness console's for the same contract. Limit: two connections per
+ * hosted job, each relay (the Common Fabric Service, the Weaver) carrying
+ * its own copy of the routes. The way out: one WebSocket on the console's
+ * frame vocabulary — `browser-host-request`/`-withdraw`/`-close` down,
+ * result, attach and detach as requests up — relayed by the Common Fabric
+ * Service, with the Weaver on its HarnessSocket/HarnessSocketWire. Replay
+ * on reattach stays here, on the runner. Topic:
+ * https://estuary.saga-castor.ts.net/topics-dev-476ea34f/fid1:s2jqOQiiTKgaCawDxf_qrcOyR2v8AE0MOVvSjFdMZ4g
  */
 
 import {

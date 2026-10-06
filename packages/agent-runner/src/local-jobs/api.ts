@@ -256,6 +256,11 @@ const eventStream = (
  * Helper for `GET /jobs/<id>/browser/stream`, which passes the host's stream
  * through with a heartbeat, and ends it when the request or the service
  * does. Ending it here leaves the host open for the next attach.
+ *
+ * SHORTCUT (2026-10-06): this stream and the result route below are the
+ * browser host's interim wire; what they simplify, their limit and the way
+ * out (one WebSocket on the cf-harness console's frames) are at
+ * `LocalJobBrowserHost` (`./browser-host.ts`).
  */
 const browserStream = (
   options: LocalJobApiOptions,
