@@ -507,7 +507,12 @@ loop's duty).
   not a CFC verdict. An explicit handler abort is a handler-error
   consequence, not an infrastructure retry.
 - **Handler body DID NOT RUN — not a consequence (RULED 2026-08-27;
-  mark/effects atomicity, the a04 write-side member).** A served
+  mark/effects atomicity, the a04 write-side member).** A terminal unavailable
+  input withdraws the dispatch transaction and reports a dropped-event failure
+  immediately; it is not re-delivered. A client-owned terminal dispatch aborts
+  and reports `EventHandlerNotRunError`. An events-down client echo seals an
+  empty speculative transaction; the server owns its authoritative disposition.
+  The deferral path below applies to transient unresolved inputs. A served
   dispatch whose handler body never executed — the runner's
   argument-did-not-resolve skip ("action argument is undefined … not
   running") — commits NOTHING: the dispatch's transaction, which
@@ -546,14 +551,15 @@ loop's duty).
   withdrawal through its abort alone — the batch marks only a
   SURVIVING lt1 run (§4), so the durable entry lands unmarked and the
   next drain delivers it once, with a `streamEntry`.
-- **A CLIENT dispatch whose handler body did not run is re-run by the
-  scheduler, never sealed.** The same skip on a client-side event has no
-  durable entry and no drain, so the scheduler is its only re-deliverer.
+- **A transient CLIENT handler-not-run dispatch is re-run by the scheduler,
+  never sealed.** A terminal unavailable input instead aborts the transaction
+  and reports `EventHandlerNotRunError`, without retry. The transient skip on a
+  client-side event has no durable entry and no drain, so the scheduler is its
+  only re-deliverer.
   An argument that reads as `undefined` on a replica still loading what
   the argument reaches is a cold read rather than a schema mismatch: a
-  computation reading a document the replica does not hold publishes
-  `undefined` until the load lands, by design, so a handler reading
-  through it finds its argument unresolved in exactly that window.
+  reactive input remains unavailable until the load lands, so a handler
+  reading through it finds its argument unresolved in exactly that window.
   Sealing the skip would fire the commit callback on a transaction that
   wrote nothing, which a caller reads as a completed handling. The
   finalize withdraws the transaction and requeues the event within the

@@ -626,6 +626,53 @@ describe("JavaScript-node data unavailability", () => {
     expect(verifierReads).toHaveLength(1);
   });
 
+  it("does not preflight opaque handles selected by typeless array items", async () => {
+    const target = runtime.getCell(
+      space,
+      `typeless array handle ${nextResultId++}`,
+    );
+    const tx = runtime.edit();
+    target.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+    await tx.commit().settled;
+
+    let calls = 0;
+    const output = await runValueNode({
+      argument: { value: [target.getAsLink()] },
+      argumentSchema: { items: { asCell: ["cell"] } },
+      implementation: (handles: Cell<unknown>[]) => {
+        calls++;
+        return handles[0].equals(target);
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(output).toBe(true);
+  });
+
+  it("does not preflight excluded children of typeless array items", async () => {
+    let calls = 0;
+    const output = await runValueNode({
+      argument: {
+        value: [{ selected: 41, excluded: UNAVAILABLE_PENDING }],
+      },
+      argumentSchema: {
+        items: {
+          type: "object",
+          properties: { selected: { type: "number" } },
+          required: ["selected"],
+          additionalProperties: false,
+        },
+      },
+      implementation: (items: { selected: number }[]) => {
+        calls++;
+        return items[0].selected + 1;
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(output).toBe(42);
+  });
+
   it("does not traverse opaque guard operands below their root", async () => {
     const nested = runtime.getCell(
       space,

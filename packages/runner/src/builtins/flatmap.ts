@@ -74,7 +74,8 @@ const logger = getLogger("runner.flatmap", { enabled: true, level: "warn" });
 
 // Rebuild the flattened list from the per-element results: spread an array
 // result one level deep, push a defined scalar directly, and treat an undefined
-// result as still streaming in. forEach over the array skips holes, so sparse
+// result as still streaming in. An unavailable result propagates its marker
+// instead of contributing a value. forEach over the array skips holes, so sparse
 // per-element results densify here. See resume-republish.ts for the convergence
 // machinery.
 export const flatMapContribution: ElementContribution = (
@@ -95,7 +96,8 @@ export const flatMapContribution: ElementContribution = (
  * Runs a pattern per element. If the result is an array, it is spread into
  * the output (one level deep, consistent with Array.prototype.flatMap). If
  * the result is a scalar, it is included directly. undefined results are
- * skipped (see two-pass convergence below). Output is always dense.
+ * skipped (see two-pass convergence below). An unavailable input or element
+ * result propagates its marker as the whole output; usable output is dense.
  *
  * Sub-arrays are iterated with forEach, which skips holes — so sparse
  * per-element results are densified during flattening.

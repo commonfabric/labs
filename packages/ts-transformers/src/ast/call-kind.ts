@@ -1158,6 +1158,8 @@ function isReactiveOriginKind(callKind: CallKind): boolean {
       return COMMONFABRIC_REACTIVE_ORIGIN_CALL_EXPORT_NAMES.has(
         "generateObject",
       );
+    case "llm-dialog":
+      return COMMONFABRIC_REACTIVE_ORIGIN_CALL_EXPORT_NAMES.has("llmDialog");
     case "runtime-call":
       return callKind.reactiveOrigin;
     case "availability-guard":

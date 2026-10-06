@@ -11,6 +11,7 @@
  * onExceed:"skip" returns exactly the fitting rows.
  */
 
+import { hasError } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 
 import app from "../../toolshed/app.ts";
@@ -197,13 +198,13 @@ async function runTest(base: URL) {
       );
 
       // Aggregate on a rule-bearing table fails closed.
-      const countUnavailable = result.key("qCount").resolveAsCell().getRaw() as
-        | { reason?: string; error?: { message?: string } }
-        | undefined;
-      const countError = countUnavailable?.reason === "error"
-        ? countUnavailable.error?.message
+      const countUnavailable = result.key("qCount").resolveAsCell().getRaw();
+      const countError = hasError(countUnavailable)
+        ? countUnavailable.errorMessage
         : undefined;
       if (
+        !hasError(countUnavailable) ||
+        countUnavailable.errorKind !== "general" ||
         typeof countError !== "string" || !countError.includes("aggregate")
       ) {
         throw new Error(

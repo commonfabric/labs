@@ -260,13 +260,13 @@ list — is the authoritative source. As of this writing it recognizes:
 - cell factories (`cell`, `new Cell`, `new OpaqueCell`, `new Stream`, etc.),
   with legacy `.of(...)` still accepted
 - `Cell.for`-style calls
-- `wish`
+- `wish` and the dedicated `llm-dialog` call kind, both reactive origins
 - default generation calls `generateObject` and `generateText`, plus the
   advanced `generateObjectStream` and `generateTextStream` forms
 - availability predicates `isPending`, `hasError`, `isSyncing`, and
   `hasSchemaMismatch`; availability projection and observation aliases
 - the `runtime-call` family — tagged-call / function runtime origins: `str`,
-  `llm`, `llmDialog`, the fetch family from the #4206 split — `fetchJson`
+  `llm`, the fetch family from the #4206 split — `fetchJson`
   (which additionally gets dedicated type-argument schema injection, §10.5),
   `fetchJsonUnchecked`, `fetchText`, `fetchBinary` — `fetchProgram`,
   `streamData`, `cellFromUrl`,
@@ -1483,6 +1483,12 @@ Capture analysis:
   parameters, JSX tag names, property keys
 - captures nested callback closures with filtering for outer locals/params
 - builds hierarchical capture trees by root path
+
+Capture objects preserve own keys, including `__proto__`, without changing
+their prototype. Stable destructuring aliases preserve the distinction between
+string keys and numeric indices: a string key with leading zeros retains its
+exact spelling. These contracts are pinned by `test/utils/capture-tree.test.ts`
+and `test/availability-analysis-coverage.test.ts`.
 
 Input-bound expression wrappers also capture enclosing function locals used
 inside nested callbacks. Parameters and locals declared within the wrapped
@@ -4329,6 +4335,10 @@ null when it does not apply. Current built-in behavior:
   messages matching
   `"Property 'get' does not exist on type 'OpaqueCell<...>'"` into user-facing
   guidance about unnecessary `.get()`.
+- accesses to envelope properties `result`, `pending`, `error`, or `partial`
+  on `AsyncResult<T>` and `AsyncStreamResult<T>` are rewritten into guidance
+  about `resultOf`, availability guards, and `partialResultOf`; other missing
+  properties retain their TypeScript diagnostic.
 - its optional `verbose` argument appends the original TypeScript message.
 
 ## 19. Current Known Limits (Observed)

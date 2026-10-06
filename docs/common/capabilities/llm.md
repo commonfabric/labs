@@ -18,7 +18,7 @@ const responseRequest = generateText({
 });
 const response = resultOf(responseRequest);
 
-{isPending(responseRequest)
+{isPending(responseRequest) || isSyncing(responseRequest)
   ? <span>Generating...</span>
   : hasError(responseRequest)
   ? <span>Error: {responseRequest.errorMessage}</span>
@@ -45,7 +45,7 @@ const ideaRequest = generateObject<ProductIdea>({
 });
 const idea = resultOf(ideaRequest);
 
-{isPending(ideaRequest)
+{isPending(ideaRequest) || isSyncing(ideaRequest)
   ? <span>Generating...</span>
   : hasError(ideaRequest)
   ? <span>Error: {ideaRequest.errorMessage}</span>
@@ -80,7 +80,7 @@ const summaries = articles.map((article) => ({
 {summaries.map(({ article, request }) => (
   <div>
     <h3>{article.title}</h3>
-    {isPending(request)
+    {isPending(request) || isSyncing(request)
       ? <em>Summarizing...</em>
       : <p>{resultOf(request)}</p>}
   </div>

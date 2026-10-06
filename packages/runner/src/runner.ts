@@ -582,9 +582,10 @@ function policyAcceptsUnavailableInput(
 function unavailableInputChildSchema(
   schema: JSONSchema | undefined,
   key: string,
+  container: "object" | "array",
 ): { selected: boolean; schema?: JSONSchema } {
   if (schema === undefined) return { selected: true };
-  const child = schemaViewChildSchema(schema, key);
+  const child = schemaViewChildSchema(schema, key, container);
   if (isSchemaViewExcluded(child)) return { selected: false };
   return {
     selected: true,
@@ -772,7 +773,11 @@ function scanUnavailableInputs(
     active.add(value);
     try {
       for (const key of Object.keys(value)) {
-        const child = unavailableInputChildSchema(schemaAtPath, key);
+        const child = unavailableInputChildSchema(
+          schemaAtPath,
+          key,
+          Array.isArray(value) ? "array" : "object",
+        );
         if (!child.selected) continue;
         visit(
           (value as Record<string, unknown>)[key],

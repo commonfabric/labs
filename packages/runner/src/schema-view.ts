@@ -292,12 +292,9 @@ const childSchema = (
 export function schemaViewChildSchema(
   schema: JSONSchema,
   key: string,
+  container: "object" | "array",
 ): JSONSchema {
-  return childSchema(
-    schema,
-    key,
-    isObjectOrArray(schema) && schema.type === "array" ? "array" : "object",
-  );
+  return childSchema(schema, key, container);
 }
 
 const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {

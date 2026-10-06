@@ -306,7 +306,7 @@ const extraction = resultOf(extractionRequest);
 
 // Render or branch on the request when this screen wants explicit status:
 // isPending(extractionRequest)
-// hasError(extractionRequest) && extractionRequest.error.message
+// hasError(extractionRequest) && extractionRequest.errorMessage
 // Otherwise `extraction` waits reactively for the usable PlateExtraction.
 ```
 

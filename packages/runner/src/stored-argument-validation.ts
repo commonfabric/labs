@@ -1,4 +1,3 @@
-import { isUnavailable } from "@commonfabric/data-model/availability";
 /** Validates stored arguments without treating unreadable links as invalid values. */
 
 import {
@@ -6,6 +5,7 @@ import {
   type FabricValue,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -39,8 +39,9 @@ const UNRESOLVED_LINK_PLACEHOLDER = Object.freeze({
  * Whether `value` needs no schema check where it stands: an opaque Cell whose
  * wrapper the schema declares, or the placeholder
  * {@link overlayUnreadableLinkPlaceholders} leaves for a stored link this
- * replica cannot read. The two together are what let a document be judged
- * here without judging values that are owned elsewhere.
+ * replica cannot read, or a runtime-owned unavailable marker. These cases
+ * preserve handles and availability while checking the document's ordinary
+ * values; reactive argument materialization enforces availability at use.
  */
 export const acceptsOpaqueCellOrUnresolvedLink = (
   value: unknown,

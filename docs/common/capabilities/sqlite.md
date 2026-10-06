@@ -94,7 +94,9 @@ react to.
 
 A bind param is resolved as the statement is issued, and `undefined` is refused
 rather than bound: the whole read fails with "sqlite: param is undefined",
-`error` carries that text, and every field computed from the result is empty.
+`hasError(request)` is true and `request.errorMessage` carries that text.
+Computations consuming `resultOf(request)` propagate the unavailable error
+instead of inventing empty fields.
 `null` is what binds SQL NULL.
 
 An input's declared default is applied when the input is READ, so an input
@@ -147,7 +149,7 @@ document, a row the result held before takes its old document back, and a
 re-run whose rows are unchanged writes no row documents. A row whose data or
 label changed is another document, and the one it had stays in the space. A
 reference a pattern keeps to a row therefore does not change when the query
-runs again: read the query's `result` for the current rows. The query is not
+runs again: read `resultOf(request).rows` for the current rows. The query is not
 the only writer that can reach a row document, though: other code holding a
 reference to one can write to it. Three things re-key every row of a labeled
 database at once and write it again: changing which database the query
@@ -226,8 +228,10 @@ something else. Two databases in one task can disagree about this, and each is
 right about itself.
 
 An empty result is a value rather than a failure. A statement matching nothing
-settles the way one matching everything does — `pending` false, `error` absent,
-`result` an empty list — and every field computed from it is empty in turn, so
+settles the way one matching everything does — `isPending(request)` and
+`isSyncing(request)` are false, `hasError(request)` is false, and
+`resultOf(request).rows` is an empty list. Fields computed from those rows can
+report emptiness, so
 the view renders its empty state and nothing reports a problem. The run
 succeeded; the emptiness is data.
 
@@ -289,20 +293,20 @@ and dropping the rows that exceed it.
 
 Where the label lands decides where to look for it. Each result row splits into
 its own entity doc and the column's label sits on that doc, at the column's own
-path. The query document labels `result` membership with the join of the
+path. The query document labels `rows` membership with the join of the
 source rows' labels and the label of the query's own statement and parameters,
 and labels the `withheld` count with that same join. A shared result joins
 every source row's label, including rows skipped by the query contract; a
 session-scoped result joins the labels of the rows it holds. Which row sits at
-a position of `result` carries the label of the query's statement and
+a position of `rows` carries the label of the query's statement and
 parameters and that row's label. A
 reader outside the join therefore cannot observe the array's membership,
 length, or withheld count, and code that reads any of them carries the join
 into what it writes: a row count of a query over labeled columns carries the
-columns' labels, and so does anything computed by mapping over `result`,
-which reads its membership. A row read through `result` by its position
+columns' labels, and so does anything computed by mapping over `rows`,
+which reads its membership. A row read through `rows` by its position
 carries the label of the query's statement and parameters and that row's own
-labels, and not the other rows'. `cf cell get-label <cell> <path>/result/<i>/<col>` follows the links
+labels, and not the other rows'. `cf cell get-label <cell> <path>/rows/<i>/<col>` follows the links
 the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.

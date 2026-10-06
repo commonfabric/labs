@@ -49,7 +49,10 @@ function objectBindingAccessSegment(
       : undefined;
   }
   const text = getStaticPropertyNameText(element.propertyName);
-  return text === undefined ? undefined : { kind: "property", text };
+  return text === undefined ? undefined : {
+    kind: ts.isNumericLiteral(element.propertyName) ? "index" : "property",
+    text,
+  };
 }
 
 function bindingElementStaticAccessPath(
@@ -96,11 +99,6 @@ function createStaticBindingAccessExpression(
       );
     } else if (isSafeIdentifierText(segment.text)) {
       current = factory.createPropertyAccessExpression(current, segment.text);
-    } else if (/^\d+$/.test(segment.text)) {
-      current = factory.createElementAccessExpression(
-        current,
-        factory.createNumericLiteral(segment.text),
-      );
     } else {
       current = factory.createElementAccessExpression(
         current,

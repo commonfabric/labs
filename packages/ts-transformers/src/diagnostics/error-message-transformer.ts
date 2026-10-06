@@ -43,11 +43,11 @@ export function createReactiveErrorTransformer(
     }
 
     const asyncResultProperty = message.match(
-      /^Property '(result|pending|error|partial)' does not exist on type 'AsyncResult<.*>'/,
+      /^Property '(result|pending|error|partial)' does not exist on type 'Async(?:Stream)?Result<.*>'/,
     );
     if (asyncResultProperty) {
       const clarification =
-        "Async built-ins now return AsyncResult<T> directly. Use " +
+        "Async built-ins return AsyncResult<T> or AsyncStreamResult<T> directly. Use " +
         "resultOf(request) for usable data, isPending(request) and " +
         "hasError(request) to branch on state, and partialResultOf(request) " +
         "for intermediate output from generateTextStream() or streamData().";

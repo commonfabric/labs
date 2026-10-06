@@ -53,6 +53,13 @@ const createBacklink = handler<void, {
   stream.send({ detail: { piece, navigate: false } });
 });
 
+const seedMention = handler<void, {
+  references: Writable<MentionRefMap>;
+  destination: Writable<MinimalPiece>;
+}>((_, { references, destination }) => {
+  references.key("a3f9zz").set({ destination, modifiedTitle: false });
+});
+
 /**
  * Whether the note's editor was given a reference map. Its presence is the
  * whole switch: with it the editor mints `[Label][key]` and puts the
@@ -404,11 +411,9 @@ export default pattern(() => {
   // Staged so the assertions can hand the projection back verbatim.
   const projectedBody = new Writable("");
 
-  const action_mention_in_projection = action(() => {
-    projectedRefs.key("a3f9zz").set({
-      destination: projectionTarget,
-      modifiedTitle: false,
-    });
+  const action_mention_in_projection = seedMention({
+    references: projectedRefs,
+    destination: projectionTarget,
   });
 
   const action_capture_projection = action(() => {

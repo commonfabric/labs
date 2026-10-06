@@ -2,6 +2,7 @@ import {
   computed,
   equals,
   handler,
+  hasError,
   ifElse,
   NAME,
   navigateTo,
@@ -172,12 +173,16 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   const roster = computed(() => participantEntries(participants));
   const join = addParticipant({ roster: participants });
   const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
+  const resolvedViewerProfile = resultOf(viewerProfile.result);
   const viewerName = wish<string>({ query: "#profileName" });
-  // The name string is empty when no profile resolved, whereas a presence
-  // test on the profile cell reads an absent profile as present.
-  const hasProfile = computed(() => resultOf(viewerName.result).trim() !== "");
+  const hasProfile = computed(() =>
+    hasError(viewerName.result)
+      ? false
+      : resultOf(viewerName.result).trim() !== ""
+  );
   const isParticipant = computed(() => {
-    const mine = viewerProfile.result;
+    if (hasError(viewerProfile.result)) return false;
+    const mine = resolvedViewerProfile;
     if (!mine) return false;
     return roster.some((entry) => equals(entry, mine));
   });

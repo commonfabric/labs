@@ -2000,7 +2000,8 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (readStatsActive) recordDocumentRead(this, doc);
 
     const readMeta = options?.meta ?? EMPTY_META;
-    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this) ||
+      isReadIgnoredForCommit(readMeta);
     const activityMeta = skipCommitPrecondition
       ? { ...readMeta, ...ignoreReadForCommit }
       : readMeta;

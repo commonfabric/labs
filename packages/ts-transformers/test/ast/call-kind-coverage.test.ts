@@ -1,4 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import {
@@ -24,6 +26,34 @@ import {
   getWithPatternHoistablePatternCall,
 } from "../../src/ast/call-kind.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+
+describe("LLM dialog reactive provenance", () => {
+  it("recognizes direct, aliased, and namespace dialog calls as reactive origins", () => {
+    const { sourceFile, checker } = createProgramWithCommonFabric(`
+      import { llmDialog, llmDialog as dialog } from "commonfabric";
+      import * as cf from "commonfabric";
+      const direct = llmDialog({});
+      const aliased = dialog({});
+      const namespaced = cf.llmDialog({});
+    `);
+
+    for (const name of ["direct", "aliased", "namespaced"]) {
+      const call = findCall(sourceFile, name);
+      expect(detectCallKind(call, checker)?.kind).toBe("llm-dialog");
+      expect(isReactiveOriginExpression(call, checker)).toBe(true);
+    }
+  });
+
+  it("does not treat a same-named author helper as a reactive origin", () => {
+    const { sourceFile, checker } = createProgramWithCommonFabric(`
+      function llmDialog() { return 7; }
+      const local = llmDialog();
+    `);
+
+    expect(isReactiveOriginExpression(findCall(sourceFile, "local"), checker))
+      .toBe(false);
+  });
+});
 
 // Harness A: a bare source-file-only program (no lib, no module resolution).
 // Mirrors the setup in call-kind.test.ts for cases that need only structural

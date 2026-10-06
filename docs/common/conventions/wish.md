@@ -20,12 +20,11 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 
 `wish()` returns a `WishState<T>` with the following properties:
 
-| Property     | Type    | Description                                                                                                                                             |
-|--------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `result`     | `T`     | The resolved piece (auto-confirmed or user-selected)                                                                                                    |
-| `candidates` | `T[]`   | All matching pieces                                                                                                                                     |
-| `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
-| `error`      | `any`   | Error message if resolution failed                                                                                                                      |
+| Property     | Type             | Description                                                                                                                                             |
+|--------------|------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `result`     | `AsyncResult<T>` | The resolved piece (auto-confirmed or user-selected), or its unavailable state                                                                            |
+| `candidates` | `T[]`            | All matching pieces                                                                                                                                     |
+| `[UI]?`      | `VNode`          | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece          |
 
 Keep the result channel for guards and use `resultOf()` for the ordinary `T`
 view:

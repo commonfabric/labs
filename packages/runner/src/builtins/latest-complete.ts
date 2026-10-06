@@ -53,7 +53,6 @@ export function latestComplete(
     throw new Error("latestComplete requires an output binding");
   }
 
-  let outputInitialized: boolean | undefined;
   let result: Cell<unknown> | undefined;
   let resultScope: CellScope | undefined;
 
@@ -102,11 +101,11 @@ export function latestComplete(
       result = scopedCell(runtime, tx, base, outputScope);
       result.sync();
       resultScope = outputScope;
-      outputInitialized = undefined;
     }
     sendResult(tx, result);
 
-    if (outputInitialized === undefined) {
+    let outputInitialized = false;
+    if (!complete) {
       const prior = tx.read(
         toMemorySpaceAddress(result.getAsNormalizedFullLink()),
         {
@@ -121,10 +120,8 @@ export function latestComplete(
 
     if (complete) {
       result.withTx(tx).setRawUntyped(snapshot as FabricValue, true);
-      outputInitialized = true;
     } else if (!outputInitialized) {
       result.withTx(tx).setRawUntyped(UNAVAILABLE_PENDING, true);
-      outputInitialized = true;
     }
   };
 }

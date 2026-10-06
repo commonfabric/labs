@@ -20,10 +20,9 @@
  * own entity doc, and INHERITED by a consumer that reads the leaf.
  *
  * Where the labels live is itself the point. A labeled result splits each row
- * into its own entity doc and stores the label THERE; the query doc holds the
- * query state and link-integrity labels, but no column confidentiality. That
- * is true of the in-frame path too, so a probe must distinguish the query
- * doc's link bookkeeping from the row doc's data label.
+ * into its own entity doc and stores its content label there. The query doc
+ * carries separate membership and reference labels, so probes distinguish
+ * root content, array enumeration, reference selection, and row content.
  */
 
 import { Database } from "@db/sqlite";
@@ -446,29 +445,38 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         );
       }
 
-      // (d) The column confidentiality lives on the row docs, NOT on the query
-      // doc. The query doc does carry integrity labels for the links it stores;
-      // those are bookkeeping rather than the data label a person asked for.
-      // Pinning that distinction keeps the resolved read in (e) honest.
-      for (
-        const path of [
-          [],
-          ["value"],
-          ["value", "rows"],
-        ] as const
-      ) {
-        let probe: Cell<unknown> = direct as Cell<unknown>;
-        for (const key of path) probe = probe.key(key as never);
-        const view = cfcLabelViewForCellWithStatus(probe).view;
-        const confidentiality = view?.entries.flatMap((entry) =>
-          entry.label.confidentiality ?? []
-        ) ?? [];
-        if (confidentiality.length > 0) {
-          throw new Error(
-            `the query doc gained column confidentiality at ${
-              JSON.stringify(path)
-            }: ${JSON.stringify(view)}`,
-          );
+      // (d) Content labels stay on the row docs. Enumeration of the result
+      // array consumes its membership label without labeling the query root.
+      for (const [name, query] of columns) {
+        for (const path of [[], ["value"], ["value", "rows"]] as const) {
+          let probe: Cell<unknown> = query as Cell<unknown>;
+          for (const key of path) probe = probe.key(key as never);
+          const { view, readFailed } = cfcLabelViewForCellWithStatus(probe);
+          if (readFailed || view === undefined) {
+            throw new Error(`${name} query label metadata is unavailable`);
+          }
+          const confidentiality = cfcConfidentialityForObservationNode({
+            labelView: view,
+            logicalPath: [],
+          });
+          const expected = path.length === 2
+            ? name === "direct" ? ["secret-body"] : WHOLE_DB_UNION
+            : [];
+          if (!sameAtoms(confidentiality, expected)) {
+            throw new Error(
+              `${name} query observation at ${JSON.stringify(path)} wanted ${
+                JSON.stringify(expected)
+              }, got ${JSON.stringify(confidentiality)}`,
+            );
+          }
+          if (
+            path.length === 2 &&
+            !view.entries.some((entry) =>
+              entry.path.length === 0 && entry.observes === "enumerate"
+            )
+          ) {
+            throw new Error(`${name} query rows lack an enumeration label`);
+          }
         }
       }
 
@@ -525,7 +533,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         "shouted",
       ]);
       const atDerivedEntry = atDerived?.entries.find((e) =>
-        e.path.length === 0
+        e.path.length === 0 && e.observes === "value"
       );
       if (
         !sameAtoms(atDerivedEntry?.label.confidentiality, WHOLE_DB_UNION) ||

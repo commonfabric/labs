@@ -734,11 +734,15 @@ Per pass, for each lane's head event:
    from the replica-load park above, which must settle before at-most-once
    dispatch.
 
-   Terminal `error` and `schemaMismatch` values do not park. Dispatch reaches
-   ordinary argument validation, which suppresses the invalid handler call and
-   settles the event as a no-op. `$event` is excluded because an immutable bad
-   payload cannot become valid while queued; `Writable<T>` and other Cell
-   capabilities are excluded because the handle itself is usable. Exact reason
+   Terminal errors, including `errorKind: "schemaMismatch"`, do not park.
+   Argument validation suppresses the invalid handler call and records a
+   terminal handler-not-run disposition. A client-owned dispatch aborts and
+   settles with a visible `EventHandlerNotRunError`; a served dispatch withdraws
+   its mark and effects and reports a dropped-event failure. An events-down
+   client echo seals only its empty speculative transaction, leaving the
+   authoritative failure to the server. `$event` is excluded because an
+   immutable bad payload cannot become valid while queued; `Writable<T>` and
+   other Cell capabilities are excluded because the handle itself is usable. Exact reason
    and queue depth are included in opt-in preflight telemetry.
 4. **Dispatch** once the closure and availability gates are clear: run the
    handler in an immediate transaction
@@ -1120,9 +1124,10 @@ the spacing between the re-run and the local writer it raced.
 At pass end, if no work is runnable now but some `invalid ∧ live` node (or
 parked head event) has a future `eligibleAt`, set a single timer for the
 minimum. `idle()` resolves when: no run in flight, no tracked background task,
-no tick queued, no runnable work now, and no parked event — i.e.
-exactly v1's contract with the special cases collapsed into the gate
-primitive. A background task is work the runtime has undertaken off the graph
+no tick queued, no runnable work now, and no replica-load-parked event.
+Availability-input parks are quiescent for `idle()` as described in §7.5, so
+their producer can await idle before publishing a usable input. A background
+task is work the runtime has undertaken off the graph
 and whose result the graph is waiting on: a piece being started so a queued
 event can be delivered, or a system pattern being fetched so a surface a
 builtin has already emitted can be filled in. Work the graph does not depend

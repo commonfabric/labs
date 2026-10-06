@@ -51,4 +51,15 @@ describe("unavailable input policy validation", () => {
       ])
     ).toThrow(/duplicate exact path/);
   });
+
+  it("rejects holes at every position in an exact path", () => {
+    for (const hole of [0, 1, 2]) {
+      const path = ["root", "branch", "leaf"];
+      delete path[hole];
+
+      expect(() =>
+        assertValidUnavailableInputPolicy([{ path, reasons: ["error"] }])
+      ).toThrow(/path must be an array of strings/);
+    }
+  });
 });

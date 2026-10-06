@@ -4,7 +4,6 @@ import {
   type FabricValue,
   isDeepFrozen,
   isKeyableObjectOrArray,
-  isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
@@ -838,7 +837,7 @@ function recursiveStripAsCellFromSchema(
       } else if (Array.isArray(value)) {
         // Handle arrays
         (result as Record<string, unknown>)[key] = value.map((item) =>
-          isWalkableObjectOrArray(item)
+          isKeyableObjectOrArray(item)
             ? recursiveStripAsCellFromSchema(
               item,
               context,

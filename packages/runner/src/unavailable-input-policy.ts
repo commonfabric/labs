@@ -41,7 +41,7 @@ export function assertValidUnavailableInputPolicy(
 
     if (
       !Array.isArray(entry.path) ||
-      !entry.path.every((part: unknown) => typeof part === "string")
+      !Array.from(entry.path).every((part: unknown) => typeof part === "string")
     ) {
       invalid(`entry ${entryIndex} path must be an array of strings`);
     }

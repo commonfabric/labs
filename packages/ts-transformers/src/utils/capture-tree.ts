@@ -1,7 +1,7 @@
 import ts from "typescript";
 
 import { unwrapExpression } from "./expression.ts";
-import { isSafeIdentifierText } from "./identifiers.ts";
+import { createPropertyName } from "./identifiers.ts";
 
 export interface CapturePathInfo {
   readonly root: string;
@@ -264,9 +264,7 @@ export function buildHierarchicalParamsValue(
   for (const [propName, childNode] of node.properties) {
     assignments.push(
       factory.createPropertyAssignment(
-        isSafeIdentifierText(propName)
-          ? factory.createIdentifier(propName)
-          : factory.createStringLiteral(propName),
+        capturePropertyName(propName, factory),
         buildHierarchicalParamsValue(childNode, rootName, factory),
       ),
     );
@@ -297,12 +295,19 @@ export function buildCapturePropertyAssignments(
     const propertyName = renameMap?.get(rootName) ?? rootName;
     properties.push(
       factory.createPropertyAssignment(
-        isSafeIdentifierText(propertyName)
-          ? factory.createIdentifier(propertyName)
-          : factory.createStringLiteral(propertyName),
+        capturePropertyName(propertyName, factory),
         buildHierarchicalParamsValue(node, rootName, factory),
       ),
     );
   }
   return properties;
+}
+
+function capturePropertyName(
+  name: string,
+  factory: ts.NodeFactory,
+): ts.PropertyName {
+  return name === "__proto__"
+    ? factory.createComputedPropertyName(factory.createStringLiteral(name))
+    : createPropertyName(name, factory);
 }

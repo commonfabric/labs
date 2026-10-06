@@ -64,4 +64,22 @@ describe("createReactiveErrorTransformer", () => {
       expect(result).toContain("partialResultOf(request)");
     }
   });
+
+  it("explains unavailable streaming result property access", () => {
+    for (const property of ["result", "pending", "error", "partial"]) {
+      const message =
+        `Property '${property}' does not exist on type 'AsyncStreamResult<string>'.`;
+      const result = createReactiveErrorTransformer()(message);
+      expect(result).toContain("AsyncStreamResult<T>");
+      expect(result).toContain("resultOf(request)");
+      expect(result).toContain("partialResultOf(request)");
+      expect(createReactiveErrorTransformer(true)(message)).toContain(message);
+    }
+
+    expect(
+      createReactiveErrorTransformer()(
+        "Property 'data' does not exist on type 'AsyncStreamResult<string>'.",
+      ),
+    ).toBeNull();
+  });
 });

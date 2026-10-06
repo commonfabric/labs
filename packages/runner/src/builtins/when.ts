@@ -17,6 +17,9 @@ import { ContextualFlowControl } from "../cfc.ts";
  * when(condition, value) - && semantics
  * Returns value if condition is truthy, otherwise returns condition (falsy value)
  *
+ * An unavailable condition propagates its pending, syncing, or error marker
+ * without evaluating truthiness or selecting `value`.
+ *
  * Truthiness is read from the condition's root (`readsTruthyAtRoot()`), so
  * nothing below the root of a condition that is a record or an array is read.
  */

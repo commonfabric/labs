@@ -971,12 +971,15 @@ Deno.test("stable const aliases reconstruct destructured static access paths", (
         regular: 1,
         "dash-key": 2,
         0: 3,
+        "01": 7,
+        1: -1,
         nested: [4],
       };
       const {
         regular,
         "dash-key": dashed,
         0: numeric,
+        "01": leadingZero,
         nested: [first],
       } = source;
       const defaulted = regular;
@@ -996,6 +999,15 @@ Deno.test("stable const aliases reconstruct destructured static access paths", (
       assertEquals(resolved("regular"), "source.regular");
       assertEquals(resolved("dashed"), 'source["dash-key"]');
       assertEquals(resolved("numeric"), "source[0]");
+      const leadingZero = resolved("leadingZero");
+      assertEquals(leadingZero, 'source["01"]');
+      assertEquals(
+        new Function("source", `"use strict"; return ${leadingZero};`)({
+          "01": 7,
+          1: -1,
+        }),
+        7,
+      );
       assertEquals(resolved("first"), "source.nested[0]");
       assertEquals(resolved("defaulted"), "regular");
       assertEquals(resolved("mutable"), undefined);

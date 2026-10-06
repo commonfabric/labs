@@ -76,10 +76,10 @@ export interface NodeTypeLinks {
  * communication registries.
  *
  * Replaces the formerly-separate registry fields on `TransformationOptions`.
- * Each registry is keyed by AST node or symbol identity, preserved across
- * `ts.transform()` stages. See `core/mod.ts` for the per-registry contract.
+ * Registries use AST node identity, symbol identity, or a variant-name string.
+ * See `core/mod.ts` for the per-registry contract.
  *
- * Storage is organized into three families (see `core/mod.ts` for the full
+ * Storage is organized into four families (see `core/mod.ts` for the full
  * rationale):
  *   1. Bare cross-package maps — `typeRegistry`, `schemaHints`. The published
  *      boundary contract: the separate schema-generator package reads them
@@ -91,6 +91,9 @@ export interface NodeTypeLinks {
  *      schemaInjected), reached only through the record/lookup/mark/is methods.
  *   3. The marker family — node/symbol-keyed WeakSets whose mutators are
  *      coupled to the context's reactive-analysis cache invalidation.
+ *   4. Availability provenance — node- and symbol-keyed observation WeakMaps,
+ *      plus a variant-name-keyed Map of canonical unavailable types. Node
+ *      observations retain original-node lookup across stage replacements.
  *
  * Division of responsibility with `TransformationContext`:
  *   - CrossStageState owns the DATA and exposes pure data operations

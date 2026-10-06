@@ -39,8 +39,8 @@ A clean close before the first event, an unsuccessful HTTP response, a
 connection failure, malformed event data, or invalid JSON produces an error on
 both channels. An event that does not match `T` produces `schemaMismatch` on
 both. The runtime does not reconnect automatically. Changing `url`, `options`,
-or the inferred event schema starts a new request and resets both channels to
-pending.
+the explicit `schema`, or the inferred event schema starts a new request and
+resets both channels to pending.
 
 If the UI should retain the last usable event while a replacement connects or
 after a failure, opt into that continuity explicitly:

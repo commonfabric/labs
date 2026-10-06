@@ -354,6 +354,8 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
   it("a second runtime recovers a pending query left by a stopped runtime", async () => {
     const a = runPattern(runtimeA);
     await a.commit;
+    await runtimeA.idle();
+    await seedDbFile(runtimeA, a.resultCell);
     const qCellA = a.resultCell.key("q").resolveAsCell();
     await waitForCellValue<QueryState>(
       runtimeA,

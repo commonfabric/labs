@@ -14,6 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { latestComplete as latestCompleteBuiltin } from "../src/builtins/latest-complete.ts";
 import { type Cell, createCell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
@@ -105,6 +106,66 @@ describe("latestComplete", () => {
   function raw(cell: Cell<unknown>): unknown {
     return cell.resolveAsCell().getRaw();
   }
+
+  it("reinitializes a snapshot after its staged write is aborted", async () => {
+    for (const initial of [7, UNAVAILABLE_PENDING]) {
+      const cause = `aborted latest snapshot ${typeof initial}`;
+      const source = runtime.getCell<unknown>(
+        space,
+        `${cause} source`,
+        undefined,
+        tx,
+      );
+      source.set(initial);
+      const inputs = runtime.getCell<{ value: unknown; schema: JSONSchema }>(
+        space,
+        `${cause} inputs`,
+        undefined,
+        tx,
+      );
+      inputs.set({ value: source.getAsLink(), schema: numberSchema });
+      const parent = runtime.getCell(space, `${cause} parent`, undefined, tx);
+      parent.set({});
+      const binding = runtime.getCell(space, `${cause} binding`)
+        .getAsNormalizedFullLink();
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+
+      let snapshot: Cell<unknown> | undefined;
+      const action = latestCompleteBuiltin(
+        inputs,
+        (_, result) => {
+          snapshot = result as Cell<unknown>;
+        },
+        () => {},
+        cause,
+        parent,
+        runtime,
+        binding,
+      );
+      tx = runtime.edit();
+      await action(tx);
+      expect(snapshot).toBeDefined();
+      expect(snapshot!.withTx(tx).getRaw()).toBe(initial);
+      source.withTx(tx).set(UNAVAILABLE_PENDING);
+      await action(tx);
+      expect(snapshot!.withTx(tx).getRaw()).toBe(initial);
+      tx.abort();
+
+      tx = runtime.edit();
+      source.withTx(tx).set(UNAVAILABLE_PENDING);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      tx = runtime.edit();
+      await action(tx);
+
+      expect(snapshot!.withTx(tx).getRaw()).toBe(UNAVAILABLE_PENDING);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      tx = runtime.edit();
+      expect(snapshot!.withTx(tx).getRaw()).toBe(UNAVAILABLE_PENDING);
+    }
+  });
 
   it("waits initially and retains the last complete scalar", async () => {
     const source = runtime.getCell<number | FabricUnavailable>(
