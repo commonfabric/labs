@@ -1032,7 +1032,9 @@ setting replaces, and the default is refused when any of those is missing. Only
 `config.json` is required whatever is named. The first five are refused as
 symbolic links too, and so is any of them reached through a directory of the
 store that is one, such as `bin`: each has to be the file or directory itself,
-at its path in the store, as gVisor's installer writes it.
+at its path in the store, as gVisor's installer writes it. A piece that is there
+but that this process cannot use is refused for that, and named so rather than
+as missing: a file it cannot open to read, and a binary it cannot execute.
 
 | In the store            | What it is                                        | Required unless                                   |
 | ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
@@ -1048,13 +1050,18 @@ A defaulted native run takes its CFC policy from
 otherwise from the store's own `policy.json`. gVisor's release installer writes
 that file; a store built from source has one only if someone put it there. The
 default is refused where neither is there, because a run enforces CFC unless
-told otherwise and an enforcing run with no policy cannot start. A `runsc`
+told otherwise and an enforcing run with no policy cannot start. That refusal
+comes before the enforcement mode is looked at: a non-enforcing mode such as
+`--cfc-enforcement-mode observe` alone does not get past it. A run on the
+default without a policy names the policy as empty, with
+`--sandbox-cfc-policy ""`, and a mode that does not enforce, both. A `runsc`
 setting that is named replaces the store's: a named rootfs stands in for the
 image, `CF_HARNESS_RUNSC_BINARY` for the shim and the daemon beside it, and a
 named policy, by `--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`, for
 both defaults. `--sandbox-cfc-policy ""` names none, and the run then starts
-only in a mode that does not enforce. `--sandbox-rootfs ""` names no rootfs, and
-the default, which runs only from one, is refused for it.
+only in a mode that does not enforce: an enforcing mode is refused as the run
+starts. `--sandbox-rootfs ""` names no rootfs, and the default, which runs only
+from one, is refused for it.
 
 Three more things refuse the default, each before anything executes:
 

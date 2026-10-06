@@ -129,13 +129,16 @@ The shim is what the driver executes, and it starts the daemon from beside
 itself. The shim reads `config.json` to start the VM. The driver names
 `images/kitchensink` as each container's rootfs, and the shim runs that from
 `ext4/kitchensink.ext4`. A piece that cannot be examined counts as not there,
-and the refusal carries the reason. So does a piece that is a symbolic link, or
-that is reached through a directory of the store that is one, such as `bin`,
-`images` or `ext4`, whatever it leads to, and the refusal names the link and its
-target: the driver hands the macOS `runsc` the rootfs and the binary by the
-paths their links resolve to, while that `runsc` knows its store's pieces by
-their paths in the store, and none of gVisor's installer scripts makes a link.
-The policy is looked at through links, as a file anywhere would be.
+and the refusal carries the reason. A file this process cannot open to read is
+refused as one that could not be read, and the shim or the daemon where this
+process cannot execute it as not executable, each apart from a piece that is
+missing. So does a piece that is a symbolic link, or that is reached through a
+directory of the store that is one, such as `bin`, `images` or `ext4`, whatever
+it leads to, and the refusal names the link and its target: the driver hands the
+macOS `runsc` the rootfs and the binary by the paths their links resolve to,
+while that `runsc` knows its store's pieces by their paths in the store, and
+none of gVisor's installer scripts makes a link. The policy is looked at through
+links, as a file anywhere would be.
 
 The macOS default is refused for three more things, each checked before the
 pieces above:
@@ -282,11 +285,14 @@ same under both; what an unnamed one falls to differs:
 | Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                       | `sandbox`.                                                                                                           |
 
 The macOS default requires a policy because a run enforces CFC unless told
-otherwise, and an enforcing run with none is refused as it starts. The store's
-own `policy.json` is what gVisor's release installer writes, so a store
-installed from a release is usable with nothing else on the machine; a store
-built from source holds one only where someone put it there. The file under the
-home is taken first so that both drivers label the same files the same way.
+otherwise, and an enforcing run with none is refused as it starts. The selection
+refuses a missing policy without looking at the enforcement mode, so a run on
+the default without one names the policy as empty and a mode that does not
+enforce, both; a non-enforcing mode alone does not get past it. The store's own
+`policy.json` is what gVisor's release installer writes, so a store installed
+from a release is usable with nothing else on the machine; a store built from
+source holds one only where someone put it there. The file under the home is
+taken first so that both drivers label the same files the same way.
 
 The harness writes the rootfs path into the bundle as the container's root. On
 Linux `runsc` is expected to find a directory there. On macOS the path is a
