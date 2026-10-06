@@ -116,25 +116,26 @@ from one driver to the other:
 The store provides the runtime when it holds each of these, and the refusal
 lists every one that is not there:
 
-| In the store            | What has to be there | Not needed where                     |
-| ----------------------- | -------------------- | ------------------------------------ |
-| `bin/runsc`             | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one  |
-| `bin/cfc-vm`            | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one  |
-| `config.json`           | a file               | never                                |
-| `images/kitchensink`    | a directory          | a rootfs is named                    |
-| `ext4/kitchensink.ext4` | a file               | a rootfs is named                    |
-| a CFC policy            | a file, see below    | a policy is named, the empty one too |
+| In the store            | What has to be there | Not needed where                                                |
+| ----------------------- | -------------------- | --------------------------------------------------------------- |
+| `bin/runsc`             | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one                             |
+| `bin/cfc-vm`            | an executable file   | `CF_HARNESS_RUNSC_BINARY` names one                             |
+| `config.json`           | a file               | never                                                           |
+| `images/kitchensink`    | a directory          | a rootfs is named                                               |
+| `ext4/kitchensink.ext4` | a file               | a rootfs is named                                               |
+| a CFC policy            | a file, see below    | a policy is named, the empty one too, or the home policy exists |
 
 The shim is what the driver executes, and it starts the daemon from beside
 itself. The shim reads `config.json` to start the VM. The driver names
 `images/kitchensink` as each container's rootfs, and the shim runs that from
 `ext4/kitchensink.ext4`. A piece that cannot be examined counts as not there,
-and the refusal carries the reason. So does a piece that is a symbolic link,
-whatever it leads to, and the refusal names its target: the driver hands the
-macOS `runsc` the rootfs and the binary by the paths their links resolve to,
-while that `runsc` knows its store's pieces by their paths in the store, and
-none of gVisor's installer scripts makes a link. The policy is looked at through
-links, as a file anywhere would be.
+and the refusal carries the reason. So does a piece that is a symbolic link, or
+that is reached through a directory of the store that is one, such as `bin`,
+`images` or `ext4`, whatever it leads to, and the refusal names the link and its
+target: the driver hands the macOS `runsc` the rootfs and the binary by the
+paths their links resolve to, while that `runsc` knows its store's pieces by
+their paths in the store, and none of gVisor's installer scripts makes a link.
+The policy is looked at through links, as a file anywhere would be.
 
 The macOS default is refused for three more things, each checked before the
 pieces above:
@@ -159,12 +160,14 @@ pieces above:
   runs one that does not match from the directory itself, which is empty. That
   is read from its source and has not been run. A path that cannot be resolved,
   a link to nothing or a loop of links among them, is refused with the reason.
-- **A default CFC policy that could not be examined.** A policy that is not
-  there reads as absent, and so does one whose path runs through a file, such as
-  a home that is not a directory, since nothing can be at such a path. Any other
-  failure to look refuses the default, naming the file and the failure, so that
-  the store's own policy never stands in for one under the home that might be
-  there. A named `runsc` is refused the same way, without the way to Docker,
+- **A default CFC policy that could not be read.** A policy that is not there
+  reads as absent, and so does one whose path runs through a file, such as a
+  home that is not a directory, since nothing can be at such a path. A policy
+  that is there is opened before it is taken, so one this process cannot read is
+  refused here, by name, rather than failing inside `runsc`. Any other failure
+  to look or to open refuses the default, naming the file and the failure, so
+  that the store's own policy never stands in for one under the home that might
+  be there. A named `runsc` is refused the same way, without the way to Docker,
   since nothing about it is a default.
 
 Each refusal is a `HarnessControlError` with the code `invalid-request`. The
@@ -1192,14 +1195,16 @@ mode.
   too. Its `selection`, its image or rootfs, its network mode and its transport
   fields are the first start's, and a resume that was selected another way, or
   that names another image, rootfs or policy, is neither refused nor recorded.
-- Only a resume is held to a driver. Nothing ties a workspace, a host mount or
-  the console's shared workspace to the driver whose runs labelled its files, so
-  a new run, or a new interactive session, on the other driver reads those files
-  as that driver's `runsc` finds them, which under Docker Desktop on macOS and
-  the native runtime is without the other's labels. A run state written before
-  its driver was recorded that holds no runtime description either, and an
-  interactive session stored before sessions recorded a driver, are held to none
-  until their next resume or turn binds them, to whichever driver that runs on.
+- Only a resume, and a later turn of a session, is held to a driver. Nothing
+  records a driver per directory or mount: not for a workspace, a host mount, or
+  the console's shared workspace. So a fresh run or session over files the other
+  driver labelled does not see their labels. It reads those files as its own
+  driver's `runsc` finds them, which under Docker Desktop on macOS and the
+  native runtime is without the other's labels, and nothing refuses it. A run
+  state written before its driver was recorded that holds no runtime description
+  either, and an interactive session stored before sessions recorded a driver,
+  are held to none until their next resume or turn binds them, to whichever
+  driver that runs on.
 - A signal that interrupts a batch CLI run closes the root run's sandbox runtime
   and not the runtimes of its children. A child's sessions still end, because
   they end with the harness process; nothing takes down a container of a child's

@@ -266,9 +266,9 @@ store and what is missing, and says to set `CF_HARNESS_SANDBOX_RUNTIME=docker`
 to serve on Docker instead. They refuse the same way where the environment sets
 one of the Docker driver's own variables, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` among them, since whoever set it
-means Docker; where a default CFC policy could not be examined; and where the
-store is reached through a symbolic link, which the macOS `runsc` cannot run
-from. There is no fallback from one driver to the other. The package's
+means Docker; where a default CFC policy could not be read; and where the store
+is reached through a symbolic link, which the macOS `runsc` cannot run from.
+There is no fallback from one driver to the other. The package's
 [current-state reference](../docs/CURRENT_STATE.md#selection) has the rule in
 full.
 

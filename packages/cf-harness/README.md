@@ -1030,8 +1030,9 @@ never a fallback from one driver to the other:
 A store is set up for the default when it holds each of the following that no
 setting replaces, and the default is refused when any of those is missing. Only
 `config.json` is required whatever is named. The first five are refused as
-symbolic links too: each has to be the file or directory itself, as gVisor's
-installer writes it.
+symbolic links too, and so is any of them reached through a directory of the
+store that is one, such as `bin`: each has to be the file or directory itself,
+at its path in the store, as gVisor's installer writes it.
 
 | In the store            | What it is                                        | Required unless                                   |
 | ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
@@ -1068,11 +1069,12 @@ Three more things refuse the default, each before anything executes:
   is removed. The selection does not refuse a named `runsc` for them, and the
   direct driver reads none of them; `console:launch` still refuses its two
   sidecar directory flags under any direct driver.
-- **A policy that cannot be examined.** A default policy the harness could not
-  look at is not known to be absent, so the next default does not stand in for
-  it. The refusal names the file and the reason. A named `runsc` is refused the
-  same way. A policy that is not there is absent, and so is one whose path runs
-  through a file, such as a home that is not a directory.
+- **A policy that cannot be read.** A default policy the harness could not look
+  at, or that is there and could not be opened, is not known to be one a run can
+  use, so the next default does not stand in for it. The refusal names the file
+  and the reason. A named `runsc` is refused the same way. A policy that is not
+  there is absent, and so is one whose path runs through a file, such as a home
+  that is not a directory.
 - **A store given by another path than the one it is at.** The driver hands the
   macOS `runsc` the rootfs by the path the file system has for it, and that
   `runsc` recognizes one of its store's images by comparing the path as written
