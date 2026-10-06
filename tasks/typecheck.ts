@@ -23,6 +23,7 @@ import { readWorkspaceMembers } from "./workspace-tests.ts";
 const DIRS = [
   ".claude/scripts",
   "docs",
+  "packages/agent-runner",
   "packages/api",
   "packages/cf-harness",
   "packages/cli",

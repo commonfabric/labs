@@ -7,20 +7,20 @@ import type {
   HarnessJobOptions,
   HarnessJobResult,
   HarnessJobSpec,
-} from "../../lib/harness-job.ts";
+} from "../../src/harness-job.ts";
 import {
   LOCAL_JOB_ERROR_MAX_LENGTH,
   localJobEventsOf,
   LocalJobLane,
   localJobSpecOf,
   PROFILE_UNAVAILABLE,
-} from "../../lib/local-jobs/lane.ts";
-import type { LocalJobProfile } from "../../lib/local-jobs/profiles.ts";
+} from "../../src/local-jobs/lane.ts";
+import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
 import {
   type LocalJob,
   type LocalJobState,
   LocalJobStore,
-} from "../../lib/local-jobs/store.ts";
+} from "../../src/local-jobs/store.ts";
 
 /** The `ask` profile the lane runs jobs under. */
 const ASK: LocalJobProfile = {

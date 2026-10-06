@@ -10,6 +10,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
+import { type GitHubCredential, staticGitHubCredential } from "./github-auth.ts";
 import {
   friendlyError,
   github,
@@ -75,7 +76,11 @@ Deno.test("github: no token -> a 'set GH_TOKEN' error, and no request is attempt
   await withTokens({}, async () => {
     await withFetch(() => Response.json({}), async (calls) => {
       const e = await assertRejects(() => github("repos/o/r"), Error);
-      assertEquals(e.message, "GitHub API repos/o/r: set GH_TOKEN or GITHUB_TOKEN");
+      assertEquals(
+        e.message,
+        "GitHub API repos/o/r: set GH_TOKEN or GITHUB_TOKEN, or " +
+          "GH_APP_CLIENT_ID and GH_APP_PRIVATE_KEY",
+      );
       assertEquals(calls.length, 0);
       // The message is one friendlyError recognizes, so a token-gated tile grays
       // out with "set GH_TOKEN" rather than "temporarily unavailable".
@@ -445,7 +450,7 @@ Deno.test("github: JSON stays active while its response body is read", async () 
         bodyRead();
         return new Promise<void>((resolve) => finishPull = resolve);
       },
-    }));
+    }, { highWaterMark: 0 }));
     await withFetch(
       () => response,
       async () => {
@@ -478,7 +483,7 @@ Deno.test("github: a download stays active while its response body is read", asy
         bodyRead();
         return new Promise<void>((resolve) => finishPull = resolve);
       },
-    }));
+    }, { highWaterMark: 0 }));
     await withFetch(
       () => response,
       async () => {
@@ -800,10 +805,57 @@ Deno.test("github: an endpoint can select a newer REST API version", async () =>
   });
 });
 
+Deno.test("github: each request carries the token its credential hands out when the request starts", async () => {
+  let issued = 0;
+  const refused: string[] = [];
+  const credential: GitHubCredential = {
+    allowance: "renewing",
+    token: () => Promise.resolve(`token-${++issued}`),
+    refused: (token) => refused.push(token),
+  };
+  await withFetch(
+    (url) => url.endsWith("/denied") ? new Response(null, { status: 401 }) : Response.json({}),
+    async (calls) => {
+      await github("repos/o/first", credential);
+      await github("repos/o/second", credential);
+      await assertRejects(() => github("repos/o/denied", credential), Error);
+      assertEquals(calls.map(auth), ["Bearer token-1", "Bearer token-2", "Bearer token-3"]);
+      assertEquals(refused, ["token-3"]);
+    },
+  );
+});
+
+Deno.test("github: a credential whose token the rate-limit check is refused hears of it", async () => {
+  const refused: string[] = [];
+  const credential: GitHubCredential = {
+    allowance: `refused-preflight-${crypto.randomUUID()}`,
+    token: () => Promise.resolve("revoked"),
+    refused: (token) => refused.push(token),
+  };
+  await withFetch(
+    () => new Response(null, { status: 401 }),
+    async () => {
+      await assertRejects(() => performanceGithub("repos/o/r", credential), Error);
+      assertEquals(refused, ["revoked"]);
+    },
+  );
+});
+
+Deno.test("friendlyError: names the GitHub App variable a credential is missing", () => {
+  assertEquals(
+    friendlyError("set GH_APP_PRIVATE_KEY to authenticate as the GitHub App"),
+    "set GH_APP_PRIVATE_KEY",
+  );
+  assertEquals(
+    friendlyError("set GH_APP_CLIENT_ID to authenticate as the GitHub App"),
+    "set GH_APP_CLIENT_ID",
+  );
+});
+
 Deno.test("github: an explicit token wins over the env; GITHUB_TOKEN backs up GH_TOKEN", async () => {
   await withFetch(() => Response.json({}), async (calls) => {
     await withTokens({ GH_TOKEN: "gh", GITHUB_TOKEN: "github" }, async () => {
-      await github("x", "explicit");
+      await github("x", staticGitHubCredential("explicit"));
       await github("x");
     });
     await withTokens({ GITHUB_TOKEN: "github" }, async () => {
@@ -893,7 +945,7 @@ Deno.test("runArtifactId: asks the listing for the one name, and returns its id"
       github: listing.github,
       runId: 42,
       name: "perf-metrics",
-      token: "t",
+      credential: staticGitHubCredential("t"),
     }),
     7,
   );
@@ -909,7 +961,7 @@ Deno.test("runArtifactId: a run with no artifact of the name -> undefined", asyn
       github: listing.github,
       runId: 42,
       name: "perf-metrics",
-      token: "t",
+      credential: staticGitHubCredential("t"),
     }),
     undefined,
   );
@@ -925,7 +977,7 @@ Deno.test("runArtifactId: a re-run job's newer artifact wins over the first atte
       github: listing.github,
       runId: 42,
       name: "perf-metrics",
-      token: "t",
+      credential: staticGitHubCredential("t"),
     }),
     9,
   );
@@ -941,7 +993,7 @@ Deno.test("runArtifactId: an expired artifact is passed over for an older one th
       github: listing.github,
       runId: 42,
       name: "perf-metrics",
-      token: "t",
+      credential: staticGitHubCredential("t"),
     }),
     7,
   );
@@ -960,7 +1012,7 @@ Deno.test("runArtifactId: a listing naming no artifacts at all -> undefined", as
       github,
       runId: 42,
       name: "perf-metrics",
-      token: "t",
+      credential: staticGitHubCredential("t"),
     }),
     undefined,
   );

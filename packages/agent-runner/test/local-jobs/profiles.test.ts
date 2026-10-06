@@ -5,7 +5,7 @@ import {
   type LocalJobProfile,
   narrowLocalJobProfile,
   readLocalJobProfiles,
-} from "../../lib/local-jobs/profiles.ts";
+} from "../../src/local-jobs/profiles.ts";
 
 /** A profile as a host file states it. */
 const ASK = {

@@ -92,23 +92,25 @@ import {
 } from "../ci-job-history.ts";
 import {
   concDot,
+  dashboardGitHubCredential,
   type DatedRun,
   durationTag,
   escapeHtml,
   friendlyError,
-  type GitHubDownload,
   github,
   githubDownload,
+  type GitHubDownload,
+  type GitHubJson,
   humanSpan,
+  isStaleRunList,
   jsonFromZip,
   multiSparkline,
-  type GitHubJson,
-  isStaleRunList,
   performanceGithub,
   performanceGithubDownload,
   runArtifactId,
   STALE_RUNS_ERROR,
 } from "../lib.ts";
+import type { GitHubCredential } from "../github-auth.ts";
 import {
   BENCH_HEADLINE_MAX_AGE_HOURS,
   BENCH_TREND_BUCKET_MS,
@@ -159,7 +161,7 @@ const BENCHMARK_REFRESH_MS = 30 * 60_000;
 const BENCHMARK_FETCH_CONCURRENCY = 8;
 
 interface BenchmarkGitHub extends GitHubJson {
-  download(path: string, token: string): Promise<GitHubDownload>;
+  download(path: string, credential: GitHubCredential): Promise<GitHubDownload>;
 }
 
 const ordinaryBenchmarkGitHub: BenchmarkGitHub = {
@@ -393,14 +395,14 @@ export function formatNs(ns: number): string {
 
 async function fetchZip(
   artifactId: number,
-  token: string,
+  credential: GitHubCredential,
   github: BenchmarkGitHub,
 ): Promise<Uint8Array<ArrayBuffer>> {
   // GitHub 302s to a pre-signed blob URL; fetch follows it and drops the
   // Authorization header on the cross-origin hop, which the signed URL expects.
   const res = await github.download(
     `repos/${REPO}/actions/artifacts/${artifactId}/zip`,
-    token,
+    credential,
   );
   if (!res.ok) throw new Error(`artifact ${artifactId}: HTTP ${res.status}`);
   return res.body;
@@ -420,7 +422,7 @@ async function fetchZip(
 // the server started, the runs the history cache records.
 async function pageBenchmarkRuns(
   github: BenchmarkGitHub,
-  token: string,
+  credential: GitHubCredential,
   cutoff: number,
 ): Promise<Run[]> {
   const runs: Run[] = [];
@@ -429,7 +431,7 @@ async function pageBenchmarkRuns(
       { workflow_runs?: (Run & { head_branch: string | null })[] }
     >(
       `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=100&page=${page}`,
-      token,
+      credential,
     );
     const batch = response.workflow_runs ?? [];
     if (!batch.length) break;
@@ -455,7 +457,7 @@ async function pageBenchmarkRuns(
 // artifact is cached as an empty map. A failed read remains unknown.
 async function loadRun(
   run: Run,
-  token: string,
+  credential: GitHubCredential,
   github: BenchmarkGitHub,
 ): Promise<{ cached: boolean; error?: unknown }> {
   let cpu = UNKNOWN_CPU;
@@ -466,10 +468,10 @@ async function loadRun(
       github,
       runId: run.id,
       name: ARTIFACT,
-      token,
+      credential,
     });
     if (artifactId !== undefined) {
-      zip = await fetchZip(artifactId, token, github);
+      zip = await fetchZip(artifactId, credential, github);
     }
   } catch (error) {
     // The read failed, so whether this run has usable results is still unknown.
@@ -1159,7 +1161,7 @@ interface BenchmarkCollectionOutcome {
 }
 
 async function collectBenchmark(
-  token: string,
+  credential: GitHubCredential,
   progress: BenchmarkProgressRecord,
   github: BenchmarkGitHub,
   // The run list the caller has already paged, when it has one. The tile pages it
@@ -1171,7 +1173,7 @@ async function collectBenchmark(
 
   try {
     await benchmarkStore.load();
-    const runs = knownRuns ?? await pageBenchmarkRuns(github, token, cutoff);
+    const runs = knownRuns ?? await pageBenchmarkRuns(github, credential, cutoff);
 
     const chosen = sampleBenchmarkRuns(runs, cutoff);
     const priorRefresh = benchmarkStore.refresh;
@@ -1215,7 +1217,7 @@ async function collectBenchmark(
         });
         let cached = false;
         try {
-          const outcome = await loadRun(run, token, github);
+          const outcome = await loadRun(run, credential, github);
           cached = outcome.cached;
           return outcome.error === undefined
             ? null
@@ -1289,7 +1291,7 @@ function startBenchmarkRefresh(
   const github = scope === "bench"
     ? performanceBenchmarkGitHub
     : ordinaryBenchmarkGitHub;
-  const token = (ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN"))!;
+  const credential = dashboardGitHubCredential(ctx)!;
   const activeBenchmarkRefresh = activeBenchmarkRefreshes.get(scope);
   if (activeBenchmarkRefresh) {
     if (baseline !== undefined) {
@@ -1331,7 +1333,7 @@ function startBenchmarkRefresh(
       // history.
       return {};
     }
-    return await collectBenchmark(token, progress, github, known);
+    return await collectBenchmark(credential, progress, github, known);
   };
   let refreshFinished = false;
   const finishRefresh = () => {
@@ -1428,21 +1430,21 @@ function benchmarkServerContext(): Ctx {
 
 /** Active collections shared by tiles using the same credentials. */
 const benchmarkTileCollections = new Map<
-  string,
+  GitHubCredential,
   ReturnType<typeof collectBenchmarkTileRuns>
 >();
 
 /** Collects the workflow list together with its completed artifact refresh. */
 async function collectBenchmarkTileRuns(
   ctx: Ctx,
-  token: string,
+  credential: GitHubCredential,
 ): Promise<{ runs: Run[]; offline?: string }> {
   await loadCachedBenchmarkSnapshot();
   // Run status refreshes every collection; artifact history has its own cadence.
   let listError: unknown;
   const listing = pageBenchmarkRuns(
     ordinaryBenchmarkGitHub,
-    token,
+    credential,
     Date.now() - SPARK_DAYS * 86_400_000,
   ).catch((error) => {
     listError = error;
@@ -1474,14 +1476,14 @@ function makeBenchmarkTile(
     intervalMs: 60_000,
     showOnlyCompletedViews: true,
     async collect(ctx): Promise<TileView> {
-      const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) return { ...benchmarkUnavailable("set GH_TOKEN"), href };
-      let collection = benchmarkTileCollections.get(token);
+      const credential = dashboardGitHubCredential(ctx);
+      if (!credential) return { ...benchmarkUnavailable("set GH_TOKEN"), href };
+      let collection = benchmarkTileCollections.get(credential);
       if (!collection) {
-        collection = collectBenchmarkTileRuns(ctx, token).finally(() => {
-          benchmarkTileCollections.delete(token);
+        collection = collectBenchmarkTileRuns(ctx, credential).finally(() => {
+          benchmarkTileCollections.delete(credential);
         });
-        benchmarkTileCollections.set(token, collection);
+        benchmarkTileCollections.set(credential, collection);
       }
       const { runs, offline } = await collection;
       return { ...benchmarkIndexView(runs, Date.now(), select, offline), href };
@@ -1545,16 +1547,16 @@ export async function benchmarkHistoryResponse(
   ctx = benchmarkServerContext(),
 ): Promise<Response> {
   await loadCachedBenchmarkSnapshot();
-  const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
+  const credential = dashboardGitHubCredential(ctx);
   const baseline = benchmarkSnapshotVersion();
   let progress: BenchmarkFetchProgress | undefined;
   let refreshError: string | undefined;
-  if (!token) {
+  if (!credential) {
     refreshError = snapshot.length
       ? "Set GH_TOKEN to refresh runtime benchmark history."
       : "Set GH_TOKEN to collect runtime benchmark history.";
   }
-  if (token && !benchmarkRefreshRecentlyFailed()) {
+  if (credential && !benchmarkRefreshRecentlyFailed()) {
     const refresh = startBenchmarkRefresh(
       ctx,
       baseline,
@@ -1590,10 +1592,10 @@ export async function benchmarkHistoryCheckResponse(
   ctx = benchmarkServerContext(),
 ): Promise<Response> {
   await loadCachedBenchmarkSnapshot();
-  const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
+  const credential = dashboardGitHubCredential(ctx);
   let progress: BenchmarkFetchProgress | null = null;
   if (
-    token &&
+    credential &&
     (!benchmarkRefreshFailedAt || activeBenchmarkRefreshes.has("bench") ||
       Date.now() - benchmarkRefreshFailedAt >= BENCHMARK_REFRESH_MS)
   ) {

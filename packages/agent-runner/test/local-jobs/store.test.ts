@@ -9,7 +9,7 @@ import {
   type LocalJobRequest,
   LocalJobStore,
   RUNNER_RESTARTED,
-} from "../../lib/local-jobs/store.ts";
+} from "../../src/local-jobs/store.ts";
 
 /** A request with plain inputs. */
 const request = (task = "Name a moon of Saturn."): LocalJobRequest => ({

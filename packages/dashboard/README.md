@@ -13,9 +13,10 @@ deno task dashboard      # = deno run … packages/dashboard/server.ts
 ```
 
 Tiles that read GitHub need `GH_TOKEN` (or `GITHUB_TOKEN`) set in the
-environment. The GitHub spend tile can use a separate `GH_BILLING_TOKEN` when
-billing needs broader account access. The other token-gated tiles gray out
-cleanly until their env vars are set (see below).
+environment, or a GitHub App configured with `GH_APP_CLIENT_ID` and
+`GH_APP_PRIVATE_KEY`. The GitHub spend tile can use a separate
+`GH_BILLING_TOKEN` when billing needs broader account access. The other
+token-gated tiles gray out cleanly until their env vars are set (see below).
 
 The root `deno task dashboard` command starts the server once. Watch mode and
 dashboard-specific tests are package tasks:
@@ -426,6 +427,10 @@ to the next; a view supplies everything under it.
 
 ## Tiles
 
+Where the table names `GH_TOKEN` or `GH_BILLING_TOKEN`, a GitHub App configured
+with `GH_APP_CLIENT_ID` and `GH_APP_PRIVATE_KEY` serves instead, through its
+installation with the same permissions; see [Credentials](#credentials).
+
 | tile | source | needs |
 |---|---|---|
 | ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
@@ -642,7 +647,7 @@ without hiding readable measurements. The headline is published as soon as the
 latest manifest is readable, before historical collection finishes.
 
 Both tiles refresh their measurements and activity independently every 30 seconds.
-With `GH_TOKEN` or `GITHUB_TOKEN` set, a
+With a GitHub credential configured, a
 **running** badge lights while the Test Selection workflow on main is queued or
 running, including reruns of older workflow runs. Runs on the workflow's
 newest page are read from its unfiltered run list, which GitHub serves current.
@@ -723,7 +728,8 @@ to before treating it as the whole bill.
 
 Every tile that reads a private source is gated on its own env var(s) and grays
 out until they are set. The GitHub tiles use `GH_TOKEN`, except that
-**github spend** can use `GH_BILLING_TOKEN` instead; every other
+**github spend** can use `GH_BILLING_TOKEN` instead, and a GitHub App can stand
+in for both; every other
 private-source tile is independently optional — set only the ones you want,
 and the rest stay gray without breaking the board. Each key below lists what
 it powers, the rights it needs, and how to mint it. (`commonfabric.com` and
@@ -731,6 +737,58 @@ it powers, the rights it needs, and how to mint it. (`commonfabric.com` and
 
 Almost every credential is shown only once at creation — copy it immediately;
 if you lose it you have to regenerate.
+
+### `GH_APP_CLIENT_ID` + `GH_APP_PRIVATE_KEY`
+
+Configure a GitHub App, and every GitHub tile authenticates as one of its
+installations, with no person's token involved. The app takes precedence over
+`GH_TOKEN` and `GITHUB_TOKEN`. `GH_BILLING_TOKEN` still takes precedence over
+the app for **github spend**, for an account the app cannot read. With only
+one of the two variables set, every GitHub tile that would use the app is gray
+and names the one that is missing.
+
+The dashboard picks the installation by the account each request is about. The
+repository and organization reads use the installation on the owner of
+`DASHBOARD_REPO`. **github spend** uses the installation on the enterprise
+named by `GH_BILLING_ENTERPRISE`. GitHub refuses an app's tokens for an
+organization's billing, so with `GH_BILLING_ENTERPRISE` unset, **github
+spend** reads the organization's billing with `GH_BILLING_TOKEN`, `GH_TOKEN`,
+or `GITHUB_TOKEN`, as it does without an app. It finds each installation among the app's own on
+first use, and mints a token for it. A token is used until it is five minutes
+from expiring, and the request after that mints the next one, so a collection
+that runs longer than a token lasts carries on without a restart. A token
+GitHub refuses, and an installation that cannot mint one, are dropped, and the
+next request looks the installation up again, so reinstalling the app needs no
+restart either.
+
+GitHub counts an installation's requests separately from any person's. An
+installation in a GitHub Enterprise Cloud organization is allowed 15,000
+requests an hour, where a personal access token is allowed 5,000.
+
+1. Create the app under the enterprise, at
+   `https://github.com/enterprises/<enterprise>/settings/apps` → **New GitHub
+   App**. An app the enterprise owns can be installed only on the enterprise
+   and its organizations, which are the two installations the dashboard uses.
+   Give it any homepage URL and clear **Webhook** → **Active**.
+2. **Repository permissions**: **Actions** and **Contents**, both
+   **Read-only**. **Metadata** becomes read-only automatically.
+3. **Organization permissions**: **Members** **Read-only** for **github
+   users**. GitHub refuses an app's tokens for an organization's billing
+   ("Resource not accessible by integration"), so **github spend** reads
+   through the app only with `GH_BILLING_ENTERPRISE` set. For an
+   organization's billing, set `GH_BILLING_TOKEN` as well.
+4. **Enterprise permissions**: **Enterprise billing** **Read-only**, for
+   **github spend** with `GH_BILLING_ENTERPRISE` set.
+5. **Create GitHub App**. Copy the **Client ID** (`Iv23…`) into
+   `GH_APP_CLIENT_ID`. Under **Private keys**, **Generate a private key**; the
+   downloaded `.pem` file's whole contents, PKCS#1 as GitHub issues it, go in
+   `GH_APP_PRIVATE_KEY`. PKCS#8 works as well.
+6. **Install App** on the organization, with **All repositories** so the **ci**
+   tile covers the whole organization. For enterprise billing, install it on
+   the enterprise too. An enterprise installation receives only the app's
+   enterprise permissions, and the organization installation only its
+   repository and organization permissions, which is why the dashboard keeps
+   one per account.
 
 ### `GH_TOKEN` (or `GITHUB_TOKEN`)
 
@@ -791,11 +849,10 @@ that organization selected as its resource owner and organization
 - A classic personal access token with `manage_billing:enterprise`, owned by an
   enterprise owner or billing manager. GitHub does not offer a read-only
   classic scope for enterprise billing.
-- A GitHub App user or installation access token with enterprise
-  **Enterprise billing: read**. This is the least-privilege enterprise option.
-  Installation access tokens expire after one hour, so a long-running
-  deployment must arrange renewal and restart the dashboard with the renewed
-  value.
+- A GitHub App with enterprise **Enterprise billing: read**, installed on the
+  enterprise. This is the least-privilege enterprise option. Configure it with
+  `GH_APP_CLIENT_ID` and `GH_APP_PRIVATE_KEY` rather than here, and the
+  dashboard renews its tokens itself.
 
 Enterprise billing endpoints do not accept fine-grained personal access
 tokens. The tile reads the enterprise-wide usage summary and budgets, so the
@@ -1087,7 +1144,9 @@ off. It needs no second change to light up once that deployment starts exporting
 Notes:
 
 - **GitHub billing token:** every GitHub tile uses `GH_TOKEN` except that
-  **github spend** prefers `GH_BILLING_TOKEN` when it is set. An organization
+  **github spend** prefers `GH_BILLING_TOKEN` when it is set. A configured
+  GitHub App takes the place of `GH_TOKEN`, through its installation on each
+  account. An organization
   deployment can keep one token with organization billing read. Enterprise
   billing needs different credentials, so the separate variable keeps the
   ordinary GitHub token free of enterprise billing access. The **github users**
@@ -1440,9 +1499,10 @@ Local-first: no build step, no deployment, a single process on `localhost`.
 
 Env knobs for the dev loop:
 
-- `GH_TOKEN` (or `GITHUB_TOKEN`) — required for the GitHub tiles. GitHub spend
-  also needs Administration read. GitHub users also needs Members read. Without
-  the token, those tiles stay gray.
+- `GH_TOKEN` (or `GITHUB_TOKEN`) — required for the GitHub tiles unless
+  `GH_APP_CLIENT_ID` and `GH_APP_PRIVATE_KEY` configure a GitHub App. GitHub
+  spend also needs Administration read. GitHub users also needs Members read.
+  Without either, those tiles stay gray.
 - `DASHBOARD_PORT` — run several instances at once (e.g. one per branch) without clashing.
 - `DASHBOARD_REPO` — point the CI tiles at any repo. Its owner selects the
   organization for GitHub users.
@@ -1457,7 +1517,8 @@ Env knobs for the dev loop:
   `OPENAI_ADMIN_KEY`/`ANTHROPIC_ADMIN_KEY`/`OPENROUTER_KEY`, `DISCORD_*`) — set
   one to develop that gated tile against its real backend.
 
-It never crashes on a missing credential: the GitHub tiles need `GH_TOKEN` and
+It never crashes on a missing credential: the GitHub tiles need `GH_TOKEN` (or
+the GitHub App) and
 the other private-source tiles each need their own env var, and any tile whose
 `collect()` throws (missing token, offline) just shows a gray "unknown" while the
 rest of the board keeps working — so you can develop against whatever you happen
@@ -1514,14 +1575,16 @@ its embedded tsnet).
    also needs MagicDNS and HTTPS certificates enabled — `tailscale serve`
    fetches a cert for `dashboard.<tailnet>.ts.net` and can't without them.
 2. `tofu apply` in `infra/tofu/gke` creates the dev-dashboard Secret Manager
-   containers and Workload Identity/BigQuery grants. Store the required GitHub
-   token (and each provider credential you want to enable):
+   containers and Workload Identity/BigQuery grants. Create the GitHub App and
+   its two installations as described under `GH_APP_CLIENT_ID` +
+   `GH_APP_PRIVATE_KEY` above, then store its private key (and each provider
+   credential you want to enable):
    ```bash
-   printf %s "github_pat_…" | gcloud secrets versions add k8s-stage-dashboard-github-token --data-file=-
+   gcloud secrets versions add k8s-stage-dashboard-github-app-private-key --data-file=path/to/private-key.pem
    ```
-   The GitHub token is fine-grained and read-only. It has Actions read for the
-   dashboard repositories. The GitHub users tile also needs org Members read;
-   GitHub spend also needs org Administration read.
+   with the path of the app's downloaded `.pem` file in place of
+   `path/to/private-key.pem`. The app's client ID is public and sits in the infra stage overlay, which also
+   names the enterprise github spend reads.
 3. The infra manifests create separate 1 Gi `standard-rwo` PVCs for the Discord
    history file and Tailscale node state. The dashboard remains a one-replica
    `Recreate` Deployment; pod replacement reuses the same non-ephemeral
@@ -1593,7 +1656,7 @@ during Google's initial export backfill it reports `no billing data yet` rather
 than a false zero.
 
 Every backend is reached over HTTP, so the image carries no cloud CLI. The
-GitHub tiles use `GH_TOKEN`. The cloud-spend tile queries BigQuery as the pod's
+GitHub tiles authenticate as the GitHub App. The cloud-spend tile queries BigQuery as the pod's
 own service account through Workload Identity. The infra repo's
 `tofu/gke/dashboard.tf` provisions that account, the Workload Identity binding,
 and its BigQuery Job User and Data Viewer grants, so no key is stored in the

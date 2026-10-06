@@ -10,7 +10,7 @@ import {
   type CfcObservationMaxConfidentiality,
 } from "@commonfabric/runner/cfc";
 
-import { agentRunObservationCeiling } from "../lib/agent-run-harness.ts";
+import { agentRunObservationCeiling } from "../src/agent-run-harness.ts";
 
 const USER = "did:key:z6MkrZ1r5XBFZjBU34qyD8fueMbMRkKw17BZaq2ivKFjnz2z";
 const OWNER = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
@@ -85,13 +85,15 @@ describe("agent run observation ceiling", () => {
     expect(cfcObservationFitsCeiling([invitation], unavailable)).toBe(false);
   });
 
-  it("keeps a default ACL lookup failure personal-only", async () => {
+  it("keeps an ACL lookup failure personal-only", async () => {
     const reports: string[] = [];
     const ceiling = await agentRunObservationCeiling(
       {
         identityKeyPath:
           `/tmp/missing-agent-ceiling-${crypto.randomUUID()}.key`,
         requester: USER,
+        readSpaceAcl: () =>
+          Promise.reject(new Error("Identity keyfile is missing.")),
         report: (line) => reports.push(line),
       },
       "http://127.0.0.1:1",

@@ -1247,6 +1247,13 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
   "can undo";
 
 /**
+ * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
+ * in the space it creates. The space's genesis commit reserves the address it
+ * derives there, so the root's address is fixed before the run that places it.
+ */
+export const IN_SPACE_ROOT_CAUSE = "in-space-root";
+
+/**
  * Reports work which failed after storage accepted a pattern setup.
  *
  * The receipt remains authoritative for the setup transaction. `.cause`
@@ -10933,11 +10940,8 @@ export class Runner {
       );
     }
     await Promise.all(
-      pending.map(([name, grants]) =>
-        this.#runtime.resolveInSpaceName(space, name, {
-          owner,
-          ...(grants !== undefined ? { grants } : {}),
-        })
+      pending.map(([name, request]) =>
+        this.#runtime.resolveInSpaceName(space, name, { owner, ...request })
       ),
     );
     throw new RetryImmediately(
@@ -12720,7 +12724,9 @@ export class Runner {
     const targetSpace = module.targetSpace ?? resultCell.space;
     let childResultCell = this.#runtime.getCell(
       targetSpace,
-      {
+      // A space's root sits where its genesis reservation says, which the
+      // reservation fixed before this output existed.
+      module.targetSpaceRoot ? IN_SPACE_ROOT_CAUSE : {
         resultFor: {
           space: outputRedirect.space,
           id: outputRedirect.id,
@@ -12805,6 +12811,9 @@ export class Runner {
           parentResultCell.space,
           delegatedCarriageOf(waveRunContextOf(instanceTx)),
         );
+        if (plan.module.targetSpaceRoot) {
+          this.#linkSpaceRootIfAbsent(instanceTx, childResultCell);
+        }
       }
       // Only a child in a space of its own claims one: an in-space nested
       // node is part of its parent's graph and is re-instantiated from the
@@ -12886,6 +12895,22 @@ export class Runner {
           }
         },
     );
+  }
+
+  /**
+   * Links `root` as the root of its space in `tx`, unless a root is linked
+   * there already. Reading the slot puts it in `tx`'s read set, so a rival
+   * linking a root first makes this commit conflict rather than replace it.
+   */
+  #linkSpaceRootIfAbsent(
+    tx: IExtendedStorageTransaction,
+    root: Cell<unknown>,
+  ): void {
+    const slot = this.#runtime.getSpaceCell(root.space).withTx(tx).key(
+      "defaultPattern",
+    );
+    if (slot.getRaw() !== undefined) return;
+    slot.set(root.withTx(tx));
   }
 
   /** Resumes a child from its retained source after its parent's commit. */

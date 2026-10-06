@@ -650,8 +650,22 @@ function factoryFromPattern<T, R>(
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
-    spaceOptions?: InSpaceOptions,
+    spaceGrants?: InSpaceGrants,
+    spaceRoot?: true,
+    spaceGrantsWithoutServerExecution?: InSpaceGrants,
   ): PatternFactory<T, R> => {
+    if (spaceRoot) {
+      // The runner places a result at the reserved root address only in the
+      // space scope; any other scope would put it somewhere else.
+      const resultScope = schemaCellScope(pattern.resultSchema) ??
+        defaultScope;
+      if (resultScope !== undefined && resultScope !== "space") {
+        throw new Error(
+          "inSpace() makes a pattern the root of a space only when its " +
+            `result is space-scoped, and this one is \`${resultScope}\`-scoped`,
+        );
+      }
+    }
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
         const module: Module & toEncodableForm & toJSON = {
@@ -669,12 +683,15 @@ function factoryFromPattern<T, R>(
         if (defaultSpace !== undefined) {
           const targetSpace = resolveInSpaceTargetSpace(
             defaultSpace,
-            spaceOptions,
+            spaceGrants,
+            spaceRoot,
+            spaceGrantsWithoutServerExecution,
             frame,
           );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
+            if (spaceRoot) module.targetSpaceRoot = true;
           }
         }
         const node: NodeRef = {
@@ -708,7 +725,13 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace, spaceOptions);
+      const derived = makePatternFactory(
+        scope,
+        defaultSpace,
+        spaceGrants,
+        spaceRoot,
+        spaceGrantsWithoutServerExecution,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -754,12 +777,19 @@ function factoryFromPattern<T, R>(
           );
         }
       }
-      const derived = makePatternFactory(defaultScope, space ?? "", {
-        ...(grants === undefined ? {} : { grants }),
-        ...(grantsWithoutServerExecution === undefined
-          ? {}
-          : { grantsWithoutServerExecution }),
-      });
+      if (options?.root && (isDID(space) || isCell(space))) {
+        throw new Error(
+          "inSpace() makes a pattern the root only of a space it creates, " +
+            "and a DID or a cell names a space that exists",
+        );
+      }
+      const derived = makePatternFactory(
+        defaultScope,
+        space ?? "",
+        grants,
+        options?.root ? true : undefined,
+        grantsWithoutServerExecution,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -1162,8 +1192,8 @@ function assignComputedCellKinds(
  *   returned; the runner resolves pending names after the run and re-runs the
  *   handler or action (RetryImmediately), at which point the target resolves
  *   synchronously. The first call to name a space in a run is the one whose
- *   grants create it: a later call naming it reads the record that call
- *   writes, as it would read the record of an earlier run.
+ *   grants and `root` create it: a later call naming it reads the record that
+ *   call writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
@@ -1174,7 +1204,9 @@ function assignComputedCellKinds(
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
-  options: InSpaceOptions | undefined,
+  grants: InSpaceGrants | undefined,
+  root: true | undefined,
+  grantsWithoutServerExecution: InSpaceGrants | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1193,28 +1225,35 @@ function resolveInSpaceTargetSpace(
   const name = typeof space === "string" && space.length > 0
     ? space
     : anonymousSpaceName(frame!);
-  const grants = inSpaceGrantsFor(
-    options,
+  const createdGrants = inSpaceGrantsFor(
+    grants,
+    grantsWithoutServerExecution,
     runtime.experimental.serverExecution === true,
   );
   const resolved = runtime.resolveInSpaceNameSync(
     callingSpace,
     name,
     tx,
-    grants,
+    createdGrants,
+    root,
   );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
   const pending = frame!.pendingSpaceNames ??= new Map();
-  if (!pending.has(name)) pending.set(name, grants);
+  if (!pending.has(name)) {
+    pending.set(name, {
+      ...(createdGrants !== undefined ? { grants: createdGrants } : {}),
+      ...(root ? { root } : {}),
+    });
+  }
   return undefined;
 }
 
 /**
- * Returns the access a space created for an `inSpace()` call with `options`
- * grants beyond its owner, on a runtime whose server execution is on when
- * `serverExecution` is `true`: `grants`, and without server execution
+ * Returns the access a space created for an `inSpace()` call grants beyond
+ * its owner, on a runtime whose server execution is on when `serverExecution`
+ * is `true`: `grants`, and without server execution
  * `grantsWithoutServerExecution` over them. `undefined` when that is nothing.
  *
  * The choice holds for the life of the space: a space created without server
@@ -1222,17 +1261,16 @@ function resolveInSpaceTargetSpace(
  * later.
  */
 function inSpaceGrantsFor(
-  options: InSpaceOptions | undefined,
+  grants: InSpaceGrants | undefined,
+  grantsWithoutServerExecution: InSpaceGrants | undefined,
   serverExecution: boolean,
 ): InSpaceGrants | undefined {
   // TODO(danfuzz): Narrow a space created without server execution to its
   // `grants` once the deployment turns server execution on, which needs a step
   // that runs then and may change the space's access list.
-  const added = serverExecution
-    ? undefined
-    : options?.grantsWithoutServerExecution;
-  if (added === undefined) return options?.grants;
-  return { ...options?.grants, ...added };
+  const added = serverExecution ? undefined : grantsWithoutServerExecution;
+  if (added === undefined) return grants;
+  return { ...grants, ...added };
 }
 
 /**
