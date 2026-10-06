@@ -523,14 +523,18 @@ const resolveRunscBinary = (given: string): string => {
  * The runsc binary, the CFC policy and the rootfs are each resolved once,
  * here, to a canonical path. That path is what is compared with the mounts,
  * what the returned configuration holds, and so what every later use names.
- * One of them that does not exist is accepted, as the path it will have under
- * its nearest existing ancestor: no writable mount holds that ancestor, so
- * what later appears there was not put there from a sandbox.
+ * On macOS the cfc-vm store is resolved and compared the same way, since the
+ * macOS runsc runs from it whatever the other three name. One of them that
+ * does not exist is accepted, as the path it will have under its nearest
+ * existing ancestor: no writable mount holds that ancestor, so what later
+ * appears there was not put there from a sandbox.
  *
- * @throws When a setting is malformed, when two sandbox roots overlap, when
- * the scratch directory lies inside a mount, when the binary, the policy or
- * the rootfs lies inside a writable mount, and when {@link canonicalHostPath}
- * cannot tell where one of those paths, or a mount, leads.
+ * @throws When a setting is malformed (on macOS, a store that is not an
+ * absolute path), when two sandbox roots overlap, when the scratch directory
+ * lies inside a mount, when the binary, the policy, the rootfs or, on macOS,
+ * the cfc-vm store lies inside a writable mount, when on macOS a writable
+ * mount lies inside the store, and when {@link canonicalHostPath} cannot tell
+ * where one of those paths, or a mount, leads.
  */
 export const resolveRunscSandboxConfig = (
   options: ResolveRunscSandboxConfigOptions,
