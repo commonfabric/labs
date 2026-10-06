@@ -326,7 +326,10 @@ function unionArms(
  * (`joinMemberIfcLabels()`). A union is labeled by every label it and its
  * arms declare read in full (`holdsUnreadArmLabel()`), or not at all, as a
  * union read by type is: a label read in part could claim what its author
- * never wrote together, and a join leaves out what an unread one held.
+ * never wrote together, and a join leaves out what an unread one held. A
+ * union with an arm that is a bare `unknown` (`isBareUnknown()`) is that
+ * `unknown`, as the checker reduces `unknown | X`, so it has only its own
+ * labels.
  */
 function armLabels(
   schema: MutableJSONSchema,
@@ -337,13 +340,34 @@ function armLabels(
   if (!isObjectOrArray(resolved) || !Array.isArray(resolved.anyOf)) {
     return labels;
   }
+  const arms = resolved.anyOf as MutableJSONSchema[];
+  if (arms.some((arm) => isBareUnknown(arm, context))) return labels;
   if (holdsUnreadArmLabel(schema, context)) return undefined;
   return joinMemberIfcLabels(
     labels ?? {},
-    (resolved.anyOf as MutableJSONSchema[]).map((arm) =>
-      armLabels(arm, context) ?? {}
-    ),
+    arms.map((arm) => armLabels(arm, context) ?? {}),
   );
+}
+
+/**
+ * Whether `schema` is a bare `unknown`, which no label declared on the way
+ * to it makes a carrier (`declaredIfcLabels()`), or a union with an arm that
+ * is one, which the checker reduces to it.
+ */
+function isBareUnknown(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): boolean {
+  if (declaredIfcLabels(schema, context.definitions) !== undefined) {
+    return false;
+  }
+  const resolved = resolveLocalRef(schema, context);
+  if (!isObjectOrArray(resolved)) return false;
+  return Array.isArray(resolved.anyOf)
+    ? (resolved.anyOf as MutableJSONSchema[]).some((arm) =>
+      isBareUnknown(arm, context)
+    )
+    : resolved.type === "unknown";
 }
 
 /**
@@ -377,16 +401,22 @@ function holdsUnreadArmLabel(
  * has only through one takes the signature's schema and casts no vote on
  * being required, and an `Omit` from a surface every arm covers that way
  * keeps just the signature, the named members dissolving into it as they do
- * in `keyof T`. A lone arm that is no object is returned as it came; a union
- * with such an arm, or a `Pick` naming a key some arm lacks (a program the
- * type checker rejects), has no view here and is `undefined`.
+ * in `keyof T`. An `unknown` arm has no keys, as `keyof unknown` is `never`,
+ * so it is an object with no members. A lone arm that is no object is
+ * returned as it came; a union with such an arm, or a `Pick` naming a key
+ * some arm lacks (a program the type checker rejects), has no view here and
+ * is `undefined`.
  */
 function pickedView(
   schema: MutableJSONSchema,
   context: GenerationContext,
   selection: { pick: Set<string> } | { omit: Set<string> },
 ): MutableJSONSchema | undefined {
-  const arms = unionArms(schema, context);
+  const arms = unionArms(schema, context).map((arm) =>
+    isObjectOrArray(arm) && arm.type === "unknown"
+      ? { type: "object", properties: {} } as MutableJSONSchema
+      : arm
+  );
   if (arms.length === 1 && !isObjectSchema(arms[0]!)) return schema;
   const objects = arms.filter(isObjectSchema);
   if (objects.length !== arms.length) return undefined;

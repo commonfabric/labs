@@ -3224,6 +3224,54 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const [alias, ifc] of [
+        ["Omit<T | Sec<{ x: string; z: 1 }>, never>", undefined],
+        [
+          "Omit<(T | { x: string }) | Sec<{ x: string; z: 1 }>, never>",
+          undefined,
+        ],
+        ["Omit<T, never>", undefined],
+        [
+          'Omit<Confidential<T | Sec<{ x: string; z: 1 }>, readonly ["c"]>, never>',
+          { confidentiality: ["c"] },
+        ],
+      ] as const
+    ) {
+      it(`reads \`${alias}\` under bindings as an object with no members, \`T\` bound to \`unknown\``, async () => {
+        // `keyof unknown` is `never`, and the checker reduces a union holding
+        // a bare `unknown` to it, the labels of the union's other members going
+        // with them.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<unknown> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: {},
+          ...(ifc ? { ifc } : {}),
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("keeps the label of a labeled `unknown` among the members of an `Omit` under bindings", async () => {
+      // `Confidential<unknown, …>` is its carrier, which reduces no union.
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T> = Confidential<
+          { inner: Omit<Confidential<T, readonly ["c"]> | Sec<{ x: string; z: 1 }>, never> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<unknown> }
+      `);
+      expect((value as any).properties.inner.ifc.confidentiality).toContain(
+        "c",
+      );
+      expect(diagnostics).toEqual([]);
+    });
+
     it('reads `Pick<T | Sec<{ x: string; z: 1 }>, "x">` under bindings unlabeled, `T` bound to an `ExactCopy` it cannot read in full', async () => {
       // Every value of a member's policy is read in full, label lists or not,
       // or none of the members' labels are.

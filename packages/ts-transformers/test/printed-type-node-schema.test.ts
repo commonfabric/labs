@@ -2518,9 +2518,12 @@ type View<T> = Omit<T | Sec<Two>, never>;`;
           }
         });
 
-        it("keeps every member's labels where a labeled member's payload is `unknown`, on both sides", async () => {
+        it("keeps the labels of a member whose labeled payload is `unknown`, on both sides", async () => {
           // `Confidential<unknown, …>` is its carrier rather than `unknown`, so
-          // it absorbs no other member of the union.
+          // it absorbs no other member of the union. `Omit` over the union
+          // keeps the keys every member has, here none: `c`, written around
+          // `Two`, lands on no member of the value, while `a` and `b`, written
+          // around payloads that list no members, land on all of it.
           const { input, output } = await schemasOf(
             `${DECLARATIONS}
 type Inner<T> = Omit<Sec<T>, never>;
@@ -2531,7 +2534,7 @@ type Nested<U> = Inner<Confidential<U, readonly ["b"]> | Confidential<Two, reado
             const { confidentiality } = (side as {
               ifc: { confidentiality: string[] };
             }).ifc;
-            expect([...confidentiality].sort()).toEqual(["a", "b", "c"]);
+            expect([...confidentiality].sort()).toEqual(["a", "b"]);
           }
         });
       });
