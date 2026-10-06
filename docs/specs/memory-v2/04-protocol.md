@@ -1392,7 +1392,12 @@ The runtime-facing scheduler rules remain the same:
 
 ## 4.7 Error Responses
 
-All errors are returned in `response`.
+All errors are returned in `response`. That includes a failure the server did
+not anticipate while handling a request: the request is answered on its own
+`requestId` with a `TransactionError` for a commit and a `QueryError` for any
+other request, unless the failure is a protocol error with a name of its own.
+The connection carries on, so a commit the server cannot handle fails alone,
+without taking the connection or the client's other commits with it.
 
 ```typescript
 // Shown at module scope.

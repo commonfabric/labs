@@ -1350,6 +1350,8 @@ class Connection {
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
           await this.#receiveOrdered(parsed);
+        } catch (error) {
+          if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
           timing.time(startedAt, "memory", "frame", "handle");
         }
@@ -1432,6 +1434,42 @@ class Connection {
       }
     });
     return current;
+  }
+
+  /**
+   * Helper for `receive()`, which answers a request whose handling threw with
+   * an error response on its own request id, so that the connection carries
+   * on: every error is returned in a response (04-protocol.md §4.7). A commit
+   * is answered with a `TransactionError` and any other request with a
+   * `QueryError`, while an engine `ProtocolError` keeps its own name, as the
+   * handlers name the failures they classify themselves.
+   *
+   * Returns whether it answered. A frame naming no request is left to the
+   * caller, and the host then closes the connection.
+   */
+  #answerFailedRequest(
+    parsed: ClientMessage | OversizedClientMessage | null,
+    error: unknown,
+  ): boolean {
+    const requestId = (parsed as { requestId?: unknown } | null)?.requestId;
+    if (parsed === null || typeof requestId !== "string") return false;
+    console.error(
+      `memory v2: handling a ${parsed.type} request failed; answering it with an error response`,
+      error,
+    );
+    this.#send({
+      type: "response",
+      requestId,
+      error: toError(
+        error instanceof Engine.ProtocolError
+          ? error.name
+          : parsed.type === "transact"
+          ? "TransactionError"
+          : "QueryError",
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+    return true;
   }
 
   #requireSession(
