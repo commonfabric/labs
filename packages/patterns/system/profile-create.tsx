@@ -13,7 +13,10 @@ import {
 } from "commonfabric";
 import ProfileHome, {
   type BackwardsCompatibleProfile,
+  type InboxPointable,
+  pointAtInboxIfUnset,
   type ProfileHomeOutput,
+  type ProfileInbox,
   type SetProfileNameEvent,
 } from "./profile-home.tsx";
 
@@ -58,10 +61,11 @@ export type CreateProfileEvent = {
 export type SeedProfileNameEvent = { name?: string; index?: number };
 
 // What the seed step needs of each profile in the list: the stored name (to
-// write only where none is stored yet) and the stream it writes through.
-// `setName` stays optional here so a stored profile of a vintage without it
-// can never keep this handler from running for the profiles created after.
-type SeedProfileTarget = {
+// write only where none is stored yet) and the stream it writes through, and
+// what pointing the profile at Home's private inbox needs. `setName` stays
+// optional here so a stored profile of a vintage without it can never keep
+// this handler from running for the profiles created after.
+export type SeedProfileTarget = InboxPointable & {
   name: string;
   setName?: Stream<SetProfileNameEvent>;
 };
@@ -103,15 +107,23 @@ export const seedProfileName = handler<
   SeedProfileNameEvent,
   {
     profiles: SeedProfileTarget[];
+    privateInbox?: ProfileInbox;
   }
->((event, { profiles }) => {
+>((event, { profiles, privateInbox }) => {
   const name = (event.name ?? "").trim();
   const index = event.index;
   if (!name || typeof index !== "number") return;
   const target = profiles[index];
-  if (target === undefined || target.setName === undefined) return;
-  if ((target.name ?? "") !== "") return;
-  target.setName.send({ name });
+  // The profile at `index` is the one just created only while its name is
+  // unstored; an index taken from a list this replica had not loaded may name
+  // an existing profile, which both steps below leave alone.
+  if (target === undefined || (target.name ?? "") !== "") return;
+  // The profile is pointed at Home's private inbox here, after its create has
+  // committed, for the same reason its name is stored here. Home's own pointing
+  // step runs once per runtime worker, so a profile created later would
+  // otherwise wait for the next worker.
+  pointAtInboxIfUnset(target, privateInbox);
+  target.setName?.send({ name });
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
@@ -322,6 +334,13 @@ export type ProfileCreateInput = {
   // time exactly as before — so a prefilled value is a head start on typing,
   // never a shortcut around the gesture.
   defaultName?: string;
+
+  /**
+   * Home's private inbox, if the embedder has it, held as a profile holds its
+   * pointer. Each profile this creates is pointed at it, unless the profile
+   * points at an inbox already.
+   */
+  privateInbox?: ProfileInbox;
 };
 
 export type ProfileCreateOutput = {
@@ -331,8 +350,11 @@ export type ProfileCreateOutput = {
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
-  ({ profiles, inputId, defaultName }) => {
-    const seedName = seedProfileName({ profiles: profiles as any });
+  ({ profiles, inputId, defaultName, privateInbox }) => {
+    const seedName = seedProfileName({
+      profiles: profiles as any,
+      privateInbox,
+    });
     const createProfile = submitProfileCreation({
       profiles: profiles as any,
       seedName,

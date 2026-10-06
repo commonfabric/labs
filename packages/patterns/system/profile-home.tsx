@@ -160,15 +160,15 @@ export type ShareInboxPiece = {
 
 /**
  * Where things shared with this profile's owner are delivered: a link to the
- * owner's share inbox piece — the piece whose `receive` stream other daemons
- * call, in the dedicated inbox space the owner's daemon minted (loom
- * `shares/inbox.py`; the design is loom's weaver-multiuser-sharing D8 and
- * share-inbox proposal). The link names the piece and its space together;
- * it carries no memory host because the inbox lives on the host the profile
- * pointing at it lives on, so a reader uses the host it read the profile
- * from. Public on purpose and no secret in it: the inbox space's ACL is the
- * gate, the link only says where to knock. Stored as the `link@1` sigil,
- * `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
+ * owner's share inbox piece, the piece whose `receive` stream senders call, in
+ * a space of its own. That is either the private inbox the owner's Home
+ * creates (`private-inbox.tsx`) or one the owner's loom daemon created; both
+ * take the same offer envelope. The link names the piece and its space
+ * together; it carries no memory host because the inbox lives on the host the
+ * profile pointing at it lives on, so a reader uses the host it read the
+ * profile from. Public on purpose and no secret in it: the link only says
+ * where to knock, and the inbox decides what it keeps. Stored as the `link@1`
+ * sigil, `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
  * the same form the profile's pinned-piece elements take; `piece` is absent
  * when the owner has no inbox.
  *
@@ -192,6 +192,45 @@ export type SetProfileInboxEvent = {
   // the link it stores.
   inbox?: Cell<ShareInboxPiece>;
 };
+
+/**
+ * What pointing a profile at an inbox needs of it: its pointer and the stream
+ * that sets it.
+ */
+export type InboxPointable = {
+  // The pointer is a typed link. An inbox labels its offers confidential to
+  // its owner, and the link carries that label; read as an untyped link from
+  // another space, it joins that label into the reading run, and the run is
+  // refused. `private-inbox.pointer-type.test.ts` pins the type.
+  inbox?: ProfileInbox;
+  // Optional so that a handler binding a list of these as a value still runs
+  // over a stored profile of a vintage without the stream.
+  setInbox?: Stream<SetProfileInboxEvent>;
+};
+
+/**
+ * Points `profile` at the inbox `holder` holds, through the profile's own
+ * `setInbox`, when the profile points at no inbox. Does nothing when `holder`
+ * holds no inbox, or when the profile points at an inbox already, whichever
+ * inbox it is. Call it from a handler, with `profile` bound as a value of type
+ * {@link InboxPointable}, so that the pointer is read as a typed link.
+ *
+ * The read and the `setInbox` it leads to are two transactions in two spaces,
+ * so a pointer set between them is replaced.
+ */
+export function pointAtInboxIfUnset(
+  profile: InboxPointable | undefined,
+  holder: ProfileInbox | undefined,
+): void {
+  // The holder's link reaches the inbox through the cell that wrote it. A link
+  // written into a profile's labeled `inbox` takes its label from the document
+  // it names, and only the inbox's own result document carries the schema
+  // that label comes from, so the profile is given that document.
+  const inbox = holder?.piece?.resolveAsCell();
+  if (inbox === undefined || profile === undefined) return;
+  if (profile.inbox?.piece !== undefined) return;
+  profile.setInbox?.send({ inbox });
+}
 
 type VerifiedIdentityListWrite<Binding> = OwnerProtectedProfileWrite<
   VerifiedExternalIdentityCell[],
