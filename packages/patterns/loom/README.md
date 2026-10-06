@@ -133,18 +133,27 @@ names whoever acted under the profile rather than the profile's owner. It
 removes an occurrence those stamps attest to the principal the event acts for
 alone. It removes one they attest to nobody whose contribution the rule could
 keep: an occurrence with no adder, one that holds its adder only as its writer's
-claim in `addedBy`, and one whose stamps name more than one principal or hold a
-claim in a form no runtime mints. It refuses one attested to another principal,
-with one exception: an OWNER of the Loom's space, by `spaceAccess`, removes an
-occurrence whose attested adder the space's access list grants nothing, by
-`spaceAccess(panel, adder)`, so that what a participant who has left added can
-be cleared up. A list the replica has not read admits no such removal. An
-occurrence that is not in the Loom is left alone without a check. `removePiece`
-applies the same check to every occurrence of the piece and removes all of them
-or none, so a piece that another principal also registered is unregistered one
-occurrence at a time, with `removePanel`. The root's Remove button sends
-`removePanel`, so it is refused on an occurrence someone else, still in the
-Loom, added.
+claim in `addedBy`, and one whose stamps name more than one principal. A field
+whose claims hold one in a form no runtime mints names nobody either: a label a
+runtime did not mint is trusted in neither direction, and the rule falls open
+there because the alternative is a panel nobody can remove; the other field's
+stamp, when well formed, still names the adder. It refuses one attested to
+another principal, with one exception: an OWNER of the Loom's space, by
+`spaceAccess(panels)`, removes an occurrence whose attested adder the Loom's
+access list grants nothing, by `spaceAccess(panels, adder)`, so that what a
+participant who has left added can be cleared up. Both reads are anchored in the
+Loom's list, never in the occurrence, which `addPanel` may have linked from
+another space whose list says nothing about the Loom. A list the replica has not
+read admits no such removal, and a list granting `*` a level says nobody has
+left. The field read stops at a value link but follows a redirect, as a write
+would, so a redirect stored in `addedBy` would stand the target document's stamp
+in for the field's; the typed pattern API authors no redirect, so no pattern can
+place one there. An occurrence that is not in the Loom is left alone without a
+check. `removePiece` applies the same check to every occurrence of the piece and
+removes all of them or none, so a piece that another principal also registered
+is unregistered one occurrence at a time, with `removePanel`. The root's Remove
+button sends `removePanel`, so it is refused on an occurrence someone else,
+still in the Loom, added.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be

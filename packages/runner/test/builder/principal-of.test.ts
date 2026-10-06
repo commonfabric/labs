@@ -763,6 +763,18 @@ describe("principalOf()", () => {
       ).toBe(alice.did());
     });
 
+    it("follows a redirect stored in the field, as a write to it would", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      const holder = await seed("redirecting", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ], { by: profile.getAsWriteRedirectLink() });
+      expect(
+        callAt(holder.key("by"), "represents-principal", { followLink: false }),
+      ).toBe(bob.did());
+    });
+
     it("reads a field holding no link as the default does", async () => {
       const record = await seed("record", [
         claimsAt(["name"], claim("authored-by", bob.did())),

@@ -51,7 +51,9 @@ const removePiece = handler<{ piece: Writable<unknown> }, State>(
     // Every occurrence of the piece goes or none does: one that another
     // principal added refuses the whole unregistration.
     for (const panel of list) {
-      if (!next.some((kept) => kept.equals(panel))) assertRemovable(panel);
+      if (!next.some((kept) => kept.equals(panel))) {
+        assertRemovable(panel, panels);
+      }
     }
     panels.set(next);
     const current = presentation.get();
@@ -70,7 +72,9 @@ const removePiece = handler<{ piece: Writable<unknown> }, State>(
 const removePanel = handler<{ panel: Writable<Panel> }, State>(
   ({ panel }, { panels, presentation }) => {
     const list = panels.get();
-    if (list.some((existing) => existing.equals(panel))) assertRemovable(panel);
+    if (list.some((existing) => existing.equals(panel))) {
+      assertRemovable(panel, panels);
+    }
     panels.set(list.filter((existing) => !existing.equals(panel)));
     const current = presentation.get();
     presentation.set({

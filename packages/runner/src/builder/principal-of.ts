@@ -139,8 +139,11 @@ function attestedPrincipals(
   }
   let followLink = true;
   if (options !== undefined) {
-    const given = isObjectNotArray(options) ? options.followLink : null;
-    if (given !== undefined && typeof given !== "boolean") {
+    const given = isObjectNotArray(options) ? options.followLink : undefined;
+    if (
+      !isObjectNotArray(options) ||
+      (given !== undefined && typeof given !== "boolean")
+    ) {
       throw new Error(
         debugStr`\`${name}\` takes \`options\` of \`{ followLink?: boolean }\`, not $quote${options}`,
       );
@@ -150,11 +153,11 @@ function attestedPrincipals(
   if (target === undefined) return undefined;
 
   // Resolution follows the link chain, which reads pointers and not the
-  // value they lead to.
+  // value they lead to. Without `followLink` it stops where a write to the
+  // cell lands: a link stored there as its value is left unfollowed, so the
+  // label read is the one on the field itself.
   const cell = cellOfTarget(target, name).withTx(tx);
   const link = !followLink
-    // Stops where a write to the cell lands: a link stored there as its value
-    // is left unfollowed, so the label read is the one on the field itself.
     ? resolveLink(
       runtime,
       runtime.readTx(tx),

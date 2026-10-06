@@ -4267,7 +4267,8 @@ export declare function principalOf(
  * attests, in the order they first appear. `undefined` means a claim there is
  * in some other form, from which no principal can be read, or that `target` is
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
- * it can be called where `principalOf()` can, and it throws where that does.
+ * `options.followLink` included; it can be called where `principalOf()` can,
+ * and it throws where that does.
  */
 export declare function principalsOf(
   target: AnyCell<unknown> | undefined,

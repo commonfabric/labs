@@ -176,34 +176,40 @@ function attestedAdders(panel: Writable<Panel>): DID[] | undefined {
  * Throws unless the principal the running event acts for may remove `panel`
  * for everyone: an occurrence its label attests to that principal alone, one
  * it attests to nobody, or, for an OWNER of the Loom's space, one it attests
- * to a principal the space's access list no longer admits. The adder is read
- * from the runtime's stamps on the occurrence's own fields, `authored-by` at
- * `addedBy` and `represents-principal` at `addedByProfile`, where the stamp
- * names whoever acted under the profile, never the linked profile's owner.
- * An `addedBy` value no stamp names is its writer's claim, and protects
- * nothing; nor does a label that names two principals, or holds a claim in a
- * form no runtime mints, since it settles on nobody whose contribution the
- * rule could keep.
+ * to a principal the Loom's access list no longer admits. `panels` is the
+ * Loom's list, which anchors both access reads in the Loom's space: an
+ * occurrence `addPanel` linked may live in another space, whose list says
+ * nothing about who belongs to the Loom. The adder is read from the runtime's
+ * stamps on the occurrence's own fields, `authored-by` at `addedBy` and
+ * `represents-principal` at `addedByProfile`, where the stamp names whoever
+ * acted under the profile, never the linked profile's owner. An `addedBy`
+ * value no stamp names is its writer's claim, and protects nothing. Nor does
+ * a field whose claims name two principals, or hold one in a form no runtime
+ * mints: a label a runtime did not mint is trusted in neither direction, and
+ * falling open is what keeps such a panel from sticking. The other field's
+ * stamp, when it is well formed, still names the adder.
  */
-export function assertRemovable(panel: Writable<Panel>): void {
-  const direct = attestedAdders(panel);
-  const underProfile = principalsOf(
-    panel.key("addedByProfile"),
-    "represents-principal",
-    { followLink: false },
-  );
-  const adders = direct === undefined || underProfile === undefined
-    ? []
-    : [...new Set([...direct, ...underProfile])];
+export function assertRemovable(
+  panel: Writable<Panel>,
+  panels: Writable<Writable<Panel>[]>,
+): void {
+  const adders = [
+    ...new Set([
+      ...(attestedAdders(panel) ?? []),
+      ...(principalsOf(panel.key("addedByProfile"), "represents-principal", {
+        followLink: false,
+      }) ?? []),
+    ]),
+  ];
   if (adders.length !== 1) return;
   const [adder] = adders;
   const actor = currentPrincipal();
   if (adder === actor) return;
-  // An owner clears up after a participant who has left: one the list grants
-  // nothing, as the list stands on this replica. A list not yet read admits
-  // nobody's removal of another's panel.
+  // An owner clears up after a participant who has left: one the Loom's list
+  // grants nothing, as the list stands on this replica. A list not yet read
+  // admits nobody's removal of another's panel.
   if (
-    spaceAccess(panel) === "OWNER" && spaceAccess(panel, adder) === "none"
+    spaceAccess(panels) === "OWNER" && spaceAccess(panels, adder) === "none"
   ) return;
   throw new Error(
     "Only the principal who added a panel can remove it, unless they have left the Loom and an OWNER removes it",

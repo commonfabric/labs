@@ -697,15 +697,16 @@ describe("loom-root", () => {
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
       labelMap: { version: 1, entries },
     });
-    /** Stores `value` at `cause` with a label map of `entries`. */
+    /** Stores `value` at `cause` in `where` with a label map of `entries`. */
     const stored = async (
       cause: string,
       value: unknown,
       entries: unknown[],
+      where: MemorySpace = space,
     ) => {
-      const cell = runtime.getCell(space, cause);
+      const cell = runtime.getCell(where, cause);
       const tx = runtime.edit();
-      writeSeedEnvelopeDoc(tx, space);
+      writeSeedEnvelopeDoc(tx, where);
       seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
         value,
         ...(entries.length === 0 ? {} : { cfc: envelope(entries) }),
@@ -723,12 +724,13 @@ describe("loom-root", () => {
       cause: string,
       value: unknown,
       entries: unknown[],
+      where: MemorySpace = space,
     ) => {
       const { addedByProfile: _, ...linkable } = value as Record<
         string,
         unknown
       >;
-      const cell = await stored(cause, linkable, []);
+      const cell = await stored(cause, linkable, [], where);
       await sendAndSettle(addPanel, { panel: cell }, `link-${cause}`);
       const tx = runtime.edit();
       seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
@@ -788,6 +790,14 @@ describe("loom-root", () => {
     ]);
     const others = "Only the principal who added a panel can remove it";
     const refusals: [string, unknown, unknown[], string][] = [
+      // A malformed field names nobody; the well-formed one still does.
+      ["malformed-beside-stamp", {
+        ...url("malformed-beside-stamp"),
+        addedByProfile: ownProfile.getAsLink(),
+      }, [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+        at(["addedByProfile"], represents(foreignSigner.did())),
+      ], others],
       ["stamped-other", url("stamped-other"), [
         at(["addedBy"], by(foreignSigner.did())),
       ], others],
@@ -903,6 +913,41 @@ describe("loom-root", () => {
       ),
     ).toBe(true);
     expect(await holds(departed)).toBe(true);
+
+    // An occurrence linked from another space is judged by the Loom's list,
+    // not that space's: owning the occurrence's space, whose list omits a
+    // current member, does not let a WRITE member of the Loom remove that
+    // member's panel.
+    const mineAlone = await runtime.createSpace();
+    const elsewhere = await linked(
+      "elsewhere",
+      url("elsewhere"),
+      [at(["addedBy"], by(foreignSigner.did()))],
+      mineAlone,
+    );
+    expect(
+      await refusedWith(
+        removePanel,
+        { panel: elsewhere },
+        "rm-elsewhere",
+        others,
+      ),
+    ).toBe(true);
+    expect(await holds(elsewhere)).toBe(true);
+    // And one who has left the Loom is cleared up by a Loom OWNER although
+    // the occurrence's own space still admits them.
+    await setAcl({ [signer.did()]: "OWNER" });
+    const theirSpace = await runtime.createSpace({
+      grants: { [foreignSigner.did()]: "WRITE" },
+    });
+    const left = await linked(
+      "left-elsewhere",
+      url("left-elsewhere"),
+      [at(["addedBy"], by(foreignSigner.did()))],
+      theirSpace,
+    );
+    await sendAndSettle(removePanel, { panel: left }, "rm-left-elsewhere");
+    expect(await holds(left)).toBe(false);
   });
 
   it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {
