@@ -1056,6 +1056,10 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
   "loom-retrieval-config": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  "local-job-profiles": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  "local-jobs-socket": () => Promise.resolve(directive({ kind: "files" })),
+  "local-jobs-store": () => Promise.resolve(directive({ kind: "files" })),
   "work-root": () => Promise.resolve(directive({ kind: "dirs" })),
   // A source directory on the commands that compile one, and an entity on
   // `inspect graph`.

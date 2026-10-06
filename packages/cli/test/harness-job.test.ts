@@ -35,6 +35,8 @@ interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
   role?: string;
+  systemPrompt?: string;
+  maxModelTurns?: number;
   signal?: AbortSignal;
 }
 
@@ -107,6 +109,9 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.systemPrompt = prompt.systemPrompt;
+              seen.maxModelTurns = prompt.maxModelTurns ??
+                loopOptions.maxModelTurns;
               seen.role = prompt.promptSlotBinding?.role;
               seen.signal = prompt.signal;
               return script({
@@ -137,6 +142,32 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
+
+  it("passes the trusted job identity through the commands config into the harness", async () => {
+    const configPath = join(runRoot, "commands.json");
+    await Deno.writeTextFile(
+      configPath,
+      JSON.stringify({
+        cliPath: "/trusted/loom",
+        transport: { kind: "broker", queuePath: "/trusted/queue" },
+        jobIdEnvVar: "HOST_JOB_ID",
+        jobId: "untrusted-file-id",
+      }),
+    );
+    const { result, seen } = await runScripted(
+      plainSpec({
+        tools: ["list_commands", "run_command"],
+        loomCommandsConfigPath: configPath,
+        commandJobId: "job-own-id",
+      }),
+      answering("Titan"),
+    );
+    expect(result.outcome).toBe("completed");
+    expect(seen.loopOptions!.loomCommands).toMatchObject({
+      jobIdEnvVar: "HOST_JOB_ID",
+      jobId: "job-own-id",
+    });
+  });
 
   describe("with plain inputs and no fabric", () => {
     it("returns the submitted value, the job's handles, and its report", async () => {
@@ -204,6 +235,21 @@ describe("runHarnessJob()", () => {
         modelTurns: 2,
         toolCalls: 1,
       });
+    });
+
+    it("gives the harness the spec's instructions and turn cap, and neither when the spec names none", async () => {
+      const { seen } = await runScripted(
+        plainSpec({ instructions: "Answer in one word.", maxModelTurns: 6 }),
+        answering("Titan"),
+      );
+      const plain = await runScripted(plainSpec(), answering("Titan"));
+
+      expect(seen.systemPrompt).toContain("Answer in one word.");
+      expect(seen.maxModelTurns).toBe(6);
+      expect(plain.seen.systemPrompt ?? "").not.toContain(
+        "Answer in one word.",
+      );
+      expect(plain.seen.maxModelTurns).not.toBe(6);
     });
 
     it("leaves usage out of the report when the loop reports none", async () => {
