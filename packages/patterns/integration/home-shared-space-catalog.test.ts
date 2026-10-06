@@ -1036,7 +1036,7 @@ describe("Home shared-space catalog", () => {
     });
 
     it(`advances revisions exactly and refuses unsupported counters with serving ${serving}`, async () => {
-      await withHome(serving, async (runtime, home, _peer, server) => {
+      await withHome(serving, async (runtime, home) => {
         await invoke(
           runtime,
           home.key("registerSharedSpace"),
@@ -1046,6 +1046,10 @@ describe("Home shared-space catalog", () => {
         const catalog = await backingCatalog(runtime, home);
         const valid = catalog.getRaw() as SharedSpaceCatalog;
         expect(valid.entries[registration.space].revision).toMatch(/^1:.+$/);
+        const eventSuffix = valid.entries[registration.space].revision.slice(2);
+        expect(eventSuffix).toMatch(/^evk:[A-Za-z0-9_-]{43}$/);
+        const exhausted = `${"9".repeat(272)}:${eventSuffix}`;
+        expect(exhausted.length).toBe(320);
         await runtime.editWithRetry((tx) =>
           catalog.withTx(tx).key("entries", registration.space, "revision").set(
             "9007199254740992:seed",
@@ -1071,7 +1075,8 @@ describe("Home shared-space catalog", () => {
             "01:seed",
             "-1:seed",
             "2:",
-            "future-revision",
+            "legacy",
+            exhausted,
             `${"9".repeat(318)}:x`,
           ]
         ) {
@@ -1079,18 +1084,19 @@ describe("Home shared-space catalog", () => {
           await runtime.editWithRetry((tx) =>
             catalog.withTx(tx).key("entries", registration.space).set(entry)
           );
-          await rejectInvocation(
-            runtime,
-            home.key("changeSharedSpaceMembership"),
-            {
-              space: registration.space,
-              id: "unsupported-counter",
-              expectedRevision: revision,
-              state: "archived",
-            },
-            server,
-            serving,
-          );
+          expect(
+            await invoke(
+              runtime,
+              home.key("changeSharedSpaceMembership"),
+              {
+                space: registration.space,
+                id: "unsupported-counter",
+                expectedRevision: revision,
+                state: "archived",
+              },
+              `unsupported:${revision}`,
+            ),
+          ).toEqual({ status: "conflict", reason: "unsupported-revision" });
           expect(catalog.getRaw()).toEqual({
             ...valid,
             entries: { ...valid.entries, [registration.space]: entry },

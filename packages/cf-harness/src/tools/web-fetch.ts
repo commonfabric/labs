@@ -4,7 +4,9 @@ import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import type { HarnessFetch } from "../contracts/http-fetch.ts";
 import {
-  isPublicAddress,
+  interfaceNetworks,
+  isOpenInternetAddress,
+  type LocalNetwork,
   normalizeHostname,
   parseIpAddress,
 } from "../network-address.ts";
@@ -80,6 +82,15 @@ export type ResolveHostAddresses = (
   signal?: AbortSignal,
 ) => Promise<readonly string[]>;
 
+/**
+ * Where web_fetch learns the addresses a host name resolves to, and the
+ * networks this device's interfaces are on, read for each check.
+ */
+interface AddressSources {
+  resolveHostAddresses: ResolveHostAddresses;
+  localNetworks: () => readonly LocalNetwork[];
+}
+
 type WebFetchBytes = Uint8Array<ArrayBuffer>;
 
 const DEFAULT_MAX_BYTES = 200_000;
@@ -100,7 +111,7 @@ export const webFetchToolDescriptor: HarnessToolDescriptor = {
   toolId: "web_fetch",
   title: "Web Fetch",
   description:
-    "Fetch a public HTTP(S) URL with bounded output, redirect validation, and extracted text metadata. Does not use cookies or ambient browser state.",
+    "Fetch an HTTP(S) URL on the open internet with bounded output, redirect validation, and extracted text metadata. Refuses local, private and reserved addresses, and addresses on this device's own networks. Does not use cookies or ambient browser state.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -219,15 +230,19 @@ export const webFetchToolDescriptor: HarnessToolDescriptor = {
 export interface CreateWebFetchToolOptions {
   fetchFn?: HarnessFetch;
   resolveHostAddresses?: ResolveHostAddresses;
+  /** By default, the networks Deno reports (`interfaceNetworks`). */
+  localNetworks?: () => readonly LocalNetwork[];
 }
 
 export const createWebFetchTool = (
   options: CreateWebFetchToolOptions = {},
 ): HarnessToolDefinition<WebFetchToolInput, WebFetchToolOutput> => {
-  const resolveHostAddresses = options.resolveHostAddresses ??
-    defaultResolveHostAddresses;
-  const fetchFn = options.fetchFn ??
-    createPinnedPublicFetch(resolveHostAddresses);
+  const sources: AddressSources = {
+    resolveHostAddresses: options.resolveHostAddresses ??
+      defaultResolveHostAddresses,
+    localNetworks: options.localNetworks ?? interfaceNetworks,
+  };
+  const fetchFn = options.fetchFn ?? createPinnedPublicFetch(sources);
   return {
     descriptor: webFetchToolDescriptor,
     async invoke(context, input) {
@@ -259,7 +274,7 @@ export const createWebFetchTool = (
       try {
         const initialUrl = await validatePublicHttpUrl(
           input.url,
-          resolveHostAddresses,
+          sources,
           controller.signal,
         );
         if (!initialUrl.ok) {
@@ -275,7 +290,7 @@ export const createWebFetchTool = (
         const fetchResult = await fetchWithRedirects({
           url: initialUrl.url,
           fetchFn,
-          resolveHostAddresses,
+          sources,
           signal: controller.signal,
         });
 
@@ -440,7 +455,7 @@ class WebFetchBlockedUrlError extends Error {
 
 const validatePublicHttpUrl = async (
   input: string,
-  resolveHostAddresses: ResolveHostAddresses,
+  sources: AddressSources,
   signal?: AbortSignal,
 ): Promise<PublicHttpUrlResult> => {
   let url: URL;
@@ -467,7 +482,7 @@ const validatePublicHttpUrl = async (
       message: "web_fetch URLs may not include credentials",
     };
   }
-  const hostBlockReason = blockedHostReason(url.hostname);
+  const hostBlockReason = blockedHostReason(url.hostname, sources);
   if (hostBlockReason !== undefined) {
     return {
       ok: false,
@@ -477,7 +492,7 @@ const validatePublicHttpUrl = async (
   }
   const resolution = await resolveValidatedPublicAddresses(
     url.hostname,
-    resolveHostAddresses,
+    sources,
     signal,
   );
   if (!resolution.ok) {
@@ -490,7 +505,10 @@ const validatePublicHttpUrl = async (
   return { ok: true, url: url.toString() };
 };
 
-const blockedHostReason = (hostname: string): string | undefined => {
+const blockedHostReason = (
+  hostname: string,
+  sources: AddressSources,
+): string | undefined => {
   const normalized = normalizeHostname(hostname);
   if (
     normalized === "localhost" ||
@@ -501,15 +519,18 @@ const blockedHostReason = (hostname: string): string | undefined => {
     return `web_fetch host ${hostname} is local and is not allowed`;
   }
   const address = parseIpAddress(normalized);
-  if (address !== undefined && !isPublicAddress(address)) {
-    return `web_fetch host ${hostname} is private and is not allowed`;
+  if (
+    address !== undefined &&
+    !isOpenInternetAddress(address, sources.localNetworks())
+  ) {
+    return `web_fetch host ${hostname} is not on the open internet and is not allowed`;
   }
   return undefined;
 };
 
 const resolveValidatedPublicAddresses = async (
   hostname: string,
-  resolveHostAddresses: ResolveHostAddresses,
+  sources: AddressSources,
   signal?: AbortSignal,
 ): Promise<
   | { ok: true; addresses: readonly string[] }
@@ -519,7 +540,7 @@ const resolveValidatedPublicAddresses = async (
   try {
     throwIfWebFetchAborted(signal);
     addresses = await withWebFetchAbort(
-      resolveHostAddresses(hostname, signal),
+      sources.resolveHostAddresses(hostname, signal),
       signal,
     );
     throwIfWebFetchAborted(signal);
@@ -542,8 +563,13 @@ const resolveValidatedPublicAddresses = async (
         `web_fetch host ${hostname} could not be resolved to a public address`,
     };
   }
+  const networks = sources.localNetworks();
   for (const address of addresses) {
-    const addressBlockReason = blockedResolvedAddressReason(hostname, address);
+    const addressBlockReason = blockedResolvedAddressReason(
+      hostname,
+      address,
+      networks,
+    );
     if (addressBlockReason !== undefined) {
       return { ok: false, message: addressBlockReason };
     }
@@ -583,19 +609,20 @@ const defaultResolveHostAddresses: ResolveHostAddresses = async (
 const blockedResolvedAddressReason = (
   hostname: string,
   address: string,
+  networks: readonly LocalNetwork[],
 ): string | undefined => {
   const parsed = parseIpAddress(normalizeHostname(address));
   if (parsed === undefined) {
     return `web_fetch host ${hostname} resolved to ${address}, which is not an IP address`;
   }
-  if (!isPublicAddress(parsed)) {
-    return `web_fetch host ${hostname} resolved to private address ${address} and is not allowed`;
+  if (!isOpenInternetAddress(parsed, networks)) {
+    return `web_fetch host ${hostname} resolved to ${address}, which is not on the open internet, and is not allowed`;
   }
   return undefined;
 };
 
 const createPinnedPublicFetch = (
-  resolveHostAddresses: ResolveHostAddresses,
+  sources: AddressSources,
 ): HarnessFetch =>
 async (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
@@ -603,7 +630,7 @@ async (input, init = {}) => {
   throwIfWebFetchAborted(signal);
   const resolution = await resolveValidatedPublicAddresses(
     url.hostname,
-    resolveHostAddresses,
+    sources,
     signal,
   );
   if (!resolution.ok) {
@@ -1129,7 +1156,7 @@ const closeConnection = (conn: Deno.Conn): void => {
 interface FetchWithRedirectsOptions {
   url: string;
   fetchFn: HarnessFetch;
-  resolveHostAddresses: ResolveHostAddresses;
+  sources: AddressSources;
   signal: AbortSignal;
 }
 
@@ -1207,7 +1234,7 @@ const fetchWithRedirects = async (
     await cancelResponseBody(response);
     const validation = await validatePublicHttpUrl(
       nextUrl,
-      options.resolveHostAddresses,
+      options.sources,
       options.signal,
     );
     if (!validation.ok) {

@@ -72,7 +72,12 @@ export type SharedSpaceMembershipResult =
   | { status: "applied" | "confirmed"; space: string; id: string }
   | {
     status: "conflict";
-    reason: "missing" | "revision" | "action" | "unsupported-state";
+    reason:
+      | "missing"
+      | "revision"
+      | "action"
+      | "unsupported-state"
+      | "unsupported-revision";
   };
 
 /**
@@ -174,22 +179,17 @@ function normalizeHost(host: string): string {
   }
 }
 
-/** Names this event's transition at a bounded, exact generation. */
+/** Names this event's transition at an exact generation. */
 function revisionAt(generation: bigint): string {
-  const revision = `${generation}:${eventKey()}`;
-  if (revision.length > 320) {
-    throw new RangeError("Shared-space membership revision is exhausted.");
-  }
-  return revision;
+  return `${generation}:${eventKey()}`;
 }
 
-/** Advances the generation while distinguishing competing optimistic writes. */
-function nextRevision(revision: string): string {
+/** Advances a known generation only when the next token fits the contract. */
+function nextRevision(revision: string): string | undefined {
   const match = /^([1-9][0-9]*):.+$/.exec(revision);
-  if (!match) {
-    throw new TypeError("Unsupported shared-space membership revision.");
-  }
-  return revisionAt(BigInt(match[1]) + 1n);
+  if (!match) return undefined;
+  const next = revisionAt(BigInt(match[1]) + 1n);
+  return next.length <= 320 ? next : undefined;
 }
 
 /** Whether a stored target carries a canonical origin and well-formed DID. */
@@ -342,6 +342,9 @@ export const changeSharedSpaceMembership = handler<
       };
     }
     const revision = nextRevision(current.revision);
+    if (revision === undefined) {
+      return { status: "conflict", reason: "unsupported-revision" };
+    }
     catalog.key("entries", change.space, "state").set(change.state);
     catalog.key("entries", change.space, "revision").set(revision);
     catalog.key("entries", change.space, "lastAction").set({
