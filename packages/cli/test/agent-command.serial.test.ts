@@ -19,6 +19,8 @@ import {
 } from "@commonfabric/runner/agent-run";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+
 import {
   type AgentRunnerCommandConfig,
   type AgentRunnerCommandDeps,
@@ -27,6 +29,7 @@ import {
   resolveRunnerTools,
   startAgentRunner,
 } from "../commands/agent.ts";
+import { selectHarnessJobSandboxRuntime } from "../lib/harness-job.ts";
 import { withEnv } from "./utils.ts";
 
 const DID = "did:key:z6MkTestRequester";
@@ -40,6 +43,10 @@ const stubDeps = (env: Record<string, string> = {}) => {
     loadIdentity: (path) => {
       events.push(`identity:${path}`);
       return Promise.resolve({ did: () => DID });
+    },
+    selectSandboxRuntime: () => {
+      events.push("sandbox");
+      return Promise.resolve();
     },
     start: (config) => {
       started.push(config);
@@ -113,10 +120,109 @@ describe("cf agent runner", () => {
     }]);
     expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
       "identity:/keys/me.key",
+      "sandbox",
       "start",
       "wait",
       "stop",
     ]);
+  });
+
+  describe("with a sandbox runtime the harness would refuse every run for", () => {
+    const ARGV = [
+      "runner",
+      "-i",
+      "/keys/me.key",
+      "-a",
+      "http://localhost:8100",
+    ];
+
+    it("throws a validation error with the harness's refusal, naming the variable alone, and starts nothing", async () => {
+      // By the path the file system has for it: a home reached through a
+      // link is refused for that before its store is looked at.
+      const home = await Deno.realPath(await Deno.makeTempDir());
+      const { deps, started } = stubDeps();
+      // A Mac with no native runtime set up, and no runtime named.
+      deps.selectSandboxRuntime = () =>
+        selectHarnessJobSandboxRuntime({
+          platform: "darwin",
+          env: { HOME: home },
+        });
+
+      try {
+        const refusal = await run(deps, ARGV).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+        expect(refusal).toBeInstanceOf(ValidationError);
+        expect(refusal).toMatchObject({
+          exitCode: 1,
+          message: expect.stringMatching(
+            /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and it is not set up at `.*`: .*\. Set it up there, or select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`\.$/,
+          ),
+        });
+        expect(started).toEqual([]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("throws what the selection threw where that is not a refusal, and starts nothing", async () => {
+      const broken = new Error("the selection broke");
+      const { deps, started } = stubDeps();
+      deps.selectSandboxRuntime = () => Promise.reject(broken);
+
+      await expect(run(deps, ARGV)).rejects.toBe(broken);
+      expect(started).toEqual([]);
+    });
+
+    it("selects, by default, as the harness would for a run of this machine with no flag", async () => {
+      const home = await Deno.realPath(await Deno.makeTempDir());
+      let selected: unknown;
+      // This case names no platform, so it takes the machine's: the half of
+      // it a machine runs depends on which it is.
+      const selecting = (): Promise<void> =>
+        defaultAgentRunnerCommandDeps.selectSandboxRuntime().then(
+          (selection) => {
+            selected = selection;
+          },
+          (error: unknown) => {
+            selected = error;
+          },
+        );
+
+      try {
+        await withEnv(
+          "HOME",
+          home,
+          () =>
+            withEnv(
+              "CFC_VM_HOME",
+              undefined,
+              () => withEnv("CF_HARNESS_SANDBOX_RUNTIME", undefined, selecting),
+            ),
+        );
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+
+      if (Deno.build.os === "darwin") {
+        expect(selected).toBeInstanceOf(HarnessControlError);
+        expect(selected).toMatchObject({
+          message: expect.stringMatching(
+            /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and .* select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`\.$/,
+          ),
+        });
+      } else {
+        expect(selected).toEqual({
+          sandboxRuntimeChoice: {
+            runtime: "docker",
+            source: "default",
+            platform: Deno.build.os,
+          },
+        });
+      }
+    });
   });
 
   it("defaults the runner's host to the home host, one run at a time, and the base tools", async () => {

@@ -11,6 +11,7 @@ import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
 import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -19,6 +20,7 @@ import {
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
 
 import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
+import { selectHarnessJobSandboxRuntime } from "../lib/harness-job.ts";
 import {
   type LocalJobsConfig,
   type LocalJobsService,
@@ -116,6 +118,12 @@ export interface AgentRunnerCommandConfig {
 export interface AgentRunnerCommandDeps {
   env: (name: string) => string | undefined;
   loadIdentity: (path: string) => Promise<{ did(): string }>;
+
+  /**
+   * Derives the sandbox runtime the harness would give this runner's runs,
+   * and rejects with a `HarnessControlError` where it would refuse them.
+   */
+  selectSandboxRuntime: () => Promise<unknown>;
 
   /** Connects, registers, and starts following the queue. */
   start: (
@@ -389,6 +397,7 @@ async function untilSignalled(): Promise<void> {
 export const defaultAgentRunnerCommandDeps: AgentRunnerCommandDeps = {
   env: (name) => Deno.env.get(name),
   loadIdentity,
+  selectSandboxRuntime: () => selectHarnessJobSandboxRuntime(),
   start: startAgentRunner,
   untilStopped: untilSignalled,
   report: (message) => console.error(message),
@@ -513,6 +522,14 @@ async function runFabricLane(
   deps: AgentRunnerCommandDeps,
 ): Promise<void> {
   const config = await resolveAgentRunnerConfig(options, deps);
+  // Every run goes to the harness's sandbox. A runtime selection the harness
+  // would refuse each of them for refuses the runner here, with the harness's
+  // own message, before it connects to anything or registers.
+  await deps.selectSandboxRuntime().catch((error: unknown) => {
+    throw error instanceof HarnessControlError
+      ? new ValidationError(error.message, { exitCode: 1 })
+      : error;
+  });
   const running = await deps.start(config, deps.report);
   deps.report(
     `agent runner: following ${config.home} on ${config.homeHost}, offering ${
