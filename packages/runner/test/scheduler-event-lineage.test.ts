@@ -596,7 +596,7 @@ describe("scheduler event lineage", () => {
         tx,
       );
       payloads.set([]);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       let originAttempts = 0;
@@ -717,7 +717,7 @@ describe("scheduler event lineage", () => {
       { asCell: ["stream"] },
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let originAttempts = 0;
