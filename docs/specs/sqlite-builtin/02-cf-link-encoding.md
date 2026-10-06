@@ -125,7 +125,8 @@ and is **driven by the typed `db.query<Row>` schema**:
    then yields `undefined` rather than crashing the whole query). This step
    converts the string to the link **object** that the runtime's link resolution
    recognizes — link resolution does not recognize a JSON string.
-3. When the consumer reads `q.result[i].<col>` under its own `<Row>` schema, the
+3. When the consumer reads `resultOf(q).rows[i].<col>` under its own `<Row>`
+   schema, the
    `asCell` marker rehydrates that sigil object into a live `Cell<T>`, carrying
    the column's declared element schema so downstream `.get()`/`.key()` are
    typed.

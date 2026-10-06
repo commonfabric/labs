@@ -1,4 +1,17 @@
-import { fetchJson, lift, NAME, pattern, UI } from "commonfabric";
+import {
+  computed,
+  fetchJson,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
+  lift,
+  NAME,
+  observeAvailability,
+  pattern,
+  resultOf,
+  UI,
+} from "commonfabric";
 
 /**
  * Fetch the Cheeseboard pizza schedule via Toolshed's web-read endpoint and
@@ -77,14 +90,14 @@ type WebReadResult = {
 */
 const createPizzaListCell = lift<{ result: WebReadResult }, CheeseboardEntry[]>(
   ({ result }) => {
-    return extractPizzas(result?.content ?? "");
+    return extractPizzas(result.content);
   },
 );
 
 export default pattern(() => {
   const cheeseBoardUrl =
     "https://cheeseboardcollective.coop/home/pizza/pizza-schedule/";
-  const { result } = fetchJson<WebReadResult>({
+  const request = fetchJson<WebReadResult>({
     url: "/api/agent-tools/web-read",
     options: {
       method: "POST",
@@ -96,6 +109,16 @@ export default pattern(() => {
         max_tokens: 4000,
       },
     },
+  });
+  const observedRequest = observeAvailability(request);
+  const result = computed<WebReadResult>(() => {
+    if (
+      isPending(observedRequest) || hasError(observedRequest) ||
+      isSyncing(observedRequest) || hasSchemaMismatch(observedRequest)
+    ) {
+      return { content: "", metadata: { word_count: 0 } };
+    }
+    return resultOf(observedRequest);
   });
 
   const pizzaList = createPizzaListCell({ result });

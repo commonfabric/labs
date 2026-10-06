@@ -133,7 +133,11 @@ describe("wish-availability", () => {
         const state = output!.withTx(undefined);
         expect(state.key("error").get()).toContain(scenario.error);
         expect(state.key("candidates").get()).toEqual([]);
-        expect(state.key("result").get()).toBeUndefined();
+        expect(state.key("result").get()).toMatchObject({
+          reason: "error",
+          errorKind: "general",
+          errorMessage: expect.stringContaining(scenario.error),
+        });
       } finally {
         cancel();
         await manager.synced();

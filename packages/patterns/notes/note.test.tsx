@@ -14,31 +14,44 @@ import {
   action,
   assert,
   FS,
+  handler,
   NAME,
   pattern,
+  resultOf,
+  type Stream,
   TESTS,
   UI,
   wish,
   Writable,
 } from "commonfabric";
 import { findNode, propsOf } from "../test/vnode-helpers.ts";
-import Note, { bareMentionId } from "./note.tsx";
+import Note, {
+  backlinkCreateProps,
+  bareMentionId,
+  handleNewBacklink,
+} from "./note.tsx";
 import Notebook from "./notebook.tsx";
-import { type MentionRefMap } from "./schemas.tsx";
+import {
+  type MentionablePiece,
+  type MentionRefMap,
+  type MinimalPiece,
+} from "./schemas.tsx";
 
-type BacklinkStream = {
-  send: (event: {
-    detail: { piece: unknown; navigate: boolean };
-  }) => void;
-};
+const appendLink = handler<void, {
+  stream: Stream<{ piece: Writable<MentionablePiece> }>;
+  piece: Writable<MentionablePiece>;
+}>((_, { stream, piece }) => {
+  stream.send({ piece });
+});
 
-const backlinkStreamOf = (subject: { [UI]: unknown }): BacklinkStream => {
-  const editor = findNode(
-    subject[UI],
-    (node) => propsOf(node)?.["onbacklink-create"] !== undefined,
-  );
-  return propsOf(editor)?.["onbacklink-create"] as BacklinkStream;
-};
+const createBacklink = handler<void, {
+  stream: Stream<{
+    detail: { piece: Writable<MentionablePiece>; navigate: boolean };
+  }>;
+  piece: Writable<MentionablePiece>;
+}>((_, { stream, piece }) => {
+  stream.send({ detail: { piece, navigate: false } });
+});
 
 /**
  * Whether the note's editor was given a reference map. Its presence is the
@@ -54,15 +67,21 @@ const editorHasReferences = (subject: { [UI]: unknown }): boolean => {
 };
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<Array<{ title?: string }>>>({
+  const pieceRegistryRequest = wish<Writable<MinimalPiece[]>>({
     query: "#pieceRegistry",
-  }).result!;
+  });
+  const pieceRegistry = resultOf(pieceRegistryRequest.result);
   const note = Note({
     title: "Test Note",
     content: "Line one\nLine two\nLine three",
 
     isHidden: false,
   });
+  const backlinkCreate = handleNewBacklink({
+    mentionable: new Writable<MentionablePiece[]>([]),
+    pieceRegistry,
+  });
+  const editorProps = backlinkCreateProps(backlinkCreate);
 
   // Create notebooks for parentNotebook testing
   const notebookA = Notebook({
@@ -109,15 +128,10 @@ export default pattern(() => {
     isHidden: false,
   });
 
-  const backlinkNote = Note({
-    title: "Backlink Subject",
-    content: "",
-  });
   const backlinkTarget = Note({
     title: "Backlink Target",
     content: "",
   });
-
   // ==========================================================================
   // Actions - Content Editing
   // ==========================================================================
@@ -184,14 +198,14 @@ export default pattern(() => {
   // Actions - Append wiki-link
   // ==========================================================================
 
-  const action_append_link = action(() => {
-    note.appendLink.send({ piece: linkTarget });
+  const action_append_link = appendLink({
+    stream: note.appendLink,
+    piece: linkTarget,
   });
 
-  const action_create_backlink = action(() => {
-    backlinkStreamOf(backlinkNote).send({
-      detail: { piece: backlinkTarget, navigate: false },
-    });
+  const action_create_backlink = createBacklink({
+    stream: editorProps["onbacklink-create"],
+    piece: backlinkTarget,
   });
 
   // ==========================================================================
@@ -204,7 +218,6 @@ export default pattern(() => {
   const assert_editor_has_references = assert(
     () => editorHasReferences(note),
   );
-
   const assert_initial_title = assert(() => note.title === "Test Note");
   const assert_initial_content = assert(
     () => note.content === "Line one\nLine two\nLine three",
@@ -348,7 +361,7 @@ export default pattern(() => {
     () => note.mentioned.length === 1,
   );
   const assert_backlink_registers_piece = assert(() =>
-    pieceRegistry.get().some((piece) => piece.title === "Backlink Target")
+    pieceRegistry.get().some((piece) => piece[NAME] === "📝 Backlink Target")
   );
 
   // The wiki-link embed contract: `of:` strips (the renderer re-adds it),
@@ -535,7 +548,6 @@ export default pattern(() => {
     noteInNotebookB,
     noteNoParent,
     linkTarget,
-    backlinkNote,
     backlinkTarget,
   };
 });

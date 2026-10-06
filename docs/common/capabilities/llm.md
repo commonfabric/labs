@@ -1,8 +1,10 @@
 # LLM Generation
 
-LLM calls are reactive nodes, not promises: never `await` them. Call them in
-the pattern body and check `pending` / `error` / `result` reactively, as shown
-below.
+LLM calls are reactive nodes, not promises: never `await` them. `generateText`
+and `generateObject` return an `AsyncResult<T>` directly: either the usable
+result or a runtime-owned unavailable state. Keep the request value for loading
+and error guards, then call `resultOf(request)` once for the ordinary usable
+value.
 
 ## generateText
 
@@ -10,17 +12,17 @@ Free-form text generation.
 
 ```typescript
 // Shown for illustration only.
-const response = generateText({
+const responseRequest = generateText({
   prompt: userInput,
   system: "You are a helpful assistant.",  // optional
 });
+const response = resultOf(responseRequest);
 
-// Response: { result: string, error: string, pending: boolean }
-{response.pending
+{isPending(responseRequest)
   ? <span>Generating...</span>
-  : response.error
-  ? <span>Error: {response.error}</span>
-  : <div>{response.result}</div>}
+  : hasError(responseRequest)
+  ? <span>Error: {responseRequest.errorMessage}</span>
+  : <div>{response}</div>}
 ```
 
 ---
@@ -37,24 +39,30 @@ interface ProductIdea {
   price: number;
 }
 
-const idea = generateObject<ProductIdea>({
+const ideaRequest = generateObject<ProductIdea>({
   prompt: userInput,
   system: "Generate a product idea.",
 });
+const idea = resultOf(ideaRequest);
 
-// Response: { result: ProductIdea, error: string, pending: boolean }
-{idea.pending
+{isPending(ideaRequest)
   ? <span>Generating...</span>
-  : idea.error
-  ? <span>Error: {idea.error}</span>
+  : hasError(ideaRequest)
+  ? <span>Error: {ideaRequest.errorMessage}</span>
   : (
     <div>
-      <h3>{idea.result?.name}</h3>
-      <p>{idea.result?.description}</p>
-      <p>${idea.result?.price}</p>
+      <h3>{idea.name}</h3>
+      <p>{idea.description}</p>
+      <p>${idea.price}</p>
     </div>
   )}
 ```
+
+The generated object is validated strictly against the schema inferred from
+`T`. A response that violates it becomes the terminal `schemaMismatch` state
+and is not automatically retried until the generation inputs change. The
+marker intentionally carries no schema detail; enable the `generateObject`
+debug logger to inspect the exact validation failure.
 
 ## Processing Arrays
 
@@ -64,20 +72,94 @@ Map over items - caching is automatic per-item:
 // Shown inside a pattern body.
 const summaries = articles.map((article) => ({
   article,
-  summary: generateText({
+  request: generateText({
     prompt: computed(() => `Summarize: ${article.title}\n${article.content}`),
   }),
 }));
 
-{summaries.map(({ article, summary }) => (
+{summaries.map(({ article, request }) => (
   <div>
     <h3>{article.title}</h3>
-    {summary.pending
+    {isPending(request)
       ? <em>Summarizing...</em>
-      : <p>{summary.result}</p>}
+      : <p>{resultOf(request)}</p>}
   </div>
 ))}
 ```
+
+The guards `isPending`, `hasError`, `isSyncing`, and `hasSchemaMismatch`
+narrow the request to the corresponding state. A computation that only uses
+`resultOf(request)` does not need guards: unavailability propagates until the
+result exists.
+
+## Partial streaming output
+
+Use `generateTextStream` or `generateObjectStream<T>` when a pattern needs
+intermediate provider text. The stream call returns the final request directly;
+`partialResultOf()` returns its usable partial value:
+
+```typescript
+// Shown for illustration only.
+const request = generateTextStream({ prompt });
+const finalText = resultOf(request);
+const partialText = partialResultOf(request);
+```
+
+Use the ordinary availability guards on `request`. Before the first chunk, a
+computation that consumes `partialText` waits just as one consuming
+`resultOf(request)` would. A replacement request resets both final and partial
+channels atomically, and a terminal failure is visible through `request`. The
+current direct object-generation provider may emit no intermediate text; its
+partial value then remains unavailable while the final object resolves.
+
+Call `partialResultOf()` in the pattern body on the direct streaming call or a
+stable const alias. Bind its result to a standalone `const` before deriving
+values from it or passing the projected value into `computed()`,
+`lift()`, an action, or a handler. Across a subpattern boundary, return the
+projected partial value as a separate child output alongside the final request.
+
+The runtime retains legacy persisted generation state internally, but the
+public streaming API does not expose its sibling state fields or metadata.
+
+## llmDialog\<T\>
+
+Use `llmDialog<T>()` for a multi-turn conversation whose model can publish a
+structured result with `presentResult`. The transformer derives that tool's
+schema from `T`; do not add `resultSchema` manually.
+
+```typescript
+// Shown for illustration only.
+const dialog = llmDialog<ResearchResult>({
+  messages,
+  tools: { search: patternTool(search) },
+});
+const result = resultOf(dialog.result);
+
+return (
+  <>
+    <cf-message-beads $messages={messages} pending={dialog.pending} />
+    {hasError(dialog.result)
+      ? <p>{dialog.result.errorMessage}</p>
+      : <ResearchView result={result} />}
+  </>
+);
+```
+
+`dialog.pending` reports whether a turn is active. It is independent of
+`dialog.result`: after `presentResult` succeeds, later turns keep the last
+successful result even while pending or if that turn fails. The separate
+`dialog.error` field reports the most recent failed turn. Before the first
+presentation, `dialog.result` is pending; a terminal failure changes it to an
+error availability value.
+
+Calling `llmDialog({ messages })` without a result type creates a control-only
+dialog. It has `addMessage`, `pending`, cancellation, pinning, and tool state,
+but no public `result` channel and no perpetual result-pending marker.
+
+As with fetch, `resultOf(request) ?? previousValue` is not a
+fallback-while-loading mechanism: an unavailable marker remains present at
+runtime. Keep the request for explicit status UI, or retain a last successful
+snapshot with `latestComplete(request)`.
 
 ### Selecting a Model
 
@@ -143,8 +225,9 @@ distinct input):
 
 ```typescript
 // Shown for illustration only.
-const result = generateObject({
+const request = generateObject({
   prompt,
   cache: false,  // Forces fresh generation
 });
+const result = resultOf(request);
 ```

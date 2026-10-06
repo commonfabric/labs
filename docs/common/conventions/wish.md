@@ -1,4 +1,4 @@
-<!-- @reviewed 2026-02-06 wish-result-shape -->
+<!-- @reviewed 2026-07-14 wish-async-result -->
 
 # wish()
 
@@ -27,17 +27,35 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 | `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
 | `error`      | `any`   | Error message if resolution failed                                                                                                                      |
 
-Access the resolved piece via `wishResult.result`:
+Keep the result channel for guards and use `resultOf()` for the ordinary `T`
+view:
 
 ```tsx
 // Shown for illustration only.
 const wishResult = wish<{ content: string }>({ query: "#note" });
+const note = resultOf(wishResult.result);
 
 // Read a property from the resolved piece
-const text = wishResult.result.content;
+const text = note.content;
 
 // Render the resolved piece's own UI
-return { [UI]: <div>{wishResult.result}</div> };
+return { [UI]: <div>{note}</div> };
+```
+
+The common case does not inspect availability. Nodes which consume `note` wait
+while the wish is pending and propagate errors automatically. A surface which
+handles failure explicitly guards the original channel:
+
+```tsx
+// Shown for illustration only.
+const noteWish = wish<Note>({ query: "#note" });
+const note = resultOf(noteWish.result);
+
+return {
+  [UI]: hasError(noteWish.result)
+    ? <div>{noteWish.result.errorMessage}</div>
+    : <NoteCard note={note} />,
+};
 ```
 
 ### Results wait for loading documents
@@ -199,8 +217,8 @@ for `wish({ query: "#profile" })`:
 
 - **0 profiles:** the trusted profile-create surface (same input as the home
   Profile tab). Submitting a name creates the viewer's first profile and leaves
-  the current view in place; the wish reacts once the link exists. `.result` is
-  `undefined` and `error` is set until the first profile exists.
+  the current view in place; the wish reacts once the link exists. `.result`
+  carries an `error` availability value until the first profile exists.
 - **1 profile:** a link to that profile.
 - **2+ profiles, a valid default set:** a link to the default profile.
 - **2+ profiles, no valid default:** the **profile picker**
@@ -281,11 +299,12 @@ reactive constructs:
 export default pattern<Input>(({ enableSearch }) => {
   // ✅ Call wish() once at pattern level
   const searchPiece = wish<SearchOutput>({ query: "#search" });
+  const search = resultOf(searchPiece.result);
 
   // Use computed() to conditionally process the result
   const searchData = computed(() => {
     if (!enableSearch) return null;
-    return searchPiece.result?.data;
+    return search.data;
   });
 
   return { searchData, [UI]: <div>{searchData}</div> };
@@ -344,12 +363,13 @@ routed to the suggestion picker.
 // any other runtime opening the same piece, reads the original capture. It
 // never updates; use it for created-at stamps, never as a clock.
 const createdAt = wish<number>({ query: "#now" });
+const createdAtValue = resultOf(createdAt.result);
 
 // Reactive: updates every 60 seconds, re-triggering downstream computed()s.
 const now = wish<number>({ query: "#now/60" });
+const nowValue = resultOf(now.result);
 const timeAgo = computed(() => {
-  if (now.result == null || createdAt.result == null) return "";
-  const ms = now.result - createdAt.result;
+  const ms = nowValue - createdAtValue;
   return `${Math.floor(ms / 60000)} minutes ago`;
 });
 ```
@@ -382,12 +402,11 @@ memoized repeat:
 // is read in reactive code — the tick is a cell, and the fetch is a reactive
 // builtin, so the graph still quiesces between windows.
 const tick = wish<number>({ query: "#now/300" });
+const tickValue = resultOf(tick.result);
 const feed = fetchJson<{ items: string[] }>({
-  url: computed(() =>
-    tick.result == null ? "" : `/api/my-feed?window=${tick.result}`
-  ),
+  url: computed(() => `/api/my-feed?window=${tickValue}`),
 });
-const items = computed(() => feed.result?.items ?? []);
+const items = computed(() => resultOf(feed).items);
 ```
 
 This stays inside the timing model: reactive fetch settlement is observed in a
@@ -416,7 +435,8 @@ To add new pieces to the space, wish for the `addPiece` handler as a `Stream`:
 const defaultApp = wish<{ addPiece: Stream<{ piece: MentionablePiece }> }>({
   query: "#default",
 });
-defaultApp.result.addPiece.send({ piece: newPiece });
+const { addPiece } = resultOf(defaultApp.result);
+addPiece.send({ piece: newPiece });
 ```
 
 Do **not** wish for `pieceRegistry` as a `Writable` — see

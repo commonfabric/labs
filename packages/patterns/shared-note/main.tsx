@@ -4,10 +4,14 @@ import {
   computed,
   Default,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   TILE_UI,
   UI,
   type VNode,
@@ -79,16 +83,21 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       query: "#profile",
     });
     const profileName = wish<string>({ query: "#profileName" });
-    const participantName = computed(() =>
-      normalizePresenceParticipantName(profileName.result ?? "")
-    );
+    const participantName = computed(() => {
+      if (
+        isPending(profileName.result) || isSyncing(profileName.result) ||
+        hasError(profileName.result)
+      ) return "";
+      return normalizePresenceParticipantName(resultOf(profileName.result));
+    });
     const hasProfile = computed(() =>
       participantName !== "" &&
-      profile.result !== undefined
+      !isPending(profile.result) && !isSyncing(profile.result) &&
+      !hasError(profile.result)
     );
     const error = new Writable.perSession("");
     const recovery = new Writable.perSession<string | null>(null);
-    const hasError = computed(() => error.get() !== "");
+    const hasEditorError = computed(() => error.get() !== "");
     const presenceNotice = new Writable.perSession("");
     const hasPresenceNotice = computed(() => presenceNotice.get() !== "");
     const hasRecovery = computed(() => recovery.get() !== null);
@@ -123,7 +132,7 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
               </div>
             )}
         </cf-hstack>
-        {hasError ? <cf-text role="alert">{error}</cf-text> : null}
+        {hasEditorError ? <cf-text role="alert">{error}</cf-text> : null}
         {hasPresenceNotice
           ? <cf-text role="status">{presenceNotice}</cf-text>
           : null}

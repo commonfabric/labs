@@ -4,11 +4,17 @@ import {
   Default,
   equals,
   handler,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -74,17 +80,19 @@ export type SendEvent = void;
 const sendMessage = handler<SendEvent, {
   messages: MessagesCell;
   draft: DraftCell;
-  // May be undefined until the viewer's `#profile` wish resolves; guarded below.
-  profile: ChatProfileCell | undefined;
+  profile: ChatProfileCell;
+  profileAvailable: boolean;
   name: string;
   avatar: string;
-}>((_event, { messages, draft, profile, name, avatar }) => {
+}>((_event, { messages, draft, profile, profileAvailable, name, avatar }) => {
   const author = (name ?? "").trim();
   const body = (draft.get() ?? "").trim();
   if (!author || !body) return; // No profile yet, or empty message.
-  if (!profile) return; // No resolved profile cell — no first-class identity.
+  if (!profileAvailable) return;
+  const availableProfile = profile.resolveAsCell();
+  if (availableProfile.get() === undefined) return;
   messages.push({
-    authorProfile: profile,
+    authorProfile: availableProfile,
     author,
     avatar: (avatar ?? "").trim(),
     body,
@@ -121,18 +129,49 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
+    const observedProfileName = observeAvailability(profileNameWish.result);
+    const observedProfileAvatar = observeAvailability(
+      profileAvatarWish.result,
+    );
+    const observedProfile = observeAvailability(profileWish.result);
 
-    const myName = computed(() => profileNameWish.result ?? "");
-    const myAvatar = computed(() => profileAvatarWish.result ?? "");
-    // The live profile cell — stored on each message and passed to the badge.
-    const myProfile = profileWish.result;
+    const myName = computed(() => {
+      if (
+        hasError(observedProfileName) || isPending(observedProfileName) ||
+        isSyncing(observedProfileName) ||
+        hasSchemaMismatch(observedProfileName)
+      ) return "";
+      return resultOf(observedProfileName);
+    });
+    const myAvatar = computed(() => {
+      if (
+        hasError(observedProfileAvatar) || isPending(observedProfileAvatar) ||
+        isSyncing(observedProfileAvatar) ||
+        hasSchemaMismatch(observedProfileAvatar)
+      ) return "";
+      return resultOf(observedProfileAvatar);
+    });
+    const myProfile = computed(() => {
+      if (
+        hasError(observedProfile) || isPending(observedProfile) ||
+        isSyncing(observedProfile) || hasSchemaMismatch(observedProfile)
+      ) return {};
+      return resultOf(observedProfile);
+    });
+    const profileAvailable = computed(() =>
+      !hasError(observedProfile) && !isPending(observedProfile) &&
+      !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile)
+    );
+    // Keep the badge in static JSX. A VNode-producing computed that captures
+    // the unavailable profile path is blocked before its fallback can run.
+    const currentProfileBadge = (
+      <cf-profile-badge $profile={myProfile} size="sm" />
+    );
     // Gate the composer on BOTH the name (for the snapshot/label) AND the live
     // profile CELL the send handler requires. Keying only on `#profileName`
     // would enable Send in the window where the name resolves but the `#profile`
     // cell hasn't, and the handler would then silently drop the message.
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "") !== "" && profileWish.result !== undefined
-    );
+    const hasProfile = computed(() => profileAvailable && myName !== "");
 
     const messageCount = messages.length;
 
@@ -161,6 +200,7 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
       messages,
       draft,
       profile: myProfile,
+      profileAvailable,
       name: myName,
       avatar: myAvatar,
     });
@@ -174,7 +214,7 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
               <cf-heading level={3}>Profile chat</cf-heading>
               <cf-vstack gap="1" align="end">
                 <cf-text variant="caption" tone="muted">You</cf-text>
-                <cf-profile-badge $profile={profileWish.result} size="sm" />
+                {currentProfileBadge}
               </cf-vstack>
             </cf-hstack>
 

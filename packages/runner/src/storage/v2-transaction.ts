@@ -103,6 +103,7 @@ import {
   isDurableReadTx,
   isInternalVerifierRead,
   isMutableTransactionReadAllowed,
+  isReadIgnoredForCommit,
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
   isUiInputBlindWriteTx,
@@ -1712,15 +1713,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       ? currentDocument(doc)
       : documentAtEpoch(doc, this.#readEpoch);
     const readMeta = options?.meta ?? EMPTY_META;
-    // In a UI-input blind-leaf-write tx (a scalar `$value` overwrite), every read
-    // is recorded for CFC/scheduling but carries no value-equality commit
-    // precondition: tag each activity with `ignoreReadForCommit` (so buildReads
-    // downgrades it to a nonRecursive entity-root existence read instead of a
-    // leaf-value precondition) and skip marking the doc `validated` (so the client
-    // validate()/claim() pass skips it too). The mode is scoped to the user
-    // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
-    // and keep their preconditions.
-    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    // A read can explicitly opt out of value-equality commit validation. The
+    // UI-input blind-leaf-write mode applies that opt-out to every read issued
+    // while a scalar `$value` overwrite is being built. Either route keeps the
+    // read recorded for CFC/scheduling, tags it for buildReads to omit, and
+    // skips marking the doc `validated` so validate()/claim() omits it too.
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this) ||
+      isReadIgnoredForCommit(readMeta);
     const { space: _, ...memoryAddress } = address;
 
     if (!hasDataUriScheme(address.id)) {

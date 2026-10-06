@@ -36,45 +36,45 @@ runtime binds a database to.
 ## db.query
 
 `db.query<Row>(sql, options?)` is a reactive read, not a promise. Never `await`
-it. Call it in the pattern body and read `pending` / `error` / `result`
-reactively; it re-runs when its inputs change, and results are memoized per
-request.
+it. Call it in the pattern body, keep the request when the UI needs to inspect
+availability, and project its usable value with `resultOf()`. It re-runs when
+its inputs change, and results are memoized per request.
 
 ```tsx
 // Shown at module scope.
+import { resultOf } from "commonfabric";
+
 export default pattern<{ orders: SqliteDb }>(({ orders }) => {
-  const pending = orders.query<{ id: number; glaze: string; boxes: number }>(
+  const request = orders.query<{ id: number; glaze: string; boxes: number }>(
     "SELECT id, glaze, boxes FROM orders WHERE shipped = 0 ORDER BY id LIMIT 200",
   );
+  const result = resultOf(request);
 
-  return lift((rows?: Array<{ glaze: string; boxes: number }>) =>
-    (rows ?? []).map((row) => `${row.boxes} × ${row.glaze}`).join(", ")
-  )(pending.result);
+  return lift((rows: Array<{ glaze: string; boxes: number }>) =>
+    rows.map((row) => `${row.boxes} × ${row.glaze}`).join(", ")
+  )(result.rows);
 });
 ```
 
-The call returns an envelope, not the rows:
-`{ pending, result?, error?, withheld? }`. `result` holds the rows once there
-are any, so a field typed as the rows themselves — `PerSession<Row[]>` — cannot
-take the call's value, and reading `.result` is what gets from one to the
-other. `withheld` counts the rows a read-time clearance kept from this reader,
-and is absent unless the query asked for one.
+The call returns an `AsyncResult<SqliteQueryResult<Row>>`, not the rows alone.
+On success, `resultOf(request)` exposes `{ rows, withheld? }`. `withheld` counts
+the rows a read-time clearance kept from this reader and is absent unless the
+query asked for one. Keep `request` itself for `isPending()` or `hasError()`
+guards; computations which only consume the projected result wait while the
+request is unavailable.
 
-Render the failure, not just the wait. A pattern that branches only on
-`pending` shows a loading view for as long as the query stays broken, because a
-query that failed is settled — `pending` is `false` and `error` holds the
-reason — and nothing further arrives to move it on. `error` reaches the pattern
-for a statement the database refuses and for a handle that does not read back
-as one, so a view that shows it is the difference between a page that says what
-went wrong and a page that spins.
+Render the failure when the UI needs to explain it. Guard the original request
+with `hasError(request)` and read `request.errorMessage`; otherwise the unavailable
+error propagates and downstream computations do not run. Query errors include
+a statement the database refuses and a handle that does not read back as one.
 
 A read refused for labeling arrives the same way and is the case most easily
 mistaken for an empty source: where a table declares a per-row label rule, a
 query that does not project every column the rule reads is refused rather than
-returned unlabeled, and `error` names the column and says to select it.
-`result` is then absent, not empty — so a view that renders "none found" over
-it states a fact about the data that nobody established. Branch on `error`
-before branching on emptiness.
+returned unlabeled, and `errorMessage` names the column and says to select it.
+The request is then unavailable, not empty — so a view that renders "none found"
+over it states a fact about the data that nobody established. Branch on
+`hasError(request)` before branching on emptiness.
 
 The `<Row>` type argument names the columns the statement projects, and is what
 turns a result into something typed. Without it the rows come back as

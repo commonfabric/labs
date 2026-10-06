@@ -1,6 +1,23 @@
 import ts from "typescript";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+const SYNTHETIC_AVAILABILITY_TYPE_NAMES = new Set([
+  "FabricUnavailable",
+  "IsPending",
+  "HasError",
+  "IsSyncing",
+  "HasSchemaMismatch",
+]);
+
+function isSyntheticAvailabilityTypeReference(
+  node: ts.TypeReferenceNode,
+): boolean {
+  return ts.isQualifiedName(node.typeName) &&
+    ts.isIdentifier(node.typeName.left) &&
+    node.typeName.left.text === "__cfHelpers" &&
+    SYNTHETIC_AVAILABILITY_TYPE_NAMES.has(node.typeName.right.text);
+}
+
 import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
@@ -3465,6 +3482,32 @@ export class SchemaGenerator {
     // Resolve by name from source scope as a fallback (e.g., PieceEntry in
     // Cell<PieceEntry[]>).
     if (ts.isTypeReferenceNode(typeNode)) {
+      if (isSyntheticAvailabilityTypeReference(typeNode)) {
+        return { type: "FabricUnavailable" };
+      }
+
+      // Transformer-created qualified references such as
+      // `__cfHelpers.HasError` have no symbol in the authored Program, but the
+      // transformer records their real semantic Type in typeRegistry. Consult
+      // that channel before syntactic wrapper/scope recovery. Otherwise the
+      // checker reports `any`, this branch falls through to `true`, and a
+      // synthetic `T | __cfHelpers.HasError` schema collapses to `true`.
+      const originalTypeNode = ts.getOriginalNode(typeNode);
+      const registeredType = typeRegistry?.get(typeNode) ??
+        (originalTypeNode !== typeNode
+          ? typeRegistry?.get(originalTypeNode)
+          : undefined);
+      if (
+        registeredType &&
+        (registeredType.flags & ts.TypeFlags.Any) === 0
+      ) {
+        return this.formatChildType(
+          registeredType,
+          context,
+          typeNode,
+        );
+      }
+
       if (detectWrapperViaNode(typeNode, checker)) {
         const wrapperType = typeRegistry?.get(typeNode) ??
           checker.getTypeFromTypeNode(typeNode);

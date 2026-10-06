@@ -14,6 +14,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { BuiltInLLMTool } from "@commonfabric/api";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import {
   clearMockResponses,
@@ -23,6 +24,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { generateObjectState } from "../src/builder/built-in.ts";
 import type { Cell, JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -115,8 +117,7 @@ describe("generateObject under a refused commit", () => {
    */
   // deno-lint-ignore no-explicit-any
   function runRefusedRequest(cause: string): Cell<any> {
-    const { pattern, generateObject, patternTool, Cell: BuilderCell } =
-      commonfabric;
+    const { pattern, patternTool, Cell: BuilderCell } = commonfabric;
     const helperPattern = pattern(
       () => ({ ok: true }),
       { type: "object", additionalProperties: false },
@@ -135,7 +136,7 @@ describe("generateObject under a refused commit", () => {
         items: { type: "object", additionalProperties: true },
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
-      return generateObject({
+      return generateObjectState({
         messages: briefing,
         schema: RESULT_SCHEMA,
         tools: {
@@ -188,7 +189,15 @@ describe("generateObject under a refused commit", () => {
     // A refused request produces no answer and no record of a conversation:
     // the post-commit outbox is cleared by the refusal, so nothing was sent and
     // no receipt stands for a request that never ran.
-    expect(settled.result).toBeUndefined();
+    const rawResult = result.withTx().key("result").resolveAsCell().getRaw();
+    expect(isUnavailable(rawResult)).toBe(true);
+    if (!isUnavailable(rawResult)) throw new Error("expected unavailable");
+    expect(rawResult.reason).toBe("error");
+    if (rawResult.reason === "error") {
+      expect(rawResult.errorMessage).toBe(
+        "generateObject request was refused before it started",
+      );
+    }
     expect(settled.messages).toBeUndefined();
     expect(requestsSent).toBe(0);
   });

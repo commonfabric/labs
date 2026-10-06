@@ -34,13 +34,22 @@ import {
 
 import type { BuiltInLLMMessage, JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import {
+  fetchJsonState,
+  fetchProgramState,
+  generateObjectState,
+  generateTextState,
+  streamDataState,
+} from "../src/builder/built-in.ts";
 import type { Cell } from "../src/builder/types.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   MAX_ENFORCEMENT_CFC_OPTIONS,
@@ -117,19 +126,31 @@ describe("a builtin whose staged request is abandoned", () => {
     return waitForCellValue<{ error?: string }>(
       runtime,
       cell,
-      (value) => typeof value?.error === "string" && value.error.length > 0,
-    );
+      (value) => {
+        if (typeof value?.error === "string" && value.error.length > 0) {
+          return true;
+        }
+        const raw = cell.withTx().key("result").resolveAsCell().getRaw();
+        return isUnavailable(raw) && raw.reason === "error";
+      },
+    ).then((value) => {
+      if (typeof value.error === "string") return value;
+      const raw = cell.withTx().key("result").resolveAsCell().getRaw();
+      return isUnavailable(raw) && raw.reason === "error"
+        ? { error: raw.errorMessage }
+        : value;
+    });
   }
 
   it("reports the refusal on streamData's error cell", async () => {
-    const { pattern, streamData, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const testPattern = pattern<Record<string, never>>(() => {
       const url = BuilderCell.of("https://example.invalid/events", {
         type: "string",
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
       // deno-lint-ignore no-explicit-any
-      return streamData({ url } as any);
+      return streamDataState({ url } as any);
     });
     const resultCell = runtime.getCell(
       space,
@@ -154,7 +175,7 @@ describe("a builtin whose staged request is abandoned", () => {
   it("reports the refusal on generateObject's error cell with no tools", async () => {
     // The tools path and the direct path build and settle their requests
     // separately, so a request with no tools reaches the second of them.
-    const { pattern, generateObject, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const testPattern = pattern<Record<string, never>>(() => {
       const messages = BuilderCell.of([{
         role: "user",
@@ -164,7 +185,7 @@ describe("a builtin whose staged request is abandoned", () => {
         items: { type: "object", additionalProperties: true },
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
-      return generateObject({
+      return generateObjectState({
         messages,
         schema: {
           type: "object",
@@ -196,7 +217,7 @@ describe("a builtin whose staged request is abandoned", () => {
   it("reports the refusal on generateObject's error cell with tools", async () => {
     // The tools path stages its own request, separately from the direct one
     // the case above reaches, and settles through its own ending.
-    const { pattern, generateObject, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const dummyPattern = pattern<Record<string, never>, { ok: boolean }>(
       () => ({
         ok: true,
@@ -211,7 +232,7 @@ describe("a builtin whose staged request is abandoned", () => {
         items: { type: "object", additionalProperties: true },
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
-      return generateObject({
+      return generateObjectState({
         messages,
         schema: {
           type: "object",
@@ -247,7 +268,7 @@ describe("a builtin whose staged request is abandoned", () => {
   });
 
   it("reports the refusal on generateText's error cell", async () => {
-    const { pattern, generateText, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const testPattern = pattern<Record<string, never>>(() => {
       const messages = BuilderCell.of([{
         role: "user",
@@ -258,7 +279,7 @@ describe("a builtin whose staged request is abandoned", () => {
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
       // deno-lint-ignore no-explicit-any
-      return generateText({ messages } as any);
+      return generateTextState({ messages } as any);
     });
     const resultCell = runtime.getCell(
       space,
@@ -311,14 +332,14 @@ describe("a builtin whose staged request is abandoned", () => {
   });
 
   it("reports the refusal on fetchProgram's error cell", async () => {
-    const { pattern, fetchProgram, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const testPattern = pattern<Record<string, never>>(() => {
       const url = BuilderCell.of("https://example.invalid/program.js", {
         type: "string",
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
       // deno-lint-ignore no-explicit-any
-      return fetchProgram({ url } as any);
+      return fetchProgramState({ url } as any);
     });
     const resultCell = runtime.getCell(
       space,
@@ -341,14 +362,14 @@ describe("a builtin whose staged request is abandoned", () => {
   });
 
   it("reports the refusal on fetchJson's error cell", async () => {
-    const { pattern, fetchJson, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const testPattern = pattern<Record<string, never>>(() => {
       const url = BuilderCell.of("https://example.invalid/data.json", {
         type: "string",
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
       // deno-lint-ignore no-explicit-any
-      return fetchJson({ url } as any);
+      return fetchJsonState({ url } as any);
     });
     const resultCell = runtime.getCell(
       space,
@@ -376,7 +397,7 @@ describe("a builtin whose staged request is abandoned", () => {
     // writes on its way there is the runtime's, and declares what flows into
     // it rather than refusing it.
 
-    const { pattern, sqliteQuery, Cell: BuilderCell } = commonfabric;
+    const { pattern, Cell: BuilderCell } = commonfabric;
     const db: SqliteDbRef = {
       id: "of:abandoned-query-db",
       tables: { notes: table({ id: "integer primary key" }) },
@@ -387,7 +408,7 @@ describe("a builtin whose staged request is abandoned", () => {
         ifc: { confidentiality: [PROMPT_INFLUENCE] },
       });
       // deno-lint-ignore no-explicit-any
-      return sqliteQuery({ db, sql } as any);
+      return sqliteQueryStateNodeFactory({ db, sql } as any);
     });
     const resultCell = runtime.getCell(
       space,
@@ -656,7 +677,7 @@ describe("a builtin whose staged request is abandoned", () => {
     });
 
     it("sends generateObject's request and lands its result", async () => {
-      const { pattern, generateObject, Cell: BuilderCell } = commonfabric;
+      const { pattern, Cell: BuilderCell } = commonfabric;
       addMockObjectResponse(() => true, {
         object: { ok: true },
         id: "abandoned-control-generate-object",
@@ -669,7 +690,7 @@ describe("a builtin whose staged request is abandoned", () => {
           type: "array",
           items: { type: "object", additionalProperties: true },
         });
-        return generateObject({
+        return generateObjectState({
           messages,
           schema: {
             type: "object",
@@ -706,7 +727,7 @@ describe("a builtin whose staged request is abandoned", () => {
       // with nothing in it for the ceiling to refuse, reaches the model and
       // lands the object the tool presented.
 
-      const { pattern, generateObject, Cell: BuilderCell } = commonfabric;
+      const { pattern, Cell: BuilderCell } = commonfabric;
       const dummyPattern = pattern<Record<string, never>, { ok: boolean }>(
         () => ({
           ok: true,
@@ -732,7 +753,7 @@ describe("a builtin whose staged request is abandoned", () => {
           type: "array",
           items: { type: "object", additionalProperties: true },
         });
-        return generateObject({
+        return generateObjectState({
           messages,
           schema: {
             type: "object",
@@ -772,7 +793,7 @@ describe("a builtin whose staged request is abandoned", () => {
     });
 
     it("sends generateText's request and lands its result", async () => {
-      const { pattern, generateText } = commonfabric;
+      const { pattern } = commonfabric;
       addMockResponse(() => true, {
         role: "assistant",
         content: "an answer",
@@ -780,7 +801,7 @@ describe("a builtin whose staged request is abandoned", () => {
       });
       const testPattern = pattern<Record<string, never>>(() =>
         // deno-lint-ignore no-explicit-any
-        generateText({ prompt: "a briefing nothing labels" } as any)
+        generateTextState({ prompt: "a briefing nothing labels" } as any)
       );
       const resultCell = runtime.getCell(
         space,

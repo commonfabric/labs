@@ -11,6 +11,7 @@ export interface ExecuteContinuationState {
   readonly consumeRerunAfterCurrentExecute: () => boolean;
   readonly hasPendingLineageHeadEvent: () => boolean;
   readonly hasLoadParkedHeadEvent: () => boolean;
+  readonly hasInputParkedHeadEvent: () => boolean;
   readonly scheduleWake: (at: number) => void;
   readonly hasWakeTimer: () => boolean;
   readonly setScheduled: (scheduled: boolean) => void;
@@ -107,10 +108,12 @@ export function applyPullExecuteContinuation(
   const now = performance.now();
   const hasPendingLineageHeadEvent = state.hasPendingLineageHeadEvent();
   const hasLoadParkedHeadEvent = state.hasLoadParkedHeadEvent();
+  const hasInputParkedHeadEvent = state.hasInputParkedHeadEvent();
   const hasQueuedEventReadyNow = state.eventQueue.length > 0 &&
     !isHeadEventParked(state, now) &&
     !hasPendingLineageHeadEvent &&
-    !hasLoadParkedHeadEvent;
+    !hasLoadParkedHeadEvent &&
+    !hasInputParkedHeadEvent;
   const hasParkedHeadEvent = state.eventQueue.length > 0 &&
     (isHeadEventParked(state, now) || hasPendingLineageHeadEvent ||
       hasLoadParkedHeadEvent);

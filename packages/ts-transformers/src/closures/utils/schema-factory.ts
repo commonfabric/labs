@@ -2,6 +2,7 @@ import ts from "typescript";
 import type { TransformationContext } from "../../core/mod.ts";
 import type { CaptureTreeNode } from "../../utils/capture-tree.ts";
 import {
+  applyAvailabilityOverridesToTypeNode,
   buildCaptureTypeElements,
   buildTypeElementsFromCaptureTree,
   createRegisteredTypeLiteral,
@@ -14,6 +15,9 @@ import {
   tryExplicitParameterType,
 } from "../../ast/type-inference.ts";
 import { isOptionalMemberSymbol } from "../../ast/mod.ts";
+import {
+  type AvailabilityCaptureOverride,
+} from "../../availability/captures.ts";
 
 /**
  * Build a TypeNode for an array method callback parameter.
@@ -158,6 +162,9 @@ export function createLiftAppliedInputSchema(
   captureTree: Map<string, CaptureTreeNode>,
   captureNameMap: Map<string, string>,
   hadZeroParameters: boolean,
+  availabilityOverrides:
+    | ReadonlyMap<string, AvailabilityCaptureOverride>
+    | undefined,
   context: TransformationContext,
 ): ts.TypeNode {
   const { checker, factory } = context;
@@ -167,8 +174,23 @@ export function createLiftAppliedInputSchema(
 
   // Add type element for original input UNLESS callback had zero parameters
   if (!hadZeroParameters) {
+    const inputAvailabilityOverrides = availabilityOverrides
+      ? [...availabilityOverrides.values()]
+        .filter((override) => override.path[0] === originalInputParamName)
+        .map((override) => ({
+          ...override,
+          path: override.path.slice(1),
+        }))
+      : [];
     // Add type element for original input using the helper function
-    const inputTypeNode = expressionToTypeNode(originalInput, context);
+    let inputTypeNode = expressionToTypeNode(originalInput, context);
+    if (inputAvailabilityOverrides.length > 0) {
+      inputTypeNode = applyAvailabilityOverridesToTypeNode(
+        inputTypeNode,
+        inputAvailabilityOverrides,
+        context,
+      );
+    }
 
     // Check if the original input is an optional property access (e.g., config.multiplier where multiplier?: number)
     let questionToken: ts.QuestionToken | undefined = undefined;
@@ -193,6 +215,7 @@ export function createLiftAppliedInputSchema(
     captureTree,
     context,
     captureNameMap,
+    availabilityOverrides,
   );
   for (const typeElement of captureTypeElements) typeElements.push(typeElement);
 

@@ -1,6 +1,10 @@
 import ts from "typescript";
 
 import { detectCallKind } from "../ast/mod.ts";
+import {
+  isCommonFabricSymbol,
+  resolvesToCommonFabricSymbol,
+} from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapExpression } from "../utils/expression.ts";
 import { isBrandedCellType } from "./cell-type.ts";
 
@@ -126,6 +130,118 @@ export function isStructuralReactiveFactoryExpression(
   );
 }
 
+function isWishStateType(
+  type: ts.Type,
+  seen: Set<ts.Type> = new Set(),
+): boolean {
+  if (seen.has(type)) return false;
+  seen.add(type);
+  const symbols = [type.aliasSymbol, type.getSymbol()].filter(
+    (symbol): symbol is ts.Symbol => !!symbol,
+  );
+  if (
+    symbols.some((symbol) =>
+      symbol.getName() === "WishState" && isCommonFabricSymbol(symbol)
+    )
+  ) {
+    return true;
+  }
+  return (type.isUnion() || type.isIntersection()) &&
+    type.types.some((member) => isWishStateType(member, seen));
+}
+
+/**
+ * Follow local helper returns and callable aliases to determine whether calling
+ * an expression creates a Wish factory node. Stored Wish values are not
+ * followed: invoking a method on an existing Wish must not be mistaken for
+ * creating another factory. The return-type check preserves fail-closed
+ * behavior for external helpers whose implementation is unavailable.
+ */
+export function isWishFactoryExpression(
+  expression: ts.CallExpression,
+  checker: ts.TypeChecker,
+  seenSymbols = new Set<ts.Symbol>(),
+): boolean {
+  if (detectCallKind(expression, checker)?.kind === "wish") return true;
+  if (isWishStateType(checker.getTypeAtLocation(expression))) return true;
+  return wishFactoryHelperCallee(expression.expression, checker, seenSymbols);
+}
+
+function wishFactoryHelperCallee(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seenSymbols: Set<ts.Symbol>,
+): boolean {
+  const target = unwrapExpression(expression);
+  if (ts.isCallExpression(target)) {
+    return isWishFactoryExpression(target, checker, seenSymbols);
+  }
+  if (
+    !ts.isIdentifier(target) &&
+    !ts.isPropertyAccessExpression(target) &&
+    !ts.isElementAccessExpression(target)
+  ) {
+    return false;
+  }
+
+  const symbol = checker.getSymbolAtLocation(target) ??
+    (ts.isElementAccessExpression(target) &&
+        ts.isStringLiteralLike(target.argumentExpression)
+      ? checker.getTypeAtLocation(target.expression).getProperty(
+        target.argumentExpression.text,
+      )
+      : undefined);
+  if (!symbol) return false;
+  if (resolvesToCommonFabricSymbol(symbol, checker, "wish")) return true;
+  const resolvedSymbol = getAliasedSymbol(symbol, checker);
+  if (seenSymbols.has(resolvedSymbol)) return false;
+  seenSymbols.add(resolvedSymbol);
+
+  return (resolvedSymbol.getDeclarations() ?? []).some((declaration) => {
+    const returnedExpression = getReturnedExpression(declaration);
+    if (returnedExpression) {
+      return returnedExpressionCreatesWish(
+        returnedExpression,
+        checker,
+        seenSymbols,
+      );
+    }
+    return false;
+  });
+}
+
+function returnedExpressionCreatesWish(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seenSymbols: Set<ts.Symbol>,
+): boolean {
+  const target = unwrapExpression(expression);
+  if (ts.isCallExpression(target)) {
+    return isWishFactoryExpression(target, checker, seenSymbols);
+  }
+  if (
+    (ts.isIdentifier(target) ||
+      ts.isPropertyAccessExpression(target) ||
+      ts.isElementAccessExpression(target)) &&
+    wishFactoryHelperCallee(target, checker, seenSymbols)
+  ) {
+    return true;
+  }
+  if (
+    ts.isPropertyAccessExpression(target) ||
+    ts.isElementAccessExpression(target)
+  ) {
+    const receiver = unwrapExpression(target.expression);
+    if (ts.isIdentifier(receiver)) return false;
+    return returnedExpressionCreatesWish(
+      receiver,
+      checker,
+      seenSymbols,
+    );
+  }
+  return false;
+}
+
 function someResolvedHelperExpressionMatches(
   expression: ts.Expression,
   checker: ts.TypeChecker,
@@ -188,6 +304,9 @@ function getAliasedSymbol(
 function getReturnedExpression(
   declaration: ts.Declaration,
 ): ts.Expression | undefined {
+  if (ts.isPropertyAssignment(declaration)) {
+    return declaration.initializer;
+  }
   if (
     ts.isFunctionDeclaration(declaration) ||
     ts.isMethodDeclaration(declaration) ||
@@ -222,7 +341,8 @@ function getReturnedExpression(
   if (
     ts.isIdentifier(initializer) ||
     ts.isCallExpression(initializer) ||
-    ts.isPropertyAccessExpression(initializer)
+    ts.isPropertyAccessExpression(initializer) ||
+    ts.isElementAccessExpression(initializer)
   ) {
     return initializer;
   }

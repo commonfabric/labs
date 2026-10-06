@@ -229,7 +229,8 @@ interface AnnotationOutput {
 
 ```ts
 // Find all annotations in the space
-const annotations = wish<AnnotationPiece[]>({ query: "#annotation" }).result;
+const annotationWish = wish<AnnotationPiece[]>({ query: "#annotation" });
+const annotations = resultOf(annotationWish.result);
 
 // Create an annotation pointing at a specific piece
 const ann = Annotation({
@@ -391,10 +392,12 @@ interface AgentOutput {
 
 ```ts
 // Find all agents in the space
-const agents = wish<AgentPiece[]>({ query: "#agent" }).result;
+const agentWish = wish<AgentPiece[]>({ query: "#agent" });
+const agents = resultOf(agentWish.result);
 
 // Bootstrap: agent finds its own piece
-const self = wish<AgentPiece>({ query: "Wisher" }).result;
+const selfWish = wish<AgentPiece>({ query: "Wisher" });
+const self = resultOf(selfWish.result);
 const directive = self.directive; // read directive
 self.markRunning.send({}); // mark as running
 // ... do work ...

@@ -71,11 +71,7 @@ async function runTest(base: URL) {
     // speculative rev bumps would starve the successor's commit, and no drain is
     // needed between sends. If this test flakes, that classification regressed.
 
-    const dumpQ = (k: string) => ({
-      pending: result.key(k).key("pending").getRaw(),
-      error: result.key(k).key("error").getRaw(),
-      result: result.key(k).key("result").getRaw(),
-    });
+    const dumpQ = (k: string) => result.key(k).getRaw();
 
     // Poll until `q` (and staging) reflect `predicate`; settles the scheduler
     // and storage between probes so terminally-rejected commits drain too.
@@ -100,9 +96,9 @@ async function runTest(base: URL) {
 
     // Row COUNT probes read the raw array (links); row CONTENT reads resolve.
     const qRowCount = () =>
-      ((result.key("q").key("result").getRaw() ?? []) as unknown[]).length;
+      ((result.key("q").key("rows").getRaw() ?? []) as unknown[]).length;
     const qRows = () =>
-      (result.key("q").key("result").get() ?? []) as {
+      (result.key("q").key("rows").get() ?? []) as {
         id: number;
         from_addr: string;
       }[];
@@ -113,9 +109,8 @@ async function runTest(base: URL) {
       await waitFor(
         "seed",
         () =>
-          (result.key("q").key("pending").get() as unknown) === false &&
           qRowCount() === 1 &&
-          (result.key("qStaging").key("result").getRaw() as unknown[])
+          (result.key("qStaging").key("rows").getRaw() as unknown[])
               ?.length === 2,
       );
 
@@ -170,7 +165,7 @@ async function runTest(base: URL) {
       // The read side re-derives row 1's label from the POST-IMAGE.
       const rowLabel = async (i: number) => {
         const dtx = runtime.edit();
-        const leaf = result.key("q").key("result").key(i).key("body")
+        const leaf = result.key("q").key("rows").key(i).key("body")
           .withTx(dtx);
         leaf.get();
         const view = cfcLabelViewForDereferenceTraces(

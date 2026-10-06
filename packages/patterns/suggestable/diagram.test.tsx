@@ -11,6 +11,8 @@ export default pattern(() => {
   const assert_no_topic = assert(() => subject.topic === "");
   const assert_not_pending = assert(() => subject.pending === false);
   const assert_no_diagram = assert(() => subject.diagram === "");
+  const assert_ready = assert(() => subject.availability === "ready");
+  const assert_no_error = assert(() => subject.error === "");
   const assert_generic_heading = assert(() => hasText(subject[UI], "Diagram"));
   const assert_no_loader = assert(() =>
     !hasText(subject[UI], "Generating diagram")
@@ -22,6 +24,8 @@ export default pattern(() => {
       { assertion: assert_no_topic },
       { assertion: assert_not_pending },
       { assertion: assert_no_diagram },
+      { assertion: assert_ready },
+      { assertion: assert_no_error },
       { assertion: assert_generic_heading },
       { assertion: assert_no_loader },
     ],

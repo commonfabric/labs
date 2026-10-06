@@ -1,10 +1,14 @@
 import {
   computed,
   type Default,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   patternTool,
   type PatternToolResult,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -76,9 +80,16 @@ export const searchPattern = pattern<
 });
 
 const SummaryIndex = pattern<Input, Output>(() => {
-  const mentionable = wish<Default<Writable<SummarizablePiece>[], []>>({
+  const mentionableWish = wish<Default<Writable<SummarizablePiece>[], []>>({
     query: "#mentionable",
-  }).result;
+  });
+  const mentionable = computed(() => {
+    const result = mentionableWish.result;
+    return isPending(result) || hasError(result) ||
+        isSyncing(result)
+      ? []
+      : resultOf(result);
+  });
 
   const query = new Writable("");
 

@@ -20,6 +20,7 @@ import {
 } from "./transformers.ts";
 import { CrossStageState } from "./cross-stage-state.ts";
 import { CFHelpers } from "./cf-helpers.ts";
+import type { AvailabilityObservation } from "../availability/types.ts";
 
 export interface TransformationContextConfig {
   program: ts.Program;
@@ -234,6 +235,27 @@ export class TransformationContext {
    */
   lookupSchemaHint(node: ts.Node): SchemaHint | undefined {
     return this.state.lookupSchemaHint(node);
+  }
+
+  recordAvailabilityObservation(
+    key: ts.Node | ts.Symbol,
+    observation: AvailabilityObservation,
+  ): void {
+    this.options.state?.recordAvailabilityObservation(key, observation);
+  }
+
+  lookupAvailabilityObservation(
+    key: ts.Node | ts.Symbol,
+  ): AvailabilityObservation | undefined {
+    return this.options.state?.lookupAvailabilityObservation(key);
+  }
+
+  recordAvailabilityVariantType(name: string, type: ts.Type): void {
+    this.options.state?.recordAvailabilityVariantType(name, type);
+  }
+
+  lookupAvailabilityVariantType(name: string): ts.Type | undefined {
+    return this.options.state?.lookupAvailabilityVariantType(name);
   }
 
   /**

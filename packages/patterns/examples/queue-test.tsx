@@ -2,8 +2,10 @@ import {
   computed,
   Default,
   generateText,
+  isPending,
   NAME,
   pattern,
+  resultOf,
   UI,
 } from "commonfabric";
 
@@ -27,16 +29,20 @@ export default pattern<QueueTestInput>(({ title }) => {
     "What is 5+5? Reply in one word.",
   ];
 
-  const responses = prompts.map((prompt) =>
-    generateText({
+  const responses = prompts.map((prompt) => {
+    const request = generateText({
       prompt,
       model: "anthropic:claude-haiku-4-5",
       queue: "test-queue",
-    })
-  );
+    });
+    const result = resultOf(request);
+    return { request, result };
+  });
 
   const completedCount = computed(() =>
-    responses.filter((r) => !r.pending && r.result).length
+    responses.filter((response) =>
+      !isPending(response.request) && response.result
+    ).length
   );
 
   return {
@@ -60,7 +66,7 @@ export default pattern<QueueTestInput>(({ title }) => {
               <cf-hstack gap="2" align="center">
                 <strong>{prompts[i]}</strong>
                 {computed(() =>
-                  r.pending
+                  isPending(r.request)
                     ? <cf-loader show-elapsed />
                     : r.result
                     ? <span style="color: green">{r.result}</span>
@@ -73,7 +79,7 @@ export default pattern<QueueTestInput>(({ title }) => {
       </cf-screen>
     ),
     responses: responses.map((r) => ({
-      pending: r.pending,
+      pending: isPending(r.request),
       result: r.result,
     })),
   };

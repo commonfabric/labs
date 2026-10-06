@@ -2,9 +2,15 @@ import {
   computed,
   Default,
   generateObject,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   UI,
   type VNode,
 } from "commonfabric";
@@ -46,7 +52,7 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
       return `Generate a checklist of actionable steps for: ${topic}`;
     });
 
-    const response = generateObject<{ items: ChecklistItem[] }>({
+    const responseRequest = generateObject<{ items: ChecklistItem[] }>({
       system:
         "You generate concise, actionable checklists. Each item should be a clear, specific step. Keep it to 5-10 items unless the task clearly requires more.",
       prompt,
@@ -70,10 +76,23 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
       },
       model: "anthropic:claude-haiku-4-5",
     });
+    const observedResponse = observeAvailability(responseRequest);
+    const responseState = computed(() => {
+      if (isPending(observedResponse)) {
+        return { response: { items: [] }, pending: true };
+      }
+      if (
+        hasError(observedResponse) || isSyncing(observedResponse) ||
+        hasSchemaMismatch(observedResponse)
+      ) {
+        return { response: { items: [] }, pending: false };
+      }
+      return { response: resultOf(observedResponse), pending: false };
+    });
 
     // Seed items from LLM result when it arrives
     const items = computed(() => {
-      return response.result?.items || [];
+      return responseState.response.items || [];
     });
 
     return {
@@ -88,7 +107,7 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
 
           <cf-vstack gap="2" style="padding: 1.5rem;">
             {ifElse(
-              response.pending,
+              responseState.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
                 <cf-loader show-elapsed /> Generating checklist...
               </div>,
@@ -105,7 +124,7 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
       ),
       topic,
       items,
-      pending: response.pending,
+      pending: responseState.pending,
     };
   },
 );

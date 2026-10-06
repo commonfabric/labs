@@ -188,7 +188,10 @@ describe("wish-profile-unavailable", () => {
       try {
         const found = await fixture.wish("#profile");
         expect(errorOf(found)).toContain("Could not load document");
-        expect(found.key("result").get()).toBeUndefined();
+        expect(found.key("result").get()).toMatchObject({
+          reason: "error",
+          errorKind: "general",
+        });
       } finally {
         await fixture.dispose();
       }

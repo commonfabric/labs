@@ -241,6 +241,25 @@ Deno.test("getCapabilitySummaryCallbackArgument reads the callback off a lift-ap
   assertEquals(callback.parameters[0]?.name.getText(), "v");
 });
 
+Deno.test("lift-applied callback lookup ignores trailing scheduler options", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import { lift } from "commonfabric";
+    const value = lift(
+      (v: number) => v + 1,
+      { unavailableInputPolicy: [{ path: ["v"], reasons: ["error"] }] },
+    )(3);
+  `);
+
+  const call = findCall(sourceFile, "value");
+  const callback = getLiftAppliedInputAndCallback(call, checker)?.callback;
+  assert(callback && ts.isArrowFunction(callback));
+  assertEquals(callback.parameters[0]?.name.getText(), "v");
+  assertEquals(
+    getCapabilitySummaryCallbackArgument(call, checker),
+    callback,
+  );
+});
+
 Deno.test("isReactiveOriginExpression is false for a non-call, non-new expression", () => {
   const { sourceFile, checker } = createProgram(`
     const value = 1 + 2;
@@ -484,6 +503,37 @@ Deno.test("detectCallKind classifies ifElse, when, unless, wish, and generate ca
     detectCallKind(findCall(sourceFile, "g"), checker)?.kind,
     "pattern-tool",
   );
+});
+
+Deno.test("detectCallKind resolves advanced generation APIs through aliases and namespaces", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import {
+      generateObjectStream as objectStream,
+      generateTextStream as textStream,
+    } from "commonfabric";
+    import * as cf from "commonfabric";
+    const aliasText = textStream({ prompt: "hello" });
+    const aliasObject = objectStream<{ ok: boolean }>({ prompt: "hello" });
+    const namespaceText = cf.generateTextStream({ prompt: "hello" });
+    const namespaceObject = cf.generateObjectStream<{ ok: boolean }>({ prompt: "hello" });
+  `);
+
+  for (const declaration of ["aliasText", "namespaceText"]) {
+    const call = findCall(sourceFile, declaration);
+    const callKind = detectCallKind(call, checker);
+    assert(callKind?.kind === "runtime-call");
+    assertEquals(callKind.exportName, "generateTextStream");
+    assertEquals(callKind.reactiveOrigin, true);
+    assertEquals(isReactiveOriginExpression(call, checker), true);
+  }
+
+  for (const declaration of ["aliasObject", "namespaceObject"]) {
+    const call = findCall(sourceFile, declaration);
+    const callKind = detectCallKind(call, checker);
+    assert(callKind?.kind === "generate-object");
+    assertEquals(callKind.exportName, "generateObjectStream");
+    assertEquals(isReactiveOriginExpression(call, checker), true);
+  }
 });
 
 Deno.test("detectCallKind resolves the cell factory imported from commonfabric", () => {
@@ -875,6 +925,87 @@ Deno.test("detectCallKind returns undefined when a const alias initializer resol
   const call = findCall(sourceFile, "value");
   // The const initializer resolves to no call kind, so the declaration loop
   // continues past it and resolution yields undefined.
+  assertEquals(detectCallKind(call, checker), undefined);
+});
+
+Deno.test("detectCallKind classifies aliased availability guards by resolved commonfabric symbol", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import { hasError as failed } from "commonfabric";
+    declare const value: unknown;
+    const result = failed(value);
+  `);
+
+  const call = findCall(sourceFile, "result");
+  assertEquals(detectCallKind(call, checker), {
+    kind: "availability-guard",
+    reason: "error",
+    variantTypeName: "HasError",
+    symbol: checker.getSymbolAtLocation(
+      call.expression as ts.Identifier,
+    ),
+  });
+});
+
+Deno.test("detectCallKind classifies observeAvailability through a stable const alias", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import { observeAvailability } from "commonfabric";
+    const observe = observeAvailability;
+    declare const value: unknown;
+    const result = observe(value, "pending");
+  `);
+
+  const call = findCall(sourceFile, "result");
+  assertEquals(detectCallKind(call, checker)?.kind, "availability-observer");
+});
+
+Deno.test("detectCallKind classifies resultOf through direct alias and namespace references", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import { resultOf, resultOf as usable } from "commonfabric";
+    import * as cf from "commonfabric";
+    declare const value: unknown;
+    const direct = resultOf(value);
+    const alias = usable(value);
+    const namespace = cf.resultOf(value);
+  `);
+
+  for (const declaration of ["direct", "alias", "namespace"]) {
+    const call = findCall(sourceFile, declaration);
+    const callKind = detectCallKind(call, checker);
+    assertEquals(callKind?.kind, "availability-result");
+    assertEquals(isReactiveOriginExpression(call, checker), true);
+  }
+});
+
+Deno.test("detectCallKind ignores an unrelated same-named resultOf", () => {
+  const { sourceFile, checker } = createProgram(`
+    function resultOf<T>(value: T): T { return value; }
+    const result = resultOf("ordinary data");
+  `);
+
+  const call = findCall(sourceFile, "result");
+  assertEquals(detectCallKind(call, checker), undefined);
+});
+
+Deno.test("detectCallKind classifies a namespace availability guard", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import * as cf from "commonfabric";
+    declare const value: unknown;
+    const result = cf.isSyncing(value);
+  `);
+
+  const call = findCall(sourceFile, "result");
+  const callKind = detectCallKind(call, checker);
+  assert(callKind?.kind === "availability-guard");
+  assertEquals(callKind.reason, "syncing");
+});
+
+Deno.test("detectCallKind ignores an unrelated same-named availability helper", () => {
+  const { sourceFile, checker } = createProgram(`
+    function hasError(_value: unknown): boolean { return false; }
+    const result = hasError("ordinary data");
+  `);
+
+  const call = findCall(sourceFile, "result");
   assertEquals(detectCallKind(call, checker), undefined);
 });
 

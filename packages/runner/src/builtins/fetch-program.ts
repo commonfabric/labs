@@ -1,4 +1,16 @@
+import {
+  FabricUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { internSchema } from "@commonfabric/data-model-schema";
+import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
+import {
+  CODEC,
+  CODEC_TYPE_TAGS,
+  NullLiveEnvironment,
+} from "@commonfabric/data-model/codec-common";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import {
   resolveScopeKey,
@@ -25,7 +37,11 @@ import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { computeInputHashFromValue } from "./fetch-utils.ts";
+import {
+  computeInputHashFromValue,
+  selectUnavailableFetchInput,
+  writeUnavailableFetchResult,
+} from "./fetch-utils.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
 
 /**
@@ -53,17 +69,59 @@ import { ownedCell } from "./runtime-owned-store.ts";
  */
 const PROGRAM_CLAIM_STALE_AFTER = 1000 * 10;
 
-export interface ProgramResult {
-  files: Array<{ name: string; contents: string }>;
+export interface ProgramFile extends FabricPlainObject {
+  name: string;
+  contents: string;
+}
+
+export interface ProgramResult extends FabricPlainObject {
+  files: ProgramFile[];
   main: string;
 }
+
+type FetchErrorState = Record<string, FabricValue> & {
+  type: string;
+  name: string | null;
+  message: string;
+  stack?: string;
+  cause?: FabricValue;
+};
 
 // State machine for fetch lifecycle
 type FetchState =
   | { type: "idle" }
   | { type: "fetching"; requestId: string; startTime: number }
   | { type: "success"; data: ProgramResult }
-  | { type: "error"; message: string };
+  | {
+    type: "error";
+    error?: FetchErrorState;
+    message?: string;
+  };
+
+/** Reads message-only failures and persisted fabric-error cache entries. */
+function decodeFetchError(
+  state: FetchErrorState | undefined,
+  message?: string,
+): Error | FabricError {
+  if (state === undefined && typeof message === "string") {
+    return new Error(message);
+  }
+  if (state === undefined) {
+    throw new TypeError("Invalid error in fetchProgram cache");
+  }
+  const env = new NullLiveEnvironment(
+    "fetchProgram durable error cache",
+  );
+  const decoded = FabricError[CODEC].decode(
+    CODEC_TYPE_TAGS.Error,
+    state,
+    env,
+  );
+  if (!(decoded instanceof FabricError)) {
+    throw new TypeError("Invalid FabricError in fetchProgram cache");
+  }
+  return decoded;
+}
 
 // Single source of truth for fetch status
 interface FetchCacheEntry {
@@ -74,7 +132,7 @@ interface FetchCacheEntry {
 /** The node's symbolic state cells, shared by instances of one scope. */
 interface ProgramCells {
   pending: Cell<boolean>;
-  result: Cell<ProgramResult | undefined>;
+  result: Cell<ProgramResult | FabricUnavailable | undefined>;
   error: Cell<unknown>;
   cache: Cell<Record<string, FetchCacheEntry>>;
 }
@@ -118,6 +176,22 @@ function snapshotFetchProgramInputs(
   const snapshot = cell.asSchema(fetchProgramInputSchema).get() ??
     ({} as { url?: string });
   return createFrozenRequestSnapshot({ url: snapshot.url });
+}
+
+function fetchProgramInputsMatchInTx(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  inputsCell: Cell<{ url: string; result?: ProgramResult }>,
+  expectedInputHash: string,
+): boolean {
+  const unavailable = selectUnavailableFetchInput(
+    inputsCell.withTx(tx).getRaw(),
+    { runtime, tx, base: inputsCell },
+  );
+  return unavailable === undefined &&
+    computeInputHashFromValue(
+        snapshotFetchProgramInputs(inputsCell.withTx(tx)),
+      ) === expectedInputHash;
 }
 
 // Full schema for cache structure to ensure proper validation when reading back
@@ -171,7 +245,22 @@ const cacheSchema = internSchema(
               properties: {
                 type: { const: "error" },
                 message: { type: "string" },
+                error: {
+                  type: "object",
+                  properties: {
+                    type: { type: "string" },
+                    name: {
+                      anyOf: [{ type: "string" }, { type: "null" }],
+                    },
+                    message: { type: "string" },
+                    stack: { type: "string" },
+                    cause: true,
+                  },
+                  required: ["type", "name", "message"],
+                  additionalProperties: true,
+                },
               },
+              required: ["type"],
             },
           ],
         },
@@ -183,11 +272,12 @@ const cacheSchema = internSchema(
 /**
  * Fetch and resolve a program from a URL.
  *
- * Returns the resolved program as `result` with structure { files, main }.
- * `pending` is true while resolution is in progress.
+ * The internal node retains pending/error sibling cells while the builder
+ * projects its result child. That child is the resolved `{ files, main }`
+ * program when usable and a FabricUnavailable marker otherwise.
  *
  * @param url - A cell containing the URL to fetch the program from.
- * @returns { pending: boolean, result: ProgramResult, error: any } - As individual cells.
+ * @returns Internal compatibility state whose result child is public.
  */
 export function fetchProgram(
   inputsCell: Cell<{ url: string; result?: ProgramResult }>,
@@ -202,6 +292,8 @@ export function fetchProgram(
 ): Action {
   const bindings = new Map<CellScope, ProgramCells>();
   const inFlight = new Map<string, ProgramResolution>();
+  const claimIds = new Map<string, string>();
+  const claimNamespace = crypto.randomUUID();
   const publications = new Set<ProgramPublication>();
   let publicationSequence = 0;
   let stopped = false;
@@ -210,6 +302,8 @@ export function fetchProgram(
   function releaseClaim(
     { cache, inputHash, requestId, identity }: ProgramResolution,
   ): void {
+    const key = effectTargetKey(`fetchProgram:${inputHash}`, cache, identity);
+    if (claimIds.get(key) === requestId) claimIds.delete(key);
     let tx: IExtendedStorageTransaction | undefined;
     try {
       tx = runtime.edit();
@@ -248,17 +342,27 @@ export function fetchProgram(
   });
 
   /** Retires deduplicated staging records with the work they share. */
-  function finish(publication: ProgramPublication): void {
+  function finish(
+    publication: ProgramPublication,
+    resolution = publication.resolution,
+  ): void {
     publication.finished = true;
-    const resolution = inFlight.get(publication.effectKey!);
-    inFlight.delete(publication.effectKey!);
+    if (inFlight.get(publication.effectKey!) === resolution) {
+      inFlight.delete(publication.effectKey!);
+    }
+    if (
+      resolution &&
+      claimIds.get(publication.effectKey!) === resolution.requestId
+    ) {
+      claimIds.delete(publication.effectKey!);
+    }
     for (const accepted of resolution?.acceptedPublications ?? []) {
       accepted.finished = true;
       publications.delete(accepted);
     }
     resolution?.acceptedPublications.clear();
     for (const other of publications) {
-      if (other.effectKey !== publication.effectKey) continue;
+      if (other.resolution !== resolution) continue;
       other.finished = true;
       if (other.accepted || other === publication) publications.delete(other);
     }
@@ -314,6 +418,7 @@ export function fetchProgram(
         return;
       }
       const owner = inFlight.get(effectKey) ?? resolution;
+      publication.resolution = owner;
       owner.acceptedPublications.add(publication);
       inFlight.set(effectKey, owner);
     };
@@ -343,7 +448,7 @@ export function fetchProgram(
       undefined,
       scope,
     );
-    const result = ownedCell<ProgramResult | undefined>(
+    const result = ownedCell<ProgramResult | FabricUnavailable | undefined>(
       runtime,
       tx,
       parentCell,
@@ -379,13 +484,34 @@ export function fetchProgram(
   return (tx: IExtendedStorageTransaction) => {
     if (stopped) return;
     tx.resetNarrowestReadScope();
-    const requestSnapshot = snapshotFetchProgramInputs(inputsCell.withTx(tx));
+    const unavailableInput = selectUnavailableFetchInput(
+      inputsCell.withTx(tx).getRaw(),
+      { runtime, tx, base: inputsCell },
+    );
+    const requestSnapshot = unavailableInput === undefined
+      ? snapshotFetchProgramInputs(inputsCell.withTx(tx))
+      : undefined;
     const outputScope = tx.getNarrowestReadScope();
     const runIdentity = waveRunContextOf(tx)?.scopeKeyIdentity;
     const identity = runIdentity === undefined ? undefined : { ...runIdentity };
     const cells = cellsFor(tx, outputScope);
     const { pending, result, error, cache } = cells;
-    const { url } = requestSnapshot;
+    if (unavailableInput !== undefined) {
+      const target = effectTargetKey("binding", cache, identity);
+      for (const [key, resolution] of inFlight) {
+        if (
+          effectTargetKey("binding", resolution.cache, resolution.identity) !==
+            target
+        ) continue;
+        resolution.controller?.abort("Fetch input is unavailable");
+        inFlight.delete(key);
+        releaseClaim(resolution);
+      }
+      writeUnavailableFetchResult(tx, pending, result, error, unavailableInput);
+      sendResult(tx, { pending, result, error });
+      return;
+    }
+    const { url } = requestSnapshot!;
     const inputHash = computeInputHashFromValue(requestSnapshot);
     const effectKey = effectTargetKey(
       `fetchProgram:${inputHash}`,
@@ -410,7 +536,9 @@ export function fetchProgram(
 
     if (!url) {
       pending.withTx(tx).set(false);
-      result.withTx(tx).set(undefined);
+      result.withTx(tx).setRaw(
+        unavailableError("Program fetch requires a URL", "invalidInput"),
+      );
       error.withTx(tx).set(undefined);
       sendResult(tx, { pending, result, error });
       return;
@@ -423,7 +551,9 @@ export function fetchProgram(
       Date.now() - state.startTime > PROGRAM_CLAIM_STALE_AFTER;
 
     if (!resolvingHere && (state.type === "idle" || claimAbandoned)) {
-      const requestId = `${runtime.id}:${inputHash}`;
+      const requestId = claimIds.get(effectKey) ??
+        `${runtime.id}:${inputHash}:${claimNamespace}:${publication.sequence}`;
+      claimIds.set(effectKey, requestId);
       const stagedResolution: ProgramResolution = {
         cache,
         inputHash,
@@ -462,6 +592,24 @@ export function fetchProgram(
             releaseClaim(stagedResolution);
             return;
           }
+          const current = runtime.edit();
+          try {
+            if (identity !== undefined) current.tx.scopeKeyIdentity = identity;
+            if (
+              !fetchProgramInputsMatchInTx(
+                runtime,
+                current,
+                inputsCell,
+                inputHash,
+              )
+            ) {
+              releaseClaim(stagedResolution);
+              finish(publication);
+              return;
+            }
+          } finally {
+            current.abort();
+          }
           const resolution = inFlight.get(effectKey) ?? stagedResolution;
           if (resolution.controller !== undefined) return;
           resolution.controller = new AbortController();
@@ -470,12 +618,16 @@ export function fetchProgram(
             startFetch(
               runtime,
               cache,
+              inputsCell,
+              pending,
+              result,
+              error,
               inputHash,
               url,
               resolution.controller.signal,
               effectKey,
               identity,
-            ).finally(() => finish(publication)),
+            ).finally(() => finish(publication, resolution)),
             parentCell,
           );
         },
@@ -515,7 +667,10 @@ export function fetchProgram(
                     cache.withTx(settleTx).update({
                       [inputHash]: {
                         inputHash,
-                        state: { type: "error", message: rejection.message },
+                        state: {
+                          type: "error",
+                          message: rejection.message,
+                        },
                       },
                     });
                   }
@@ -538,7 +693,9 @@ export function fetchProgram(
                   }
                   if (!ownsFields) return;
                   pending.withTx(settleTx).set(false);
-                  result.withTx(settleTx).set(undefined);
+                  result.withTx(settleTx).setRaw(
+                    unavailableError(rejection),
+                  );
                   error.withTx(settleTx).set(rejection.message);
                 },
               ).finally(() => {
@@ -559,11 +716,19 @@ export function fetchProgram(
     const current = cache.withTx(tx).get()?.[inputHash]?.state ??
       { type: "idle" };
     pending.withTx(tx).set(current.type === "fetching");
-    result.withTx(tx).set(
-      current.type === "success" ? current.data : undefined,
+    result.withTx(tx).setRaw(
+      current.type === "success"
+        ? current.data
+        : current.type === "error"
+        ? unavailableError(
+          decodeFetchError(current.error, current.message),
+        )
+        : UNAVAILABLE_PENDING,
     );
     error.withTx(tx).set(
-      current.type === "error" ? current.message : undefined,
+      current.type === "error"
+        ? decodeFetchError(current.error, current.message).message
+        : undefined,
     );
     sendResult(tx, { pending, result, error });
   };
@@ -585,6 +750,10 @@ export function fetchProgram(
 async function startFetch(
   runtime: Runtime,
   cache: Cell<Record<string, FetchCacheEntry>>,
+  inputsCell: Cell<{ url: string; result?: ProgramResult }>,
+  pending: Cell<boolean>,
+  result: Cell<ProgramResult | FabricUnavailable | undefined>,
+  error: Cell<any | undefined>,
   inputHash: string,
   url: string,
   abortSignal: AbortSignal,
@@ -597,6 +766,7 @@ async function startFetch(
 
     // Program resolution parses; load the deferred compiler stack first.
     const { resolveProgram, ts } = await ensureCompilerStack();
+    if (abortSignal.aborted) return;
 
     // Resolve the program with all dependencies
     const program = await resolveProgram(resolver, {
@@ -609,6 +779,7 @@ async function startFetch(
     if (abortSignal.aborted) return;
 
     await runtime.idle();
+    if (abortSignal.aborted) return;
 
     // Only write into an entry that is still marked `fetching`.
     await runtime.editWithRetry((tx) => {
@@ -627,7 +798,12 @@ async function startFetch(
             inputHash,
             state: {
               type: "success",
-              data: { files: program.files, main: program.main },
+              data: {
+                files: program.files.map(
+                  ({ name, contents }): ProgramFile => ({ name, contents }),
+                ),
+                main: program.main,
+              },
             },
           },
         });
@@ -638,6 +814,10 @@ async function startFetch(
     if (abortSignal.aborted) return;
 
     await runtime.idle();
+    if (abortSignal.aborted) return;
+
+    const nativeError = err instanceof Error ? err : new Error(String(err));
+    const unavailable = unavailableError(nativeError);
 
     // Only write into an entry that is still marked `fetching`.
     await runtime.editWithRetry((tx) => {
@@ -654,10 +834,27 @@ async function startFetch(
             inputHash,
             state: {
               type: "error",
-              message: err instanceof Error ? err.message : String(err),
+              message: nativeError.message,
             },
           },
         });
+        if (
+          fetchProgramInputsMatchInTx(
+            runtime,
+            tx,
+            inputsCell,
+            inputHash,
+          )
+        ) {
+          writeUnavailableFetchResult(
+            tx,
+            pending,
+            result,
+            error,
+            unavailable,
+            nativeError.message,
+          );
+        }
       }
     });
   }

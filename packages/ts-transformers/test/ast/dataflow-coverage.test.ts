@@ -290,8 +290,8 @@ function analyzePatternArrow(callbackSource: string) {
 }
 
 Deno.test("destructured alias with a renamed key resolves reactive", () => {
-  // `{ count: renamed }` builds a "property" segment from the propertyName
-  // identifier (lines 234-236) and resolves back to the reactive parameter.
+  // `{ count: renamed }` builds a property segment from the propertyName
+  // identifier and resolves back to the reactive parameter.
   const analysis = analyzePatternArrow(
     `(p: { count: number }) => { const { count: renamed } = p; return renamed; }`,
   );
@@ -299,8 +299,8 @@ Deno.test("destructured alias with a renamed key resolves reactive", () => {
 });
 
 Deno.test("destructured alias with a string-literal key resolves reactive", () => {
-  // A quoted property name is not an identifier, so getObjectBindingAccessSegment
-  // falls to getStaticPropertyNameText's string-literal branch (238-241, 253-259).
+  // A quoted property name takes getStaticPropertyNameText's string-literal
+  // branch.
   const analysis = analyzePatternArrow(
     `(p: { count: number }) => { const { "count": renamed } = p; return renamed; }`,
   );
@@ -308,8 +308,8 @@ Deno.test("destructured alias with a string-literal key resolves reactive", () =
 });
 
 Deno.test("destructured alias with a numeric-literal key resolves reactive", () => {
-  // A numeric property name exercises getStaticPropertyNameText's numeric-literal
-  // branch (255-256) inside the propertyName path.
+  // A numeric property name exercises getStaticPropertyNameText's
+  // numeric-literal branch inside the propertyName path.
   const analysis = analyzePatternArrow(
     `(p: { 0: number }) => { const { 0: renamed } = p; return renamed; }`,
   );
@@ -317,8 +317,8 @@ Deno.test("destructured alias with a numeric-literal key resolves reactive", () 
 });
 
 Deno.test("shorthand destructured alias resolves reactive", () => {
-  // Shorthand binding (no propertyName) builds a "property" segment from the
-  // element name (lines 227-230).
+  // Shorthand binding (no propertyName) builds a property segment from the
+  // element name.
   const analysis = analyzePatternArrow(
     `(p: { count: number }) => { const { count } = p; return count; }`,
   );
@@ -326,8 +326,8 @@ Deno.test("shorthand destructured alias resolves reactive", () => {
 });
 
 Deno.test("array-destructured alias resolves reactive through an index segment", () => {
-  // Array binding element contributes an index segment (284-290) and the built
-  // element-access resolves back to the reactive parameter.
+  // An array binding element contributes an index segment and the built
+  // element access resolves back to the reactive parameter.
   const analysis = analyzePatternArrow(
     `(p: number[]) => { const [first] = p; return first; }`,
   );
@@ -335,8 +335,8 @@ Deno.test("array-destructured alias resolves reactive through an index segment",
 });
 
 Deno.test("nested destructuring resolves reactive through the whole path", () => {
-  // Nested binding elements take the owner-is-BindingElement continue branch
-  // (296-299) building a multi-segment static path (`p.nested.inner`).
+  // Nested binding elements build a multi-segment static path
+  // (`p.nested.inner`).
   const analysis = analyzePatternArrow(
     `(p: { nested: { inner: number } }) => { const { nested: { inner } } = p; return inner; }`,
   );

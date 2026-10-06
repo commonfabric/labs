@@ -689,7 +689,8 @@ what makes it safe to publish before the outcome exists.
 
 Per pass, for each lane's head event:
 
-1. **Preflight.** Compute the handler's read closure in a read-only,
+1. **Preflight.** Presync handler-only input documents, then compute the
+   handler's read closure in a read-only,
    commit-as-no-op transaction (CFC-inert, as today): declared writable-input
    links when present, else the `$event`-scoped schema closure — the one
    place a deep schema read survives in v2. **Default is
@@ -724,8 +725,23 @@ Per pass, for each lane's head event:
    that was already in flight at the preflight snapshot re-parks; a generation
    first kicked by that same preflight is history-suppressed, avoiding a
    self-created park livelock.
-3. **Dispatch** once the closure is clean: presync handler inputs
-   (`presyncInputs`, unchanged), run the handler in an immediate transaction
+3. **Availability gate.** A plain captured value which currently carries a
+   transient `FabricUnavailable` reason (`pending` or `syncing`) parks the same
+   FIFO head on a one-shot watcher over its preflight reads. A change wakes and
+   rechecks the original event; it is never reconstructed or reordered. This
+   input park is quiescent for `idle()` so a fetch or generation producer may
+   itself await idle before publishing the wakeup. It is deliberately distinct
+   from the replica-load park above, which must settle before at-most-once
+   dispatch.
+
+   Terminal `error` and `schemaMismatch` values do not park. Dispatch reaches
+   ordinary argument validation, which suppresses the invalid handler call and
+   settles the event as a no-op. `$event` is excluded because an immutable bad
+   payload cannot become valid while queued; `Writable<T>` and other Cell
+   capabilities are excluded because the handle itself is usable. Exact reason
+   and queue depth are included in opt-in preflight telemetry.
+4. **Dispatch** once the closure and availability gates are clear: run the
+   handler in an immediate transaction
    stamped with the handler's id, commit optimistically (changes propagate
    through the one channel), retry a stale-basis rejection by re-queueing at
    the lane head (backoff-parked via `notBefore`), then run the internal

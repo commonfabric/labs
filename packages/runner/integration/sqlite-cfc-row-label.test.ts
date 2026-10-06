@@ -69,39 +69,30 @@ async function runTest(base: URL) {
       while (Date.now() < deadline) {
         await runtime.idle();
         await runtime.storageManager.synced();
-        const qPending = result.key("q").key("pending").get() as unknown;
-        const skimPending = result.key("qSkim").key("pending").get() as
-          | boolean
-          | unknown;
-        const countPending = result.key("qCount").key("pending").get() as
-          | boolean
-          | unknown;
-        const clearPending = result.key("qClear").key("pending").get() as
-          | boolean
-          | unknown;
-        if (
-          qPending === false && skimPending === false &&
-          countPending === false && clearPending === false
-        ) {
-          const arr = result.key("q").key("result").getRaw() as
+        const arr = result.key("q").resolveAsCell().key("rows").getRaw() as
+          | unknown[]
+          | undefined;
+        const skim = result.key("qSkim").resolveAsCell().key("rows").getRaw() as
+          | unknown[]
+          | undefined;
+        const count = result.key("qCount").resolveAsCell().getRaw() as
+          | { reason?: string }
+          | undefined;
+        const cleared = result.key("qClear").resolveAsCell().key("rows")
+          .getRaw() as
             | unknown[]
             | undefined;
-          if (Array.isArray(arr) && arr.length === 2) {
-            ready = true;
-            break;
-          }
+        if (
+          Array.isArray(arr) && arr.length === 2 && Array.isArray(skim) &&
+          count?.reason === "error" && Array.isArray(cleared)
+        ) {
+          ready = true;
+          break;
         }
         await new Promise((r) => setTimeout(r, 50));
       }
       if (!ready) {
-        const dump = (k: string) => {
-          const q = result.key(k);
-          return {
-            pending: q.key("pending").getRaw(),
-            error: q.key("error").getRaw(),
-            result: q.key("result").getRaw(),
-          };
-        };
+        const dump = (k: string) => result.key(k).resolveAsCell().getRaw();
         throw new Error(
           "queries never settled; " + JSON.stringify({
             q: dump("q"),
@@ -117,7 +108,7 @@ async function runTest(base: URL) {
       // those dereferences (per-row ROOT label + per-column field labels).
       const rowLabel = async (i: number) => {
         const dtx = runtime.edit();
-        const leaf = result.key("q").key("result").key(i).key("body")
+        const leaf = result.key("q").key("rows").key(i).key("body")
           .withTx(dtx);
         leaf.get();
         const view = cfcLabelViewForDereferenceTraces(
@@ -206,44 +197,42 @@ async function runTest(base: URL) {
       );
 
       // Aggregate on a rule-bearing table fails closed.
-      const countError = result.key("qCount").key("error").get() as unknown;
+      const countUnavailable = result.key("qCount").resolveAsCell().getRaw() as
+        | { reason?: string; error?: { message?: string } }
+        | undefined;
+      const countError = countUnavailable?.reason === "error"
+        ? countUnavailable.error?.message
+        : undefined;
       if (
         typeof countError !== "string" || !countError.includes("aggregate")
       ) {
         throw new Error(
           `qCount should have failed closed; got error=${
             JSON.stringify(countError)
-          } result=${
-            JSON.stringify(result.key("qCount").key("result").getRaw())
-          }`,
+          } result=${JSON.stringify(countUnavailable)}`,
         );
       }
 
       // Declared ceiling + onExceed:"skip": exactly row 1 survives.
-      const skim = result.key("qSkim").key("result").get() as
+      const skim = result.key("qSkim").resolveAsCell().key("rows").get() as
         | { id: number }[]
         | undefined;
       if (!Array.isArray(skim) || skim.length !== 1 || skim[0].id !== 1) {
         throw new Error(
           `qSkim should keep exactly the fitting row; got ${
             JSON.stringify(skim)
-          } error=${JSON.stringify(result.key("qSkim").key("error").getRaw())}`,
+          } request=${JSON.stringify(result.key("qSkim").getRaw())}`,
         );
       }
 
       // Read-time clearance (Phase 3.b): the owner satisfies no row's
       // conjunctive rule (the did:mailto participants are required too), so a
       // cleared query returns zero rows and reports withheld: 2.
-      const clearErr = result.key("qClear").key("error").getRaw();
-      const cleared = result.key("qClear").key("result").get() as
+      const cleared = result.key("qClear").resolveAsCell().key("rows").get() as
         | unknown[]
         | undefined;
-      const withheld = result.key("qClear").key("withheld").get() as unknown;
-      if (clearErr !== undefined) {
-        throw new Error(
-          `qClear should not error; got ${JSON.stringify(clearErr)}`,
-        );
-      }
+      const withheld = result.key("qClear").resolveAsCell().key("withheld")
+        .get() as unknown;
       if (!Array.isArray(cleared) || cleared.length !== 0) {
         throw new Error(
           `qClear should withhold every row for the owner; got ${

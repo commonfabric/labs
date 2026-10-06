@@ -4,13 +4,15 @@ import {
   computed,
   type Default,
   handler,
+  hasError,
   ifElse,
+  isPending,
   llmDialog,
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   Stream,
-  toSchema,
   UI,
   type VNode,
   wish,
@@ -185,19 +187,21 @@ export interface DailyJournalOutput {
 export default pattern<DailyJournalInput, DailyJournalOutput>(
   ({ title, entries, template }) => {
     // Access default-app for addPiece (global piece registration)
-    const { addPiece } = wish<{
+    const defaultWish = wish<{
       addPiece: Stream<{ piece: MentionablePiece }>;
-    }>({ query: "#default" }).result!;
+    }>({ query: "#default" });
+    const { addPiece } = resultOf(defaultWish.result);
 
     // UI state
     const showSettings = new Writable(false);
-    // Reactive #now; the date input defaults to today once it resolves (the
-    // ambient clock is not available at pattern body).
+    // Reactive #now; dependent computations remain unavailable until it
+    // resolves because the ambient clock is not readable from the pattern body.
     const nowCell = wish<number>({ query: "#now" });
+    const nowCellValue = resultOf(nowCell.result);
     const selectedDate = new Writable("");
     computed(() => {
-      const nowMs = nowCell.result;
-      if (nowMs != null && selectedDate.get() === "") {
+      const nowMs = nowCellValue;
+      if (selectedDate.get() === "") {
         selectedDate.set(getTodayDate(nowMs));
       }
     });
@@ -254,8 +258,7 @@ export default pattern<DailyJournalInput, DailyJournalOutput>(
 
     // Gather last 7 days of note content for the system prompt
     const recentNotesContext = computed(() => {
-      const now = nowCell.result;
-      if (now == null) return [];
+      const now = nowCellValue;
       const today = new Date(now);
       const sevenDaysAgo = new Date(now);
       sevenDaysAgo.setDate(today.getDate() - 7);
@@ -312,16 +315,17 @@ ${notesXml}
       tools: {},
       model: "anthropic:claude-haiku-4-5" as const,
       builtinTools: false,
-      resultSchema: toSchema<WeeklyRollup>(),
     };
+    const rollupDialog = llmDialog<WeeklyRollup>(rollupParams);
     const {
       addMessage: rollupAddMessage,
       pending: rollupPending,
-      result: rollupResult,
-    } = llmDialog(rollupParams);
+    } = rollupDialog;
 
     const weeklyRollup = computed(() =>
-      rollupResult as WeeklyRollup | undefined
+      isPending(rollupDialog.result) || hasError(rollupDialog.result)
+        ? undefined
+        : resultOf(rollupDialog.result)
     );
     const hasRollup = computed(() => !!weeklyRollup);
 

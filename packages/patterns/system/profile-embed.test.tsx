@@ -11,7 +11,7 @@ import ProfileHome from "./profile-home.tsx";
  * and a valid profile MUST live in its own (cross-)space — seeding one would drive the
  * exact cross-space create surface the pattern-unit lane forbids (it fails a
  * file on ANY console error). So `#profile` stays unresolved here and we test:
- *   (1) the fallback branch — `result ?? fallback` — via the exported
+ *   (1) the fallback branch — unavailable wish result plus setup UI — via the exported
  *       `hasProfile` / `isEditing` signals when no profile resolves; and
  *   (2) the amend-in-place CONTRACT the pattern depends on, exercised against a
  *       REAL `ProfileHome` instance the way the pattern's save handlers do:

@@ -4,10 +4,12 @@ import {
   Default,
   equals,
   handler,
+  hasError,
   NAME,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -117,8 +119,10 @@ export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
 
-    const myName = computed(() => profileNameWish.result ?? "");
-    const myProfile = profileWish.result;
+    const myName = hasError(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
+    const myProfile = resultOf(profileWish.result);
 
     const participants = roster.participants;
     const participantCount = participants.length;
@@ -149,7 +153,7 @@ export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
                 DO navigate. */
               }
               <cf-profile-badge
-                $profile={profileWish.result}
+                $profile={myProfile}
                 size="md"
                 noNavigate
               />

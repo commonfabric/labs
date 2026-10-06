@@ -22,6 +22,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { SqliteTableSchemas } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  FabricUnavailable,
+  isUnavailable,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -118,10 +122,8 @@ function makePattern(
 }
 
 type QueryState = {
-  pending?: boolean;
-  error?: unknown;
-  requestHash?: string;
-  result?: unknown[];
+  rows: unknown[];
+  withheld?: number;
 };
 
 /** Run the pattern and return schema-less cells for the handle and query docs. */
@@ -298,11 +300,9 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     const qA = await waitForCellValue<QueryState>(
       runtimeA,
       qCellA,
-      (v) => v?.pending === false && v?.error === undefined,
+      (v) => Array.isArray(v?.rows),
     );
-    expect(qA.error).toBeUndefined();
-    const hashA = qA.requestHash;
-    expect(typeof hashA).toBe("string");
+    expect(qA.rows).toEqual([]);
     await runtimeA.storageManager.synced();
 
     // Second runtime, separate heap, same server: HYDRATES the same piece
@@ -311,8 +311,8 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
     });
-    // Count B's server reads: with a stable request hash B must DEDUP against
-    // the settled shared result, never issue its own request. (The red failure
+    // Count B's server reads: B must DEDUP against the settled shared result,
+    // never issue its own request. (The red failure
     // mode: B's sqliteDatabase re-init rewrote the handle — dropping `rev`,
     // re-deriving `tables` — so BOTH runtimes saw "new inputs", each write
     // invalidating the other's hash on the ONE shared result cell.)
@@ -338,31 +338,28 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     const qB = await waitForCellValue<QueryState>(
       runtimeB!,
       qCellB,
-      (v) => v?.pending === false && v?.requestHash === hashA,
+      (v) => Array.isArray(v?.rows),
     );
-    expect(qB.error).toBeUndefined();
+    expect(qB.rows).toEqual([]);
 
-    // Stability: B adopted the settled result (no re-issue), and A's hash
-    // survived B's hydration untouched.
+    // Stability: B adopted the settled result and A's value survived B's
+    // hydration untouched.
     await runtimeB!.settled();
     await runtimeA.settled();
     expect(issuesFromB).toBe(0);
     const settledA = qCellA.get() as QueryState;
-    expect(settledA.requestHash).toBe(hashA);
-    expect(settledA.pending).toBe(false);
-    expect(settledA.error).toBeUndefined();
+    expect(settledA.rows).toEqual([]);
   });
 
   it("a second runtime recovers a pending query left by a stopped runtime", async () => {
     const a = runPattern(runtimeA);
     await a.commit;
     const qCellA = a.resultCell.key("q").resolveAsCell();
-    const initial = await waitForCellValue<QueryState>(
+    await waitForCellValue<QueryState>(
       runtimeA,
       qCellA,
-      (value) => value?.pending === false,
+      (value) => Array.isArray(value?.rows),
     );
-    expect(typeof initial.requestHash).toBe("string");
 
     const providerA = runtimeA.storageManager.open(space) as unknown as {
       sqliteQuery: (...args: unknown[]) => Promise<unknown>;
@@ -380,13 +377,11 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
         };
       });
     await seedDbFile(runtimeA, a.resultCell);
-    const pending = await waitForCellValue<QueryState>(
+    await waitForCellValue<FabricUnavailable>(
       runtimeA,
       qCellA,
-      (value) =>
-        value?.pending === true && value.requestHash !== initial.requestHash,
+      (value) => isUnavailable(value) && value.reason === "pending",
     );
-    expect(typeof pending.requestHash).toBe("string");
     await runtimeA.patternManager.flushCompileCacheWrites();
     await runtimeA.storageManager.synced();
     runtimeA.scheduler.dispose();
@@ -413,13 +408,11 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     const recovered = await waitForCellValue<QueryState>(
       runtimeB,
       qCellB,
-      (value) => value?.pending === false,
+      (value) => Array.isArray(value?.rows),
     );
 
     expect(issuesFromB).toBe(1);
-    expect(recovered.pending).toBe(false);
-    expect(recovered.requestHash).toBe(pending.requestHash);
-    expect(recovered.error).toBeUndefined();
+    expect(recovered.rows).toEqual(expect.any(Array));
     cancelResultSink();
     expect(resumeA).toBeDefined();
     await resumeA!();

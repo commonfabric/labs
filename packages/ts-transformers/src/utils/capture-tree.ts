@@ -61,32 +61,44 @@ export function parseCaptureExpression(
     }
   }
 
-  if (ts.isPropertyAccessExpression(unwrapped)) {
+  if (
+    ts.isPropertyAccessExpression(unwrapped) ||
+    ts.isElementAccessExpression(unwrapped)
+  ) {
     const segments: string[] = [];
     let current: ts.Expression = unwrapped;
 
-    while (ts.isPropertyAccessExpression(current)) {
+    while (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
       // If we encounter optional chaining (e.g., foo?.bar), stop here and
       // capture just the expression before the optional chain.
       // This preserves nullability in the schema - the root object might be
       // null/undefined, so we shouldn't descend into its properties.
-      if (ts.isPropertyAccessChain(current)) {
-        // The expression before the ?. is our capture target
-        const beforeChain = unwrapExpression(current.expression);
-        if (ts.isIdentifier(beforeChain)) {
-          return { root: beforeChain.text, path: [], expression: beforeChain };
-        }
-        // If it's a nested property access before the chain (e.g., a.b?.c),
-        // recursively parse that part
-        if (ts.isPropertyAccessExpression(beforeChain)) {
-          return parseCaptureExpression(beforeChain);
-        }
-        // Can't parse this expression
+      if (
+        ts.isPropertyAccessChain(current) ||
+        ts.isElementAccessChain(current)
+      ) {
+        return parseCaptureExpression(current.expression);
+      }
+      if (ts.isPropertyAccessExpression(current)) {
+        segments.unshift(current.name.text);
+        // Unwrap at every descent step so wrappers anywhere in the chain
+        // (e.g. `((entry).name).x`) don't break the walk.
+        current = unwrapExpression(current.expression);
+        continue;
+      }
+
+      const argument = unwrapExpression(current.argumentExpression);
+      if (
+        !ts.isStringLiteralLike(argument) &&
+        !ts.isNumericLiteral(argument) &&
+        !ts.isNoSubstitutionTemplateLiteral(argument)
+      ) {
         return undefined;
       }
-      segments.unshift(current.name.text);
-      // Unwrap at every descent step so wrappers anywhere in the chain
-      // (e.g. `((entry).name).x`) don't break the walk.
+      segments.unshift(argument.text);
       current = unwrapExpression(current.expression);
     }
 

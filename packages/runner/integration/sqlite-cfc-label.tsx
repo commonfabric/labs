@@ -1,6 +1,7 @@
 import {
   handler,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   table,
@@ -34,5 +35,5 @@ export default pattern(() => {
     { reactOn: db },
   );
 
-  return { q, seed: seed({ db }) };
+  return { q: resultOf(q), seed: seed({ db }) };
 });

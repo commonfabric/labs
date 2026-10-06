@@ -1107,14 +1107,14 @@ identity that user-space cannot mint.
 ```tsx
 // Shown for illustration only.
 const profileWish = wish({ query: "#profile" }); // resolves the viewer's profile cell
+const profile = resultOf(profileWish.result);
 ...
-<cf-profile-badge $profile={profileWish.result} size="sm" />
+<cf-profile-badge $profile={profile} size="sm" />
 ```
 
 - `$profile`: a profile **cell** — the viewer's own is
-  `wish({ query: "#profile" }).result` (the `.result`, not the wish object); for
-  other participants, bind the profile cell they contributed to the shared roster
-  on join.
+  `resultOf(wish({ query: "#profile" }).result)`; for other participants, bind
+  the profile cell they contributed to the shared roster on join.
 - `size`: `xs | sm | md | lg | xl`.
 - The verified seal only appears for a live, runtime-attested profile cell (it
   will not show in stories or `--no-run` checks — that is expected, not a failure).
@@ -1130,9 +1130,10 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   once — **never inside a `{computed(() => …)}` subtree**. Inside a computed the
   cell is auto-unwrapped to a plain value and the renderer throws *"Bidirectionally
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
-  `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
-  its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+  `wish({query:"#profile"})` once, project its result with `resultOf()`, and place
+  the badge in the static JSX; gate only its *siblings* reactively, or use
+  `ifElse(cond, staticA, staticB)` as a child of a static wrapper. Repro:
+  `packages/patterns/scope-bug-computed-vnode-blank/`.
 
 ---
 

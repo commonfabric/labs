@@ -2,12 +2,14 @@ import {
   type BuiltInLLMMessage,
   computed,
   handler,
+  hasError,
+  isPending,
   llmDialog,
   NAME,
   pattern,
   patternTool,
+  resultOf,
   type Stream,
-  toSchema,
   UI,
   type VNode,
   wish,
@@ -56,14 +58,16 @@ const triggerAnalysis = handler<
 
 export default pattern<SpaceOverviewInput, SpaceOverviewOutput>(() => {
   // Fetch space data references for tools
-  const mentionable = wish<MentionablePiece[]>({
+  const mentionableWish = wish<MentionablePiece[]>({
     query: "#mentionable",
-  }).result;
-  const { entries: summaryEntries } = wish<{ entries: SummaryIndexEntry[] }>({
+  });
+  const mentionable = resultOf(mentionableWish.result);
+  const summaryWish = wish<{ entries: SummaryIndexEntry[] }>({
     query: "#summaryIndex",
-  }).result!;
+  });
+  const { entries: summaryEntries } = resultOf(summaryWish.result);
   const profileWish = wish<string>({ query: "#learnedSummary" });
-  const profileText = computed(() => profileWish.result ?? "");
+  const profileText = resultOf(profileWish.result);
 
   const systemPrompt = computed(() => {
     const profile = profileText;
@@ -109,11 +113,14 @@ Be concise and insightful. Focus on patterns and connections, not just listing t
     tools: llmTools,
     model: "anthropic:claude-haiku-4-5" as const,
     builtinTools: false,
-    resultSchema: toSchema<SpaceOverviewResult>(),
   };
-  const { addMessage, pending, result } = llmDialog(dialogParams);
-
-  const overview = computed(() => result as SpaceOverviewResult | undefined);
+  const dialog = llmDialog<SpaceOverviewResult>(dialogParams);
+  const { addMessage, pending } = dialog;
+  const overview = computed(() =>
+    isPending(dialog.result) || hasError(dialog.result)
+      ? undefined
+      : resultOf(dialog.result)
+  );
 
   const hasResult = computed(() => !!overview);
   const summary = computed(() => overview?.headline ?? "Space Overview");

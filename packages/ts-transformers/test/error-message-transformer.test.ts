@@ -49,4 +49,19 @@ describe("createReactiveErrorTransformer", () => {
     expect(result).not.toBeNull();
     expect(result).toContain("Unnecessary .get() call");
   });
+
+  it("explains legacy AsyncResult property access", () => {
+    const transform = createReactiveErrorTransformer();
+
+    for (const property of ["result", "pending", "error", "partial"]) {
+      const result = transform(
+        `Property '${property}' does not exist on type 'AsyncResult<Repo>'.`,
+      );
+      expect(result).not.toBeNull();
+      expect(result).toContain("resultOf(request)");
+      expect(result).toContain("isPending(request)");
+      expect(result).toContain("hasError(request)");
+      expect(result).toContain("partialResultOf(request)");
+    }
+  });
 });

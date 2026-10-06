@@ -1,11 +1,15 @@
 import {
-  Cell,
   computed,
   Default,
   generateText,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -28,10 +32,20 @@ const handleSend = handler<
 export default pattern<Input>(({ title }) => {
   const topic = new Writable("");
 
-  const profile = wish<Cell<string>>({ query: "#learnedSummary" });
+  const profile = wish<string>({ query: "#learnedSummary" });
+  const profileText = resultOf(profile.result);
+  const profileDisplay = computed(() => {
+    if (isPending(profile.result) || isSyncing(profile.result)) {
+      return "Loading profile context…";
+    }
+    if (hasSchemaMismatch(profile.result)) {
+      return "Profile context has an unexpected format.";
+    }
+    if (hasError(profile.result)) return "Profile context is unavailable.";
+    return resultOf(profile.result);
+  });
 
   const systemPrompt = computed(() => {
-    const profileText = profile.result!.get();
     const profileSection = profileText
       ? `\n\n--- About the User ---\n${profileText}\n---\n`
       : "";
@@ -39,9 +53,65 @@ export default pattern<Input>(({ title }) => {
 Write content personalized to the user when appropriate.`;
   });
 
-  const result = generateText({
+  const resultRequest = generateText({
     system: systemPrompt,
     prompt: topic,
+  });
+  const resultState = computed(() => {
+    if (!topic) {
+      return { response: "", availability: "ready", error: "" };
+    }
+    if (isPending(resultRequest)) {
+      return { response: "", availability: "pending", error: "" };
+    }
+    if (hasSchemaMismatch(resultRequest)) {
+      return {
+        response: "",
+        availability: "schemaMismatch",
+        error: "The generated text has an unexpected format.",
+      };
+    }
+    if (hasError(resultRequest)) {
+      return {
+        response: "",
+        availability: "error",
+        error: resultRequest.errorMessage,
+      };
+    }
+    if (isSyncing(resultRequest)) {
+      return { response: "", availability: "syncing", error: "" };
+    }
+    return {
+      response: resultOf(resultRequest),
+      availability: "ready",
+      error: "",
+    };
+  });
+  const resultUI = computed(() => {
+    if (!topic) return null;
+    if (resultState.availability === "pending") {
+      return (
+        <div style="margin-top: 16px;">
+          <cf-loader show-elapsed /> Generating personalized content...
+        </div>
+      );
+    }
+    if (resultState.availability === "syncing") {
+      return <div role="status">Waiting for synchronized data.</div>;
+    }
+    if (resultState.error) {
+      return <div role="alert">{resultState.error}</div>;
+    }
+    return resultState.response
+      ? (
+        <div style="margin-top: 16px;">
+          <h3>Generated Text:</h3>
+          <div style="white-space: pre-wrap; padding: 12px; background: #f9f9f9; border-radius: 4px; line-height: 1.6;">
+            {resultState.response}
+          </div>
+        </div>
+      )
+      : null;
   });
 
   return {
@@ -52,10 +122,7 @@ Write content personalized to the user when appropriate.`;
 
         <cf-card>
           <h4 style="margin-top: 0;">Profile Context:</h4>
-          <cf-code-editor
-            $value={profile.result}
-            style={{ maxHeight: "256px" }}
-          />
+          <pre>{profileDisplay}</pre>
         </cf-card>
 
         <div>
@@ -78,25 +145,12 @@ Write content personalized to the user when appropriate.`;
           )
           : null}
 
-        {result.pending
-          ? (
-            <div style="margin-top: 16px;">
-              <cf-loader show-elapsed /> Generating personalized content...
-            </div>
-          )
-          : result.result
-          ? (
-            <div style="margin-top: 16px;">
-              <h3>Generated Text:</h3>
-              <div style="white-space: pre-wrap; padding: 12px; background: #f9f9f9; border-radius: 4px; line-height: 1.6;">
-                {result.result}
-              </div>
-            </div>
-          )
-          : null}
+        {resultUI}
       </div>
     ),
     topic,
-    response: result.result,
+    response: resultState.response,
+    availability: resultState.availability,
+    error: resultState.error,
   };
 });

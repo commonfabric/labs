@@ -10,6 +10,7 @@ import {
   refuseFabricInstance,
   shallowFabricFromConvertibleJsObjectElseUndefined,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { type AliasBinding, isAliasBinding } from "../alias-binding.ts";
 import {
   type FabricExecFunction,
@@ -162,6 +163,12 @@ export function withAliasBindings(
   // to `{}`. It leaves whole, and it leaves FIRST: it is also a record, so an
   // `isObjectOrArray()` test would otherwise claim it.
   if (value instanceof FabricPrimitive) return value;
+
+  // Availability markers are runtime-owned atomic control values. Their codec
+  // state is closed over the fixed reason (and frozen FabricError for the
+  // error variant), so preserve them as leaves instead of treating them as an
+  // arbitrary FabricInstance container.
+  if (isUnavailable(value)) return value;
 
   // A `FabricInstance` is NOT a leaf. It is a container reached by its codec
   // contents rather than by property name, which this walk cannot do, so the
@@ -438,6 +445,8 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     bind?: unknown;
   };
   let implementation = module.implementation;
+  const isJavaScriptModule = module.type === "javascript" ||
+    module.type === "javascript-availability";
 
   // CT-1230 WORKAROUND: Preserve pattern structure when serializing pattern modules.
   //
@@ -476,7 +485,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     // design §5) — closure-bearing, so by-identity resolution is their only
     // rehydration. Everything else (test-built, never verified) keeps its
     // stringified body below for the SES fallback.
-    const provenance = module.type === "javascript"
+    const provenance = isJavaScriptModule
       ? getVerifiedProvenance(implementation)
       : undefined;
     // The entry-ref fallback (host pseudo-modules) is REGISTRY-scoped, unlike
@@ -485,7 +494,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     // a host trust grant in another runtime of the same process proves
     // nothing here (Codex/cubic P1 on the E5 PR).
     const entryRefCandidate =
-      provenance?.symbol === undefined && module.type === "javascript"
+      provenance?.symbol === undefined && isJavaScriptModule
         ? getArtifactEntryRef(implementation)
         : undefined;
     const entryRefValue = entryRefCandidate !== undefined &&
@@ -536,7 +545,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     return {
       ...rest,
       ...implRef,
-      ...(module.type === "javascript" && !implRefResolvable
+      ...(isJavaScriptModule && !implRefResolvable
         ? {
           implementation: Function.prototype.toString.call(implementation),
         }

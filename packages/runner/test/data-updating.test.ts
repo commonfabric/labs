@@ -1,3 +1,4 @@
+import { UNAVAILABLE_PENDING } from "@commonfabric/data-model/availability";
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
@@ -111,6 +112,30 @@ describe("data-updating", () => {
   });
 
   describe("setNestedValue", () => {
+    it("replaces an unavailable FabricInstance with a usable object", () => {
+      const testCell = runtime.getCell<{ answer: number }>(
+        space,
+        "replace unavailable marker with object",
+        {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        tx,
+      );
+      testCell.setRawUntyped(UNAVAILABLE_PENDING);
+
+      expect(() =>
+        diffAndUpdate(
+          runtime,
+          tx,
+          testCell.getAsNormalizedFullLink(),
+          { answer: 42 },
+        )
+      ).not.toThrow();
+      expect(testCell.getRaw()).toEqual({ answer: 42 });
+    });
+
     it("should set a value at a path", () => {
       const testCell = runtime.getCell<{ a: number; b: { c: number } }>(
         space,

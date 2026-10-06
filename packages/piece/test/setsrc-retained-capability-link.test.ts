@@ -51,7 +51,7 @@ type Row = { k: string; v: string };
 /** The result shape every version of the test pattern below produces. */
 interface PanelResult {
   version: string;
-  rows: { pending: boolean; result?: Row[]; error?: unknown };
+  rows: Row[];
 }
 
 /** Byte-for-byte the derivation in packages/cli/lib/sqlite-source.ts. */
@@ -84,16 +84,17 @@ function panelProgram(version: string, limit: number): RuntimeProgram {
       name: "/main.tsx",
       contents: [
         "/// <cts-enable />",
-        "import { NAME, pattern, type SqliteDb } from 'commonfabric';",
+        "import { NAME, pattern, resultOf, type SqliteDb } from 'commonfabric';",
         "interface Row { k: string; v: string; }",
         "interface In { db: SqliteDb; }",
         "interface Out {",
         "  [NAME]: string;",
         "  version: string;",
-        "  rows: { pending: boolean; result?: Row[]; error?: unknown };",
+        "  rows: Row[];",
         "}",
         "const Panel = pattern<In, Out>(({ db }) => {",
-        `  const rows = db.query<Row>("SELECT k, v FROM lookup ORDER BY k LIMIT ${limit}");`,
+        `  const query = db.query<Row>("SELECT k, v FROM lookup ORDER BY k LIMIT ${limit}");`,
+        "  const rows = resultOf(query).rows;",
         "  return {",
         `    [NAME]: ${JSON.stringify("panel-" + version)},`,
         `    version: ${JSON.stringify(version)},`,
@@ -180,7 +181,7 @@ describe("setsrc over a retained injected sqlite capability link", () => {
     const result = pieces.getResult(piece) as Cell<PanelResult>;
     const cancel = result.sink(() => {});
     try {
-      const rowsOf = () => result.key("rows").key("result").get();
+      const rowsOf = () => result.key("rows").get();
       const waitFor = async (
         desc: string,
         pred: () => boolean,
@@ -202,7 +203,7 @@ describe("setsrc over a retained injected sqlite capability link", () => {
           `timeout waiting for ${desc}` + (last ? ` (last: ${last})` : "") +
             ` — rows=${JSON.stringify(rowsOf())} version=${
               JSON.stringify(result.key("version").get())
-            } error=${JSON.stringify(result.key("rows").key("error").get())}`,
+            }`,
         );
       };
 
@@ -295,7 +296,7 @@ describe("setsrc over a retained injected sqlite capability link", () => {
         while (Date.now() < deadline) {
           await freshRuntime.idle();
           await freshRuntime.storageManager.synced();
-          rows = freshResult.key("rows").key("result").get();
+          rows = freshResult.key("rows").get();
           if (Array.isArray(rows) && rows.length === 1) break;
           await new Promise((r) => setTimeout(r, 25));
         }

@@ -26,7 +26,6 @@ export default pattern<Record<string, never>>((_) => {
       return result;
     }),
   });
-
   return {
     [NAME]: "Wish tester",
     [UI]: (

@@ -60,6 +60,7 @@ import {
   reportCfcDenial,
 } from "@commonfabric/runner/cfc";
 import type { CellRef } from "@commonfabric/runtime-client";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -72,6 +73,7 @@ import {
   isEventHandler,
   isEventProp,
 } from "../render-utils.ts";
+import { PENDING_RENDER_ATTRIBUTE } from "../pending-render.ts";
 import { CONTAINER_NODE_ID, type VDomOp } from "../vdom-ops.ts";
 import {
   admitsEverything,
@@ -534,6 +536,7 @@ export class WorkerReconciler {
       // renderCellChild. `renderRoot` is re-invoked with the last resolved
       // value when an ACL changes.
       let lastRootValue: unknown;
+      let rootIsPending = false;
       let rootConsumed: SinkConsumedLabel | undefined;
       const rootWatch: FitWatch = {
         watched: new Set<string>(),
@@ -569,6 +572,39 @@ export class WorkerReconciler {
           );
           this.#rootChildId = wrapperState.currentChild?.nodeId ?? null;
           return;
+        }
+        // Pending behaves like suspense. Before the first usable value the
+        // wrapper remains empty; after one, retain and mark its rendered tree.
+        // Other unavailable reasons render no content unless explicitly
+        // handled by the authored VDOM. Policy checks deliberately run first.
+        if (isUnavailable(resolvedVnode)) {
+          if (resolvedVnode.reason === "pending") {
+            if (wrapperState.currentChild && !rootIsPending) {
+              this.#queuePendingRenderState(
+                wrapperState.currentChild.nodeId,
+                true,
+              );
+              rootIsPending = true;
+            }
+            return;
+          }
+
+          rootIsPending = false;
+          this.#reconcileIntoWrapper(
+            ctx,
+            wrapperState,
+            undefined,
+            this.#rootRenderPolicy,
+          );
+          this.#rootChildId = null;
+          return;
+        }
+        if (rootIsPending && wrapperState.currentChild) {
+          this.#queuePendingRenderState(
+            wrapperState.currentChild.nodeId,
+            false,
+          );
+          rootIsPending = false;
         }
         // Validate that the resolved value is a valid render node
         if (!this.#isValidRenderNode(resolvedVnode)) {
@@ -727,6 +763,23 @@ export class WorkerReconciler {
   #queueOps(ops: VDomOp[]): void {
     for (const op of ops) this.#pendingOps.push(op);
     this.#scheduleFlush();
+  }
+
+  #queuePendingRenderState(nodeId: number, pending: boolean): void {
+    this.#queueOps([
+      pending
+        ? {
+          op: "set-prop",
+          nodeId,
+          key: PENDING_RENDER_ATTRIBUTE,
+          value: true,
+        }
+        : {
+          op: "remove-prop",
+          nodeId,
+          key: PENDING_RENDER_ATTRIBUTE,
+        },
+    ]);
   }
 
   /**
@@ -2529,6 +2582,35 @@ export class WorkerReconciler {
   }
 
   /**
+   * Emit a resolved reactive prop only when it is usable. Availability markers
+   * are control-flow values: initially the DOM prop remains unset, and a later
+   * marker retains the last usable prop value until another usable value
+   * arrives.
+   */
+  #emitReactivePropValueIfAvailable(
+    state: NodeState,
+    key: string,
+    value: unknown,
+    sourceCell?: Cell<unknown>,
+  ): boolean {
+    if (isUnavailable(value)) return false;
+
+    const propValue = this.#transformPropValueForState(
+      state,
+      key,
+      value,
+      sourceCell,
+    );
+    this.#queueOps([{
+      op: "set-prop",
+      nodeId: state.nodeId,
+      key,
+      value: propValue,
+    }]);
+    return true;
+  }
+
+  /**
    * Create a wrapper state for reactive roots.
    */
   #createWrapperState(_ctx: ReconcileContext, nodeId: number): {
@@ -3249,18 +3331,12 @@ export class WorkerReconciler {
             propKeyCell,
             existingState !== undefined,
             (deepValue) => {
-              const propValue = this.#transformPropValueForState(
+              this.#emitReactivePropValueIfAvailable(
                 state,
                 key,
                 deepValue,
                 this.#resolveTextPropSourceCell(state, propsCell, key, value),
               );
-              this.#queueOps([{
-                op: "set-prop",
-                nodeId: state.nodeId,
-                key,
-                value: propValue,
-              }]);
             },
           );
           state.propSubscriptions.set(key, {
@@ -3318,18 +3394,14 @@ export class WorkerReconciler {
             continue;
           }
 
-          const propValue = this.#transformPropValueForState(
-            state,
-            key,
-            value,
-            this.#resolveTextPropSourceCell(state, propsCell, key, value),
-          );
-          this.#queueOps([{
-            op: "set-prop",
-            nodeId: state.nodeId,
-            key,
-            value: propValue,
-          }]);
+          if (
+            !this.#emitReactivePropValueIfAvailable(
+              state,
+              key,
+              value,
+              this.#resolveTextPropSourceCell(state, propsCell, key, value),
+            )
+          ) continue;
           state.propSubscriptions.set(key, {
             cell: undefined,
             cancel: () => {},
@@ -4002,12 +4074,7 @@ export class WorkerReconciler {
       cancel: this.#sinkAdmittedPropValue(state, key, cell, replacing, (
         value,
       ) => {
-        this.#queueOps([{
-          op: "set-prop",
-          nodeId: state.nodeId,
-          key,
-          value: this.#transformPropValueForState(state, key, value, cell),
-        }]);
+        this.#emitReactivePropValueIfAvailable(state, key, value, cell);
         if (this.#isTextIntegrityPolicyProp(key)) {
           this.#refreshTextIntegrityBoundary(ctx, state);
         }
@@ -4619,6 +4686,7 @@ export class WorkerReconciler {
     // re-renders even when the value it stands in for has not changed.
     let currentPlaceholder: string | undefined;
     let currentRefusedSpace: string | undefined;
+    let childIsPending = false;
 
     // §4.9.3 Stage 2: on each render, watch the ACL docs of the spaces this
     // cell's read is labeled with, so a fail-closed over-block upgrades to an
@@ -4635,6 +4703,7 @@ export class WorkerReconciler {
     const renderResolved = (resolvedChild: unknown) => {
       const isInitialRender = childState.nodeId === -1;
       const resultCell = this.#resolveCellForBinding(cell);
+      const unavailable = isUnavailable(resolvedChild);
       const valueUnchanged = Object.is(
         resolvedChild,
         childState.currentValue,
@@ -4727,6 +4796,7 @@ export class WorkerReconciler {
         childState.elementState = undefined;
         childState.isText = false;
         childState.hasPieceBoundary = false;
+        childIsPending = false;
 
         const blockedState = refusedSpace !== undefined
           ? this.#createAccessPlaceholder(ctx, policy, refusedSpace)
@@ -4752,6 +4822,39 @@ export class WorkerReconciler {
         return;
       }
 
+      // Pending behaves like suspense: retain the last rendered child and mark
+      // it stale, but render nothing before the first usable value. Other
+      // unavailable reasons clear the child. Policy and integrity refusals
+      // remain authoritative over availability retention.
+      if (unavailable && !blockedByIntegrity) {
+        if (resolvedChild.reason === "pending") {
+          if (
+            currentContentState === "rendered" && childState.nodeId !== -1 &&
+            !childIsPending
+          ) {
+            this.#queuePendingRenderState(childState.nodeId, true);
+            childIsPending = true;
+          }
+          return;
+        }
+
+        if (childState.nodeId !== -1) {
+          if (currentCancel) {
+            currentCancel();
+            currentCancel = undefined;
+          }
+          this.#cleanupNodeHandlers(childState);
+          this.#queueOps([{ op: "remove-node", nodeId: childState.nodeId }]);
+        }
+        childState.nodeId = -1;
+        childState.elementState = undefined;
+        childState.isText = false;
+        childState.hasPieceBoundary = false;
+        childIsPending = false;
+        currentContentState = undefined;
+        return;
+      }
+
       if (blockedByIntegrity) {
         this.#denyCellText(cell, policy);
         if (!isInitialRender) {
@@ -4767,6 +4870,7 @@ export class WorkerReconciler {
         childState.elementState = undefined;
         childState.isText = false;
         childState.hasPieceBoundary = false;
+        childIsPending = false;
 
         const blockedState = this.#createBlockedPlaceholder(
           ctx,
@@ -4790,6 +4894,11 @@ export class WorkerReconciler {
           beforeId,
         }]);
         return;
+      }
+
+      if (childIsPending && childState.nodeId !== -1) {
+        this.#queuePendingRenderState(childState.nodeId, false);
+        childIsPending = false;
       }
 
       // Try to update in place if not initial render

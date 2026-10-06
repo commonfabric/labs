@@ -1,4 +1,6 @@
 import type { DID } from "@commonfabric/identity";
+import { hasError, isUnavailable } from "@commonfabric/data-model/availability";
+
 import {
   type Cell,
   createBuilder,
@@ -175,6 +177,17 @@ export async function resolveWish(
     const outCell = result.key("out");
     const error: unknown = outCell.key("error").get();
     const resolved = outCell.key("result");
+    const directValue = resolved.get();
+    if (isUnavailable(directValue)) {
+      return {
+        result: null,
+        error: typeof error === "string" && error.length > 0
+          ? error
+          : hasError(directValue)
+          ? directValue.errorMessage
+          : undefined,
+      };
+    }
     // Whether the wish matched is read where the wish WROTE it, not inferred
     // from what the target holds. A matched target whose value nothing has
     // set dereferences to `undefined` exactly as an unmatched wish does, and
@@ -182,7 +195,7 @@ export async function resolveWish(
     // address, which is the whole of what a marked position asks for.
     const matched = resolved.getRaw() !== undefined;
     const value: unknown = spec.schema === undefined
-      ? resolved.get()
+      ? directValue
       : resolved.resolveAsCell().asSchema(spec.schema).get();
 
     return {

@@ -502,6 +502,11 @@ A `ProblematicValue` (Section 3) does not work this way. It encodes under its
 own `Problematic@1` key with the preserved tag as data, because that tag may
 be one that is not a tag, and so cannot be reproduced as a key.
 
+Recognition is version-specific. For example, a runtime which registers
+`FabricUnavailable@1` but not `FabricUnavailable@2` decodes the latter as an
+`UnknownValue`; it does not apply the version-1 discriminator validation to
+the future state.
+
 ## 9. `/`-Key Reservation Rule
 
 The `/` prefix is wholly owned by the encoding system in the wire format. Any

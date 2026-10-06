@@ -19,7 +19,11 @@
  * - Events are posted to the aggregator in real-time
  */
 import {
+  computed,
   type Default,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   UI,
@@ -64,7 +68,11 @@ export default pattern<Input, Output>(
       query: "#folksonomyAggregator",
       scope: ["~", "."],
     });
-    const hasAggregator = aggregatorWish.result != null;
+    const hasAggregator = computed(() => {
+      const result = aggregatorWish.result;
+      return result != null && !isPending(result) && !hasError(result) &&
+        !isSyncing(result);
+    });
 
     // Shared scope for A and B
     const sharedScope = `https://github.com/commontools/folksonomy-demo/${

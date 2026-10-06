@@ -11,7 +11,7 @@ async function generatedOptions(source: string): Promise<ts.Expression> {
   const output = await transformSource(
     `import {
       generateObject, pattern,
-      type BuiltInLLMGenerateObjectState, type Reactive,
+      type AsyncResult, type Reactive,
     } from "commonfabric";
 ${source}`,
     { types: COMMONFABRIC_TYPES, typeCheck: true },
@@ -46,32 +46,31 @@ describe("generateObject schema inference", () => {
     const { context, source } of [
       {
         context: "a state annotation",
-        source: `const state: BuiltInLLMGenerateObjectState<{ title: string }> =
+        source: `const state: AsyncResult<{ title: string }> =
   generateObject({ prompt: "Return a title" });`,
       },
       {
         context: "an aliased reactive state",
-        source: `type State<T> = Reactive<BuiltInLLMGenerateObjectState<T>>;
+        source: `type State<T> = Reactive<AsyncResult<T>>;
 const state: State<{ title: string }> =
   generateObject({ prompt: "Return a title" });`,
       },
       {
         context: "a function return type",
-        source:
-          `export function makeState(): BuiltInLLMGenerateObjectState<{ title: string }> {
+        source: `export function makeState(): AsyncResult<{ title: string }> {
   return generateObject({ prompt: "Return a title" });
 }`,
       },
       {
         context: "an argument type",
         source:
-          `declare function consume(state: BuiltInLLMGenerateObjectState<{ title: string }>): void;
+          `declare function consume(state: AsyncResult<{ title: string }>): void;
 consume(generateObject({ prompt: "Return a title" }));`,
       },
       {
         context: "a state annotation with non-literal options",
         source: `const options = { prompt: "Return a title" };
-const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(options);`,
+const state: AsyncResult<{ title: string }> = generateObject(options);`,
       },
     ]
   ) {
@@ -83,7 +82,7 @@ const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(o
   it("uses the explicit type argument within a broader contextual type", async () => {
     expect(
       await generatedSchema(
-        `const state: BuiltInLLMGenerateObjectState<unknown> =
+        `const state: AsyncResult<unknown> =
   generateObject<{ title: string }>({ prompt: "Return a title" });`,
       ),
     ).toEqual(titleSchema);
@@ -92,7 +91,7 @@ const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(o
   it("emits unknown for an unresolved contextual type parameter", async () => {
     expect(
       await generatedSchema(
-        `export function makeState<T>(): BuiltInLLMGenerateObjectState<T> {
+        `export function makeState<T>(): AsyncResult<T> {
   return generateObject({ prompt: "Return an object" });
 }`,
       ),
@@ -102,7 +101,7 @@ const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(o
   it("leaves an authored schema in place when the result has a contextual type", async () => {
     expect(
       await generatedSchema(
-        `const state: BuiltInLLMGenerateObjectState<{ title: string }> =
+        `const state: AsyncResult<{ title: string }> =
   generateObject({ prompt: "Return a title", schema: { type: "object" } as const });`,
       ),
     ).toEqual({ type: "object" });
@@ -126,10 +125,10 @@ const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(o
     ).toBeUndefined();
   });
 
-  it("omits an inferred schema when destructuring supplies no result type", async () => {
+  it("omits an inferred schema when an unannotated binding supplies no result type", async () => {
     expect(
       await generatedSchema(
-        `const { result } = generateObject({ prompt: "Return an object" });`,
+        `const state = generateObject({ prompt: "Return an object" });`,
       ),
     ).toBeUndefined();
   });
@@ -137,7 +136,7 @@ const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(o
   it("omits an inferred schema when the contextual result type is any", async () => {
     expect(
       await generatedSchema(
-        `const state: BuiltInLLMGenerateObjectState<any> =
+        `const state: AsyncResult<any> =
   generateObject({ prompt: "Return an object" });`,
       ),
     ).toBeUndefined();
@@ -166,10 +165,10 @@ const state: BuiltInLLMGenerateObjectState<{ title: string }> = generateObject(o
         const [context, binding, typeArguments] of [
           [
             "an inferred result type",
-            "const state: BuiltInLLMGenerateObjectState<{ title: string }>",
+            "const state: AsyncResult<{ title: string }>",
             "",
           ],
-          ["destructuring without a result type", "const { result }", ""],
+          ["an unannotated binding", "const state", ""],
           ["an explicit result type", "const state", "<{ title: string }>"],
         ]
       ) {

@@ -1,4 +1,5 @@
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import type { UnavailableObservationKind } from "@commonfabric/data-model/availability";
 import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 
 import type { Module, Pattern } from "../builder/types.ts";
@@ -71,6 +72,12 @@ export type SchedulerObservationIdentity = {
 
 export type Action = (tx: IExtendedStorageTransaction) => any;
 export type AnnotatedAction = Action & TelemetryAnnotations;
+export type HandlerInputReadiness =
+  | { readonly ready: true }
+  | {
+    readonly ready: false;
+    readonly reason: UnavailableObservationKind;
+  };
 export type EventHandler =
   & ((tx: IExtendedStorageTransaction, event: any) => any)
   & {
@@ -96,6 +103,18 @@ export type EventHandler =
       event: any,
     ) => void;
 
+    /**
+     * Optional pre-dispatch readiness check for handler inputs. It runs in the
+     * same read-only transaction as dependency discovery so an unavailable
+     * input can park the original queued event on the exact reads that will
+     * wake it. Transient unavailable inputs park the original event; terminal
+     * unavailable inputs continue to dispatch so normal argument validation
+     * can suppress the handler and settle the event.
+     */
+    inputReadiness?: (
+      tx: IExtendedStorageTransaction,
+      event: any,
+    ) => HandlerInputReadiness;
     /**
      * Optional callback to ensure the handler's input docs are locally
      * available before the handler body runs. A handler reads its asCell

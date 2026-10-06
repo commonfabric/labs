@@ -1,0 +1,1 @@
+{"date":"2026-10-06","from":{"k":"unit","s":"runner","n":"LLM availability race coverage > publishes schema mismatch when structured inputs are incomplete"},"to":{"k":"unit","s":"runner","n":"LLM availability race coverage > publishes invalid input when structured inputs are incomplete"}}

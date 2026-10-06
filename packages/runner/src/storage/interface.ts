@@ -111,6 +111,27 @@ export type {
 export type ChangeGroup = unknown;
 
 /**
+ * Per-space remote connection state. A ready epoch advances only after the
+ * memory session has reconnected and restored all of its watches and pending
+ * commits, so consumers can use a new epoch as a safe retry boundary. `closed`
+ * is terminal for the current connection generation; a provider remount can
+ * supersede it only with a higher ready epoch.
+ */
+export type StorageConnectionState =
+  | { readonly status: "idle"; readonly epoch: 0 }
+  | { readonly status: "ready"; readonly epoch: number }
+  | {
+    readonly status: "disconnected";
+    readonly epoch: number;
+    readonly cause: Error;
+  }
+  | {
+    readonly status: "closed";
+    readonly epoch: number;
+    readonly cause: Error;
+  };
+
+/**
  * Base interface for storage errors. These are lightweight objects (not Error
  * instances) used in Result types for better performance. Error instances are
  * ~500x more expensive to create due to stack trace generation.
@@ -142,7 +163,10 @@ export class ReplicaLoadFailureError extends Error {
     cause: unknown,
   ) {
     super(
-      cause instanceof Error ? cause.message : String(cause),
+      typeof cause === "object" && cause !== null &&
+        "message" in cause && typeof cause.message === "string"
+        ? cause.message
+        : String(cause),
       { cause },
     );
   }
@@ -268,6 +292,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * space.
    */
   open(space: MemorySpace): IStorageProvider;
+
+  /**
+   * Observe the remote connection used by one space. The callback is invoked
+   * immediately with the current state, then whenever that state changes.
+   * Implementations without a persistent remote connection may omit this
+   * optional capability.
+   */
+  subscribeConnectionState?(
+    space: MemorySpace,
+    callback: (state: StorageConnectionState) => void,
+  ): () => void;
 
   /**
    * Whether SPACE's replica holds server-confirmed verified content for
@@ -1497,7 +1532,7 @@ export interface IStorageTransaction {
    * `sqlite` op; on SQL failure the whole commit aborts). Claims `space` as a
    * write target (same write-isolation rules as a cell write) and throws if the
    * tx is not writable. See
-   * docs/specs/sqlite-builtin/plans/sqlite-execute-commit-fold.md.
+   * docs/specs/sqlite-builtin/04-server-execution-and-transactions.md.
    */
   recordSqliteWrite?(space: MemorySpace, op: SqliteOperation): void;
 
@@ -1958,16 +1993,18 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * sealing a skipped run would commit the mark with ZERO effects and
    * permanently consume the event (the a04 1-op shape); the entry stays
    * pending-unconsequenced and the drain re-delivers it. A client
-   * dispatch is requeued by the scheduler within its retry window, parked
-   * on the loads the run registered when any are in flight, and fails
-   * loudly once the window is spent or once its re-runs with nothing to
-   * park on reach `HANDLER_NOT_RUN_BACKOFF_LIMIT`; one that opted out of retrying is
-   * not re-run, and its callback sees the aborted transaction. Under
-   * events-down a client dispatch without a served carriage is the
-   * speculative echo of an entry the server re-drains, and its skip seals
-   * as an empty speculative commit.
+   * dispatch with a transient input is requeued by the scheduler within its
+   * retry window, parked on the loads the run registered when any are in
+   * flight, and fails loudly once the window is spent or once its re-runs with
+   * nothing to park on reach `HANDLER_NOT_RUN_BACKOFF_LIMIT`; one that opted
+   * out of retrying is not re-run, and its callback sees the aborted
+   * transaction. A terminal skip aborts and reports a visible failure instead
+   * of retrying an input no load can resolve. Under events-down
+   * a client dispatch without a served carriage is the speculative echo of an
+   * entry the server re-drains, and its skip seals as an empty speculative
+   * commit.
    */
-  dispatchedHandlerNotRun?: { reason: string };
+  dispatchedHandlerNotRun?: { reason: string; terminal?: boolean };
 
   /**
    * Commit-time preconditions attached to this transaction's commit in

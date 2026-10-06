@@ -3,9 +3,11 @@ import {
   Default,
   fetchJson,
   generateText,
+  isPending,
   NAME,
   type OpaqueCell,
   pattern,
+  resultOf,
   UI,
   type VNode,
   Writable,
@@ -210,9 +212,9 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   });
 
   const commitsData = fetchJson<CommitResponse>({ url: fallbackApiUrl });
-  const commits = commitsData.result;
+  const commits = resultOf(commitsData);
   const fallbackPrompt = computed(() => {
-    const commitList = commits ?? [];
+    const commitList = commits;
     if (commitList.length === 0) return "";
     const messages = commitList
       .slice(0, 10)
@@ -225,6 +227,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
       "You are a concise technical writer. Summarize the recent development activity based on these commit messages. Focus on themes and notable changes. Keep it to 2-3 sentences.",
     prompt: fallbackPrompt,
   });
+  const summaryText = resultOf(summary);
 
   const repoName = computed(() => {
     const { owner, repo } = parsed;
@@ -625,19 +628,19 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
             />
           </div>
 
-          {summary.pending
+          {isPending(summary)
             ? (
               <div style="margin-bottom: 16px;">
                 <cf-loader show-elapsed /> Generating summary...
               </div>
             )
-            : summary.result
+            : summaryText
             ? (
               <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
                 <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
                   Activity Summary
                 </h3>
-                <p style="margin: 0; line-height: 1.5;">{summary.result}</p>
+                <p style="margin: 0; line-height: 1.5;">{summaryText}</p>
               </div>
             )
             : null}

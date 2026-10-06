@@ -29,7 +29,10 @@ import {
 import type { AnalyzeFn } from "./expression-rewrite/types.ts";
 import type { ExpressionContainerKind } from "./expression-site-types.ts";
 import { createLiftAppliedCall } from "./builtins/lift-applied.ts";
-import { classifyOpaquePathTerminalCall } from "./opaque-roots.ts";
+import {
+  classifyOpaquePathTerminalCall,
+  isLocalOpaqueOriginBindingReference,
+} from "./opaque-roots.ts";
 
 interface RewriteExpressionSiteParams {
   readonly expression: ts.Expression;
@@ -291,6 +294,21 @@ export function rewriteExpressionSite(
 
   if (!analysis.requiresRewrite && !hasLogicalOps && !controlFlowNeedsRewrite) {
     return undefined;
+  }
+
+  if (!hasLogicalOps) {
+    const relevantDataFlows = context.getRelevantDataFlowsFromAnalysis(
+      analysis,
+    );
+    if (
+      shouldDeferToLateInPlaceLowering(
+        context,
+        expression,
+        relevantDataFlows,
+      )
+    ) {
+      return undefined;
+    }
   }
 
   const result = rewriteExpression({
@@ -648,7 +666,10 @@ function getDataFlowRootIdentifier(
 ): ts.Identifier | undefined {
   let current: ts.Expression = expression;
   while (true) {
-    if (ts.isPropertyAccessExpression(current)) {
+    if (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
       current = current.expression;
       continue;
     }
@@ -666,10 +687,10 @@ function getDataFlowRootIdentifier(
 }
 
 /**
- * True when every relevant dataflow is rooted at an array-method element
- * binding (no captures of outer reactive values like `labelPrefix`).
+ * True when every relevant dataflow can remain as a key-specific reactive
+ * value until the late pattern-body lowering pass.
  */
-function allDataFlowsAreElementBindingRoots(
+function allDataFlowsSupportLateInPlaceLowering(
   context: TransformationContext,
   dataFlows: readonly { readonly expression: ts.Expression }[],
 ): boolean {
@@ -677,7 +698,10 @@ function allDataFlowsAreElementBindingRoots(
   for (const dataFlow of dataFlows) {
     const root = getDataFlowRootIdentifier(dataFlow.expression);
     if (!root) return false;
-    if (!context.isArrayMethodElementBindingReference(root)) return false;
+    if (
+      !context.isArrayMethodElementBindingReference(root) &&
+      !isLocalOpaqueOriginBindingReference(root, context)
+    ) return false;
   }
   return true;
 }
@@ -706,11 +730,11 @@ function isPassthroughContainerExpression(
 
 /**
  * Combined gate: the early lift-applied wrap should defer to late in-place
- * lowering for an expression whose only reactive content is element-member
- * access AND whose shape doesn't produce a new value of its own. Both
- * conditions are required:
+ * lowering for an expression whose only reactive content is member access on
+ * an array element or local opaque-origin binding AND whose shape doesn't
+ * produce a new value of its own. Both conditions are required:
  *
- *   - All-element-binding-rooted alone isn't enough: a computation like
+ *   - A supported reactive root alone isn't enough: a computation like
  *     `elem.type === "folder"` still needs an early wrap to be reactive,
  *     even though its only reactive read is `elem.type`.
  *
@@ -722,7 +746,7 @@ function shouldDeferToLateInPlaceLowering(
   expression: ts.Expression,
   dataFlows: readonly { readonly expression: ts.Expression }[],
 ): boolean {
-  return allDataFlowsAreElementBindingRoots(context, dataFlows) &&
+  return allDataFlowsSupportLateInPlaceLowering(context, dataFlows) &&
     isPassthroughContainerExpression(expression);
 }
 

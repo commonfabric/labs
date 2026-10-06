@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
+import { UNAVAILABLE_PENDING } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, KeepAsCell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -338,6 +339,62 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
           expect(page.texts()).toEqual([PLACEHOLDER]);
         } finally {
           page.cancel();
+        }
+      },
+    );
+    await t.step(
+      "withdraws retained text when required integrity changes while pending",
+      async () => {
+        const text = await write("pending-policy-text", ENDORSED, [endorsed]);
+        const required = await write("pending-policy-required", endorsed);
+        const ops: VDomOp[] = [];
+        const reconciler = new WorkerReconciler({
+          onOps: (batch) => {
+            for (const op of batch) ops.push(op);
+          },
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            requiredTextIntegrity: required as never,
+          },
+          children: [text as never],
+        });
+        try {
+          await t.settle();
+          const renderedText = ops.find((op) =>
+            op.op === "create-text" && op.text === ENDORSED
+          );
+          expect(renderedText?.op).toBe("create-text");
+          const renderedTextId = renderedText?.op === "create-text"
+            ? renderedText.nodeId
+            : undefined;
+          ops.length = 0;
+
+          await write("pending-policy-text", UNAVAILABLE_PENDING, [endorsed]);
+          await t.settle();
+          expect(ops.some((op) => op.op === "remove-node")).toBe(false);
+          ops.length = 0;
+
+          await write("pending-policy-required", {
+            kind: "signed-release",
+            subject: "another-release",
+          });
+          await t.settle();
+          expect(
+            ops.some((op) =>
+              op.op === "remove-node" && op.nodeId === renderedTextId
+            ),
+          ).toBe(true);
+          expect(
+            ops.some((op) =>
+              op.op === "create-text" && op.text === PLACEHOLDER
+            ),
+          ).toBe(true);
+        } finally {
+          cancel();
         }
       },
     );

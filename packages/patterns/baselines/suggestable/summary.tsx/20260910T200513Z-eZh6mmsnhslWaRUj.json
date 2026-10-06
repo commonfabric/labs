@@ -1,0 +1,53 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "context": {
+        "additionalProperties": true,
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "topic": {
+        "default": "",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "suggestable/summary.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "availability": {
+        "type": "string"
+      },
+      "error": {
+        "type": "string"
+      },
+      "pending": {
+        "type": "boolean"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "topic": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "topic",
+      "summary",
+      "pending",
+      "availability",
+      "error",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

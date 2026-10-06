@@ -910,6 +910,72 @@ describe("handler dependency pulling", () => {
     }
   });
 
+  it("reports unavailable handler parks with reason and queue depth", async () => {
+    runtime.scheduler.setEventPreflightTelemetryEnabled(true);
+    const preflights: EventPreflightMarker[] = [];
+    const listener = (event: Event) => {
+      const marker = (event as CustomEvent<{ marker: RuntimeTelemetryMarker }>)
+        .detail.marker;
+      if (marker.type === "scheduler.event.preflight") {
+        preflights.push(marker);
+      }
+    };
+    runtime.telemetry.addEventListener("telemetry", listener);
+
+    try {
+      const eventStream = runtime.getCell<number>(
+        space,
+        "handler-unavailable-preflight-events",
+        undefined,
+        tx,
+      );
+      eventStream.set(0);
+      const ready = runtime.getCell<boolean>(
+        space,
+        "handler-unavailable-preflight-ready",
+        undefined,
+        tx,
+      );
+      ready.set(false);
+      await tx.commit().settled;
+      tx = runtime.edit();
+
+      let handlerRuns = 0;
+      const handler: EventHandler = Object.assign(
+        () => {
+          handlerRuns++;
+        },
+        {
+          inputReadiness: (readTx: IExtendedStorageTransaction) =>
+            ready.withTx(readTx).get()
+              ? { ready: true as const }
+              : { ready: false as const, reason: "pending" as const },
+        },
+      );
+      runtime.scheduler.addEventHandler(
+        handler,
+        eventStream.getAsNormalizedFullLink(),
+        (readTx) => ready.withTx(readTx).get(),
+      );
+
+      runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 1);
+      await runtime.scheduler.idle();
+
+      expect(handlerRuns).toBe(0);
+      expect(preflights[0]?.inputUnavailableReason).toBe("pending");
+      expect(preflights[0]?.queueDepth).toBe(1);
+      expect(preflights[0]?.skipped).toBe(true);
+
+      const readyTx = runtime.edit();
+      ready.withTx(readyTx).set(true);
+      await readyTx.commit().settled;
+      await runtime.scheduler.idle();
+      expect(handlerRuns).toBe(1);
+    } finally {
+      runtime.telemetry.removeEventListener("telemetry", listener);
+    }
+  });
+
   it("should preserve FIFO order while the head event is parked", async () => {
     const source = runtime.getCell<number>(
       space,

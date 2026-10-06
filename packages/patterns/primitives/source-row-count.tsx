@@ -17,9 +17,15 @@
 import {
   computed,
   Default,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   type SqliteDb,
   UI,
   type VNode,
@@ -96,19 +102,6 @@ const countSql = (table: string, predicate: string): string =>
     `FROM ${quotedIdentifier(table)}`,
   ].join("\n");
 
-/**
- * What a query reports about a failure, empty when it has not failed.
- *
- * The same narrowing the sqlite builtin applies before it writes one, so a
- * value that reaches here already a message passes through unchanged.
- */
-const errorText = (error: unknown): string =>
-  error === undefined || error === null
-    ? ""
-    : error instanceof Error
-    ? error.message
-    : String(error);
-
 export const SourceRowCount = pattern<
   SourceRowCountInput,
   SourceRowCountOutput
@@ -117,12 +110,25 @@ export const SourceRowCount = pattern<
     computed(() => countSql(table, predicate)),
     { scope: "session" },
   );
+  const observedCountRead = observeAvailability(countRead);
 
-  const total = computed(() => countRead.result?.[0]?.total ?? 0);
-  const matching = computed(() => countRead.result?.[0]?.matching ?? 0);
-  const pending = computed(() => countRead.pending === true);
-  const errorMessage = computed(() => errorText(countRead.error));
-  const hasError = computed(() => errorMessage !== "");
+  const total = computed(() =>
+    isPending(observedCountRead) || hasError(observedCountRead) ||
+      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead)
+      ? 0
+      : resultOf(observedCountRead).rows[0]?.total ?? 0
+  );
+  const matching = computed(() =>
+    isPending(observedCountRead) || hasError(observedCountRead) ||
+      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead)
+      ? 0
+      : resultOf(observedCountRead).rows[0]?.matching ?? 0
+  );
+  const pending = computed(() => isPending(observedCountRead));
+  const errorMessage = computed(() =>
+    hasError(observedCountRead) ? observedCountRead.errorMessage : ""
+  );
+  const queryHasError = computed(() => errorMessage !== "");
 
   // Both counts fall back to zero while the read is in flight, and `0 of 0` is
   // the one reading this part exists to rule out — a full table that looks
@@ -147,7 +153,7 @@ export const SourceRowCount = pattern<
         </cf-hstack>
 
         {ifElse(
-          hasError,
+          queryHasError,
           <cf-alert status="error">{errorMessage}</cf-alert>,
           null,
         )}

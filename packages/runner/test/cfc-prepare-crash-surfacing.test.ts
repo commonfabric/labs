@@ -34,7 +34,9 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -320,6 +322,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
         close: () => Promise<void>;
       };
       runWishOnce: (
+        expectedName: string | undefined,
         prePullLink?: { id: string; scope: string | undefined },
       ) => Promise<string>;
       seedTarget: (cellName: string, name: string) => Promise<void>;
@@ -351,6 +354,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       };
 
       const runWish = async (
+        expectedName: string | undefined,
         prePullLink?: { id: string; scope: string | undefined },
       ): Promise<
         { state: string; stateLink: { id: string; scope: string | undefined } }
@@ -392,19 +396,48 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           await tx.commit().settled;
           await result.pull().catch(() => {});
           await rt.runtime.idle();
-          // Let the failure-surfacing bookkeeping transaction (spawned from a
-          // commit callback, with its own bounded retries) land. This file is
-          // on the REAL clock (clock-preload.ts realClockFiles): the
-          // two-writer journey drives live cross-runtime storage transport,
-          // the class the fake clock's auto-advance mode cannot pace.
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          await rt.runtime.idle();
+          // The result first publishes pending while the cross-runtime link is
+          // loading. A refused commit surfaces its error on the durable state
+          // document, while a successful run publishes through the result
+          // field. Wait on the surface that can complete this run; neither a
+          // previous result nor a preseeded ambiguous envelope can satisfy the
+          // wait by itself.
+          const completionCell = expectedName === undefined &&
+              prePullLink !== undefined
+            ? rt.runtime.getCellFromLink(
+              {
+                id: prePullLink.id,
+                space,
+                scope: prePullLink.scope,
+                path: [],
+              } as never,
+              undefined,
+              undefined,
+            )
+            : result.key("secretWish");
+          const finalState = await waitForCellValue<unknown>(
+            rt.runtime,
+            completionCell,
+            (value) => {
+              if (
+                isUnavailable(value) || value === null ||
+                typeof value !== "object"
+              ) {
+                return false;
+              }
+              if ("error" in value && typeof value.error === "string") {
+                return true;
+              }
+              return expectedName !== undefined &&
+                JSON.stringify(value).includes(expectedName);
+            },
+          );
           const readTx = rt.runtime.edit();
           const fieldLink = result.key("secretWish").getAsNormalizedFullLink();
           const resolved = resolveLink(rt.runtime, readTx, fieldLink);
           readTx.abort();
           return {
-            state: JSON.stringify(result.key("secretWish").get() ?? null),
+            state: JSON.stringify(finalState ?? null),
             stateLink: { id: resolved.id, scope: resolved.scope },
           };
         } finally {
@@ -442,9 +475,13 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       return {
         makeRuntime,
         runWishOnce: async (
+          expectedName: string | undefined,
           prePullLink?: { id: string; scope: string | undefined },
         ) => {
-          const { state, stateLink } = await runWish(prePullLink);
+          const { state, stateLink } = await runWish(
+            expectedName,
+            prePullLink,
+          );
           lastLink = stateLink;
           return state;
         },
@@ -466,11 +503,11 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       // changed /result link LANDS — the profile-embed lift condition.
       const journey = makeJourney();
       await journey.seedTarget("ow50-secret-a", "classified");
-      const stateA = await journey.runWishOnce();
+      const stateA = await journey.runWishOnce("classified");
       expect(stateA).toContain("classified");
 
       await journey.seedTarget("ow50-secret-b", "still classified");
-      const stateB = await journey.runWishOnce();
+      const stateB = await journey.runWishOnce("still classified");
       expect(stateB).toContain("still classified");
       expect(stateB).not.toContain('"error"');
     });
@@ -481,7 +518,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       // server reproduces the same id.
       const discovery = makeJourney();
       await discovery.seedTarget("ow50-secret-a", "classified");
-      await discovery.runWishOnce();
+      await discovery.runWishOnce("classified");
       const stateDoc = await discovery.resolveStateDocLink();
 
       // The live journey: seed the AMBIGUOUS envelope at that id FIRST (the
@@ -514,7 +551,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           await rt.close();
         }
       }
-      await journey.runWishOnce(stateDoc);
+      await journey.runWishOnce(undefined, stateDoc);
 
       // Read the state DOC directly: the refused wish commit also carried the
       // piece-result link write, so the result field never resolves — the

@@ -17,7 +17,7 @@ describe("protected cell policy", () => {
   it("accepts a computed read of a wished profile's defaulted owner-protected field", async () => {
     const diagnostics: TransformationDiagnostic[] = [];
     const output = await transformSource(
-      `import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, WriteAuthorizedBy, computed, handler, pattern, wish } from "commonfabric";
+      `import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, WriteAuthorizedBy, computed, handler, pattern, wish, resultOf } from "commonfabric";
 const setBio = handler<void, {}>(() => {});
 type OwnerProtected<T, Binding> = RepresentsCurrentUser<
   Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>
@@ -25,7 +25,7 @@ type OwnerProtected<T, Binding> = RepresentsCurrentUser<
 export type ProfileOut = { bio: Default<OwnerProtected<string, typeof setBio>, ""> };
 export default pattern<{}>(() => {
   const profileWish = wish<ProfileOut>({ query: "#profile" });
-  const bio = computed(() => String(profileWish.result?.bio as string).trim());
+  const bio = computed(() => String(resultOf(profileWish.result)?.bio as string).trim());
   return { bio };
 });`,
       {
@@ -36,20 +36,17 @@ export default pattern<{}>(() => {
     );
 
     expect(diagnostics.filter(isError)).toEqual([]);
-    // The capture reads the field whole, out of a result that may be missing.
+    // The availability guard keeps the result whole; its definition carries
+    // the field's owner and writer policy.
     expect(callSchemas(parseModule(output), "lift")[0]).toMatchObject({
-      properties: {
-        profileWish: {
+      $defs: {
+        ProfileOut: {
           properties: {
-            result: {
-              properties: {
-                bio: {
-                  ifc: {
-                    ownerPrincipal: { __ctCurrentPrincipal: true },
-                    writeAuthorizedBy: {
-                      __ctWriterIdentityOf: { path: ["setBio"] },
-                    },
-                  },
+            bio: {
+              ifc: {
+                ownerPrincipal: { __ctCurrentPrincipal: true },
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: { path: ["setBio"] },
                 },
               },
             },
@@ -869,7 +866,7 @@ export default pattern(() => {
     const transform = async (result: string, declaration = constructed) =>
       parseModule(
         await transformSource(
-          `import { Cfc, CurrentPrincipal, cell, computed, Default, handler, pattern, RepresentsCurrentUser, UI, wish, Writable, WriteAuthorizedBy } from "commonfabric";
+          `import { Cfc, CurrentPrincipal, cell, computed, Default, handler, pattern, RepresentsCurrentUser, UI, wish, resultOf, Writable, WriteAuthorizedBy } from "commonfabric";
 import * as CF from "commonfabric";
 type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
 interface Item { id: string }
@@ -1039,32 +1036,24 @@ export default pattern(() => {
 
     it("keeps the writer a declared member names on a value read from a wished result", async () => {
       const root = await transform(
-        `{ count: computed(() => listed.result?.items.length ?? 0) }`,
+        `{ count: computed(() => resultOf(listed.result)?.items.length ?? 0) }`,
         `const listed = wish<Listed>({ query: "#listed" });`,
       );
-      // The result may be missing, so its schema is a union with `undefined`.
+      // The guarded capture keeps the result whole, including its writer.
       expect(callSchemas(root, "lift")[0]).toMatchObject({
-        properties: {
-          listed: {
+        $defs: {
+          Listed: {
             properties: {
-              result: {
-                anyOf: expect.arrayContaining([
-                  expect.objectContaining({
-                    properties: {
-                      items: expect.objectContaining({
-                        ifc: {
-                          ...ownerPolicy,
-                          writeAuthorizedBy: {
-                            __ctWriterIdentityOf: {
-                              file: "/test.tsx",
-                              path: ["removeItem"],
-                            },
-                          },
-                        },
-                      }),
+              items: {
+                ifc: {
+                  ...ownerPolicy,
+                  writeAuthorizedBy: {
+                    __ctWriterIdentityOf: {
+                      file: "/test.tsx",
+                      path: ["removeItem"],
                     },
-                  }),
-                ]),
+                  },
+                },
               },
             },
           },

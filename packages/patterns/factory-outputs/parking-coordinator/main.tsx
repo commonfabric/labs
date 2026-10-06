@@ -8,10 +8,15 @@ import {
   Default,
   equals,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
   type RequiresIntegrity,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -638,19 +643,27 @@ export default pattern<ParkingCoordinatorInput, ParkingCoordinatorOutput>(
     // when nothing claimed anything, and every viewer would park on the empty
     // claim instead of the wish. Strings are honestly "" when unset.
     const hasViewerClaim = computed(() => (viewer?.name ?? "").trim() !== "");
+    const wishedProfile = hasError(profileWish.result) ||
+        isPending(profileWish.result) ||
+        isSyncing(profileWish.result) ||
+        hasSchemaMismatch(profileWish.result)
+      ? undefined
+      : resultOf(profileWish.result);
+    const wishedName = hasError(profileNameWish.result) ||
+        isPending(profileNameWish.result) ||
+        isSyncing(profileNameWish.result) ||
+        hasSchemaMismatch(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
     // The identity every authorization answer in this pattern is about.
-    const actingProfile = hasViewerClaim ? viewer?.profile : profileWish.result;
+    const actingProfile = hasViewerClaim ? viewer?.profile : wishedProfile;
     // "" until an identity resolves, which is the honest signal that there is
     // nobody to authorize yet.
-    const actingName = computed(() =>
-      (viewer?.name ?? profileNameWish.result ?? "").trim()
-    );
+    const actingName = computed(() => (viewer?.name ?? wishedName).trim());
 
-    const nowTimestamp = wish<number>({ query: "#now" });
-    const todayStr = computed(() => {
-      const nowMs = nowTimestamp.result;
-      return nowMs != null ? toLocalDateStr(nowMs) : "";
-    });
+    const nowRequest = wish<number>({ query: "#now" });
+    const nowValue = resultOf(nowRequest.result);
+    const todayStr = computed(() => toLocalDateStr(nowValue));
     const weekDatesArr = computed(() => getWeekDates(todayStr));
 
     // User/session UI state
@@ -660,9 +673,9 @@ export default pattern<ParkingCoordinatorInput, ParkingCoordinatorOutput>(
     // defaults to today without reading the ambient clock at pattern body.
     const requestDate = new Writable.perSession("");
     computed(() => {
-      const nowMs = nowTimestamp.result;
-      if (nowMs != null && requestDate.get() === "") {
-        requestDate.set(toLocalDateStr(nowMs));
+      const today = todayStr;
+      if (today !== "" && requestDate.get() === "") {
+        requestDate.set(today);
       }
     });
     const requestResult = new Writable.perSession("");

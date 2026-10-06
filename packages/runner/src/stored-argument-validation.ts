@@ -1,3 +1,4 @@
+import { isUnavailable } from "@commonfabric/data-model/availability";
 /** Validates stored arguments without treating unreadable links as invalid values. */
 
 import {
@@ -45,6 +46,7 @@ export const acceptsOpaqueCellOrUnresolvedLink = (
   value: unknown,
   schema: JSONSchema,
 ): boolean =>
+  isUnavailable(value) ||
   value === UNRESOLVED_LINK_PLACEHOLDER ||
   schemaAcceptsOpaqueCellValue(value, schema);
 
@@ -312,6 +314,12 @@ export function storedArgumentValidationIssue(
     { mergeMaterializedLinks: true },
   );
   const validationOptions = {
+    // Availability is a transient control state, not the stored argument's
+    // business value. A candidate must be able to replace the producer while
+    // one of its linked arguments is pending, disconnected, or invalid; the
+    // ordinary runtime preflight parks consumers until that value is usable.
+    // Authenticate the concrete FabricInstance here rather than teaching an
+    // object schema to accept arbitrary branded values.
     acceptOpaqueValue: acceptsOpaqueCellOrUnresolvedLink,
     // An OPTIONAL key holding `undefined` carries no data, and a handler
     // mints one without meaning to: `comments.push({ author, ... })` with

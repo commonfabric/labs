@@ -34,10 +34,10 @@ distinct (and CFC can gate them independently):
 
 - **`db.query<Row>(sql, { params?, reactOn? })`** — read-only `SELECT`. Reactive:
   re-runs when its `reactOn` input changes. Returns
-  `Reactive<{ pending, result?: Row[], error? }>`, the same shape as
-  `fetchJson`/`generateText`
-  (see [`packages/runner/src/builtins/fetch.ts`](../../../packages/runner/src/builtins/fetch.ts)).
-  A free `sqliteQuery<Row>({ db, sql, ... })` function is equivalent.
+  `Reactive<AsyncResult<{ rows: Row[]; withheld?: number }>>`, matching the
+  direct-result contract used by fetch and generation. Ordinary consumers use
+  `resultOf(request)`; guards inspect availability on the request itself. A free
+  `sqliteQuery<Row>({ db, sql, ... })` function is equivalent.
 - **`db.exec(sql, params?)`** — writes (`INSERT`/`UPDATE`/`DELETE`). Imperative,
   called inside a handler; returns `void`. It records a `sqlite` op onto the
   caller's transaction so the write commits **atomically** with surrounding cell
@@ -114,7 +114,7 @@ Two cross-cutting rules make cell references first-class inside SQLite:
 
 ```tsx
 // Shown for illustration only.
-import { sqliteDatabase, table, cfLink, handler, derive, type Cell } from "commonfabric";
+import { sqliteDatabase, table, cfLink, handler, resultOf, type Cell } from "commonfabric";
 
 // A database tied to this pattern's own cell (default source). Tables (and the
 // _cf_link columns) are declared once, here; the runtime owns DDL/migration.
@@ -146,5 +146,5 @@ const post = handler<{ body: string }, { author: Cell<User> }>(
   },
 );
 
-return derive(recent.result, (rows) => rows ?? []);
+return resultOf(recent).rows;
 ```

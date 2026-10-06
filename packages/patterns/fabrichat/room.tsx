@@ -24,6 +24,7 @@ import {
   pattern,
   type PerSession,
   principalOf,
+  resultOf,
   SELF,
   Stream,
   UI,
@@ -461,7 +462,7 @@ export const FabriChatRoomCore = pattern<
   // whose default pattern isn't there yet lists none.
   const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
   const spaceParticipants = computed(
-    () => [...(space.result?.participants ?? [])],
+    () => [...(resultOf(space.result).participants ?? [])],
   );
   const participants = computed(() =>
     participantsOf(spaceParticipants, entries)
@@ -752,7 +753,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       accept: Stream<AcceptRoomEvent>;
       rooms: ChatIndexEntry[];
     }>({ query: "#chatManager" });
-    const startsDirect = computed(() => managerWish.result !== undefined);
+    const manager = resultOf(managerWish.result);
+    const startsDirect = computed(() => manager !== undefined);
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
     // value, as `FabriChatMessageRow` says.
     const setupDisplay = computed((): ChatDisplay =>
@@ -769,7 +771,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         activity,
         counters,
         startsDirect,
-        startDirect: managerWish.result?.openDirect,
+        startDirect: manager.openDirect,
       },
     );
 
@@ -792,8 +794,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         <cf-screen>
           <AddToChats
             room={self}
-            listed={managerWish.result?.rooms}
-            accept={managerWish.result?.accept}
+            listed={manager.rooms}
+            accept={manager.accept}
           />
           {room[UI]}
           <div

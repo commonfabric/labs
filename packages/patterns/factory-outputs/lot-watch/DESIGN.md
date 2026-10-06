@@ -279,7 +279,7 @@ Reuse the `store-mapper.tsx:326-370` idiom — a `generateObject` call whose
 `schema`:
 
 ```ts
-const extraction = generateObject<PlateExtraction>({
+const extractionRequest = generateObject<PlateExtraction>({
   system:
     "You are reading a photo of a parked car. Extract the vehicle description " +
     "(color + make + model in plain words), the license plate characters, and " +
@@ -302,7 +302,12 @@ const extraction = generateObject<PlateExtraction>({
   schema: {/* PlateExtraction JSON schema, like store-mapper */},
   model: "anthropic:claude-sonnet-4-5",
 });
-// reactive: extraction.result / extraction.pending / extraction.error
+const extraction = resultOf(extractionRequest);
+
+// Render or branch on the request when this screen wants explicit status:
+// isPending(extractionRequest)
+// hasError(extractionRequest) && extractionRequest.error.message
+// Otherwise `extraction` waits reactively for the usable PlateExtraction.
 ```
 
 ### Confirm & save

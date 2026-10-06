@@ -3,8 +3,10 @@ import {
   Default,
   generateText,
   handler,
+  isPending,
   NAME,
   pattern,
+  resultOf,
   UI,
   Writable,
 } from "commonfabric";
@@ -31,11 +33,12 @@ const askQuestion = handler<
 export default pattern<LLMTestInput>(({ title }) => {
   const question = new Writable("");
 
-  const llmResponse = generateText({
+  const responseRequest = generateText({
     system:
       "You are a helpful assistant. Answer questions clearly and concisely.",
     prompt: question,
   });
+  const llmResponse = resultOf(responseRequest);
 
   return {
     [NAME]: title,
@@ -63,18 +66,18 @@ export default pattern<LLMTestInput>(({ title }) => {
           )
           : null}
 
-        {llmResponse.pending
+        {isPending(responseRequest)
           ? (
             <div>
               <cf-loader show-elapsed /> Thinking...
             </div>
           )
-          : llmResponse.result
+          : llmResponse
           ? (
             <div>
               <h3>LLM Response:</h3>
               <pre>
-                {llmResponse.result}
+                {llmResponse}
               </pre>
             </div>
           )
@@ -82,6 +85,6 @@ export default pattern<LLMTestInput>(({ title }) => {
       </div>
     ),
     question,
-    response: llmResponse.result,
+    response: llmResponse,
   };
 });

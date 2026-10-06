@@ -536,12 +536,11 @@ handler, so it can read the clock's current value and write a fixed number:
 ```tsx
 // Shown inside a pattern body.
 const nowCell = wish<number>({ query: "#now/300" });
+const now = resultOf(nowCell.result);
 const glazes = Writable.of<{ name: string; bakedAt: number }[]>([]);
 const tray = DonutTray({ glazes });
 
 const action_seed_glazes = action(() => {
-  const now = nowCell.result;
-  if (now === undefined) return;
   glazes.set([{ name: "maple", bakedAt: now - 86_400_000 }]);
 });
 ```

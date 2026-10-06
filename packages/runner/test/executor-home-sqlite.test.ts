@@ -3,6 +3,8 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import type { AsyncResult } from "@commonfabric/api";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { Server } from "@commonfabric/memory/v2/server";
 import { table } from "@commonfabric/memory/sqlite/schema";
@@ -17,7 +19,7 @@ const alice = await Identity.fromPassphrase("home sqlite Alice");
 const bob = await Identity.fromPassphrase("home sqlite Bob");
 
 type View = {
-  query?: { pending: boolean; result?: { body: string }[]; error?: string };
+  query?: AsyncResult<{ rows: { body: string }[] }>;
 };
 
 describe("executor-home-sqlite", () => {
@@ -111,10 +113,10 @@ describe("executor-home-sqlite", () => {
           files: [{
             name: "/main.tsx",
             contents: `
-import { pattern, wish, PerUser, PerSession, Writable, SqliteDb, sqliteQuery } from "commonfabric";
+import { computed, pattern, wish, resultOf, PerUser, PerSession, Writable, SqliteDb, sqliteQuery } from "commonfabric";
 export default pattern<{ sql: PerSession<Writable<string>> }, { query: any }>(({ sql }) => {
   const resources = wish<Writable<PerUser<{ db: SqliteDb }>>>({ query: "#loom_resources_v1", scope: ["~"], headless: true });
-  const db = resources.result?.get()?.db;
+  const db = computed(() => resultOf(resources.result).get().db);
   const query = sqliteQuery.asScope("session")({ db: db!, sql });
   return { query };
 });`,
@@ -145,10 +147,11 @@ export default pattern<{ sql: PerSession<Writable<string>> }, { query: any }>(({
           runtime,
           result,
           (value) =>
-            value?.query?.pending === false &&
-            value.query.result?.[0]?.body === user.did(),
+            value?.query !== undefined && !isUnavailable(value.query) &&
+            "rows" in value.query &&
+            value.query.rows?.[0]?.body === user.did(),
         );
-        expect(value.query?.error).toBeUndefined();
+        expect(isUnavailable(value.query)).toBe(false);
       }
       expect(errors).toEqual([]);
     } finally {

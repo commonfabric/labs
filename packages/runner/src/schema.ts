@@ -15,6 +15,7 @@ import {
   isWalkableObjectOrArray,
   shallowMutableClone,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   internSchema,
   isNontrivialSchema,
@@ -76,6 +77,8 @@ import {
 } from "./schema-registry.ts";
 import {
   defaultForAbsentValue,
+  isSchemaMismatchError,
+  isUnresolvedInputError,
   materializeSchemaView,
   SchemaMismatchError,
   UnresolvedInputError,
@@ -512,7 +515,7 @@ const selectMatchingCompoundBranch = (
  * the branch itself holds, and a view decides that where the reader touches
  * it.
  */
-const narrowUnionByValueType = (
+export const narrowUnionByValueType = (
   schema: JSONSchemaObj,
   value: unknown,
 ): JSONSchema | undefined => {
@@ -928,6 +931,8 @@ export function mergeDefaults(
   // and loses whichever side held the value. A `FabricInstance` default is
   // refused rather than merged.
   const mergedDefault = base.type === "object" &&
+      !isUnavailable(base.default) &&
+      !isUnavailable(defaultValue) &&
       isWalkableObjectOrArray(base.default) &&
       isWalkableObjectOrArray(defaultValue)
     ? { ...base.default, ...defaultValue } as JSONValue
@@ -1148,6 +1153,86 @@ export interface ValidateAndTransformOptions {
    * without the option.
    */
   truthinessOnly?: boolean;
+
+  /** Receives a root materialization refusal without conflating it with undefined. */
+  onFailure?: (
+    failure: Exclude<ValidateAndTransformResult, { ok: any }>,
+  ) => void;
+}
+
+/**
+ * Status-bearing counterpart to {@link validateAndTransform}.
+ *
+ * `undefined` is a valid schema result, so callers which need to distinguish
+ * that value from traversal failure must use this result rather than inspect
+ * the transformed value.
+ */
+export type ValidateAndTransformResult =
+  | { ok: any }
+  | {
+    error: unknown;
+    unavailableReason?: "syncing" | "error";
+    unavailableError?: Error;
+    unavailableLink?: NormalizedFullLink;
+  };
+
+export function validateAndTransformResult(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction | undefined,
+  sourceRef: NormalizedFullLink | CellViewRef,
+  _seen?: Array<[string, any]>,
+  options?: ValidateAndTransformOptions,
+): ValidateAndTransformResult {
+  let failure: Exclude<ValidateAndTransformResult, { ok: any }> | undefined;
+  let value: unknown;
+  const classify = (
+    result: Exclude<ValidateAndTransformResult, { ok: any }>,
+  ): ValidateAndTransformResult => {
+    if (result.unavailableLink === undefined) return result;
+    const identity = tx === undefined
+      ? undefined
+      : waveRunContextOf(tx)?.scopeKeyIdentity ?? tx.tx?.scopeKeyIdentity;
+    const status = runtime.ensureLinkedDocLoaded(
+      result.unavailableLink,
+      (isCellViewRef(sourceRef) ? sourceRef.link : sourceRef).space,
+      identity,
+    );
+    if (status === "settled") return { error: result.error };
+    return {
+      ...result,
+      unavailableReason: status === "error" ? "error" : "syncing",
+      ...(status === "error" &&
+        {
+          unavailableError: runtime.linkedDocLoadError(
+            result.unavailableLink,
+            identity,
+          ) ?? new Error("Linked document synchronization failed"),
+        }),
+    };
+  };
+  try {
+    value = validateAndTransform(
+      runtime,
+      tx,
+      sourceRef,
+      _seen,
+      {
+        ...options,
+        onFailure: (result) => {
+          failure = result;
+          options?.onFailure?.(result);
+        },
+      },
+    );
+  } catch (error) {
+    if (!isSchemaMismatchError(error)) throw error;
+    return classify({
+      error,
+      ...(isUnresolvedInputError(error) &&
+        { unavailableReason: "syncing", unavailableLink: error.link }),
+    });
+  }
+  return failure === undefined ? { ok: value } : classify(failure);
 }
 
 export function validateAndTransform(
@@ -1180,7 +1265,9 @@ export function validateAndTransform(
   // transaction, since opaque cells should preserve identity without materializing
   // the pointed-to value.
   const asCellValues = ContextualFlowControl.getAsCellValues(resolvedSchema);
-  if (ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque") {
+  if (
+    ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque"
+  ) {
     return new TransformObjectCreator(
       runtime,
       tx!,
@@ -1452,6 +1539,13 @@ export function validateAndTransform(
     // will notify the scheduler for shallow reads as they occur.
     const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
     doc = { address, value: value };
+    if (resolvedValueLink.pendingHopDoc === true && value === undefined) {
+      options?.onFailure?.({
+        error: new UnresolvedInputError(resolvedValueLink),
+        unavailableReason: "syncing",
+        unavailableLink: resolvedValueLink,
+      });
+    }
     const valueSelectedSchema = isObjectOrArray(effectiveSchema)
       ? asCellCompoundSchemaForValue(effectiveSchema, value)
       : undefined;
@@ -1546,6 +1640,7 @@ export function validateAndTransform(
             synced: options?.synced,
             mismatchThrows: options?.mismatchThrows,
             viewChild: true,
+            onFailure: options?.onFailure,
           },
         );
       }
@@ -1590,6 +1685,7 @@ export function validateAndTransform(
           cfcLabelView,
           options?.synced ?? false,
           options?.mismatchThrows !== true,
+          options?.onFailure,
         );
       }
       selector.schema = viewSchema;
@@ -1657,6 +1753,13 @@ export function validateAndTransform(
     handleMintsThroughMerge && SchemaObjectTraverser.hasAsCell(effectiveSchema)
       ? tx.runWithAmbientReadMeta(excludeReadFromConflict, traverse)
       : traverse();
+  if (error !== undefined) {
+    options?.onFailure?.({
+      error,
+      ...(unservedHop !== undefined &&
+        { unavailableReason: "syncing", unavailableLink: unservedHop }),
+    });
+  }
   // A traversal a view asked for may cross such a hop and still succeed. Where
   // a branch admits the `undefined` the hop reads as, the success stands, as an
   // eager read's does, and the registered read runs the reader again when the
@@ -1678,9 +1781,6 @@ export function validateAndTransform(
     tx.noteSchemaRefusal(refusal);
     throw refusal;
   }
-  // TODO(@ubik2): Now that undefined is a valid return value from traverse,
-  // we need some other way to indicate success to our caller. For now, I'm
-  // still just returning undefined in the error case.
   return val;
 }
 

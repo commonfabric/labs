@@ -10,6 +10,7 @@ import {
   isWalkableObjectNotArray,
   toIndentedDebugString,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import {
@@ -2027,7 +2028,9 @@ export function mergeAnyOfMatches<T>(
     // special object among them sends the whole set to the first-match return
     // below: it has no properties for `Object.assign` to copy, so merging one
     // yields `{}` and the value is lost.
-    if (matches.every((v) => isWalkableObjectNotArray(v))) {
+    if (
+      matches.every((v) => !isUnavailable(v) && isWalkableObjectNotArray(v))
+    ) {
       const unified: Record<string, T> = {};
       for (const match of matches) {
         for (const [key, value] of Object.entries(match as object)) {
@@ -2344,7 +2347,8 @@ export abstract class BaseObjectTraverser {
           };
           const val = this.traverseDAG(
             itemDoc,
-            isWalkableObjectNotArray(defaultValue)
+            !isUnavailable(defaultValue) &&
+              isWalkableObjectNotArray(defaultValue)
               ? (defaultValue as JSONObject)[k]
               : undefined,
           )!;
@@ -4855,7 +4859,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       );
       return { ok: this.objectCreator.createObject(newLink, doc.value) };
     }
-    if (doc.value === undefined) {
+    if (isUnavailable(doc.value)) {
+      // Availability markers are control-flow leaves, not user containers.
+      // They must survive projection through any declared result schema so
+      // consumers can propagate or inspect the exact unavailable reason.
+      return { ok: doc.value };
+    } else if (doc.value === undefined) {
       // If we have a default, annotate it and return it
       // Otherwise, return undefined
       const defaultValue = this.#applyDefault(doc, resolved);
@@ -5084,6 +5093,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     reads: PlainSchemaReads,
   ): TraverseResult<FabricValue> | undefined {
     if (isSigilLink(doc.value)) return undefined;
+    if (isUnavailable(doc.value)) return { ok: doc.value };
 
     if (plan.kind === "primitive") {
       return getPlainJsonType(doc.value) === plan.type

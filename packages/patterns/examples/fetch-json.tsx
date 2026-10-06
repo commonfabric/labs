@@ -4,6 +4,7 @@ import {
   fetchJson,
   NAME,
   pattern,
+  resultOf,
   UI,
   Writable,
 } from "commonfabric";
@@ -164,24 +165,12 @@ export default pattern<
   });
 
   // Fetch repository data
-  const repoData = fetchJson<GithubResponse>({
+  const repoRequest = fetchJson<GithubResponse>({
     url: apiUrl,
   });
-  const data = repoData.result;
+  const data = resultOf(repoRequest);
 
-  const validData = computed(() =>
-    data ?? {
-      name: "Unknown",
-      owner: { login: "Unknown" },
-      description: "No description provided",
-      stargazers_count: 0,
-      forks_count: 0,
-      watchers_count: 0,
-      open_issues_count: 0,
-      network_count: 0,
-      subscribers_count: 0,
-    }
-  );
+  const validData = data;
 
   return {
     [NAME]: "GitHub Repository Details",

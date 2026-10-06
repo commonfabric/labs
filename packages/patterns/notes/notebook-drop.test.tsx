@@ -14,10 +14,19 @@
  *
  * Run: deno task cf test packages/patterns/notes/notebook-drop.test.tsx --root packages/patterns --verbose
  */
-import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import {
+  action,
+  assert,
+  handler,
+  pattern,
+  type Stream,
+  TESTS,
+  UI,
+} from "commonfabric";
 import { findNode, propsOf, readValue } from "../test/vnode-helpers.ts";
 import Notebook from "./notebook.tsx";
 import Note from "./note.tsx";
+import { type NotePiece } from "./schemas.tsx";
 
 type DropStream = {
   send: (event: { detail: { sourceCell: unknown } }) => void;
@@ -36,11 +45,11 @@ const isElement = (
   (value as { name?: unknown }).name === name;
 
 const sendDropOntoRow = (
-  subject: { [UI]: unknown },
+  ui: unknown,
   rowText: string,
-  sourceCell: unknown,
+  sourceCell: NotePiece,
 ) => {
-  const zone = findNode(subject[UI], (node) => {
+  const zone = findNode(ui, (node) => {
     if (!isElement(readValue(node), "cf-drop-zone")) return false;
     // Prop values arrive as link proxies, so resolve before comparing.
     if (
@@ -60,6 +69,10 @@ const sendDropOntoRow = (
     (stream as DropStream).send({ detail: { sourceCell } });
   }
 };
+
+const sendVoid = handler<void, { stream: Stream<void> }>(
+  (_, { stream }) => stream.send(),
+);
 
 const noteTitlesOf = (subject: { notes?: unknown }): string[] =>
   [...((subject.notes as { title?: string }[] | undefined) ?? [])]
@@ -88,18 +101,18 @@ export default pattern(() => {
     notes: [firstNote, secondNote],
     isHidden: false,
   });
+  const firstNoteCell: NotePiece = firstNote;
+  const looseNoteCell: NotePiece = looseNote;
 
   const action_drop_existing_note_onto_row = action(() =>
-    sendDropOntoRow(subject, "Second Note", firstNote)
+    sendDropOntoRow(subject[UI], "Second Note", firstNoteCell)
   );
-  const action_select_all = action(() => {
-    subject.selectAllNotes.send();
-  });
+  const action_select_all = sendVoid({ stream: subject.selectAllNotes });
   const action_drop_selected_onto_row = action(() =>
-    sendDropOntoRow(subject, "Second Note", firstNote)
+    sendDropOntoRow(subject[UI], "Second Note", firstNoteCell)
   );
   const action_drop_loose_note_onto_row = action(() =>
-    sendDropOntoRow(subject, "Second Note", looseNote)
+    sendDropOntoRow(subject[UI], "Second Note", looseNoteCell)
   );
 
   const assert_initial_order = assert(() => {

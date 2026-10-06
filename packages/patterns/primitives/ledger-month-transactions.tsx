@@ -23,9 +23,15 @@
 import {
   computed,
   Default,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   type SqliteDb,
   UI,
   type VNode,
@@ -105,19 +111,6 @@ const rowsSql = (): string =>
     "LIMIT 500",
   ].join("\n");
 
-/**
- * What a query reports about a failure, empty when it has not failed.
- *
- * The same narrowing the sqlite builtin applies before it writes one, so a
- * value that reaches here already a message passes through unchanged.
- */
-const errorText = (error: unknown): string =>
-  error === undefined || error === null
-    ? ""
-    : error instanceof Error
-    ? error.message
-    : String(error);
-
 /** `amount` as a signed figure in `code`, to the cent. */
 const money = (amount: number, code: string): string =>
   `${(amount || 0).toFixed(2)} ${code || "USD"}`;
@@ -141,15 +134,29 @@ export const LedgerMonthTransactions = pattern<
     params: [monthParam],
     scope: "session",
   });
+  const observedMonthRead = observeAvailability(monthRead);
+  const observedRowsRead = observeAvailability(rowsRead);
 
-  const resolvedMonth = computed(() => monthRead.result?.[0]?.month ?? "");
-  const rows = computed(() => rowsRead.result ?? []);
-  const rowCount = computed(() => (rowsRead.result ?? []).length);
-  const pending = computed(() => rowsRead.pending === true);
-  const errorMessage = computed(() => errorText(rowsRead.error));
-  const hasError = computed(() => errorMessage !== "");
+  const resolvedMonth = computed(() =>
+    isPending(observedMonthRead) || hasError(observedMonthRead) ||
+      isSyncing(observedMonthRead) || hasSchemaMismatch(observedMonthRead)
+      ? ""
+      : resultOf(observedMonthRead).rows[0]?.month ?? ""
+  );
+  const rows = computed(() =>
+    isPending(observedRowsRead) || hasError(observedRowsRead) ||
+      isSyncing(observedRowsRead) || hasSchemaMismatch(observedRowsRead)
+      ? []
+      : resultOf(observedRowsRead).rows
+  );
+  const rowCount = computed(() => rows.length);
+  const pending = computed(() => isPending(observedRowsRead));
+  const errorMessage = computed(() =>
+    hasError(observedRowsRead) ? observedRowsRead.errorMessage : ""
+  );
+  const hasQueryError = computed(() => errorMessage !== "");
   const isEmpty = computed(() =>
-    !pending && !hasError && (rowsRead.result ?? []).length === 0
+    !pending && !hasQueryError && rows.length === 0
   );
 
   const listRows = rows.map((row: LedgerTransaction) => (
@@ -178,7 +185,7 @@ export const LedgerMonthTransactions = pattern<
         </cf-hstack>
 
         {ifElse(
-          hasError,
+          hasQueryError,
           <cf-alert status="error">{errorMessage}</cf-alert>,
           null,
         )}

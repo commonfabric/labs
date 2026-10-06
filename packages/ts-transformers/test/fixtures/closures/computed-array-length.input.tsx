@@ -9,7 +9,7 @@
  * rather than { type: "object", properties: { length: { type: "number" } } }
  */
 
-import { computed, NAME, pattern, UI, wish } from "commonfabric";
+import { computed, NAME, pattern, resultOf, UI, wish } from "commonfabric";
 
 interface Piece {
   id: string;
@@ -23,7 +23,8 @@ interface Piece {
 // Context: Regression test ensuring array .length produces the correct schema
 //   shape rather than an object schema with a length property.
 export default pattern(() => {
-  const { pieceRegistry } = wish<{ pieceRegistry: Piece[] }>({ query: "/" }).result!;
+  const piecesWish = wish<{ pieceRegistry: Piece[] }>({ query: "/" });
+  const { pieceRegistry } = resultOf(piecesWish.result);
 
   return {
     [NAME]: computed(() => `Pieces (${pieceRegistry.length})`),

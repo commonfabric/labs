@@ -10,6 +10,7 @@ import {
   isFabricSpecialObject,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { DID } from "@commonfabric/identity";
 import { type CfcCellLinkRefPayload } from "@commonfabric/runner/cfc";
@@ -1307,8 +1308,8 @@ export class CellHandle<T = unknown> {
    * meaningful as bindings inside Pattern objects, which the client never
    * interprets. A `FabricPrimitive` comes back as itself.
    *
-   * @throws If the value holds a `FabricInstance`, which is a container this
-   *   walk cannot descend and so cannot hydrate a link inside.
+   * @throws If the value holds an unsupported `FabricInstance`, which is a
+   *   container this walk cannot descend and so cannot hydrate a link inside.
    */
   static deserialize<T>(
     base: CellHandle<T>,
@@ -1325,11 +1326,13 @@ export class CellHandle<T = unknown> {
       return value.map((item) => CellHandle.deserialize(base, item));
     }
 
-    // A `FabricPrimitive` is a leaf, so a walk that stops at it has already
-    // done the right thing -- and this goes _before_ the record branch, which
-    // rebuilds from enumerable own properties a fabric class does not have and
-    // would put `{}` here in place of the value.
-    if (value instanceof FabricPrimitive) return value;
+    // Atomic fabric values hold no cell ref for this walk to hydrate. This goes
+    // _before_ the record branch, which rebuilds from enumerable own properties
+    // a fabric class does not have and would put `{}` here in place of the
+    // value.
+    if (value instanceof FabricPrimitive || isUnavailable(value)) {
+      return value;
+    }
 
     // An instance is a container, reached by its codec contents rather than by
     // property name, so a sigil link can sit inside one where this walk cannot
@@ -1439,12 +1442,13 @@ export class CellHandle<T = unknown> {
       return value.map((element) => CellHandle.#serialize(element, linkFormat));
     }
 
-    // A `FabricPrimitive` crosses whole rather than being walked: it is a
-    // leaf, so stopping at it loses nothing. This goes _before_ the record
-    // test, since such a value is also a record and that branch would rebuild
-    // it from enumerable own properties it is not supposed to have, putting
-    // `{}` on the wire in place of a `FabricBytes`.
-    if (value instanceof FabricPrimitive) return value;
+    // Atomic fabric values cross whole rather than being walked: stopping at
+    // one loses nothing. This goes _before_ the record test, since such a value
+    // is also a record and that branch would rebuild it from enumerable own
+    // properties it is not supposed to have, putting `{}` on the wire.
+    if (value instanceof FabricPrimitive || isUnavailable(value)) {
+      return value;
+    }
 
     // An instance is a container whose contents this walk cannot reach, so a
     // `CellHandle` inside one would cross unconverted -- as a handle, which
@@ -1521,10 +1525,10 @@ function applyValue<T>(
     );
   }
 
-  // A leaf, carried through whole as `deserialize()` hydrates one: the record
-  // branch below would rebuild it from enumerable own properties it does not
-  // have.
-  if (current instanceof FabricPrimitive) {
+  // An atomic fabric value, carried through whole as `deserialize()` hydrates
+  // one: the record branch below would rebuild it from enumerable own
+  // properties it does not have.
+  if (current instanceof FabricPrimitive || isUnavailable(current)) {
     return current;
   }
 
@@ -1590,17 +1594,16 @@ function valuesOrCellsEqual(a: unknown, b: unknown): boolean {
     return isCellHandle(a) && isCellHandle(b) && a.equals(b);
   }
 
-  // A `FabricPrimitive` is compared by the data model rather than by this
-  // walk, and _before_ the record branch, for the same reason: two
-  // `FabricBytes` over different bytes both present as `{}` there and would
-  // compare equal. A primitive is a leaf, so comparing its content is the
-  // whole comparison.
+  // Atomic fabric values are compared by the data model rather than by this
+  // walk, and _before_ the record branch, for the same reason: two values with
+  // different private state both present as `{}` there and would compare
+  // equal. Comparing their codec-defined content is the whole comparison.
   //
-  // There is no arm for a `FabricInstance`. `applyValue()` is this function's
-  // only caller and refuses one before it returns, so neither argument can
-  // hold one -- an arm here would be unreachable rather than defensive, and
-  // untestable with it.
-  if (a instanceof FabricPrimitive || b instanceof FabricPrimitive) {
+  // A `FabricInstance` is refused by `applyValue()` before this comparison.
+  if (
+    a instanceof FabricPrimitive || b instanceof FabricPrimitive ||
+    isUnavailable(a) || isUnavailable(b)
+  ) {
     return valueEqual(a as FabricValue, b as FabricValue);
   }
   if (Array.isArray(a)) {

@@ -1,11 +1,20 @@
-import { action, assert, pattern, TESTS, wish, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  pattern,
+  resultOf,
+  TESTS,
+  wish,
+  Writable,
+} from "commonfabric";
 import type { MinimalPiece } from "../../notes/schemas.tsx";
 import NotebookNestBug from "./main.tsx";
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<MinimalPiece[]>>({
+  const pieceRegistryRequest = wish<Writable<MinimalPiece[]>>({
     query: "#pieceRegistry",
-  }).result!;
+  });
+  const pieceRegistry = resultOf(pieceRegistryRequest.result);
   const subject = NotebookNestBug({});
 
   const action_create_nested_notebooks = action(() => {

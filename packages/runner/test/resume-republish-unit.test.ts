@@ -67,7 +67,16 @@ class FakeCell {
   get(): unknown {
     return this.value;
   }
+  getRaw(): unknown {
+    return this.value;
+  }
+  resolveAsCell(): this {
+    return this;
+  }
   set(v: unknown): void {
+    this.setValues.push(v);
+  }
+  setRawUntyped(v: unknown): void {
     this.setValues.push(v);
   }
   sync(): Promise<unknown> {

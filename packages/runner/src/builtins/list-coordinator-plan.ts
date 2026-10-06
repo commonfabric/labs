@@ -31,6 +31,8 @@ export type ListCoordinatorPlan = {
    * input has no value, and a non-array passes through for the caller's
    * guard. */
   list: Cell<any>[] | undefined;
+  /** Raw list value, retained so unavailable markers remain distinguishable. */
+  rawList: unknown;
   /** The scope the result container is bound to. */
   scope: ReturnType<typeof narrowestCellScope>;
   /** The scoped result container, bound to the plan's transaction. */
@@ -136,6 +138,7 @@ export function listCoordinatorPlan(
     argumentUsage,
     listCell,
     list,
+    rawList,
     scope,
     container,
     elementKeys,

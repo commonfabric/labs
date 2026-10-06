@@ -43,6 +43,22 @@ describe("labelResultSchema (pure)", () => {
             properties: { s: { ifc: { confidentiality: ["sender"] } } },
           },
         },
+        value: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            rows: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: true,
+                properties: {
+                  s: { ifc: { confidentiality: ["sender"] } },
+                },
+              },
+            },
+          },
+        },
       },
     });
   });

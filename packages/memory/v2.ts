@@ -955,7 +955,7 @@ export type OperationFieldSnapshot = OperationFieldAddress & {
  * A SQLite write folded into the commit, applied inside the same transaction as
  * the cell ops (atomic). It is NOT an entity revision — it has no `id` and never
  * enters the revision/head/snapshot/dirty machinery (see SqliteDbRef below /
- * docs/specs/sqlite-builtin/plans/atomic-writes.md).
+ * docs/specs/sqlite-builtin/04-server-execution-and-transactions.md).
  */
 export type SqliteOperation = {
   op: "sqlite";

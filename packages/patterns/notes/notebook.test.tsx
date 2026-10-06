@@ -27,6 +27,7 @@ import {
   equals,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   wish,
   Writable,
@@ -35,9 +36,11 @@ import Notebook from "./notebook.tsx";
 import Note from "./note.tsx";
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<object[]>>({
-    query: "#pieceRegistry",
-  }).result!;
+  const pieceRegistry = resultOf(
+    wish<Writable<object[]>>({
+      query: "#pieceRegistry",
+    }).result,
+  );
 
   // Create some initial notes for testing
   const note1 = Note({

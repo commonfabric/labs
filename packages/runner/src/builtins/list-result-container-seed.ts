@@ -97,6 +97,18 @@ export function seedResultContainerWhenPullSettles(
       if (!stillHeld()) return;
       markDurableReadTx(seedTx);
       if (identity !== undefined) seedTx.tx.scopeKeyIdentity = identity;
+      // This bookkeeping write is bound for the wire. On a speculative client,
+      // the ordinary view may contain the map's own local echo; consuming that
+      // layer would give the exported seed a process-local basis the server can
+      // never resolve. Read the durable replica just as piece-start bookkeeping
+      // does. Serving waves keep their ordinary in-wave view, and the OFF arm
+      // keeps its existing transaction semantics.
+      if (
+        runtime.experimental.serverExecution === true &&
+        !runtime.servingPosture
+      ) {
+        markDurableReadTx(seedTx);
+      }
       runtime.stampServerRun(seedTx, {
         actionId: seedActionId,
         kind: "bookkeeping",

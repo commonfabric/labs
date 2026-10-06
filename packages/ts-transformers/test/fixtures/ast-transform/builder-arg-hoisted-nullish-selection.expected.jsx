@@ -61,9 +61,9 @@ interface CardState {
 const __cfLift_1 = __cfHelpers.lift<{
     profile?: __cfHelpers.Cell<Profile> | undefined;
     profileWish: {
-        result: Profile | undefined;
+        result: __cfHelpers.AsyncResult<Profile>;
     };
-}, Profile | __cfHelpers.Cell<Profile> | undefined>(({ profile, profileWish }) => profile ?? profileWish.result, {
+}, __cfHelpers.Cell<Profile> | AsyncResult<Profile>>(({ profile, profileWish }) => profile ?? profileWish.result, {
     type: "object",
     properties: {
         profile: {
@@ -78,13 +78,31 @@ const __cfLift_1 = __cfHelpers.lift<{
             type: "object",
             properties: {
                 result: {
-                    $ref: "#/$defs/Profile"
+                    anyOf: [{
+                            $ref: "#/$defs/Profile"
+                        }, {
+                            $ref: "#/$defs/IsPending"
+                        }, {
+                            $ref: "#/$defs/IsSyncing"
+                        }, {
+                            $ref: "#/$defs/HasError"
+                        }]
                 }
-            }
+            },
+            required: ["result"]
         }
     },
     required: ["profileWish"],
     $defs: {
+        HasError: {
+            type: "FabricUnavailable"
+        },
+        IsSyncing: {
+            type: "FabricUnavailable"
+        },
+        IsPending: {
+            type: "FabricUnavailable"
+        },
         Profile: {
             type: "object",
             properties: {
@@ -97,14 +115,27 @@ const __cfLift_1 = __cfHelpers.lift<{
     }
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
-            type: "undefined"
-        }, {
             $ref: "#/$defs/Profile"
         }, {
             $ref: "#/$defs/Profile",
             asCell: ["cell"]
+        }, {
+            $ref: "#/$defs/IsPending"
+        }, {
+            $ref: "#/$defs/IsSyncing"
+        }, {
+            $ref: "#/$defs/HasError"
         }],
     $defs: {
+        HasError: {
+            type: "FabricUnavailable"
+        },
+        IsSyncing: {
+            type: "FabricUnavailable"
+        },
+        IsPending: {
+            type: "FabricUnavailable"
+        },
         Profile: {
             type: "object",
             properties: {
@@ -167,7 +198,7 @@ export default pattern((__cf_pattern_input) => {
     }).for("activeProfile", true);
     const boundJoin = join({
         myName,
-        profile: activeProfile?.for(["boundJoin", "profile"], true)
+        profile: activeProfile.for(["boundJoin", "profile"], true)
     }).for({ stream: "boundJoin" }, true);
     return {
         [UI]: (<div>

@@ -17,8 +17,12 @@ import {
   cfSqlite,
   computed,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   Stream,
@@ -92,9 +96,18 @@ export default pattern<Record<string, never>, RecordsOutput>(() => {
     { reactOn: db, maxConfidentiality: ceiling, onExceed: "fail" },
   );
 
-  const diagnosisRows = computed<DiagnosisRow[]>(() => diagnoses.result ?? []);
-  const diagnosisError = computed<string>(() => String(diagnoses.error ?? ""));
-  const ssnError = computed<string>(() => String(ssns.error ?? ""));
+  const diagnosisRows = computed<DiagnosisRow[]>(() => {
+    if (
+      hasError(diagnoses) || isPending(diagnoses) || isSyncing(diagnoses)
+    ) return [];
+    return resultOf(diagnoses).rows;
+  });
+  const diagnosisError = computed<string>(() =>
+    hasError(diagnoses) ? diagnoses.errorMessage : ""
+  );
+  const ssnError = computed<string>(() =>
+    hasError(ssns) ? ssns.errorMessage : ""
+  );
 
   const seed = seedRecords({ db });
 

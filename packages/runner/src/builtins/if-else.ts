@@ -1,4 +1,6 @@
 import { internSchema } from "@commonfabric/data-model-schema";
+import { isUnavailable } from "@commonfabric/data-model/availability";
+import { readAvailabilityAwareCell } from "../data-unavailability.ts";
 
 import { type Cell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
@@ -9,6 +11,7 @@ import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import { readsTruthyAtRoot } from "../schema.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+
 import { ownedCell } from "./runtime-owned-store.ts";
 import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
 
@@ -76,6 +79,18 @@ export function ifElse(
     );
     sendResult(tx, result);
     const resultWithLog = result.withTx(tx);
+    const condition = readAvailabilityAwareCell(
+      tx,
+      inputsCell.key("condition"),
+      {
+        surfaceReplicaSyncing: true,
+        readValue: false,
+      },
+    );
+    if (isUnavailable(condition)) {
+      resultWithLog.setRaw(condition);
+      return;
+    }
     const inputsWithLog = inputsCell.withTx(tx);
 
     const ref = inputsWithLog.key(truthy ? "ifTrue" : "ifFalse")

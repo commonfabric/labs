@@ -195,3 +195,104 @@ Deno.test("removing a property a custom element defines sets it to undefined", (
     '<x-labeled-box title="Hint"></x-labeled-box>',
   );
 });
+
+for (const authoredInert of [false, true]) {
+  Deno.test(`removing pending state restores authored inert=${authoredInert} and busy attributes and focus behavior`, () => {
+    const applicator = new DomApplicator({
+      onEvent: () => {},
+      onError: (error) => {
+        throw error;
+      },
+    });
+    applicator.applyBatch({
+      batchId: 1,
+      ops: [{ op: "create-element", nodeId: 1, tagName: "button" }],
+    });
+    const button = applicator.getNode(1) as HTMLButtonElement;
+    document.body.appendChild(button);
+    try {
+      button.inert = authoredInert;
+      button.setAttribute("aria-busy", "false");
+      applicator.applyBatch({
+        batchId: 2,
+        ops: [{
+          op: "set-prop",
+          nodeId: 1,
+          key: "data-cf-pending",
+          value: true,
+        }],
+      });
+      assertStrictEquals(button.inert, true);
+      assertStrictEquals(button.getAttribute("aria-busy"), "true");
+      button.focus();
+      assertStrictEquals(document.activeElement === button, false);
+
+      applicator.applyBatch({
+        batchId: 3,
+        ops: [{ op: "remove-prop", nodeId: 1, key: "data-cf-pending" }],
+      });
+      assertStrictEquals(button.hasAttribute("data-cf-pending"), false);
+      assertStrictEquals(button.inert, authoredInert);
+      assertStrictEquals(button.getAttribute("aria-busy"), "false");
+      button.focus();
+      assertStrictEquals(document.activeElement === button, !authoredInert);
+    } finally {
+      button.remove();
+      applicator.dispose();
+    }
+  });
+}
+
+Deno.test("pending state retains authored attribute updates until recovery", () => {
+  const applicator = new DomApplicator({
+    onEvent: () => {},
+    onError: (error) => {
+      throw error;
+    },
+  });
+  applicator.applyBatch({
+    batchId: 1,
+    ops: [{ op: "create-element", nodeId: 1, tagName: "button" }],
+  });
+  const button = applicator.getNode(1) as HTMLButtonElement;
+  document.body.appendChild(button);
+  try {
+    button.inert = true;
+    button.setAttribute("aria-busy", "true");
+    applicator.applyBatch({
+      batchId: 2,
+      ops: [{
+        op: "set-prop",
+        nodeId: 1,
+        key: "data-cf-pending",
+        value: true,
+      }, {
+        op: "set-prop",
+        nodeId: 1,
+        key: "inert",
+        value: false,
+      }, {
+        op: "set-prop",
+        nodeId: 1,
+        key: "aria-busy",
+        value: "false",
+      }],
+    });
+    assertStrictEquals(button.inert, true);
+    assertStrictEquals(button.getAttribute("aria-busy"), "true");
+    button.focus();
+    assertStrictEquals(document.activeElement === button, false);
+
+    applicator.applyBatch({
+      batchId: 3,
+      ops: [{ op: "remove-prop", nodeId: 1, key: "data-cf-pending" }],
+    });
+    assertStrictEquals(button.inert, false);
+    assertStrictEquals(button.getAttribute("aria-busy"), "false");
+    button.focus();
+    assertStrictEquals(document.activeElement, button);
+  } finally {
+    button.remove();
+    applicator.dispose();
+  }
+});

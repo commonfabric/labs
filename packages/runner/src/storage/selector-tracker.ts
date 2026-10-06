@@ -1,8 +1,5 @@
 import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
-import {
-  isDeepFrozen,
-  isWalkableObjectOrArray,
-} from "@commonfabric/data-model";
+import { isDeepFrozen, isKeyableObjectOrArray } from "@commonfabric/data-model";
 import {
   hashSchema,
   internSchema,
@@ -400,7 +397,7 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     const traverse = (
       value: Readonly<any>,
     ): FabricValue => {
-      if (isWalkableObjectOrArray(value)) {
+      if (isKeyableObjectOrArray(value)) {
         if (Array.isArray(value)) {
           return value.map((val) => traverse(val));
         } else {

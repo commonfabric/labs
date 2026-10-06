@@ -11,29 +11,32 @@
  *
  * Run: deno task cf test packages/patterns/system/default-app.test.tsx --root packages/patterns --verbose
  */
-import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import {
+  action,
+  assert,
+  computed,
+  handler,
+  pattern,
+  type Stream,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 import { findElementByExactText, propsOf } from "../test/vnode-helpers.ts";
 import DefaultApp from "./default-app.tsx";
 import Note from "../notes/note.tsx";
+import { type MentionablePiece } from "./backlinks-index.tsx";
 
-type AddPieceStream = { send: (event: { piece: unknown }) => void };
+const addPiece = handler<void, {
+  stream: Stream<{ piece: Writable<MentionablePiece> }>;
+  piece: Writable<MentionablePiece>;
+}>((_, { stream, piece }) => stream.send({ piece }));
 
-// Module scope: SES callbacks may not capture callables from enclosing
-// function scopes.
-const addPieceOf = (subject: Record<string, unknown>, piece: unknown) =>
-  (subject.addPiece as AddPieceStream).send({ piece });
-
-const piecesLengthOf = (subject: Record<string, unknown>) =>
-  [...((subject.pieceRegistry as unknown[]) ?? [])].length;
-
-const clickFirstRemove = (subject: { [UI]: unknown }) => {
-  const button = findElementByExactText(subject[UI], "cf-button", "🗑️");
-  const onClick = propsOf(button)?.onClick;
-  (onClick as { send: (event: Record<string, never>) => void }).send({});
-};
+const piecesLengthOf = (pieceRegistry: unknown[]) => [...pieceRegistry].length;
 
 export default pattern(() => {
   const subject = DefaultApp();
+  const currentUI = computed(() => subject[UI]);
 
   const note = Note({
     title: "Registered Note",
@@ -44,30 +47,43 @@ export default pattern(() => {
     content: "",
   });
 
-  const action_register_note = action(() => addPieceOf(subject, note));
-  const action_register_note_again = action(() => addPieceOf(subject, note));
-  const action_register_other_note = action(() =>
-    addPieceOf(subject, otherNote)
-  );
-  const action_remove_first_note = action(() => clickFirstRemove(subject));
+  const action_register_note = addPiece({
+    stream: subject.addPiece,
+    piece: note,
+  });
+  const action_register_note_again = addPiece({
+    stream: subject.addPiece,
+    piece: note,
+  });
+  const action_register_other_note = addPiece({
+    stream: subject.addPiece,
+    piece: otherNote,
+  });
+  const action_remove_first_note = action(() => {
+    const button = findElementByExactText(currentUI, "cf-button", "🗑️");
+    const onClick = propsOf(button)?.onClick;
+    (onClick as { send: (event: Record<string, never>) => void }).send({});
+  });
 
-  const assert_starts_empty = assert(() => piecesLengthOf(subject) === 0);
+  const assert_starts_empty = assert(() =>
+    piecesLengthOf(subject.pieceRegistry) === 0
+  );
 
   const assert_first_registration_lands = assert(() =>
-    piecesLengthOf(subject) === 1
+    piecesLengthOf(subject.pieceRegistry) === 1
   );
 
   // The same piece cell again must resolve to the same membership entry.
   const assert_duplicate_registration_is_noop = assert(() =>
-    piecesLengthOf(subject) === 1
+    piecesLengthOf(subject.pieceRegistry) === 1
   );
 
   // Dedup is by identity, not a cap: a distinct piece still lands.
   const assert_distinct_piece_lands = assert(() =>
-    piecesLengthOf(subject) === 2
+    piecesLengthOf(subject.pieceRegistry) === 2
   );
   const assert_remove_updates_registry = assert(() =>
-    piecesLengthOf(subject) === 1
+    piecesLengthOf(subject.pieceRegistry) === 1
   );
 
   return {

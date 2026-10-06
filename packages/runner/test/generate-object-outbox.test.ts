@@ -14,6 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { generateObjectState } from "../src/builder/built-in.ts";
 import { generateObject as rawGenerateObject } from "../src/builtins/llm.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -37,9 +38,7 @@ describe("generateObject outbox mechanism", () => {
   let tx: IExtendedStorageTransaction;
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
   let dummyPattern: any;
-  let generateObject: ReturnType<
-    typeof createBuilder
-  >["commonfabric"]["generateObject"];
+  let generateObject: typeof generateObjectState;
 
   beforeEach(() => {
     clearMockResponses();
@@ -51,7 +50,8 @@ describe("generateObject outbox mechanism", () => {
     tx = runtime.edit();
 
     const { commonfabric } = createTrustedBuilder(runtime);
-    ({ pattern, generateObject } = commonfabric);
+    ({ pattern } = commonfabric);
+    generateObject = generateObjectState;
     dummyPattern = pattern(() => ({}), { type: "object" });
   });
 

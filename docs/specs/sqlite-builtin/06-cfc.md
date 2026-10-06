@@ -114,7 +114,7 @@ than a crash.
 Provenance is captured **server-side** (where the prepared statement lives); the
 **runner** maps each origin → the column's `ifc` and writes the result rows under
 a **per-field label schema** (`labelResultSchema`), so a consumer reading
-`q.result[i].<col>` inherits that column's label:
+`resultOf(q).rows[i].<col>` inherits that column's label:
 
 - An origin column's `ifc` is copied to its result field.
 - A `null`-origin column (expression / literal / aggregate) does NOT refuse the

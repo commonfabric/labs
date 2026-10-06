@@ -1,7 +1,14 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
+
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { hashOf } from "@commonfabric/data-model";
+
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { BuiltInCompileAndRunParams } from "commonfabric";
@@ -188,7 +195,12 @@ describe("compile-and-run-served", () => {
           f.action(tx);
           const publication = f.publication.withTx(tx);
           expect(publication.key("pending").get()).toBe(false);
-          expect(publication.key("result").get()).toBeUndefined();
+          expect(publication.key("result").get()).toEqual(
+            unavailableError(
+              "Compilation requires a main entrypoint and files",
+              "invalidInput",
+            ),
+          );
           expect(publication.key("error").get()).toBeUndefined();
           expect(publication.key("errors").get()).toBeUndefined();
           for (
@@ -373,22 +385,21 @@ describe("compile-and-run-served", () => {
       runtime.run(tx, parent, {}, result);
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
-      const value = await waitForCellValue<
-        { pending: boolean; error?: string }
-      >(
+      const value = await waitForCellValue(
         runtime,
         result,
-        (value) => value?.error !== undefined,
+        (value) => isUnavailable(value) && value.reason === "error",
       );
       await runtime.settled();
       expect(launches).toBe(0);
       expect(refusals.map(String).join("\n")).toContain(
         "sink-request confidentiality exceeds ceiling for compileAndRun",
       );
-      expect(value.pending).toBe(false);
-      expect(value.error).toBe(
-        "compileAndRun request was refused before it started",
-      );
+      expect(value).toMatchObject({
+        reason: "error",
+        errorKind: "compile",
+        errorMessage: "compileAndRun request was refused before it started",
+      });
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -461,19 +472,21 @@ describe("compile-and-run-served", () => {
       // reports the refusal, and a run that reaches the compiler reports
       // nothing.
       await Promise.race([
-        waitForCellValue<{ pending: boolean; error?: string }>(
+        waitForCellValue(
           runtime,
           result,
-          (value) => value?.error !== undefined,
+          (value) => isUnavailable(value) && value.reason === "error",
         ),
         refused.promise,
       ]);
       await runtime.settled();
       expect(refusals.map(String).join("\n")).not.toContain("writer-fit");
       expect(launches).toBe(1);
-      const value = result.get() as { pending: boolean; error?: string };
-      expect(value.pending).toBe(false);
-      expect(value.error).toContain("labeled source compiler failure");
+      const value = result.get();
+      expect(isUnavailable(value) && value.reason).toBe("error");
+      expect(isUnavailable(value) && value.errorMessage).toContain(
+        "labeled source compiler failure",
+      );
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -607,7 +620,11 @@ describe("compile-and-run-served", () => {
       expect(f.outputs.error.get()).toBe(
         "compileAndRun request was refused before it started",
       );
-      expect(f.outputs.result.get()).toBeUndefined();
+      expect(f.outputs.result.get()).toMatchObject({
+        reason: "error",
+        errorKind: "compile",
+        errorMessage: "compileAndRun request was refused before it started",
+      });
       expect(f.memo.get()?.requestHash).toBe(hashOf(PROGRAM).toString());
       expect(f.memo.get()?.phase).toBe("resolved");
     } finally {
@@ -636,7 +653,7 @@ describe("compile-and-run-served", () => {
         phase: "compiled",
       });
       expect(f.outputs.pending.get()).toBe(true);
-      expect(f.outputs.result.get()).toBeUndefined();
+      expect(f.outputs.result.get()).toEqual(UNAVAILABLE_PENDING);
 
       expect(await f.run(empty)).toBe(false);
       expect(f.memo.get()).toEqual({
@@ -644,7 +661,10 @@ describe("compile-and-run-served", () => {
         phase: "resolved",
       });
       expect(f.outputs.pending.get()).toBe(false);
-      expect(f.outputs.result.get()).toBeUndefined();
+      expect(f.outputs.result.get()).toMatchObject({
+        reason: "error",
+        errorKind: "invalidInput",
+      });
     } finally {
       await f.close();
     }
@@ -684,7 +704,12 @@ describe("compile-and-run-served", () => {
         expect(f.inputs.get()).toEqual(empty);
         expect(await f.run(empty)).toBe(false);
         expect(f.outputs.pending.get()).toBe(false);
-        expect(f.outputs.result.get()).toBeUndefined();
+        expect(f.outputs.result.get()).toEqual(
+          unavailableError(
+            "Compilation requires a main entrypoint and files",
+            "invalidInput",
+          ),
+        );
         expect(f.memo.get()).toEqual({
           requestHash: hashOf(empty).toString(),
           phase: "resolved",

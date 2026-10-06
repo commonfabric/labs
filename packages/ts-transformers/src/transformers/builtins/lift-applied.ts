@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { CFHelpers } from "../../core/cf-helpers.ts";
 import {
+  detectCallKind,
   getExpressionText,
   getTypeAtLocationWithFallback,
   preserveSourceMapRange,
@@ -27,6 +28,15 @@ import {
 } from "../../ast/type-building.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
 import type { TransformationContext } from "../../core/mod.ts";
+import {
+  availabilityOverridesByPath,
+  collectAvailabilityGuardCaptures,
+  createUnavailableInputPolicyOptions,
+} from "../../availability/captures.ts";
+import {
+  canonicalizeResultOfCaptures,
+  rewriteResultOfAliasReferences,
+} from "../../availability/analysis.ts";
 
 /**
  * Replace Reactive expressions with parameter identifiers in the callback body.
@@ -207,9 +217,20 @@ export function createLiftAppliedCall(
   }
 
   const { factory, tsContext, cfHelpers, context } = options;
+  const canonical = canonicalizeResultOfCaptures(refs, context);
+  const canonicalExpression = rewriteResultOfAliasReferences(
+    expression,
+    canonical.aliases,
+    context,
+    tsContext,
+  );
+  const availabilityCaptures = collectAvailabilityGuardCaptures(
+    canonicalExpression,
+    context,
+  );
   const { captureTree, fallbackEntries, refToParamName } =
     planLiftAppliedInputEntries(
-      refs,
+      [...canonical.captures],
     );
   if (captureTree.size === 0 && fallbackEntries.length === 0) {
     return undefined;
@@ -225,7 +246,7 @@ export function createLiftAppliedCall(
   );
 
   const lambdaBody = replaceReactivesWithParams(
-    expression,
+    canonicalExpression,
     refToParamName,
     factory,
     tsContext,
@@ -270,18 +291,23 @@ export function createLiftAppliedCall(
     captureTree,
     fallbackEntries,
     context,
+    availabilityOverridesByPath(availabilityCaptures),
   );
 
   // Infer the expression result when the caller supplies no output type.
   const resultTypeNode = options.resultTypeNode ??
     buildResultTypeNode(expression, context);
+  const availabilityOptions = createUnavailableInputPolicyOptions(
+    availabilityCaptures,
+    factory,
+  );
 
   // Inner lift call: __cfHelpers.lift<inputTypeNode, resultTypeNode>(callback)
   const innerLiftCall = cfHelpers.createHelperCall(
     "lift",
     expression,
     [inputTypeNode, resultTypeNode],
-    [arrowFunction],
+    [arrowFunction, ...(availabilityOptions ? [availabilityOptions] : [])],
   );
 
   // Outer applied call: (inputObject). Source-map-range ONLY: this wrapper
@@ -323,6 +349,7 @@ function buildInputTypeNode(
   captureTree: ReturnType<typeof groupCapturesByRoot>,
   fallbackEntries: readonly FallbackEntry[],
   context: TransformationContext,
+  availabilityOverrides: ReturnType<typeof availabilityOverridesByPath>,
 ): ts.TypeNode {
   const { factory } = context;
   const typeElements: ts.TypeElement[] = [];
@@ -331,6 +358,8 @@ function buildInputTypeNode(
   const captureTypeElements = buildCaptureTypeElements(
     captureTree,
     context,
+    undefined,
+    availabilityOverrides,
   );
   for (const typeElement of captureTypeElements) typeElements.push(typeElement);
 
@@ -368,6 +397,18 @@ function buildResultTypeNode(
     context.state.typeRegistry,
   );
   if (constructedCell) return constructedCell;
+
+  // Availability guards are predicates and therefore always produce a
+  // boolean. In transformer fixtures (and other syntax-only consumers) the
+  // commonfabric module can be intentionally unresolved, causing the checker
+  // to report `any` for the call. The runtime registry remains authoritative
+  // for the call kind, so preserve the guard's precise output contract here.
+  if (
+    ts.isCallExpression(expression) &&
+    detectCallKind(expression, checker)?.kind === "availability-guard"
+  ) {
+    return factory.createKeywordTypeNode(ts.SyntaxKind.BooleanKeyword);
+  }
 
   // Try to get the type of the result expression
   // Use getTypeAtLocationWithFallback to handle synthetic nodes that may have

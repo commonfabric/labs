@@ -1,4 +1,12 @@
-import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
+import {
+  computed,
+  NAME,
+  pattern,
+  resultOf,
+  UI,
+  type VNode,
+  wish,
+} from "commonfabric";
 
 // A live wall clock, driven by the reactive `#now` wish.
 //
@@ -7,9 +15,10 @@ import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
 // time/entropy capability gate — a live clock read there would break reactive
 // idempotency). The ticking time therefore comes from `wish({ query: "#now/1" })`,
 // a coarse, one-second, grid-aligned clock the reactive graph can depend on. It
-// reads `null` until the wish first resolves, so every derived label guards for
-// that window. `new Date(ms)` with an explicit argument is deterministic and is
-// not gated, so it is fine for formatting a known timestamp.
+// is unavailable until the wish first resolves, so `resultOf()` projects the
+// timestamp and dependent labels remain unavailable during that window.
+// `new Date(ms)` with an explicit argument is deterministic and is not gated,
+// so it is fine for formatting a known timestamp.
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = [
@@ -58,11 +67,10 @@ export interface ClockOutput {
 
 export const Clock = pattern<void, ClockOutput>(() => {
   const now = wish<number>({ query: "#now/1" });
+  const nowValue = resultOf(now.result);
 
-  const time = computed(() =>
-    now.result == null ? "--:--:--" : formatTime(now.result)
-  );
-  const date = computed(() => now.result == null ? "" : formatDate(now.result));
+  const time = computed(() => formatTime(nowValue));
+  const date = computed(() => formatDate(nowValue));
 
   return {
     [NAME]: computed(() => `Clock — ${time}`),

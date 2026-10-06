@@ -623,10 +623,11 @@ transaction shape, and a transaction outside the blind-write family —
 including its verifier reads — keeps naming every layer, unless it
 carries the durable-read mark below; `speculation-overlay.test.ts`
 pins the export, the scoping, the verify-durable consistency, the
-content-addressed exemption, and the durable-read mark on both a
-direct transaction and a piece start.
+content-addressed exemption, and the durable-read mark on a direct transaction
+and a piece start. `list-result-container-seed.test.ts` pins the same mark on a
+list result-container recovery seed.
 
-### The durable-read mark, and the piece start that needs it
+### The durable-read mark and the bookkeeping that needs it
 
 An authored transaction whose writes must reach the wire can read the
 durable replica view instead of the ordinary one. `markDurableReadTx`
@@ -636,9 +637,12 @@ transaction consumed and what it names stay the same set — the
 verify-durable and name-durable pairing again, one shape wider. A
 document still short of its authoritative value re-derives reactively
 once that value lands, which is the recovery path §6's refusal
-message names. Two callers carry the mark. One is the direct SQLite
-capability's exec, an authored write with no reactive run around it.
-The other is the runner's piece start.
+message names. Three callers carry the mark. One is the direct SQLite
+capability's exec, an authored write with no reactive run around it. The second
+is the runner's piece start. The third is a `map` / `filter` / `flatMap`
+result-container recovery seed on a server-execution client: the seed is
+wire-bound bookkeeping, and its presence probe must not consume the
+coordinator's own speculative result.
 
 A piece start mints its own transaction, instantiates the pattern's
 nodes into it, and commits it fire-and-forget as sanctioned

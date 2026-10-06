@@ -5,10 +5,14 @@ import {
   type Cell,
   computed,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   navigateTo,
   pattern,
   type PerUser,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -98,7 +102,7 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
   const appendBook = addBook({ books: addedBooks });
   const appendAuthor = addAuthor({ authors: addedAuthors });
   const view = LibraryView({
-    profile: profile.result!,
+    profile: resultOf(profile.result),
     books: reading.books,
     favoriteAuthors: reading.favoriteAuthors,
     agentStatus: computed(() =>
@@ -108,7 +112,13 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
     addBook: appendBook,
     addAuthor: appendAuthor,
     createInvitation: create,
-    canCreateInvitation: computed(() => profile.result?.get() !== undefined),
+    canCreateInvitation: computed(() => {
+      if (
+        isPending(profile.result) || isSyncing(profile.result) ||
+        hasError(profile.result)
+      ) return false;
+      return resultOf(profile.result).get() !== undefined;
+    }),
   });
   return {
     [NAME]: "My reading shelf",

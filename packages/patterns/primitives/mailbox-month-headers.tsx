@@ -16,9 +16,15 @@
 import {
   computed,
   Default,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   type SqliteDb,
   UI,
   type VNode,
@@ -111,19 +117,6 @@ const headersSql = (): string =>
     `LIMIT max(1, min(COALESCE(?, ${DEFAULT_LIMIT}), ${MAX_LIMIT}))`,
   ].join("\n");
 
-/**
- * What a query reports about a failure, empty when it has not failed.
- *
- * The same narrowing the sqlite builtin applies before it writes one, so a
- * value that reaches here already a message passes through unchanged.
- */
-const errorText = (error: unknown): string =>
-  error === undefined || error === null
-    ? ""
-    : error instanceof Error
-    ? error.message
-    : String(error);
-
 export const MailboxMonthHeaders = pattern<
   MailboxMonthHeadersInput,
   MailboxMonthHeadersOutput
@@ -145,15 +138,30 @@ export const MailboxMonthHeaders = pattern<
     params: [monthParam, limitParam],
     scope: "session",
   });
+  const observedMonthRead = observeAvailability(monthRead);
+  const observedHeadersRead = observeAvailability(headersRead);
 
-  const resolvedMonth = computed(() => monthRead.result?.[0]?.month ?? "");
-  const headers = computed(() => headersRead.result ?? []);
-  const headerCount = computed(() => (headersRead.result ?? []).length);
-  const pending = computed(() => headersRead.pending === true);
-  const errorMessage = computed(() => errorText(headersRead.error));
-  const hasError = computed(() => errorMessage !== "");
+  const resolvedMonth = computed(() =>
+    isPending(observedMonthRead) || hasError(observedMonthRead) ||
+      isSyncing(observedMonthRead) || hasSchemaMismatch(observedMonthRead)
+      ? ""
+      : resultOf(observedMonthRead).rows[0]?.month ?? ""
+  );
+  const headers = computed(() =>
+    isPending(observedHeadersRead) || hasError(observedHeadersRead) ||
+      isSyncing(observedHeadersRead) ||
+      hasSchemaMismatch(observedHeadersRead)
+      ? []
+      : resultOf(observedHeadersRead).rows
+  );
+  const headerCount = computed(() => headers.length);
+  const pending = computed(() => isPending(observedHeadersRead));
+  const errorMessage = computed(() =>
+    hasError(observedHeadersRead) ? observedHeadersRead.errorMessage : ""
+  );
+  const hasQueryError = computed(() => errorMessage !== "");
   const isEmpty = computed(() =>
-    !pending && !hasError && (headersRead.result ?? []).length === 0
+    !pending && !hasQueryError && headers.length === 0
   );
 
   const listRows = headers.map((header: MailboxHeader) => (
@@ -178,7 +186,7 @@ export const MailboxMonthHeaders = pattern<
         </cf-hstack>
 
         {ifElse(
-          hasError,
+          hasQueryError,
           <cf-alert status="error">{errorMessage}</cf-alert>,
           null,
         )}

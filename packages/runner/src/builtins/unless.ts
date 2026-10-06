@@ -1,4 +1,7 @@
 import { type Cell } from "../cell.ts";
+import { isUnavailable } from "@commonfabric/data-model/availability";
+import { readAvailabilityAwareCell } from "../data-unavailability.ts";
+
 import { type Action } from "../scheduler.ts";
 import { type Runtime } from "../runtime.ts";
 import { readsTruthyAtRoot } from "../schema.ts";
@@ -40,6 +43,14 @@ export function unless(
     );
     sendResult(tx, result);
     const resultWithLog = result.withTx(tx);
+    const condition = readAvailabilityAwareCell(tx, conditionCell, {
+      surfaceReplicaSyncing: true,
+      readValue: false,
+    });
+    if (isUnavailable(condition)) {
+      resultWithLog.setRaw(condition);
+      return;
+    }
     const inputsWithLog = inputsCell.withTx(tx);
 
     const truthy = readsTruthyAtRoot(

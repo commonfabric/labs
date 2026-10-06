@@ -7,8 +7,16 @@
 import {
   computed,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  ifElse,
+  isPending,
+  isSyncing,
+  latestComplete,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   toIndentedDebugString,
   UI,
   wish,
@@ -90,21 +98,62 @@ export default pattern<Record<string, never>>((_) => {
   const journalResult = wish<Array<JournalEntry>>({
     query: "#journal",
   });
+  const journal = resultOf(journalResult.result);
 
   // Current time, ticking every 60 seconds so relative-time labels
   // ("just now", "5m ago", ...) refresh as time passes.
   const nowCell = wish<number>({ query: "#now/60" });
+  const journalSnapshot = latestComplete({
+    journal: journalResult.result,
+    nowMs: nowCell.result,
+  });
+  const observedJournalSnapshot = observeAvailability(journalSnapshot);
+  const displaySnapshot = computed(() => {
+    if (
+      isPending(observedJournalSnapshot) ||
+      hasError(observedJournalSnapshot) ||
+      isSyncing(observedJournalSnapshot)
+    ) return { journal: [], nowMs: 0 };
+    return resultOf(observedJournalSnapshot);
+  });
+  const availabilityState = computed(() => {
+    if (isPending(journalResult.result) || isPending(nowCell.result)) {
+      return { availability: "pending", error: "" };
+    }
+    if (
+      hasSchemaMismatch(journalResult.result) ||
+      hasSchemaMismatch(nowCell.result)
+    ) {
+      return {
+        availability: "schemaMismatch",
+        error: "Journal data has an unexpected format.",
+      };
+    }
+    if (hasError(journalResult.result)) {
+      return {
+        availability: "error",
+        error: journalResult.result.errorMessage,
+      };
+    }
+    if (hasError(nowCell.result)) {
+      return {
+        availability: "error",
+        error: nowCell.result.errorMessage,
+      };
+    }
+    if (isSyncing(journalResult.result) || isSyncing(nowCell.result)) {
+      return { availability: "syncing", error: "" };
+    }
+    return { availability: "ready", error: "" };
+  });
+
+  // Keep the last complete pair so a transient reconnect does not replace a
+  // populated journal with an empty state or fabricate a reference time.
+  const entries = computed(() => [...displaySnapshot.journal].reverse());
 
   // Debug: stringify raw result for the debug panel
   const debugRaw = computed(() => {
-    const raw = journalResult.result;
-    return toIndentedDebugString(raw);
-  });
-
-  // Most recent entries first
-  const entries = computed(() => {
-    const journal = journalResult.result || [];
-    return [...journal].reverse();
+    return toIndentedDebugString(entries);
   });
 
   const entryCount = computed(() => entries.length);
@@ -124,13 +173,27 @@ export default pattern<Record<string, never>>((_) => {
           <h2 style={{ margin: "0" }}>Activity Journal</h2>
           {entryCount > 0 && (
             <cf-button
-              onClick={clearJournal({ journal: journalResult.result! })}
+              onClick={clearJournal({ journal })}
               variant="secondary"
             >
               Clear Journal
             </cf-button>
           )}
         </div>
+
+        {ifElse(
+          computed(() =>
+            availabilityState.availability === "pending" ||
+            availabilityState.availability === "syncing"
+          ),
+          <p role="status">Loading journal data…</p>,
+          null,
+        )}
+        {ifElse(
+          availabilityState.error,
+          <p role="alert">{availabilityState.error}</p>,
+          null,
+        )}
 
         {/* Debug section */}
         <details style={{ marginBottom: "16px", fontSize: "12px" }}>
@@ -204,9 +267,10 @@ export default pattern<Record<string, never>>((_) => {
                     color: "#666",
                   }}
                 >
-                  {nowCell.result == null
-                    ? ""
-                    : formatTimestamp(entry.timestamp, nowCell.result)}
+                  {formatTimestamp(
+                    entry.timestamp,
+                    displaySnapshot.nowMs,
+                  )}
                 </span>
               </div>
 
@@ -264,5 +328,7 @@ export default pattern<Record<string, never>>((_) => {
         </div>
       </div>
     ),
+    availability: availabilityState.availability,
+    error: availabilityState.error,
   };
 });

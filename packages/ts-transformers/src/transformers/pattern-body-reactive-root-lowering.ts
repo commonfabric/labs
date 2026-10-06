@@ -1208,10 +1208,13 @@ function hasLocalOpaqueOriginBinding(
     if (ts.isFunctionLike(node) && node !== body) return;
 
     if (ts.isVariableDeclaration(node) && node.initializer) {
-      const initializer = unwrapExpression(node.initializer);
       if (
-        ts.isCallExpression(initializer) &&
-        isOpaqueOriginCall(initializer, context)
+        isOpaqueSourceExpression(
+          node.initializer,
+          new Set(),
+          new Set(),
+          context,
+        )
       ) {
         found = true;
         return;

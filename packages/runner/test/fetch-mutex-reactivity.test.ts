@@ -1,5 +1,8 @@
+import { FabricUnavailable } from "@commonfabric/data-model/availability";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { isDeepFrozen } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
@@ -7,9 +10,21 @@ import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setPatternEnvironment } from "../src/env.ts";
+import { parseLink } from "../src/link-utils.ts";
 
 const signer = await Identity.fromPassphrase("test fetch mutex");
 const space = signer.did();
+
+async function rawResultChild(
+  runtime: Runtime,
+  container: any,
+): Promise<unknown> {
+  const link = parseLink(container.key("result").getRaw(), container);
+  if (!link) throw new Error("fetch result child link was not materialized");
+  const child = runtime.getCellFromLink(link);
+  await child.sync();
+  return child.getRaw();
+}
 
 describe("fetch-json mutex mechanism: reactive fetch state", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -246,6 +261,7 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
     const data = (await result.pull()) as {
       error?: unknown;
       pending?: boolean;
+      result?: unknown;
     };
 
     // The error reads back from the result cell with a `name` of `Error`, a
@@ -260,6 +276,11 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
     expect(fe.message).toMatch(/HTTP 404/);
     expect(typeof fe.stack).toBe("string");
     expect(data.pending).toBe(false);
+    const unavailable = await rawResultChild(rt, result) as FabricUnavailable;
+    expect(unavailable).toBeInstanceOf(FabricUnavailable);
+    expect(unavailable.reason).toBe("error");
+    expect(unavailable.errorMessage).toMatch(/HTTP 404/);
+    expect(isDeepFrozen(unavailable)).toBe(true);
 
     await localTx.commit().settled;
     await rt.dispose();
@@ -298,7 +319,10 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
     };
 
     // Should have cleared state
-    expect(data.result).toBeUndefined();
+    expect(await rawResultChild(runtime, resultCell)).toMatchObject({
+      reason: "error",
+      errorKind: "invalidInput",
+    });
     expect(data.error).toBeUndefined();
     expect(data.pending).toBe(false);
   });

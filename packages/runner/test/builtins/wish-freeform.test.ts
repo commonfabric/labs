@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 
 import { wish } from "../../src/builtins/wish.ts";
 import type { Cell } from "../../src/cell.ts";
@@ -27,7 +28,9 @@ describe("wish-freeform", () => {
         const suggestion = pattern<{
           situation: string;
           context: { note: string };
-        }>(({ situation, context }) => ({ result: situation, context }));
+        }>(({ situation, context }) => ({
+          result: { query: situation, context },
+        }));
         runtime.sourceReconciler.open = (_piece, origin) => {
           opened.push(origin);
           return Promise.resolve(suggestion);
@@ -55,22 +58,21 @@ describe("wish-freeform", () => {
           owner,
           runtime,
         );
-        const tx = runtime.edit();
-        builtin.action(tx);
-        runtime.prepareTxForCommit(tx);
-        expect((await tx.commit().settled).error).toBeUndefined();
+        cancels.push(runtime.scheduler.subscribe(builtin.action, {}));
         await runtime.idle();
         expect(output).toBeDefined();
         const state = output!.withTx(undefined);
         if (headless) {
           expect(opened).toEqual([]);
-          expect(state.key("result").get()).toBeUndefined();
+          const result = state.key("result").get();
+          expect(isUnavailable(result)).toBe(true);
+          if (isUnavailable(result)) expect(result.reason).toBe("pending");
           expect(state.key("candidates").get()).toEqual([]);
         } else {
           expect(opened).toEqual(["system:system/suggestion.tsx"]);
           await state.pull();
-          expect(state.key("result").get()).toBe(query);
-          expect(state.key("context").key("note").get()).toBe(
+          expect(state.key("result").key("query").get()).toBe(query);
+          expect(state.key("result").key("context").key("note").get()).toBe(
             "Keep the project notes together",
           );
         }

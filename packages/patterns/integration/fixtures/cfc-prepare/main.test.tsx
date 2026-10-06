@@ -1,6 +1,6 @@
 /// <cts-enable />
 // FIXTURE: SQL-aggregate selection and parsing before reactive bubble rendering.
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, pattern, resultOf, TESTS } from "commonfabric";
 import Thread from "./main.tsx";
 
 export default pattern(() => {
@@ -9,10 +9,10 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert(() => thread.bubbles.length === 0) },
       { action: action(() => thread.seed.send({ count: 11 })) },
-      { assertion: assert(() => thread.thread.result?.length === 1) },
+      { assertion: assert(() => resultOf(thread.thread).rows.length === 1) },
       {
         assertion: assert(() =>
-          typeof thread.thread.result?.[0]?.packed === "string"
+          typeof resultOf(thread.thread).rows[0]?.packed === "string"
         ),
       },
       { assertion: assert(() => thread.bubbles.length === 0) },

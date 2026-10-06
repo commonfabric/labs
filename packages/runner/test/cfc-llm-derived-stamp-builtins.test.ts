@@ -243,7 +243,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     expect(resultIntegrity(result)).toContainEqual(LLM_DERIVED_ATOM);
   });
 
-  it("stamps the `generateText` builtin's model-output result", async () => {
+  it("stamps the `generateTextStream` builtin's model-output result", async () => {
     const testPrompt = "d1b-generateText-stamp";
     addMockResponse(
       (req) =>
@@ -253,9 +253,13 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       { role: "assistant", content: "text reply", id: "d1b-gt-1" },
     );
 
-    const testPattern = builder.pattern(() =>
-      builder.generateText({ prompt: testPrompt })
-    );
+    const testPattern = builder.pattern(() => {
+      const request = builder.generateTextStream({ prompt: testPrompt });
+      return {
+        result: request,
+        partial: builder.partialResultOf(request),
+      };
+    });
     const resultCell = runtime.getCell(
       space,
       "d1b-generateText-result",
@@ -272,7 +276,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     expect(partialIntegrity(result)).toContainEqual(LLM_DERIVED_ATOM);
   });
 
-  it("stamps the `generateObject` direct-path model-output result", async () => {
+  it("stamps the `generateObjectStream` direct-path model-output result", async () => {
     const testPrompt = "d1b-generateObject-direct-stamp";
     const objectSchema: JSONSchema = {
       type: "object",
@@ -293,9 +297,12 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       },
     );
 
-    const testPattern = builder.pattern(() =>
-      builder.generateObject({ prompt: testPrompt, schema: objectSchema })
-    );
+    const testPattern = builder.pattern(() => ({
+      result: builder.generateObjectStream({
+        prompt: testPrompt,
+        schema: objectSchema,
+      }),
+    }));
     const resultCell = runtime.getCell(
       space,
       "d1b-generateObject-direct-result",
@@ -316,7 +323,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     expect(resultIntegrity(result)).toContainEqual(LLM_DERIVED_ATOM);
   });
 
-  it("stamps the `generateObject` tools-path model-output result", async () => {
+  it("stamps the `generateObjectStream` tools-path model-output result", async () => {
     const testPrompt = "d1b-generateObject-tools-stamp";
     const objectSchema: JSONSchema = {
       type: "object",
@@ -342,8 +349,8 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     );
 
     const dummyPattern = builder.pattern(() => ({}), { type: "object" });
-    const testPattern = builder.pattern(() =>
-      builder.generateObject({
+    const testPattern = builder.pattern(() => ({
+      result: builder.generateObjectStream({
         prompt: testPrompt,
         schema: objectSchema,
         tools: {
@@ -352,8 +359,8 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
             pattern: dummyPattern,
           },
         },
-      })
-    );
+      }),
+    }));
     const resultCell = runtime.getCell(
       space,
       "d1b-generateObject-tools-result",
@@ -369,7 +376,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     expect(resultIntegrity(result)).toContainEqual(LLM_DERIVED_ATOM);
   });
 
-  it("stamps a `generateObject` result whose schema splits model bytes into a child doc", async () => {
+  it("stamps a `generateObjectStream` result whose schema splits model bytes into a child doc", async () => {
     // Codex P1: when the resultSchema redirects/splits a nested value into its
     // OWN document (here an `asCell` array item), the model-produced bytes land
     // in that separate child doc. The D1b stamp is merged only into the schema
@@ -409,13 +416,13 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       },
     );
 
-    const testPattern = builder.pattern(() =>
-      builder.generateObject({
+    const testPattern = builder.pattern(() => ({
+      result: builder.generateObjectStream({
         prompt: testPrompt,
         schema: objectSchema,
         schemaSanitizePromptInjection: true,
-      })
-    );
+      }),
+    }));
     const resultCell = runtime.getCell(
       space,
       "d1b-generateObject-child-doc-result",
@@ -514,13 +521,13 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       },
     );
 
-    const testPattern = builder.pattern(() =>
-      builder.generateObject({
+    const testPattern = builder.pattern(() => ({
+      result: builder.generateObjectStream({
         prompt: testPrompt,
         schema: objectSchema,
         schemaSanitizePromptInjection: true,
-      })
-    );
+      }),
+    }));
     const resultCell = runtime.getCell(
       space,
       "d1b-generateObject-compound-recursive-result",
@@ -613,7 +620,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     }
   });
 
-  it("does not stamp the `generateObject` result when CFC is disabled", async () => {
+  it("does not stamp the `generateObjectStream` result when CFC is disabled", async () => {
     // Exercises setStampedObjectResult's disabled branch (writes through the
     // bare resultSchema, minting no CFC metadata).
     const disabledStorage = StorageManager.emulate({ as: signer });
@@ -642,12 +649,12 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     );
 
     try {
-      const testPattern = commonfabric.pattern(() =>
-        commonfabric.generateObject({
+      const testPattern = commonfabric.pattern(() => ({
+        result: commonfabric.generateObjectStream({
           prompt: testPrompt,
           schema: objectSchema,
-        })
-      );
+        }),
+      }));
       const resultCell = disabledRuntime.getCell(
         space,
         "d1b-generateObject-disabled-result",

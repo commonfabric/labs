@@ -211,6 +211,39 @@ describe("Common Fabric formatter flap coverage", () => {
   );
 
   it(
+    "extracts a Default value from a typeof object without a cold pattern compile",
+    async () => {
+      const code = `
+        const DEFAULT_SETTINGS = {
+          retries: 3,
+          enabled: true,
+        } as const;
+
+        // Mirror the public Default<T, V> brand payload. The payload is the
+        // only place V survives after the checker expands the authored alias.
+        declare const DEFAULT_MARKER: unique symbol;
+        type DefaultMarker<V> = { readonly [DEFAULT_MARKER]: V };
+        type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+        interface Settings {
+          retries: number;
+          enabled: boolean;
+        }
+        interface SchemaRoot {
+          settings: Default<Settings, typeof DEFAULT_SETTINGS>;
+        }
+      `;
+
+      const { type, checker } = await getTypeFromCode(code, "SchemaRoot");
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+
+      const settings = schema.properties?.settings as any;
+      expect(settings.default).toEqual({ retries: 3, enabled: true });
+    },
+  );
+
+  it(
     "preserves an outer cell wrapper via the node-driven array items override with plain items",
     async () => {
       const code = `

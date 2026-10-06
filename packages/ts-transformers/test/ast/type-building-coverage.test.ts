@@ -2,10 +2,12 @@ import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import ts from "typescript";
 
 import {
+  applyAvailabilityOverridesToTypeNode,
   buildCaptureTypeElements,
   reportUnknownReactiveType,
   shouldPreserveBindingDeclaredTypeNode,
 } from "../../src/ast/type-building.ts";
+import type { AvailabilityCaptureOverride } from "../../src/availability/captures.ts";
 import { TransformationContext } from "../../src/core/mod.ts";
 import {
   type CaptureTreeNode,
@@ -318,6 +320,83 @@ Deno.test("buildCaptureTypeElements: an intermediate node with neither expressio
         ),
       Error,
       "Invariant violated",
+    );
+  });
+});
+
+Deno.test("applyAvailabilityOverridesToTypeNode: recurses through parenthesized object and tuple paths", () => {
+  withContextEmit(`type Input = unknown;`, (context, sourceFile) => {
+    const factory = context.factory;
+    const base = factory.createParenthesizedType(
+      factory.createTypeLiteralNode([
+        factory.createPropertySignature(
+          undefined,
+          "items",
+          undefined,
+          factory.createTupleTypeNode([
+            factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+            factory.createTypeLiteralNode([
+              factory.createPropertySignature(
+                undefined,
+                "count",
+                undefined,
+                factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+              ),
+            ]),
+          ]),
+        ),
+        factory.createPropertySignature(
+          undefined,
+          "unchanged",
+          undefined,
+          factory.createKeywordTypeNode(ts.SyntaxKind.BooleanKeyword),
+        ),
+        factory.createMethodSignature(
+          undefined,
+          "method",
+          undefined,
+          undefined,
+          [],
+          factory.createKeywordTypeNode(ts.SyntaxKind.VoidKeyword),
+        ),
+      ]),
+    );
+    const overrides: AvailabilityCaptureOverride[] = [
+      {
+        path: ["items", "0"],
+        reasons: ["pending"],
+        variants: [{ name: "IsPending" }],
+      },
+      {
+        path: ["items", "1", "count"],
+        reasons: ["error"],
+        variants: [{ name: "HasError" }],
+      },
+      {
+        path: ["missing"],
+        reasons: ["syncing"],
+        variants: [{ name: "IsSyncing" }],
+      },
+    ];
+
+    const result = applyAvailabilityOverridesToTypeNode(
+      base,
+      overrides,
+      context,
+    );
+    const printed = ts.createPrinter().printNode(
+      ts.EmitHint.Unspecified,
+      result,
+      sourceFile,
+    );
+
+    assertStringIncludes(printed, "string | __cfHelpers.IsPending");
+    assertStringIncludes(printed, "number | __cfHelpers.HasError");
+    assertStringIncludes(printed, "unchanged: boolean");
+    assertStringIncludes(printed, "method(): void");
+    assertEquals(
+      applyAvailabilityOverridesToTypeNode(base, [], context),
+      base,
     );
   });
 });

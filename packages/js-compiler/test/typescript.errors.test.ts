@@ -195,12 +195,14 @@ describe("Checker", () => {
     // Identical TS4025 shape, but the private name matches a
     // KNOWN_EXPORTED_SYMBOLS entry — a known TypeScript false positive for the
     // commonfabric brand symbols, filtered rather than surfaced.
-    const checker = new Checker(programFor({
-      "/brand.ts":
-        "function f() { const CELL_BRAND: unique symbol = Symbol(); return { [CELL_BRAND]: 1 }; }\n" +
-        "export const v = f();",
-    }));
-    checker.declarationCheck();
+    for (const brand of ["CELL_BRAND", "CELL_RESULT_TYPE"]) {
+      const checker = new Checker(programFor({
+        "/brand.ts":
+          `function f() { const ${brand}: unique symbol = Symbol(); return { [${brand}]: 1 }; }\n` +
+          "export const v = f();",
+      }));
+      checker.declarationCheck();
+    }
   });
 
   it("check() tolerates empty diagnostics and throws a CompilerError otherwise", () => {

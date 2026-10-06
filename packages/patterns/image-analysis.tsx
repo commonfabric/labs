@@ -2,10 +2,16 @@ import {
   computed,
   generateText,
   handler,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
   ImageData,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   UI,
   VNode,
   Writable,
@@ -74,13 +80,28 @@ export default pattern<ImageChatInput, ImageChatOutput>(
     });
 
     // Generate text from the content parts
-    const { result, pending, requestHash: _requestHash } = generateText({
+    const responseRequest = generateText({
       system: computed(() =>
         systemPrompt ||
         "You are a helpful assistant that can analyze images. Describe what you see."
       ),
       prompt: contentParts,
     });
+    const observedResponse = observeAvailability(responseRequest);
+    const responseState = computed(() => {
+      if (isPending(observedResponse)) {
+        return { response: undefined, pending: true };
+      }
+      if (
+        hasError(observedResponse) || isSyncing(observedResponse) ||
+        hasSchemaMismatch(observedResponse)
+      ) {
+        return { response: undefined, pending: false };
+      }
+      return { response: resultOf(observedResponse), pending: false };
+    });
+    const result = responseState.response;
+    const pending = responseState.pending;
 
     const ui = (
       <cf-screen>

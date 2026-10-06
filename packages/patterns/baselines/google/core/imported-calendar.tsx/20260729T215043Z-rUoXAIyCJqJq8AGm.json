@@ -1,0 +1,118 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "LocalEvent": {
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "title",
+          "date",
+          "startTime",
+          "endTime",
+          "color",
+          "notes"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "localEvents": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/LocalEvent"
+        },
+        "type": "array"
+      },
+      "title": {
+        "default": "Imported Calendar",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "google/core/imported-calendar.tsx",
+  "resultSchema": {
+    "$defs": {
+      "LocalEvent": {
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "title",
+          "date",
+          "startTime",
+          "endTime",
+          "color",
+          "notes"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "eventCount": {
+        "type": "number"
+      },
+      "localEvents": {
+        "items": {
+          "$ref": "#/$defs/LocalEvent"
+        },
+        "type": "array"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "eventCount",
+      "localEvents"
+    ],
+    "type": "object"
+  }
+}

@@ -293,6 +293,22 @@ describe("symbolDeclaresCommonFabricDefault", () => {
   });
 
   describe("user-defined Default type (should return false)", () => {
+    it("returns false for an unrelated type alias symbol", () => {
+      const { program, checker } = createProgram({
+        "/test.ts": `type Plain = string;`,
+      });
+      const sf = program.getSourceFile("/test.ts")!;
+      const declaration = findFirstNode(sf, ts.isTypeAliasDeclaration);
+
+      assert(declaration);
+      assertFalse(
+        symbolDeclaresCommonFabricDefault(
+          checker.getSymbolAtLocation(declaration.name),
+          checker,
+        ),
+      );
+    });
+
     it("returns false when the property type references a user-defined Default alias in the same file", () => {
       // Default is declared in /test.ts — NOT in commonfabric.d.ts.
       const { program, checker } = createProgram({

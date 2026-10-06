@@ -15,6 +15,15 @@ behavior and open follow-up work.
 
 ## Delta Backlog
 
+### Inline compilation-diagnostics projection
+
+`compileDiagnosticsOf()` is a construction-time alias lookup. Standalone const
+bindings and directly returned aliases are supported; inline operations on the
+accessor result are diagnosed because expression lowering would capture the
+materialized compilation result rather than the diagnostics cell. Supporting
+inline projections requires lifting the operation over a construction-time
+diagnostics alias. The projection itself must remain zero-node.
+
 ### Collection index selectors
 
 Explicit array-valued cells expose `groupBy` and `keyBy`, returning typed index

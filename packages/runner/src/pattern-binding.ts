@@ -7,6 +7,7 @@ import {
   isWalkableObjectOrArray,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { deepFrozenCloneAndInternSchema } from "@commonfabric/data-model-schema";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
@@ -479,7 +480,9 @@ function sendValueToBindingInner<T>(
     // not a record, whatever its `typeof` says, so it falls to the constant
     // comparison below rather than being decomposed key by key.
   } else if (
-    isWalkableObjectOrArray(binding) && isWalkableObjectOrArray(value)
+    !isUnavailable(binding) && !isUnavailable(value) &&
+    isWalkableObjectOrArray(binding) &&
+    isWalkableObjectOrArray(value)
   ) {
     for (const key of Object.keys(binding)) {
       if (key in value) {
@@ -494,7 +497,9 @@ function sendValueToBindingInner<T>(
       }
     }
   } else if (
-    !isWalkableObjectOrArray(binding) || Object.keys(binding).length !== 0
+    isUnavailable(binding) ||
+    !isWalkableObjectOrArray(binding) ||
+    Object.keys(binding).length !== 0
   ) {
     // `fabricAwareEqual`, not `===`: a constant `NaN` binding legitimately
     // matches a produced `NaN`, `0` vs `-0` is a genuine mismatch, and a
@@ -780,6 +785,11 @@ export function unwrapOneLevelAndBindToDoc(
         );
       }
     } else if (binding instanceof FabricPrimitive) {
+      return binding;
+    } else if (isUnavailable(binding)) {
+      // Runtime-owned availability markers are atomic control values. Unlike
+      // an arbitrary FabricInstance, their closed codec state cannot conceal
+      // a write redirect or another builder binding.
       return binding;
     } else if (binding instanceof FabricInstance) {
       throw new Error(

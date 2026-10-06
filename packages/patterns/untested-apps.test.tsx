@@ -61,9 +61,15 @@ export default pattern(() => {
     scopeReduceRepro[NAME] === "Cozy lunch poll"
   );
 
-  const assert_chat_apps_render = assert(() =>
-    textContent(profileGroupChat[UI]).length > 0 &&
-    textContent(scopedGroupChat[UI]).length > 0 &&
+  const assert_profile_group_chat_renders = assert(() =>
+    textContent(profileGroupChat[UI]).length > 0
+  );
+
+  const assert_scoped_group_chat_renders = assert(() =>
+    textContent(scopedGroupChat[UI]).length > 0
+  );
+
+  const assert_shared_profile_roster_renders = assert(() =>
     textContent(sharedProfileRoster[UI]).length > 0
   );
 
@@ -91,7 +97,9 @@ export default pattern(() => {
       { assertion: assert_apps_named },
       { assertion: assert_cfc_demos_named },
       { assertion: assert_repro_named },
-      { assertion: assert_chat_apps_render },
+      { assertion: assert_profile_group_chat_renders },
+      { assertion: assert_scoped_group_chat_renders },
+      { assertion: assert_shared_profile_roster_renders },
       { assertion: assert_tools_render },
       { assertion: assert_cfc_demos_render },
       { assertion: assert_repro_renders },

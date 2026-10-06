@@ -33,7 +33,7 @@ export default pattern(() => {
                     anyOf: [{
                             type: "unknown"
                         }, {
-                            type: "undefined"
+                            $ref: "#/$defs/UnavailableVariant"
                         }]
                 },
                 candidates: {
@@ -42,7 +42,6 @@ export default pattern(() => {
                         type: "unknown"
                     }
                 },
-                error: true,
                 $UI: {
                     $ref: "https://commonfabric.org/schemas/vnode.json"
                 }
@@ -56,7 +55,7 @@ export default pattern(() => {
                     anyOf: [{
                             type: "unknown"
                         }, {
-                            type: "undefined"
+                            $ref: "#/$defs/UnavailableVariant"
                         }]
                 },
                 candidates: {
@@ -65,7 +64,6 @@ export default pattern(() => {
                         type: "unknown"
                     }
                 },
-                error: true,
                 $UI: {
                     $ref: "https://commonfabric.org/schemas/vnode.json"
                 }
@@ -73,7 +71,27 @@ export default pattern(() => {
             required: ["result", "candidates"]
         }
     },
-    required: ["profile", "bare"]
+    required: ["profile", "bare"],
+    $defs: {
+        UnavailableVariant: {
+            anyOf: [{
+                    $ref: "#/$defs/IsPending"
+                }, {
+                    $ref: "#/$defs/IsSyncing"
+                }, {
+                    $ref: "#/$defs/HasError"
+                }]
+        },
+        HasError: {
+            type: "FabricUnavailable"
+        },
+        IsSyncing: {
+            type: "FabricUnavailable"
+        },
+        IsPending: {
+            type: "FabricUnavailable"
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }

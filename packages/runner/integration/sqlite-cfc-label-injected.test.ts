@@ -20,10 +20,10 @@
  * own entity doc, and INHERITED by a consumer that reads the leaf.
  *
  * Where the labels live is itself the point. A labeled result splits each row
- * into its own entity doc and stores the label THERE; the query doc holds only
- * `{ pending, result, requestHash }` and carries no label view at any path.
- * That is true of the in-frame path too, so a probe of the query doc reports
- * "unlabeled" for a fully labeled result.
+ * into its own entity doc and stores the label THERE; the query doc holds the
+ * query state and link-integrity labels, but no column confidentiality. That
+ * is true of the in-frame path too, so a probe must distinguish the query
+ * doc's link bookkeeping from the row doc's data label.
  */
 
 import { Database } from "@db/sqlite";
@@ -67,7 +67,7 @@ const TABLES = {
 type QueryState = {
   pending?: boolean;
   error?: unknown;
-  result?: unknown[];
+  value?: { rows?: unknown[] };
   requestHash?: string;
 };
 
@@ -139,7 +139,7 @@ function settled(query: Cell<QueryState>, superseded?: unknown): Promise<void> {
               error: query.key("error").getRaw(),
               requestHash: query.key("requestHash").getRaw(),
               superseded,
-              result: query.key("result").getRaw(),
+              rows: query.key("value").key("rows").getRaw(),
             }),
         ),
       );
@@ -149,7 +149,7 @@ function settled(query: Cell<QueryState>, superseded?: unknown): Promise<void> {
   });
 }
 
-/** The label a consumer INHERITS by reading `query.result[0].<column>`: the
+/** The label a consumer INHERITS by reading `query.value.rows[0].<column>`: the
  *  read traverses the links (pattern result -> query result -> the row's own
  *  entity doc), and the traces it accumulates carry the label back out. */
 async function inheritedConfidentiality(
@@ -239,13 +239,31 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
     const cancelSink = result.sink(() => {});
 
     try {
-      const direct = result.key("direct") as Cell<QueryState>;
-      const derived = result.key("derived") as Cell<QueryState>;
+      const directValue = result.key("direct").resolveAsCell();
+      const derivedValue = result.key("derived").resolveAsCell();
+      await Promise.all([directValue.pull(), derivedValue.pull()]);
+      const queryState = (value: Cell<unknown>): Cell<QueryState> => {
+        const link = parseLink(value.getRaw());
+        if (!link?.id || link.path?.at(-1) !== "value") {
+          throw new Error(
+            "query result did not resolve through its value channel",
+          );
+        }
+        return runtime.getCellFromLink({
+          ...link,
+          space: link.space ?? space,
+          path: [],
+        }) as Cell<QueryState>;
+      };
+      const direct = queryState(directValue);
+      const derived = queryState(derivedValue);
       /** The row's own entity doc, which a labeled result splits each row into
        *  and stores the row's labels on. Declared here because the labeled
        *  reads below and the contract-free probe above them both need it. */
       const rowDoc = (query: Cell<QueryState>) => {
-        const link = parseLink(query.key("result").key(0).getRaw());
+        const link = parseLink(
+          query.key("value").key("rows").key(0).getRaw(),
+        );
         if (!link?.id) {
           throw new Error("result row did not split into its own entity doc");
         }
@@ -282,7 +300,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
           }
           const inherited = await inheritedConfidentiality(
             runtime,
-            query.key("result").key(0).key(column),
+            query.key("value").key("rows").key(0).key(column),
           );
           if (inherited.length !== 0) {
             throw new Error(
@@ -319,13 +337,13 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       }
 
       // (a) The rows read back through the injected source.
-      const row = direct.key("result").key(0).get() as
+      const row = direct.key("value").key("rows").key(0).get() as
         | Record<string, unknown>
         | undefined;
       if (!row || row.secret !== "top secret") {
         throw new Error(`unexpected direct row: ${JSON.stringify(row)}`);
       }
-      const derivedRow = derived.key("result").key(0).get() as
+      const derivedRow = derived.key("value").key("rows").key(0).get() as
         | Record<string, unknown>
         | undefined;
       if (!derivedRow || derivedRow.shouted !== "TOP SECRET") {
@@ -408,7 +426,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       // (c) A consumer reading the leaf inherits that confidentiality.
       const secretConf = await inheritedConfidentiality(
         runtime,
-        direct.key("result").key(0).key("secret"),
+        direct.key("value").key("rows").key(0).key("secret"),
       );
       if (!sameAtoms(secretConf, ["secret-body"])) {
         throw new Error(
@@ -418,7 +436,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       }
       const shoutedConf = await inheritedConfidentiality(
         runtime,
-        derived.key("result").key(0).key("shouted"),
+        derived.key("value").key("rows").key(0).key("shouted"),
       );
       if (!sameAtoms(shoutedConf, WHOLE_DB_UNION)) {
         throw new Error(
@@ -428,22 +446,28 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         );
       }
 
-      // (d) The labels live on the row docs, NOT on the query doc. The
-      // one-hop reader follows a link the selected path lands ON, and these
-      // paths CROSS one at `result/0`, so it reports nothing for a result
-      // that plainly carries labels. Pinning that keeps the contrast in (e)
-      // honest, and keeps a future reader from probing the query doc, finding
-      // nothing, and reporting a fully labeled result as unlabeled.
-      for (const path of [[], ["result"], ["result", 0]] as const) {
+      // (d) The column confidentiality lives on the row docs, NOT on the query
+      // doc. The query doc does carry integrity labels for the links it stores;
+      // those are bookkeeping rather than the data label a person asked for.
+      // Pinning that distinction keeps the resolved read in (e) honest.
+      for (
+        const path of [
+          [],
+          ["value"],
+          ["value", "rows"],
+        ] as const
+      ) {
         let probe: Cell<unknown> = direct as Cell<unknown>;
         for (const key of path) probe = probe.key(key as never);
         const view = cfcLabelViewForCellWithStatus(probe).view;
-        if (view !== undefined) {
+        const confidentiality = view?.entries.flatMap((entry) =>
+          entry.label.confidentiality ?? []
+        ) ?? [];
+        if (confidentiality.length > 0) {
           throw new Error(
-            `the one-hop reader gained a label view at ${
+            `the query doc gained column confidentiality at ${
               JSON.stringify(path)
-            }: ${JSON.stringify(view)} — update this test, (e), and the ` +
-              `loom-side probe together`,
+            }: ${JSON.stringify(view)}`,
           );
         }
       }
@@ -466,30 +490,40 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         }
         return status.view;
       };
-      const atColumn = resolvedAt(direct, ["result", 0, "secret"]);
+      const atColumn = resolvedAt(direct, [
+        "value",
+        "rows",
+        0,
+        "secret",
+      ]);
       const columnEntry = atColumn?.entries.find((e) => e.path.length === 0);
       if (
         !columnEntry?.label.confidentiality?.some((a) => a === "secret-body")
       ) {
         throw new Error(
-          `get-label reported no confidentiality at result/0/secret; got ${
+          `get-label reported no confidentiality at value/rows/0/secret; got ${
             JSON.stringify(atColumn)
           }`,
         );
       }
-      const atRow = resolvedAt(direct, ["result", 0]);
+      const atRow = resolvedAt(direct, ["value", "rows", 0]);
       const rowEntry = atRow?.entries.find((e) =>
         e.path.length === 1 && e.path[0] === "secret"
       );
       if (!rowEntry?.label.confidentiality?.some((a) => a === "secret-body")) {
         throw new Error(
-          `get-label reported no per-column entry at result/0; got ${
+          `get-label reported no per-column entry at value/rows/0; got ${
             JSON.stringify(atRow)
           }`,
         );
       }
       // The null-origin column reaches the same reader with its class intact.
-      const atDerived = resolvedAt(derived, ["result", 0, "shouted"]);
+      const atDerived = resolvedAt(derived, [
+        "value",
+        "rows",
+        0,
+        "shouted",
+      ]);
       const atDerivedEntry = atDerived?.entries.find((e) =>
         e.path.length === 0
       );

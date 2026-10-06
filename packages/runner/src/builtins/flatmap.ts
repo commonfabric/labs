@@ -1,4 +1,8 @@
 import { internSchema } from "@commonfabric/data-model-schema";
+import {
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
@@ -9,6 +13,10 @@ import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
+import {
+  preferDataUnavailable,
+  readAvailabilityAwareCell,
+} from "../data-unavailability.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
@@ -35,6 +43,7 @@ import {
 } from "./list-op-argument-usage.ts";
 import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
+import { shouldAwaitResumedListInput } from "./list-resume-state.ts";
 import {
   createResumeRepublisher,
   type ElementContribution,
@@ -73,6 +82,7 @@ export const flatMapContribution: ElementContribution = (
   _inputElement,
   out,
 ) => {
+  if (isUnavailable(elemResult)) return elemResult;
   if (Array.isArray(elemResult)) elemResult.forEach((v) => out.push(v));
   else if (elemResult !== undefined) out.push(elemResult);
   else return "pending";
@@ -286,7 +296,7 @@ function createFlatMapInstance(
       parentCell,
       outputBinding,
     );
-    const { opPattern, argumentUsage, list } = plan;
+    const { opPattern, argumentUsage, list, rawList } = plan;
     const outputScope = plan.scope;
 
     // Whether this reconcile issues the container's links: a container it
@@ -327,6 +337,16 @@ function createFlatMapInstance(
     // every element's taint into the coordinator's per-tx join.
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
+
+    if (isUnavailable(rawList)) {
+      resultWithLog.setRawUntyped(rawList, true);
+      for (const entry of elementRuns.values()) {
+        runtime.runner.stop(entry.resultCell);
+      }
+      elementRuns.clear();
+      return;
+    }
+
     // (S16) Declare the result container so prepare re-derives its `structure`
     // label (membership/order/multiplicity, §8.5.6.1) from this tx's J — the
     // selection criteria the coordinator read (op results) — EVERY reconcile,
@@ -346,6 +366,7 @@ function createFlatMapInstance(
         { ...linkResolutionProbe, ...machineryRead },
         fn,
       );
+    const rawResult = probeScoped(() => result!.getRaw());
     const createRunInput = (element: Cell<any>, index: number) => ({
       ...(argumentUsage.usesElement ? { element } : {}),
       ...(argumentUsage.usesIndex ? { index } : {}),
@@ -389,8 +410,12 @@ function createFlatMapInstance(
     // empty input clears the result. Outside resume the flag is clear, so a list
     // set undefined at runtime still runs the cleanup below.
     if (
-      elementAwaitSync && priorLen > 0 &&
-      (list === undefined || (Array.isArray(list) && list.length === 0))
+      shouldAwaitResumedListInput(
+        elementAwaitSync,
+        rawResult,
+        list,
+        priorLen,
+      )
     ) {
       awaitInputThenSettle(inputsCell.key("list").withTx(tx).resolveAsCell());
       return;
@@ -439,6 +464,7 @@ function createFlatMapInstance(
     // list can be republished once they confirm — distinct from an op that has
     // settled undefined (a real skip), which converges immediately.
     const pendingCells: Cell<any>[] = [];
+    let unavailable: UnavailableVariant | undefined;
     for (let i = 0; i < list.length; i++) {
       // Skip sparse holes — don't create pattern runs for them
       if (!(i in list)) continue;
@@ -522,8 +548,10 @@ function createFlatMapInstance(
       // have undefined result cells on the first pass before the pattern runs).
       const childCell = elementRuns.get(elementKey)!.resultCell;
       if (elementAwaitSync) resumeCells.push(childCell);
-      const elemResult = childCell.withTx(tx).get();
-      if (Array.isArray(elemResult)) {
+      const elemResult = readAvailabilityAwareCell(tx, childCell);
+      if (isUnavailable(elemResult)) {
+        unavailable = preferDataUnavailable(unavailable, elemResult);
+      } else if (Array.isArray(elemResult)) {
         // forEach skips holes in sub-arrays (sparse-safe)
         elemResult.forEach((v) => {
           newArrayValue.push(v);
@@ -533,6 +561,11 @@ function createFlatMapInstance(
       } else {
         pendingCells.push(childCell);
       }
+    }
+
+    if (unavailable !== undefined) {
+      resultWithLog.setRawUntyped(unavailable, true);
+      return;
     }
 
     // Wait for the whole resume batch before the aggregate moves. Its

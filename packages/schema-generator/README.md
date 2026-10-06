@@ -59,6 +59,20 @@ Implementation: see `src/schema-generator.ts` (`formatType`) and
 Implementation: see `src/formatters/object-formatter.ts` and
 `src/type-utils.ts:isFunctionLike`.
 
+## Availability Marker Union Arms
+
+When a TypeScript union includes a Common Fabric availability marker, such as
+`AsyncResult<string>`, the marker arm is emitted as the native schema
+`{ "type": "FabricUnavailable" }`. This recognizes the canonical primitive, not
+an arbitrary object with matching fields. Common Fabric declaration provenance
+distinguishes these types from unrelated local same-named types.
+
+At runner compute boundaries, availability preflight runs before schema
+traversal. The serialized exact-path input policy decides which reasons and
+error kinds the computation can observe. Native schema admission alone does not
+authorize observation. Accepted primitives remain intact through the lazy schema
+view while surrounding usable data retains its ordinary validation.
+
 ## Running
 
 - Check typings: `deno task check`
