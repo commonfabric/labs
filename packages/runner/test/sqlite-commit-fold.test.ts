@@ -51,7 +51,7 @@ describe("folded sqlite write (commit atomicity at the runner)", () => {
       sql: "INSERT INTO notes (body) VALUES (?)",
       params: ["hi"],
     });
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     // The row landed.
@@ -69,7 +69,7 @@ describe("folded sqlite write (commit atomicity at the runner)", () => {
     )
       .withTx(tx2).get();
     expect(m).toEqual({ ok: true });
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 
   it("commits a sqlite-only transaction (no cell ops dropped)", async () => {
@@ -84,7 +84,7 @@ describe("folded sqlite write (commit atomicity at the runner)", () => {
       sql: "INSERT INTO notes (body) VALUES (?)",
       params: ["solo"],
     });
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -115,7 +115,7 @@ describe("folded sqlite write (commit atomicity at the runner)", () => {
       sql: "INSERT INTO notes (body) VALUES (?)",
       params: [null],
     });
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeDefined();
 
     // The sibling cell write did NOT persist.
@@ -135,6 +135,6 @@ describe("folded sqlite write (commit atomicity at the runner)", () => {
       "SELECT count(*) AS c FROM notes",
     );
     expect((r.rows[0] as { c: number }).c).toBe(0);
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 });

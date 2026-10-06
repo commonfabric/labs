@@ -230,9 +230,15 @@ What works today:
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
-  local/private target blocking, extracted text/links, and raw bounded response
-  retention in tool-output artifacts; `web_fetch` is intentionally not part of
-  the default parent tool surface
+  extracted text/links, and raw bounded response retention in tool-output
+  artifacts; `web_fetch` is intentionally not part of the default parent tool
+  surface. It fetches only from addresses on the open internet, whether the URL
+  names the address or a host name resolves to it. It refuses local, private and
+  reserved addresses, and any address on a network one of this device's
+  interfaces is on, such as a home network's public IPv6 prefix; an IPv6
+  interface's network counts as at least the /64 that holds its address. The
+  process running it needs `--allow-sys=networkInterfaces` to read those
+  networks
 - provider-neutral bounded prompt/tool loop with OpenAI-compatible gateway and
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
@@ -2642,6 +2648,12 @@ the file directly; both ways end at the same path. With `--allow-tool`, name
 `submit_result` alongside the run's other tools. The schema and host path are
 retained in run state, so a resumed root run keeps the same result contract
 without repeating the command-line flags; a conflicting restatement is refused.
+
+The system prompt includes the complete result schema for both batch and
+operator runs, whether the result is submitted through the tool or written to
+the file. Object schemas are closed by default, including nested objects: a
+result includes only properties the schema declares unless that schema allows
+additional properties explicitly.
 
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from

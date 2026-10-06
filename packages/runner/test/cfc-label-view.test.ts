@@ -86,7 +86,7 @@ async function withLabeledDocument(
       },
     });
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     body(runtime, runtime.getCellFromLink(link));
   } finally {
     await runtime.dispose();
@@ -374,7 +374,7 @@ describe("CFC label view helpers", () => {
         path: [],
       }, { value: source.getAsLink() });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       expect(cfcLabelViewForCell(target)).toBeUndefined();
     } finally {
@@ -458,7 +458,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       expect(cfcLabelViewForCell(target.key("detail"))).toEqual({
         version: 1,
@@ -545,7 +545,7 @@ describe("CFC label view helpers", () => {
           });
         }
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         body((scope) =>
           runtime.getCell(space, "scoped-label", undefined, undefined, scope)
         );
@@ -707,7 +707,7 @@ describe("CFC label view helpers", () => {
           },
         }, tx).set({ title: "t", notes: "hi" });
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         // The broader slot holds a redirect, whose link entry labels that
         // pointer, reference integrity atom included.
@@ -771,7 +771,7 @@ describe("CFC label view helpers", () => {
           },
         } as never);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         return runtime.getCell(space, id);
       };
       const source = await seedIn(elsewhere, "spaces-source", "sealed", [{
@@ -893,7 +893,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       // Both resolutions run on ONE transaction, so the second is the repeat.
       const readTx = runtime.edit();
@@ -982,7 +982,7 @@ describe("CFC label view helpers", () => {
         cfc: metadata,
       } as never);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const queries = [
@@ -1071,7 +1071,7 @@ describe("CFC label view helpers", () => {
               },
             } as never);
             runtime.prepareTxForCommit(tx);
-            expect((await tx.commit()).ok).toBeDefined();
+            expect((await tx.commit().settled).ok).toBeDefined();
             return runtime.getCell(space, id);
           },
           home: signer.did(),
@@ -1908,7 +1908,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const storedLinkField = cfcLabelViewFromMetadata(
         {
@@ -2069,7 +2069,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const value = target.get();
       const recovered = (value as { [toCell]: () => unknown })[toCell]();
@@ -2162,7 +2162,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const recovered = target.get();
       expect(cfcLabelViewForCell(recovered)).toEqual({
@@ -2245,7 +2245,7 @@ describe("CFC label view helpers", () => {
         path: [],
       }, { value: source.getAsLink() });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const recovered = target.get() as { a: unknown; b: unknown };
       expect(cfcLabelViewForCell(recovered.a)).toEqual({
@@ -2345,7 +2345,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const recovered = target.get() as { item: unknown };
       expect(cfcLabelViewForCell(recovered.item)).toEqual({
@@ -2450,7 +2450,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const recovered = (list.get() as unknown[]).map((item) =>
         (item as { [toCell]: () => unknown })[toCell]()
@@ -2555,7 +2555,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const recovered = (list.get() as unknown[]).map((item) =>
         (item as { [toCell]: () => unknown })[toCell]()
@@ -2647,7 +2647,7 @@ describe("CFC label view helpers", () => {
         });
       }
       runtime.prepareTxForCommit(seedTx);
-      await seedTx.commit();
+      await seedTx.commit().settled;
 
       const tx = runtime.edit();
       const { commonfabric } = createTrustedBuilder(runtime);
@@ -2682,7 +2682,7 @@ describe("CFC label view helpers", () => {
         resultCell,
       );
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await result.pull();
 
       const firstValue = result
@@ -2770,7 +2770,7 @@ describe("CFC label view helpers", () => {
       );
       target.setRawUntyped([source.getAsLink()]);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const schemaLessEntry = runtime.getCellFromLink({
         ...target.key(0).getAsNormalizedFullLink(),
@@ -2945,7 +2945,7 @@ describe("CFC label view helpers", () => {
           },
         });
         runtime.prepareTxForCommit(tx);
-        return tx.commit();
+        return tx.commit().settled;
       };
 
       await writeDoc("authored-by-alice");
@@ -3012,7 +3012,7 @@ describe("CFC label view helpers", () => {
           },
         });
         runtime.prepareTxForCommit(tx);
-        return tx.commit();
+        return tx.commit().settled;
       };
       await writeTarget("first-secret");
       const holder = runtime.getCell<{ inner: string }>(
@@ -3023,7 +3023,7 @@ describe("CFC label view helpers", () => {
         const tx = runtime.edit();
         holder.withTx(tx).setRawUntyped({ inner: target.getAsLink() });
         runtime.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
       }
       await runtime.idle();
 
@@ -3120,7 +3120,7 @@ describe("CFC label view helpers", () => {
         },
       });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const labels: unknown[] = [];
@@ -3143,7 +3143,7 @@ describe("CFC label view helpers", () => {
         assertionEnvelope("reverified-source"),
       );
       runtime.prepareTxForCommit(relabelTx);
-      await relabelTx.commit();
+      await relabelTx.commit().settled;
       await runtime.idle();
       cancel();
 

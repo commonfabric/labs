@@ -77,7 +77,7 @@ describe("stored owner", () => {
     const field = runtime.getCell(space, name, fieldSchema, tx);
     runtime.getCell(space, `${name}-result`, undefined, tx).set({ field });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return field.getAsNormalizedFullLink();
   }
 
@@ -96,7 +96,7 @@ describe("stored owner", () => {
       tx,
     ).set(value);
     runtime.prepareTxForCommit(tx);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     actingPrincipal = owner.did();
     return error?.message;
   }

@@ -154,7 +154,7 @@ describe("scoped-internal-cell-seed", () => {
   ) {
     const tx = runtime.edit();
     draft.withTx(tx).key("title").set(title);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
   }
 
@@ -205,7 +205,7 @@ describe("scoped-internal-cell-seed", () => {
       const tx = second.edit();
       second.run(tx, compiled, {}, reopened);
       second.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await second.idle();
 
       expect(failures).toEqual([]);
@@ -230,7 +230,7 @@ describe("scoped-internal-cell-seed", () => {
       }
       const write = second.edit();
       privateDraft.withTx(write).set("kept");
-      const written = await write.commit();
+      const written = await write.commit().settled;
       if (protectedDraft) expect(written.error).toBeDefined();
       else expect(written.error).toBeUndefined();
       await second.idle();
@@ -242,7 +242,7 @@ describe("scoped-internal-cell-seed", () => {
       const reloadTx = third.edit();
       third.run(reloadTx, compiled, {}, reloaded);
       third.prepareTxForCommit(reloadTx);
-      expect((await reloadTx.commit()).error).toBeUndefined();
+      expect((await reloadTx.commit().settled).error).toBeUndefined();
       await third.idle();
       expect(failures).toEqual([]);
       expect(reloaded.key("draft").resolveAsCell().getRawUntyped()).toBe(
@@ -306,7 +306,7 @@ describe("scoped-internal-cell-seed", () => {
           ifc: { confidentiality: [ownerLabel] },
         }),
       );
-      expect((await protect.commit()).error).toBeUndefined();
+      expect((await protect.commit().settled).error).toBeUndefined();
       await first.storageManager.synced();
 
       const second = openRuntime(owner);
@@ -361,7 +361,7 @@ describe("scoped-internal-cell-seed", () => {
     try {
       const tx = second.edit();
       second.run(tx, pattern, {}, piece);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await second.idle();
     } finally {
       second.runner.accessForTestingOnly.dependencySyncer = undefined;
@@ -386,7 +386,7 @@ describe("scoped-internal-cell-seed", () => {
         ...(kind === "event-handler" ? { eventId: "draft-event" } : {}),
       });
       second.run(tx, pattern, {}, piece);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await second.idle();
       expect(piece.key("draft").resolveAsCell().getRawUntyped()).toEqual(
         EMPTY_DRAFT,
@@ -405,7 +405,7 @@ describe("scoped-internal-cell-seed", () => {
       // landing as evidence that this actor's durable default was prepared.
       const authored = second.edit();
       second.run(authored, pattern, {}, piece);
-      expect((await authored.commit()).error).toBeUndefined();
+      expect((await authored.commit().settled).error).toBeUndefined();
       await second.idle();
       await durable.runner.syncStoredPieceCells(
         stored,
@@ -439,7 +439,7 @@ describe("scoped-internal-cell-seed", () => {
     try {
       const tx = second.edit();
       second.run(tx, requested, {}, piece);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await entered.promise;
       await first.runtime.runSynced(
         original,
@@ -483,7 +483,7 @@ describe("scoped-internal-cell-seed", () => {
       await second.runner.syncStoredPieceCells(piece, pattern);
       const tx = callerOwned ? second.edit() : undefined;
       await second.runner.setup(tx, pattern, {}, piece);
-      if (tx) expect((await tx.commit()).error).toBeUndefined();
+      if (tx) expect((await tx.commit().settled).error).toBeUndefined();
       expect(piece.key("draft").resolveAsCell().getRawUntyped()).toEqual(
         EMPTY_DRAFT,
       );
@@ -527,7 +527,7 @@ describe("scoped-internal-cell-seed", () => {
         }
         const runTx = second.edit();
         second.run(runTx, pattern, {}, piece);
-        expect((await runTx.commit()).error).toBeUndefined();
+        expect((await runTx.commit().settled).error).toBeUndefined();
       } finally {
         release.resolve();
         await pending;
@@ -571,7 +571,7 @@ describe("scoped-internal-cell-seed", () => {
     try {
       const tx = second.edit();
       second.run(tx, compiled, {}, piece);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await entered.promise;
       second.runner.stop(piece);
     } finally {

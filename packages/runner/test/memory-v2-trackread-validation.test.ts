@@ -31,7 +31,7 @@ describe("trackReadWithoutLoad validation", () => {
       { value: { count: 0 } },
     );
     assert(seedWrite.ok, "seed write should succeed");
-    const seedCommit = await seedTx.commit();
+    const seedCommit = await seedTx.commit().settled;
     assert(seedCommit.ok, "seed commit should succeed");
 
     // Start tx1 and do a trackReadWithoutLoad read.
@@ -49,7 +49,7 @@ describe("trackReadWithoutLoad validation", () => {
       { value: { count: 999 } },
     );
     assert(writeResult.ok, "concurrent write should succeed");
-    const tx2Commit = await tx2.commit();
+    const tx2Commit = await tx2.commit().settled;
     assert(tx2Commit.ok, "concurrent commit should succeed");
 
     // Now write something in tx1 (to a different doc) so it has operations.
@@ -61,7 +61,7 @@ describe("trackReadWithoutLoad validation", () => {
 
     // tx1's commit should detect that the trackReadWithoutLoad document
     // was modified and reject with an inconsistency error.
-    const tx1Commit = await tx1.commit();
+    const tx1Commit = await tx1.commit().settled;
     assert(
       tx1Commit.error,
       "commit should fail because trackReadWithoutLoad document was concurrently modified",
@@ -96,7 +96,7 @@ describe("multi-write previousValue tracking", () => {
       { space, id: docId, type, path: [] },
       { a: "original", b: 1 },
     );
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     // Start a new transaction, write to ["a"] twice.
     const tx = storage.edit();
@@ -150,6 +150,6 @@ describe("multi-write previousValue tracking", () => {
     expect(aNovelty).toBeDefined();
     expect(aNovelty!.value).toBe("second-write");
 
-    await tx.commit();
+    await tx.commit().settled;
   });
 });

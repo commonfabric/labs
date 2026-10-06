@@ -263,7 +263,7 @@ describe("resume-list-children-faults", () => {
         { items: [{ n: 1 }, { n: 2 }] },
         authored,
       );
-      await tx.commit();
+      await tx.commit().settled;
       await authored.pull();
       await author.runtime.settled();
       await author.runtime.patternManager.flushCompileCacheWrites();

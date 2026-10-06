@@ -78,7 +78,7 @@ describe("cf wish headless read on a cold replica", () => {
       elements: [],
     });
     profileSpaceCell.key("defaultPattern").set(profileDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     tx = runtime.edit();
@@ -107,7 +107,7 @@ describe("cf wish headless read on a cold replica", () => {
     homeDefaultCell.key("mru").set(mruCell);
     // deno-lint-ignore no-explicit-any
     (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
   }
@@ -144,7 +144,7 @@ describe("cf wish headless read on a cold replica", () => {
             bio: "",
             elements: [],
           });
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           profiles.push(profile);
         }
         const tx = writer.edit();
@@ -155,7 +155,7 @@ describe("cf wish headless read on a cold replica", () => {
           tx,
         )
           .key("profiles").set(profiles);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await writer.storageManager.synced();
 
         const reader = connect();
@@ -191,7 +191,7 @@ describe("cf wish headless read on a cold replica", () => {
         .key("profiles").set(
           missingFirst ? [missing, healthy] : [healthy, missing],
         );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await writer.storageManager.synced();
       const { result, error } = await resolveWish(
         connect(),

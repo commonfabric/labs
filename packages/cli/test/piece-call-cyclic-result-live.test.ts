@@ -186,7 +186,7 @@ async function withTracker<T>(
     const rootCell = runtime.getCell(space, "cyclic-live", undefined, tx);
     const root = runtime.run(tx, compiled, { title: "Root" }, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await root.pull();
 
     // The same stream the pattern put on `addChild`, reached on the piece's
@@ -203,7 +203,7 @@ async function withTracker<T>(
     );
     inputCell.setRaw({ fileUnder: root.key("addChild").getAsLink() } as never);
     runtime.prepareTxForCommit(inputTx);
-    expect((await inputTx.commit()).error).toBeUndefined();
+    expect((await inputTx.commit().settled).error).toBeUndefined();
 
     let patternLoads = 0;
     const piece = {

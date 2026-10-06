@@ -83,7 +83,7 @@ describe("PatternManager program persistence", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose({ closeStorage: false });
     await storageManager?.close();
   });
@@ -151,7 +151,7 @@ describe("PatternManager program persistence", () => {
       tx,
     );
     const result = runtime.run(tx, loaded!, { value: 3 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.getAsQueryResult()).toEqual({ result: 6 });
@@ -263,7 +263,7 @@ describe("PatternManager program persistence", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     await storageManager.synced();
 
     const inspect = runtime.edit();
@@ -273,7 +273,7 @@ describe("PatternManager program persistence", () => {
     });
     expect(storedMetadata?.labelMap.entries).toHaveLength(1);
     expect(sourceCfcMetadataProhibitsCrossSpaceCopy(storedMetadata)).toBe(true);
-    await inspect.commit();
+    await inspect.commit().settled;
 
     const destinationSpace = (await Identity.fromPassphrase(
       "pattern source destination",
@@ -333,7 +333,7 @@ describe("PatternManager.loadPatternByIdentity single-flight", () => {
         .getArtifactEntryRef(compiled)!;
       // Make the closure durable before runtime B reads it.
       await runtimeA.patternManager.flushCompileCacheWrites();
-      await txA.commit();
+      await txA.commit().settled;
       await storageManager.synced();
 
       // Runtime B shares the storage but has cold in-memory indexes, so the
@@ -440,7 +440,7 @@ describe("PatternManager.compileOrGetPattern", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose({ closeStorage: false });
     await storageManager?.close();
   });

@@ -103,7 +103,7 @@ describe("cfc-link-crossing-write-authority", () => {
     setCfcImplementationIdentity(seedTx, asProducer);
     producer.set({ bio: "seed" });
     seedTx.prepareCfc();
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
     await rt.idle();
 
     const linkTx = rt.edit();
@@ -116,7 +116,7 @@ describe("cfc-link-crossing-write-authority", () => {
     setCfcImplementationIdentity(linkTx, asConsumer);
     consumer.key("slot").set(producer.withTx(linkTx));
     linkTx.prepareCfc();
-    expect((await linkTx.commit()).error).toBeUndefined();
+    expect((await linkTx.commit().settled).error).toBeUndefined();
     await rt.idle();
 
     return rt;
@@ -142,7 +142,7 @@ describe("cfc-link-crossing-write-authority", () => {
     setCfcImplementationIdentity(tx, identity);
     consumer.key("slot").key("bio").set(value);
     tx.prepareCfc();
-    const error = (await tx.commit()).error?.message;
+    const error = (await tx.commit().settled).error?.message;
     await rt.idle();
     return error;
   };

@@ -40,7 +40,7 @@ Deno.test("commitNative rejection is caught and surfaced as Result error", async
     assert(writeResult.ok);
 
     // commit() should resolve with an error result, NOT reject/throw
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assert(commitResult.error, "commit should return an error result");
     assertEquals(commitResult.error.name, "StoreError");
 

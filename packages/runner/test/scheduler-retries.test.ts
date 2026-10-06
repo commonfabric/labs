@@ -49,7 +49,7 @@ describe("reactive retries", () => {
         tx,
       );
       source.set(1);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       // Count runs; force commit failure each time. The action reports its
@@ -88,7 +88,7 @@ describe("reactive retries", () => {
 
       // After reaching retry limit, a subsequent input change should re-trigger
       source.withTx(tx).send(2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       // Wait for the run the change triggers, then span its commit as well.
@@ -144,7 +144,7 @@ describe("reactive retries", () => {
         ? Promise.reject(error)
         : Promise.resolve({ error })) as unknown as ReturnType<
           IExtendedStorageTransaction["commit"]
-        >;
+        >["settled"];
     await watchReactiveActionCommit({
       canRetry: options.canRetry ?? (() => true),
       awaitRetryReadiness: options.awaitRetryReadiness ??
@@ -529,7 +529,7 @@ describe("reactive retries", () => {
       );
       output.set(0);
 
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       let action1Attempts = 0;

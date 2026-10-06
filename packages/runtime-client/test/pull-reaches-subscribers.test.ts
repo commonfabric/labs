@@ -66,7 +66,7 @@ async function messageWithReactions() {
   ) => {
     const tx = runtime.edit();
     edit(tx);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw new Error(`The commit failed: ${error.name}`);
     await runtime.scheduler.idleWithPendingCommits();
   };

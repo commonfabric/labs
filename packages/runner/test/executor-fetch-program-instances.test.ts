@@ -199,11 +199,11 @@ export default pattern<{ url: ${scoped} }, { fetched: any }>(({ url }) => ({
       await result.sync();
       const seed = runtime.edit();
       argument.withTx(seed).key("url").set(url);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       if (create) {
         const start = runtime.edit();
         runtime.run(start, pattern, argument, result);
-        expect((await start.commit()).error).toBeUndefined();
+        expect((await start.commit().settled).error).toBeUndefined();
       }
       client.cancel = result.sink(() => {});
       return {
@@ -385,7 +385,7 @@ describe("executor-fetch-program-instances", () => {
       const setUrl = async (value: string) => {
         const tx = f.first.runtime.edit();
         f.first.argument.withTx(tx).key("url").set(value);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       };
       try {
         await f.issued(1);

@@ -1,6 +1,6 @@
 /**
- * What the trusted host's reviewed operations share: the snapshot copy, the
- * custody seal, and the reviewed intent each inspect what they will show,
+ * What the trusted host's reviewed operations share: the snapshot copy and the
+ * custody seal each inspect what they will show,
  * hand the host a preview, and write only if what they read still holds when
  * a trusted gesture commits. This module holds the pieces of that pattern
  * that do not depend on what is reviewed: recording a review's reads and

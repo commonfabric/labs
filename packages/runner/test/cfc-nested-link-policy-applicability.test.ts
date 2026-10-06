@@ -120,7 +120,7 @@ describe("cfc-nested-link-policy-applicability", () => {
     const profile = rt.getCell(space, id, profileSchema, tx);
     profile.set({ name: "Ada", avatar: "ada.png" });
     tx.prepareCfc();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return profile;
   };
 
@@ -144,7 +144,7 @@ describe("cfc-nested-link-policy-applicability", () => {
       avatar: avatar.getAsWriteRedirectLink(),
     });
     tx.prepareCfc();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return profile;
   };
 
@@ -171,7 +171,7 @@ describe("cfc-nested-link-policy-applicability", () => {
       });
     }
     tx.prepareCfc();
-    const error = (await tx.commit()).error?.message;
+    const error = (await tx.commit().settled).error?.message;
     await rt.idle();
     return error;
   };

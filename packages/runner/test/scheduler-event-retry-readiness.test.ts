@@ -160,7 +160,7 @@ describe("scheduler event retry readiness", () => {
   it("re-dispatches a conflicted event only once the conflict's readiness resolves", async () => {
     const events: string[] = [];
     const piece = buildCounterPiece(runtime, tx, "readiness-gate-root", events);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -201,7 +201,7 @@ describe("scheduler event retry readiness", () => {
       "readiness-barrier-root",
       events,
     );
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -237,7 +237,7 @@ describe("scheduler event retry readiness", () => {
   it("syncs the document the conflict names before the handler re-runs", async () => {
     const events: string[] = [];
     const piece = buildCounterPiece(runtime, tx, "readiness-sync-root", events);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -272,7 +272,7 @@ describe("scheduler event retry readiness", () => {
     // would then land over it — an event overtaking one sent before it.
     const events: string[] = [];
     const piece = buildCounterPiece(runtime, tx, "readiness-fifo-root", events);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -321,7 +321,7 @@ describe("scheduler event retry readiness", () => {
       "readiness-telemetry-root",
       events,
     );
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -377,7 +377,7 @@ describe("scheduler event retry readiness", () => {
         "readiness-teardown-root",
         events,
       );
-      await own.tx.commit();
+      await own.tx.commit().settled;
       await own.runtime.idle();
 
       const gate = Promise.withResolvers<void>();

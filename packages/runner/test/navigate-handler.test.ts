@@ -125,7 +125,7 @@ async function runNavigateHandlerTest(conditional: boolean): Promise<void> {
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
 
     result.key("openNote").send({});
@@ -184,7 +184,7 @@ async function runCancelledDeferredNavigateTest(
       tx,
     );
     const root = runtime.run(tx, Root, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
     await runtime.scheduler.idleWithPendingCommits();
@@ -207,7 +207,7 @@ async function runCancelledDeferredNavigateTest(
   } finally {
     gate?.confirm();
     gate?.restore();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }
@@ -302,7 +302,7 @@ Deno.test("navigateTo is idempotent for one result cell", async () => {
 
     first.action(tx);
     second.action(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.settled();
 
     assertEquals(navigations.length, 1);
@@ -347,7 +347,7 @@ Deno.test(
         undefined,
         setupTx,
       );
-      const setupResult = await setupTx.commit();
+      const setupResult = await setupTx.commit().settled;
       assert(setupResult.ok !== undefined);
 
       const sendResult = (
@@ -373,14 +373,14 @@ Deno.test(
         "navigateTo retry regression",
       );
       builtin.action(rejectedTx);
-      const rejectedResult = await rejectedTx.commit();
+      const rejectedResult = await rejectedTx.commit().settled;
       assert(isCfcEnforcementRejection(rejectedResult.error));
       await runtime.settled();
       assertEquals(navigations.length, 0);
 
       const retryTx = runtime.edit();
       builtin.action(retryTx);
-      const retryResult = await retryTx.commit();
+      const retryResult = await retryTx.commit().settled;
       assert(retryResult.ok !== undefined);
       await runtime.settled();
 
@@ -430,7 +430,7 @@ Deno.test("navigateTo async callback is tracked by runtime.settled", async () =>
       setupTx,
     );
     const root = runtime.run(setupTx, Root, {}, rootCell);
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await root.pull();
 
     root.key("openTarget").send({});
@@ -486,7 +486,7 @@ Deno.test("navigateTo contains a rejected async callback", async () => {
       setupTx,
     );
     const root = runtime.run(setupTx, Root, {}, rootCell);
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await root.pull();
 
     root.key("openTarget").send({});
@@ -550,7 +550,7 @@ Deno.test(
         "navigateCallback is not set",
       );
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.dispose();
       await storageManager.close();
     }

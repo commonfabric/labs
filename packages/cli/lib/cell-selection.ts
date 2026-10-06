@@ -3610,7 +3610,10 @@ export async function deriveSelectedValue(
   const outputCell = result.key("value").asSchema(outputSchema);
   try {
     runtime.prepareTxForCommit(tx);
-    const committed = await timeSelectionPhase("commit", () => tx.commit());
+    const committed = await timeSelectionPhase(
+      "commit",
+      () => tx.commit().settled,
+    );
     if (committed.error !== undefined) {
       throw new CellSelectionError(
         `Could not apply get transform: ${committed.error.message}`,

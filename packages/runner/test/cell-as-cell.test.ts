@@ -40,7 +40,7 @@ describe("asCell", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -135,7 +135,7 @@ describe("asCell", () => {
       tx,
     );
     c.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const changeGroup = {};
@@ -149,19 +149,19 @@ describe("asCell", () => {
 
     const sameGroupTx = runtime.edit({ changeGroup });
     c.withTx(sameGroupTx).set(1);
-    await sameGroupTx.commit();
+    await sameGroupTx.commit().settled;
     await runtime.idle();
     expect(values).toEqual([0]);
 
     const otherGroupTx = runtime.edit({ changeGroup: {} });
     c.withTx(otherGroupTx).set(2);
-    await otherGroupTx.commit();
+    await otherGroupTx.commit().settled;
     await runtime.idle();
     expect(values).toEqual([0, 2]);
 
     const noGroupTx = runtime.edit();
     c.withTx(noGroupTx).set(3);
-    await noGroupTx.commit();
+    await noGroupTx.commit().settled;
     await runtime.idle();
     expect(values).toEqual([0, 2, 3]);
 
@@ -286,7 +286,7 @@ describe("asCell with schema", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

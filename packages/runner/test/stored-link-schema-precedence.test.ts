@@ -83,7 +83,7 @@ describe("stored-link-schema-precedence", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -352,7 +352,7 @@ describe("stored-link-schema-precedence", () => {
       );
       row.setRaw(storedRow);
       // One transaction writes one space: the row lands before the holder.
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       const holder = runtime.getCell<Holder>(
         space,
