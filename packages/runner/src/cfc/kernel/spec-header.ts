@@ -38,20 +38,27 @@ export interface SpecHeader {
 /**
  * One `@spec` tag. The section is written with its `§`, the hash with its
  * `sha256:` prefix, and the fields are separated by whitespace, which lets a
- * header wrap across the continuation lines of a doc comment.
+ * header wrap across the continuation lines of a doc comment. The hash ends
+ * at a token boundary, so a 65th hex digit or a letter run on from it makes
+ * the tag malformed rather than a 64-digit match.
  */
 const SPEC_TAG =
-  /@spec\s+([\w.-]+\.md)\s+§(\d+(?:\.\d+)*)\s+([A-Za-z_$][\w$]*)\s+sha256:([0-9a-f]{64})(?![0-9a-f])/g;
+  /@spec\s+([\w.-]+\.md)\s+§(\d+(?:\.\d+)*)\s+([A-Za-z_$][\w$]*)\s+sha256:([0-9a-f]{64})(?![\w$])/g;
+
+/** The ` * ` a doc comment opens each continuation line with. */
+const CONTINUATION_PREFIX = /^[ \t]*\*(?!\/)[ \t]?/gm;
 
 /**
- * Parses the `@spec` tags in the text of one doc comment, in order. A
- * comment with no tag parses to an empty list; one whose tag is malformed
- * parses as though the tag were absent, since the regular expression is the
- * whole of what this recognizes.
+ * Parses the `@spec` tags in the text of one doc comment, in order, reading
+ * past the `*` each continuation line opens with so a tag wrapped across
+ * lines is one tag. A comment with no tag parses to an empty list; one whose
+ * tag is malformed parses as though the tag were absent, since the regular
+ * expression is the whole of what this recognizes.
  */
 export function parseSpecHeaders(comment: string): SpecHeader[] {
   const headers: SpecHeader[] = [];
-  for (const match of comment.matchAll(SPEC_TAG)) {
+  const text = comment.replace(CONTINUATION_PREFIX, " ");
+  for (const match of text.matchAll(SPEC_TAG)) {
     const [, file, section, name, sha256] = match;
     headers.push({ file, section, name, sha256 });
   }
