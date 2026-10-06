@@ -211,6 +211,20 @@ const notSetUp = (store: string, problem: string, docker: string): string =>
 const rejection = (promise: Promise<unknown>): Promise<unknown> =>
   promise.then(() => undefined, (error: unknown) => error);
 
+/** The message of the error `thrown` is, or the empty one where it is none. */
+const messageOf = (thrown: unknown): string =>
+  thrown instanceof Error ? thrown.message : "";
+
+/** The message of what `run` throws, or `undefined` where it returns. */
+const thrownMessage = (run: () => unknown): string | undefined => {
+  try {
+    run();
+  } catch (error) {
+    return messageOf(error);
+  }
+  return undefined;
+};
+
 /** The selection of a defaulted native runtime, taken whole from `store`. */
 const fromStore = (store: string, policy: string): SandboxRuntimeSelection => ({
   sandboxRuntimeKind: "runsc",
@@ -591,7 +605,7 @@ describe("sandbox-runtime-default", () => {
             DOCKER_BY_VARIABLE,
           ),
         });
-        expect((refusal as Error).message).not.toContain("--sandbox");
+        expect(messageOf(refusal)).not.toContain("--sandbox");
       });
 
       it("throws for a store that cannot be located, with neither `CFC_VM_HOME` nor a home", async () => {
@@ -828,7 +842,7 @@ describe("sandbox-runtime-default", () => {
               DOCKER_BY_FLAG_OR_VARIABLE,
             ),
           });
-          expect((refusal as Error).message).not.toContain("secret");
+          expect(messageOf(refusal)).not.toContain("secret");
         });
 
         it("throws for one before it looks for a store", async () => {
@@ -1018,7 +1032,7 @@ describe("sandbox-runtime-default", () => {
           );
 
           expect(refusal).toBeInstanceOf(HarnessControlError);
-          expect((refusal as Error).message).toContain(
+          expect(messageOf(refusal)).toContain(
             `the CFC policy at \`${homePolicy(home)}\` could not be examined (`,
           );
         });
@@ -1124,7 +1138,7 @@ describe("sandbox-runtime-default", () => {
             );
 
             expect(refusal).toBeInstanceOf(HarnessControlError);
-            const { message } = refusal as Error;
+            const message = messageOf(refusal);
             expect(message).toContain("its store cannot be located: ");
             expect(message).toContain(why);
             expect(message.endsWith(`or ${DOCKER_BY_FLAG_OR_VARIABLE}`)).toBe(
@@ -1658,7 +1672,7 @@ describe("sandbox-runtime-default", () => {
       const refusal = await rejection(start("darwin", { HOME: home }));
 
       expect(refusal).toBeInstanceOf(HarnessControlError);
-      const { message } = refusal as Error;
+      const message = messageOf(refusal);
       expect(message).toContain(
         `it is not set up at \`${defaultStore(home)}\`: `,
       );
@@ -2164,7 +2178,7 @@ describe("sandbox-runtime-default", () => {
         );
 
         expect(refusal).toBeInstanceOf(HarnessControlError);
-        const { message } = refusal as Error;
+        const message = messageOf(refusal);
         expect(message).toContain(
           `it is not set up at \`${defaultStore(home)}\`: `,
         );
@@ -2351,7 +2365,7 @@ describe("sandbox-runtime-default", () => {
       );
 
       expect(refusal).toBeInstanceOf(HarnessControlError);
-      expect((refusal as Error).message).toContain(
+      expect(messageOf(refusal)).toContain(
         "`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` is a setting of the " +
           "Docker driver, which the native runtime does not read. Remove " +
           `it, or ${DOCKER_BY_VARIABLE}`,
@@ -2430,7 +2444,7 @@ describe("sandbox-runtime-default", () => {
 
         expect(refusal).toBeInstanceOf(HarnessControlError);
         expect(served).toBe(false);
-        const { message } = refusal as Error;
+        const message = messageOf(refusal);
         expect(message).toContain(
           `it is not set up at \`${defaultStore(home)}\`: `,
         );
@@ -2533,12 +2547,13 @@ describe("sandbox-runtime-default", () => {
         const store = await installed();
         const workspace = join(store, holder);
 
-        expect(() => resolved(store, workspace, defaulted(store))).toThrow(
-          new Error(
+        expect(
+          thrownMessage(() => resolved(store, workspace, defaulted(store))),
+        )
+          .toBe(
             within(`${label} ${join(store, file)}`, workspace) +
               unnamed(store),
-          ),
-        );
+          );
       });
 
       it(`says of a ${label} in the workspace no more than where it lies, for a runtime that was named`, async () => {
@@ -2552,9 +2567,8 @@ describe("sandbox-runtime-default", () => {
             { runtime: "runsc", source: "environment" } as const,
           ]
         ) {
-          expect(() => resolved(store, workspace, selection)).toThrow(
-            new Error(within(`${label} ${join(store, file)}`, workspace)),
-          );
+          expect(thrownMessage(() => resolved(store, workspace, selection)))
+            .toBe(within(`${label} ${join(store, file)}`, workspace));
         }
       });
     }
@@ -2710,7 +2724,7 @@ describe("sandbox-runtime-default", () => {
       if (Deno.build.os !== "darwin") return false;
       const refusal = await rejection(selecting);
       expect(refusal).toBeInstanceOf(HarnessControlError);
-      expect((refusal as Error).message).toContain(
+      expect(messageOf(refusal)).toContain(
         `it is not set up at \`${defaultStore(home)}\`: `,
       );
       return true;
