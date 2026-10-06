@@ -242,6 +242,7 @@ import {
 import type {
   DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
+  SandboxPlatform,
   SandboxRuntime,
   SandboxRuntimeChoice,
   SandboxRuntimeKind,
@@ -450,6 +451,13 @@ export interface CreateHarnessEngineOptions
   /** runsc runtime: the binary, default `runsc` on PATH. */
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+
+  /**
+   * runsc runtime: the platform whose driver defaults apply, as
+   * `Deno.build.os` writes it, which it is when absent. On macOS an unnamed
+   * rootfs is the kitchen-sink image of the macOS `runsc`'s store.
+   */
+  sandboxPlatform?: SandboxPlatform;
 
   /**
    * How an entrypoint selected the runtime, which the run records in its
@@ -1062,6 +1070,9 @@ export class CfHarnessEngine {
         networkMode: options.sandboxRunscNetworkMode,
         additionalMounts: options.additionalMounts,
         runId,
+        ...(options.sandboxPlatform !== undefined
+          ? { platform: options.sandboxPlatform }
+          : {}),
         // The macOS `runsc` runs with this process's environment, and finds
         // its store by these two.
         homeDir: Deno.env.get("HOME"),

@@ -3182,6 +3182,7 @@ describe("sandbox-runtime-default", () => {
             workspaceHostPath: workspace,
             sandboxRuntimeKind: "runsc",
             sandboxRunscBinary: join(storeA, SHIM),
+            sandboxPlatform: "darwin",
             cfcEnforcementMode: "observe",
             processRunner: {
               run: () =>

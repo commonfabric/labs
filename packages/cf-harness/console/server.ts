@@ -1371,13 +1371,15 @@ export const consoleHealthRows = (
 /**
  * The direct driver's configuration for this console's turns, resolved from
  * the options every turn is built with, as the engine resolves them, in the
- * environment `env`: on macOS an unnamed rootfs is the kitchen-sink image of
- * the store `CFC_VM_HOME` there names, else of the one under its `HOME`.
- * Throws where a turn would be refused.
+ * environment `env` on `platform`, `Deno.build.os` where absent: on macOS an
+ * unnamed rootfs is the kitchen-sink image of the store `CFC_VM_HOME` there
+ * names, else of the one under its `HOME`. Throws where a turn would be
+ * refused.
  */
 const resolveConsoleRunscConfig = (
   config: ConsoleConfig,
   env: Record<string, string | undefined>,
+  platform: SandboxPlatform | undefined,
 ): RunscSandboxConfig => {
   const options = harnessSessionEngineOptions(config);
   return resolveRunscSandboxConfig({
@@ -1387,6 +1389,7 @@ const resolveConsoleRunscConfig = (
     cfcPolicyPath: options.sandboxCfcPolicy,
     networkMode: options.sandboxRunscNetworkMode,
     additionalMounts: options.additionalMounts,
+    ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,
     cfcVmHome: env.CFC_VM_HOME,
     unnamedRuntimeNote: unnamedRuntimeMountNote(config.sandboxRuntimeChoice),
@@ -1432,7 +1435,7 @@ export const consoleVmHealthProbes = (
   if (config.sandboxRuntimeKind !== "runsc") return [];
   let rootfs: string;
   try {
-    rootfs = resolveConsoleRunscConfig(config, env).rootfs;
+    rootfs = resolveConsoleRunscConfig(config, env, options.platform).rootfs;
   } catch {
     return [];
   }
@@ -1473,7 +1476,7 @@ export const createConsoleHealth = (
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
     config.sandboxRuntimeKind === "runsc"
       ? consoleRunscHealthProbe(
-        () => resolveConsoleRunscConfig(config, env),
+        () => resolveConsoleRunscConfig(config, env, host.platform),
         consoleTurnEnforcementMode(config),
         undefined,
         undefined,
