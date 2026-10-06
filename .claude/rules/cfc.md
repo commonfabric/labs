@@ -31,9 +31,9 @@ citation in `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts` naming
 a section it does not list, unless the task's `EXEMPTIONS` table names that
 file, citation and reason; a function exported under
 `packages/runner/src/cfc/kernel/` without a `@spec` header, with a hash the
-snapshot does not record, or with a value import from outside the kernel other
-than the shared type module `@commonfabric/api/cfc` (type-only imports are
-free); a critical pseudocode function in the snapshot that no manifest row or
+snapshot does not record, or with a value import from outside the kernel
+(type-only imports are free; a constant a kernel function needs is declared
+inside the kernel); a critical pseudocode function in the snapshot that no manifest row or
 companion entry in `packages/runner/src/cfc/kernel/manifest.ts` covers, or a
 row the snapshot or the kernel contradicts; and more than three `SPEC-PENDING`
 markers in the governed source files (the runner CFC sources and tests, the

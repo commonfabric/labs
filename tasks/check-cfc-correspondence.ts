@@ -20,9 +20,10 @@
  * 2. **The kernel is pinned and pure.** Every function a file under
  *    `packages/runner/src/cfc/kernel/` exports carries a `@spec` header whose
  *    hash is the snapshot's for that function, and the file's value imports
- *    reach only other kernel files and the modules {@link KERNEL_SHARED_MODULES}
- *    names. The ledger files, {@link KERNEL_LEDGER_FILES}, are exempt from the
- *    header rule and held to the import rule.
+ *    reach only other kernel files: a type import is erased before anything
+ *    runs and is allowed from anywhere, and nothing else from outside the
+ *    kernel executes. The ledger files, {@link KERNEL_LEDGER_FILES}, are
+ *    exempt from the header rule and held to the import rule.
  * 3. **Every `§` citation under `packages/runner/src/cfc/` names a section
  *    the snapshot has.** A citation written on purpose to something else is
  *    recorded in {@link EXEMPTIONS}, naming the file, the citation and why;
@@ -73,16 +74,6 @@ export const KERNEL_DIR = "packages/runner/src/cfc/kernel/";
 export const KERNEL_LEDGER_FILES: ReadonlySet<string> = new Set([
   `${KERNEL_DIR}manifest.ts`,
   `${KERNEL_DIR}spec-header.ts`,
-]);
-
-/**
- * The modules a kernel file may import values from besides other kernel
- * files: the atom and label types a kernel function is written over. A type
- * import is erased before anything runs and so is allowed from anywhere; this
- * list bounds what a kernel file may execute.
- */
-export const KERNEL_SHARED_MODULES: ReadonlySet<string> = new Set([
-  "@commonfabric/api/cfc",
 ]);
 
 /** The most `SPEC-PENDING` markers the governed files may hold at once. */
@@ -367,15 +358,13 @@ function kernelFileFindings(
 ): Finding[] {
   const findings: Finding[] = [];
   for (const { specifier, at } of valueImports(file.text)) {
-    if (staysInKernel(specifier) || KERNEL_SHARED_MODULES.has(specifier)) {
-      continue;
-    }
+    if (staysInKernel(specifier)) continue;
     findings.push({
       file: file.path,
       line: lineAt(file.text, at),
-      message: `imports \`${specifier}\`, which is outside the kernel and ` +
-        "not a shared type module; a kernel function takes no transaction, " +
-        "reads no dial and calls no hook",
+      message: `imports \`${specifier}\`, which is outside the kernel; a ` +
+        "kernel function takes no transaction, reads no dial and calls no " +
+        "hook, and a value it needs from outside is declared inside the kernel",
     });
   }
   if (KERNEL_LEDGER_FILES.has(file.path)) return findings;

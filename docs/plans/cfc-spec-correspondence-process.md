@@ -141,10 +141,12 @@ header.
   snapshot does not list;
 - `SPEC-PENDING` markers exceed the budget, or one names no specs pull
   request;
-- a kernel file imports anything outside `kernel/` other than the shared type
-  module `@commonfabric/api/cfc`, which is the mechanical half of "pure".
-  Type-only imports are erased and allowed; the manifest and the header
-  parser are ledger files beside the kernel, not kernel functions.
+- a kernel file imports a value from outside `kernel/`, which is the
+  mechanical half of "pure". Type-only imports are erased and allowed from
+  anywhere; a constant a kernel function needs is declared inside the kernel
+  rather than imported, since the packages that hold such constants also
+  export behavior. The manifest and the header parser are ledger files beside
+  the kernel, not kernel functions.
 
 The task is a repository gate declared in `tasks/test-topology/gates.ts`,
 reached by the CFC sources, so it runs where the other `check-*` gates do.

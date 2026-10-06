@@ -475,27 +475,31 @@ export { le as atomLe };
           .toEqual([
             [
               1,
-              "imports `../clause.ts`, which is outside the kernel and not " +
-              "a shared type module; a kernel function takes no " +
-              "transaction, reads no dial and calls no hook",
+              "imports `../clause.ts`, which is outside the kernel; a kernel " +
+              "function takes no transaction, reads no dial and calls no " +
+              "hook, and a value it needs from outside is declared inside " +
+              "the kernel",
             ],
             [
               2,
               "imports `@commonfabric/runner/cfc/trust`, which is outside " +
-              "the kernel and not a shared type module; a kernel function " +
-              "takes no transaction, reads no dial and calls no hook",
+              "the kernel; a kernel function takes no transaction, reads no " +
+              "dial and calls no hook, and a value it needs from outside is " +
+              "declared inside the kernel",
             ],
             [
               3,
-              "imports `./%2e%2e/prepare.ts`, which is outside the kernel " +
-              "and not a shared type module; a kernel function takes no " +
-              "transaction, reads no dial and calls no hook",
+              "imports `./%2e%2e/prepare.ts`, which is outside the kernel; a " +
+              "kernel function takes no transaction, reads no dial and " +
+              "calls no hook, and a value it needs from outside is declared " +
+              "inside the kernel",
             ],
             [
               13,
-              "imports `../prepare.ts`, which is outside the kernel and not " +
-              "a shared type module; a kernel function takes no " +
-              "transaction, reads no dial and calls no hook",
+              "imports `../prepare.ts`, which is outside the kernel; a kernel " +
+              "function takes no transaction, reads no dial and calls no " +
+              "hook, and a value it needs from outside is declared inside " +
+              "the kernel",
             ],
           ]);
       });
@@ -509,7 +513,7 @@ export { le as atomLe };
         expect(collectFindings(input({ kernelFiles: [file] }))).toEqual([]);
       });
 
-      it("reports a value import reaching outside the kernel", () => {
+      it("reports value imports reaching outside the kernel, the api package included", () => {
         const file = kernelFile(
           `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
             `import type { Tx } from "../../storage/interface.ts";\n` +
@@ -519,12 +523,22 @@ export { le as atomLe };
         );
         const findings = collectFindings(input({ kernelFiles: [file] }));
         expect(findings.map((finding) => [finding.line, finding.message]))
-          .toEqual([[
-            1,
-            "imports `@commonfabric/utils/deep-equal`, which is outside the " +
-            "kernel and not a shared type module; a kernel function takes " +
-            "no transaction, reads no dial and calls no hook",
-          ]]);
+          .toEqual([
+            [
+              1,
+              "imports `@commonfabric/utils/deep-equal`, which is outside " +
+              "the kernel; a kernel function takes no transaction, reads " +
+              "no dial and calls no hook, and a value it needs from outside " +
+              "is declared inside the kernel",
+            ],
+            [
+              4,
+              "imports `@commonfabric/api/cfc`, which is outside the " +
+              "kernel; a kernel function takes no transaction, reads no " +
+              "dial and calls no hook, and a value it needs from outside " +
+              "is declared inside the kernel",
+            ],
+          ]);
       });
 
       it("holds a ledger file to the import rule and not the header rule", () => {

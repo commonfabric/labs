@@ -284,9 +284,10 @@ on four things, each read against the committed snapshot:
   block that is neither a row nor a companion.
 - A function exported from a file under `packages/runner/src/cfc/kernel/`
   with no `@spec` header, with a header whose hash is not the snapshot's for
-  that function, or in a file whose value imports reach past the kernel and
-  the shared type module `@commonfabric/api/cfc`. Type-only imports are
-  erased before anything runs and are not held to that. The manifest and the
+  that function, or in a file whose value imports reach past the kernel.
+  Type-only imports are erased before anything runs and are not held to that;
+  a constant a kernel function needs is declared inside the kernel, since the
+  packages that hold such constants also export behavior. The manifest and the
   header module are the ledger: they carry no header and are held to the
   import rule.
 - A `§` citation in `packages/runner/src/cfc.ts` or under
