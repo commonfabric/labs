@@ -145,6 +145,11 @@ describe("document writer policy", () => {
       ],
       ["a tuple", "", `{ pair: [${POLICY}] }`],
       [
+        "a carrier a mapped type folds into an object",
+        "type Mirror<T> = { [K in keyof T]: T[K] };",
+        "{ box: Mirror<WriteAuthorizedBy<{ a: string }, typeof setName>> }",
+      ],
+      [
         "a generic alias of a tuple",
         "type Tup<T> = [T];",
         `{ pair: Tup<${POLICY}> }`,

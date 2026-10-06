@@ -98,7 +98,7 @@ describe("a writer policy a document's schema reaches", () => {
     const cell = runtime.getCell<{ value: string }>(space, name, undefined, tx);
     const running = runtime.run(tx, pattern, {}, cell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
 
@@ -154,7 +154,7 @@ describe("a writer policy a document's schema reaches", () => {
     const cell = runtime.getCell<unknown>(space, name, undefined, tx);
     const running = runtime.run(tx, pattern, {}, cell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
 
@@ -484,7 +484,7 @@ export default pattern<{ initial: string }>((input): ${resultType} => {`,
       runtime.run(tx, pattern, {}, cell);
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /value",
       );
     });
@@ -553,7 +553,7 @@ export default pattern<{ initial: string }>((input): ${resultType} => {`,
       );
       const running = runtime.run(tx, pattern, {}, cell);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
       await runtime.idle();
 

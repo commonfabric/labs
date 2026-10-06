@@ -17,6 +17,9 @@ const DECLARATIONS = `
     Policies extends readonly [unknown, ...unknown[]],
   > = Cfc<T, { readonly writePolicyAnyOf: Policies }>;
   type Confidential<T, C> = Cfc<T, { confidentiality: C }>;
+  type Stamped<T, Meta> = T & {
+    readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T };
+  };
   function save() {}
   type Policy = WriteAuthorizedBy<string, typeof save>;
   interface Node { next: Node | null; value: string }
@@ -82,6 +85,17 @@ describe("writer-policy", () => {
       expect(carriesWriterPolicy(types.set, checker)).toBe(true);
     });
 
+    it("returns `true` for a carrier that records the payload its writer policy was written around", async () => {
+      // `CfcStamp` keeps the policy's payload beside its metadata.
+      const { checker, types } = await typesOf({
+        stamped: "Stamped<string, { writeAuthorizedBy: typeof save }>",
+        labelled: 'Stamped<string, { confidentiality: ["secret"] }>',
+      });
+
+      expect(carriesWriterPolicy(types.stamped, checker)).toBe(true);
+      expect(carriesWriterPolicy(types.labelled, checker)).toBe(false);
+    });
+
     it("returns `false` for a carrier holding only labels, and for a policy a member holds", async () => {
       const { checker, types } = await typesOf({
         labelled: 'Confidential<string, ["secret"]>',
@@ -112,6 +126,17 @@ describe("writer-policy", () => {
       for (const type of Object.values(types)) {
         expect(holdsWriterPolicy(type, checker)).toBe(true);
       }
+    });
+
+    it("returns `true` for a value holding a carrier that records the payload its writer policy was written around", async () => {
+      const { checker, types } = await typesOf({
+        stamped:
+          "{ value: Stamped<string, { writeAuthorizedBy: typeof save }> }",
+        labelled: '{ value: Stamped<string, { confidentiality: ["secret"] }> }',
+      });
+
+      expect(holdsWriterPolicy(types.stamped, checker)).toBe(true);
+      expect(holdsWriterPolicy(types.labelled, checker)).toBe(false);
     });
 
     it("returns `false` for labels alone, a function's result, and a recursive type holding no policy", async () => {

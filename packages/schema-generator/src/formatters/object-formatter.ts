@@ -42,7 +42,7 @@ import {
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
-import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
+import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {

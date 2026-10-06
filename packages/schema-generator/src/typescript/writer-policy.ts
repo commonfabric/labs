@@ -7,7 +7,11 @@
 
 import ts from "typescript";
 
-import { cfcCarrierProperty } from "./cfc-carrier.ts";
+import {
+  carrierStamps,
+  cfcCarrierProperty,
+  memberValueType,
+} from "./cfc-carrier.ts";
 
 /**
  * The writer policy `metadata`, a CFC carrier's metadata type, holds, by the
@@ -28,6 +32,19 @@ export const writerPolicyHeldBy = (
 };
 
 /**
+ * Whether `carrier`, a CFC carrier's `__ct_cfc__` member, records a writer
+ * policy among the policies it records (`carrierStamps()`).
+ */
+const recordsWriterPolicy = (
+  carrier: ts.Symbol,
+  checker: ts.TypeChecker,
+): boolean =>
+  carrierStamps(
+    memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
+    checker,
+  ).some((stamp) => writerPolicyHeldBy(stamp.meta, checker) !== undefined);
+
+/**
  * Whether `type` itself carries a writer policy: a member of an intersection
  * that is a CFC carrier holding one, read through unions and intersections
  * but not into the values the type holds.
@@ -40,8 +57,7 @@ export const carriesWriterPolicy = (
   type.types.some((member) => {
     const carrier = cfcCarrierProperty(member);
     return carrier
-      ? writerPolicyHeldBy(checker.getTypeOfSymbol(carrier), checker) !==
-        undefined
+      ? recordsWriterPolicy(carrier, checker)
       : carriesWriterPolicy(member, checker);
   });
 
@@ -65,10 +81,7 @@ export const holdsWriterPolicy = (
   if (type.isUnionOrIntersection()) {
     return type.types.some((member) => {
       const carrier = cfcCarrierProperty(member);
-      return carrier
-        ? writerPolicyHeldBy(checker.getTypeOfSymbol(carrier), checker) !==
-          undefined
-        : within(member);
+      return carrier ? recordsWriterPolicy(carrier, checker) : within(member);
     });
   }
   if ((type.flags & ts.TypeFlags.Object) === 0) return false;
