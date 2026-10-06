@@ -1622,6 +1622,30 @@ describe("sandbox-runtime-default", () => {
       });
     }
 
+    it("refuses every flag of the Docker driver given with no runtime named on macOS, naming each", async () => {
+      await installStore(defaultStore(home));
+
+      const { exitCode, built, stderr } = await run("darwin", { HOME: home }, [
+        "--cfc-invocation-context-dir",
+        "private/contexts",
+        "--sandbox-image=registry.example/private:tag",
+        "--cfc-result-dir",
+        "private/results",
+        "--sandbox-docker-runtime",
+        "runc",
+      ]);
+
+      expect([exitCode, built]).toEqual([1, []]);
+      expect(stderr).toEqual([
+        "No sandbox runtime is named, so the default applies, which on " +
+        "macOS is the native `runsc` runtime, and `--sandbox-image`, " +
+        "`--sandbox-docker-runtime`, `--cfc-result-dir` and " +
+        "`--cfc-invocation-context-dir` are settings of the Docker driver, " +
+        "which the native runtime does not read. Remove them, or " +
+        `${DOCKER_BY_FLAG_OR_VARIABLE}\n`,
+      ]);
+    });
+
     it("refuses the variable of a Docker setting with no runtime named on macOS", async () => {
       await installStore(defaultStore(home));
 
