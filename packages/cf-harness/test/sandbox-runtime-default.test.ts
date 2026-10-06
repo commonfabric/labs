@@ -3227,11 +3227,18 @@ describe("sandbox-runtime-default", () => {
       );
 
       await health.refresh();
+      const rows = health.snapshot().rows;
 
-      expect(
-        health.snapshot().rows.find((row) => row.id === "sandbox.runtime")
-          ?.detail,
-      ).toContain(`rootfs ${join(storeA, ROOTFS)};`);
+      expect(rows.find((row) => row.id === "sandbox.runtime")?.detail)
+        .toContain(`rootfs ${join(storeA, ROOTFS)};`);
+      // The VM row is A's too, and finds the rootfs to be one of its images.
+      // No daemon runs for a store a case made, and reading the row starts
+      // none.
+      expect(rows.find((row) => row.id === "sandbox.vm")).toMatchObject({
+        state: "ok",
+        value: "idle; starts on first use",
+        detail: join(storeA, "daemon.sock"),
+      });
     });
   });
 
