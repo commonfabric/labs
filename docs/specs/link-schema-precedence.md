@@ -137,7 +137,9 @@ stands (a default-only reader's included, though `{ "default": … }` is
 otherwise a true schema). A default-only STORED schema contributes the
 same way: trivially true for shape, its default is still the nearest
 declaration, and the resolution carry inherits it onto the traveling
-schema rather than discarding it with the shape it does not have. Path
+schema rather than discarding it with the shape it does not have. The
+stored schema is read in structural form, so a default it declares behind
+a content-addressed reference is inherited as an inline one is. Path
 narrowing surfaces a link's nested property defaults as top-level at the
 positions where deeper reads combine, so the rule composes per position
 across a chain.
