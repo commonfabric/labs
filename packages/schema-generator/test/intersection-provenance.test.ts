@@ -183,4 +183,204 @@ describe("SchemaGenerator", () => {
       });
     }
   });
+
+  describe("properties several intersection constituents declare", () => {
+    // Each case declares `M1` and `M2`, and reads `M1 & M2` by its type and
+    // as a type node with no checker bindings, whose constituents are read
+    // through their names.
+
+    const conflictComment =
+      "Conflicting docs across intersection constituents; using first";
+    const cases: [string, string, JSONSchema][] = [
+      [
+        "returns the narrower schema for `unknown` beside `string`",
+        `type M1 = { a: unknown }; type M2 = { a: string };`,
+        {
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+        },
+      ],
+      [
+        "returns the narrower schema for `string` beside `unknown`",
+        `type M1 = { a: string }; type M2 = { a: unknown };`,
+        {
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+        },
+      ],
+      [
+        "returns the union member the other declaration narrows to",
+        `type M1 = { a: string | number }; type M2 = { a: string };`,
+        {
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+        },
+      ],
+      [
+        "returns `false` for disjoint declarations",
+        `type M1 = { a: string }; type M2 = { a: number };`,
+        { type: "object", properties: { a: false }, required: ["a"] },
+      ],
+      [
+        "returns the merged members of object-typed declarations",
+        `type M1 = { a: { x: unknown } }; type M2 = { a: { x: string; y: number } };`,
+        {
+          type: "object",
+          properties: {
+            a: {
+              type: "object",
+              properties: { x: { type: "string" }, y: { type: "number" } },
+              required: ["x", "y"],
+            },
+          },
+          required: ["a"],
+        },
+      ],
+      [
+        "lists the property in `required` when one declaration requires it",
+        `type M1 = { a?: string }; type M2 = { a: string };`,
+        {
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+        },
+      ],
+      [
+        "keeps the first declaration's description beside a narrower declaration",
+        `
+          interface M1 {
+            /** First doc */
+            a: unknown;
+          }
+          interface M2 {
+            /** Second doc */
+            a: string;
+          }
+        `,
+        {
+          type: "object",
+          properties: {
+            a: {
+              type: "string",
+              description: "First doc",
+              $comment: conflictComment,
+            },
+          },
+          required: ["a"],
+        },
+      ],
+      [
+        "keeps the first of two descriptions on declarations of one type",
+        `
+          interface M1 {
+            /** First doc */
+            a: string;
+          }
+          interface M2 {
+            /** Second doc */
+            a: string;
+          }
+        `,
+        {
+          type: "object",
+          properties: {
+            a: {
+              type: "string",
+              description: "First doc",
+              $comment: conflictComment,
+            },
+          },
+          required: ["a"],
+        },
+      ],
+      // A documented branded primitive emits the unsupported-pattern
+      // fallback, whose constituents are recorded; read without its
+      // description, it still meets `number` as `string` would.
+      [
+        "returns `false` for a documented branded declaration beside a disjoint one",
+        `
+          interface M1 {
+            /** Branded doc */
+            a: string & { topic: unknown };
+          }
+          interface M2 {
+            a: number;
+          }
+        `,
+        { type: "object", properties: { a: false }, required: ["a"] },
+      ],
+    ];
+
+    for (const [description, declarations, expected] of cases) {
+      it(description, async () => {
+        const code = `${declarations}\ntype Result = M1 & M2;`;
+        const { checker, program, sourceFile } = await createTestProgram(code);
+        expect(program.getSemanticDiagnostics(sourceFile)).toEqual([]);
+        const declaration = sourceFile.statements.find((statement) =>
+          ts.isTypeAliasDeclaration(statement) &&
+          statement.name.text === "Result"
+        );
+        if (!declaration || !ts.isTypeAliasDeclaration(declaration)) {
+          throw new Error("Missing `Result` declaration");
+        }
+        const type = checker.getTypeFromTypeNode(declaration.type);
+        expect(new SchemaGenerator().generateSchema(type, checker)).toEqual(
+          expected,
+        );
+
+        const syntheticFile = ts.createSourceFile(
+          "synthetic.ts",
+          `type Result = M1 & M2;`,
+          ts.ScriptTarget.Latest,
+          true,
+        );
+        const synthetic = syntheticFile.statements[0];
+        if (!synthetic || !ts.isTypeAliasDeclaration(synthetic)) {
+          throw new Error("Missing synthetic `Result` declaration");
+        }
+        expect(new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          synthetic.type,
+          checker,
+          undefined,
+          undefined,
+          sourceFile,
+        )).toEqual(expected);
+      });
+    }
+
+    it("returns a union with `undefined` for an optional declaration beside `string | undefined`", async () => {
+      // An optional declaration admits `undefined` as its `?` does, so the
+      // property that declaration and `string | undefined` share admits it
+      // too. The node path spells the union it settles as `anyOf`.
+
+      const { checker, sourceFile } = await createTestProgram(`
+        type M1 = { a: string | undefined };
+        type M2 = { a?: string };
+      `);
+      const syntheticFile = ts.createSourceFile(
+        "synthetic.ts",
+        `type Result = M1 & M2;`,
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      const synthetic = syntheticFile.statements[0] as ts.TypeAliasDeclaration;
+
+      expect(new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        synthetic.type,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      )).toEqual({
+        type: "object",
+        properties: {
+          a: { anyOf: [{ type: "string" }, { type: "undefined" }] },
+        },
+        required: ["a"],
+      });
+    });
+  });
 });
