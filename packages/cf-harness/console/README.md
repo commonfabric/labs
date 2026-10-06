@@ -46,10 +46,10 @@ shared host, a tailnet with an access policy — and not behind a public address
   sandbox. On macOS that is, unless the environment names another, the native
   runtime: the direct `runsc` driver over the cfc-vm store gVisor's macOS
   installer writes, with no Docker, and the console refuses to start where that
-  store is not set up. On every other platform it is a Docker container under
-  the `runsc-cfc` runtime, and a stopped Docker daemon is a run that fails on
-  its first `bash` call. `CF_HARNESS_SANDBOX_RUNTIME` names either on any
-  platform; see [Sandbox runtime](#sandbox-runtime).
+  store is not set up. On every other platform it is, by default, a Docker
+  container under the `runsc-cfc` runtime, and a stopped Docker daemon is a run
+  that fails on its first `bash` call. `CF_HARNESS_SANDBOX_RUNTIME` names either
+  on any platform; see [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.

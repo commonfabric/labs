@@ -132,7 +132,8 @@ printout's `sandbox` row says which and why:
 
 A console on the direct driver needs no sidecar directory and reads no Docker
 registration; the printout names its `runsc` binary, rootfs and CFC policy
-instead, each beside the variable or the store it came from.
+instead, each beside the variable or the store it came from, or beside
+`harness default` where neither named it.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and

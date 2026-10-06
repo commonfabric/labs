@@ -237,6 +237,29 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", asy
   assertEquals(c.cfcPolicyPath, undefined);
 });
 
+Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolute path", () => {
+  // The macOS `runsc` resolves `CFC_VM_HOME` against its own working
+  // directory, so a relative store names one place here and another there.
+  for (const cfcVmHome of ["cfc-vm", "~/cfc-vm", "./cfc-vm"]) {
+    for (const rootfs of [undefined, "/images/kitchensink"]) {
+      assertThrows(
+        () =>
+          resolveRunscSandboxConfig({
+            workspaceHostPath: "/tmp/ws",
+            runscBinary: RUNSC,
+            platform: "darwin",
+            homeDir: "/Users/someone",
+            cfcVmHome,
+            rootfs,
+            scratchDir: "/tmp/scratch",
+          }),
+        Error,
+        `\`${cfcVmHome}\` is not an absolute path`,
+      );
+    }
+  }
+});
+
 Deno.test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () => {
   assertThrows(
     () =>

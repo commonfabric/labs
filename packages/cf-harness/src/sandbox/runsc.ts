@@ -539,6 +539,13 @@ export const resolveRunscSandboxConfig = (
   const store = platform === "darwin"
     ? darwinCfcVmStore(options.cfcVmHome, options.homeDir)
     : undefined;
+  if (store !== undefined && !isAbsoluteHostPath(store)) {
+    // The macOS `runsc` reads the same `CFC_VM_HOME` and resolves it against
+    // its own working directory, which need not be this one.
+    throw new Error(
+      `runsc sandbox needs the cfc-vm store by its absolute path: \`${store}\` is not an absolute path (set CFC_VM_HOME to the store's absolute path)`,
+    );
+  }
   const rootfs = options.rootfs ??
     (store !== undefined ? darwinCfcVmRootfs(store) : undefined);
   if (rootfs === undefined) {
