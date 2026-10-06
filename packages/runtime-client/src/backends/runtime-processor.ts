@@ -1574,6 +1574,9 @@ export class RuntimeProcessor {
       () => undefined,
       (error: unknown) => ({ error }),
     );
+    // Projection can discover reads beyond the initial pull. editWithRetry
+    // reconciles documents read as absent and re-runs this probe when those
+    // documents turn out to exist.
     const existing = await this.#runtime.editWithRetry((tx) => {
       const cell = target.withTx(tx);
       try {

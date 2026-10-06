@@ -54,6 +54,9 @@ including commits from a running pattern in another space. Every document
 consumed to build the returned value, including redirect and linked-value
 targets, must be free of pending local writes. The returned value is the snapshot
 selected by that transaction; later writes can still change it.
+Later branches of a multi-space commit become pending local writes only when
+they start in their replica. Before such a branch starts, initialization can
+return this stored snapshot; the branch can subsequently change the cell.
 
 For an absent or optimistic backing value, or an inconclusive read, initialization
 keeps demand active through the full commit-aware barrier before atomically
