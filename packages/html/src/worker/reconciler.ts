@@ -1173,7 +1173,9 @@ export class WorkerReconciler {
           childCtx,
           placeholder,
           decision.outOfReach !== undefined
-            ? this.#accessPlaceholderVNode()
+            ? this.#accessPlaceholderVNode(
+              this.#refusedSpaceOf(decision.outOfReach)!,
+            )
             : null,
           state.childRenderPolicy,
         );
