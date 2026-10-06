@@ -24,6 +24,7 @@ import {
   startConsoleServer,
 } from "../console/server.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
+import { resolveInteractiveProvisioning } from "../src/host-mounts.ts";
 import {
   type CfHarnessCliIO,
   formatCfHarnessCliResult,
@@ -462,6 +463,42 @@ describe("sandbox-runtime-default", () => {
         });
       }
 
+      describe("given a platform too, which its type does not show", () => {
+        // A caller typed as one that must name the runtime, whose value also
+        // carries a platform: its type admits the value, which is what the
+        // selection is handed at run time. It takes no default all the same.
+        const both = { namedBy: "Loom", platform: "darwin" as const };
+        const caller: { namedBy: string } = both;
+
+        it("throws for an unnamed runtime, as for one given no platform", async () => {
+          await installStore(defaultStore(home));
+
+          const refusal = await rejection(
+            resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+              ...caller,
+              flags: true,
+            }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({ message: mustName(true) });
+        });
+
+        it("refuses the interactive provisioning of an unnamed runtime, as for one given no platform", async () => {
+          await installStore(defaultStore(home));
+
+          const refusal = await rejection(
+            resolveInteractiveProvisioning({}, root, { HOME: home }, {
+              ...caller,
+              homeDir: home,
+            }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(refusal).toMatchObject({ message: mustName(false) });
+        });
+      });
+
       it("throws for a runtime named by white space alone", async () => {
         expect(
           await rejection(
@@ -750,6 +787,28 @@ describe("sandbox-runtime-default", () => {
               "where that runtime runs only from one. Name a rootfs, or " +
               "leave the flag out to run from the store's own image, or " +
               DOCKER_BY_FLAG_OR_VARIABLE,
+          });
+        });
+
+        it("throws naming the variable alone for a rootfs given empty to an entrypoint that takes no selection flags", async () => {
+          await installStore(defaultStore(home));
+
+          const refusal = await rejection(
+            resolveSandboxRuntimeSelection(
+              { HOME: home },
+              { sandboxRootfs: "" },
+              { platform: "darwin", flags: false },
+            ),
+          );
+
+          expect(refusal).toMatchObject({
+            code: "invalid-request",
+            message: "No sandbox runtime is named, so the default applies, " +
+              "which on macOS is the native `runsc` runtime, and a rootfs " +
+              "is given empty, which names none, where that runtime runs " +
+              "only from one. Name a rootfs with " +
+              "`CF_HARNESS_SANDBOX_ROOTFS`, or leave it unnamed to run from " +
+              "the store's own image, or " + DOCKER_BY_VARIABLE,
           });
         });
 

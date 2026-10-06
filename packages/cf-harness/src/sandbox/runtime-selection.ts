@@ -105,6 +105,9 @@ export const SANDBOX_DOCKER_RUNTIME_ENV = "CF_HARNESS_SANDBOX_DOCKER_RUNTIME";
 /** The batch CLI's flag naming the runtime. */
 export const SANDBOX_RUNTIME_FLAG = "--sandbox-runtime";
 
+/** The batch CLI's flag naming the runsc runtime's rootfs. */
+export const SANDBOX_ROOTFS_FLAG = "--sandbox-rootfs";
+
 /** The batch CLI's flag naming the runsc runtime's CFC policy. */
 export const SANDBOX_CFC_POLICY_FLAG = "--sandbox-cfc-policy";
 
@@ -203,12 +206,14 @@ export type UnnamedSandboxRuntime =
    * It takes the default of the `platform` it runs on. Required, so that an
    * entrypoint states its platform instead of inheriting one by omission.
    */
-  | { platform: SandboxPlatform }
+  | { platform: SandboxPlatform; namedBy?: never }
   /**
    * It refuses, on every platform: `namedBy` is the caller that must name the
-   * runtime of every run, as the refusal names it.
+   * runtime of every run, as the refusal names it. A value that carries a
+   * platform as well, which this type forbids and a wider one can hand over,
+   * still refuses: a caller that must name the runtime takes no default.
    */
-  | { namedBy: string };
+  | { namedBy: string; platform?: never };
 
 /** How an entrypoint derives its selection. */
 export type SandboxRuntimeSelectionOptions = UnnamedSandboxRuntime & {
@@ -533,7 +538,7 @@ export const resolveSandboxRuntimeSelection = async (
       sandboxRuntimeChoice: { runtime: named, source: namedBy },
     };
   }
-  if (named === undefined && !("platform" in options)) {
+  if (named === undefined && options.namedBy !== undefined) {
     throw new HarnessControlError(
       "invalid-request",
       "No sandbox runtime is named, and this entrypoint takes no default: " +
@@ -544,7 +549,7 @@ export const resolveSandboxRuntimeSelection = async (
   }
   // The platform is the whole of the reason: the native runtime is the macOS
   // `runsc`, and no other platform has the VM it runs in.
-  const platform = "platform" in options ? options.platform : undefined;
+  const platform = options.namedBy === undefined ? options.platform : undefined;
   if (
     named === undefined && platform !== undefined &&
     platform !== NATIVE_RUNTIME_PLATFORM
@@ -636,12 +641,21 @@ export const resolveSandboxRuntimeSelection = async (
   ) {
     // Named, and named as nothing: the store's image does not stand in for
     // a rootfs someone said there is none of.
-    throw nativeDefaultRefusal(
-      "`--sandbox-rootfs` is given empty, which names no rootfs, where that " +
-        "runtime runs only from one",
-      "Name a rootfs, or leave the flag out to run from the store's own image",
-      options.flags,
-    );
+    throw options.flags
+      ? nativeDefaultRefusal(
+        `\`${SANDBOX_ROOTFS_FLAG}\` is given empty, which names no rootfs, ` +
+          "where that runtime runs only from one",
+        "Name a rootfs, or leave the flag out to run from the store's own " +
+          "image",
+        true,
+      )
+      : nativeDefaultRefusal(
+        "a rootfs is given empty, which names none, where that runtime runs " +
+          "only from one",
+        `Name a rootfs with \`${SANDBOX_ROOTFS_ENV}\`, or leave it unnamed to ` +
+          "run from the store's own image",
+        false,
+      );
   }
   const policyNamed = explicit.sandboxCfcPolicy !== undefined;
   const namedPolicy = atCwd(

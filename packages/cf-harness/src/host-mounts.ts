@@ -210,10 +210,12 @@ export const resolveInteractiveProvisioning = async (
   const mounts = hostMountsToAdditionalMounts(
     await parseHostMountSpecs(parsed.hostMountSpecs, cwd),
   );
+  // A caller that must name the runtime takes no default, whatever else its
+  // value carries.
   const runtime = await resolveSandboxRuntimeSelection(env, {}, {
-    ...("platform" in host
-      ? { platform: host.platform }
-      : { namedBy: host.namedBy }),
+    ...(host.namedBy !== undefined
+      ? { namedBy: host.namedBy }
+      : { platform: host.platform }),
     flags: false,
     cwd,
     ...(host.homeDir !== undefined ? { homeDir: host.homeDir } : {}),
