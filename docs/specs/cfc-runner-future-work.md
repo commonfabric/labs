@@ -335,6 +335,21 @@ Each is bounded and mostly independent. Several are fail-safe today.
   intent consumption + bounded-retry attempt-cell ledger (`attemptCellId`/
   `consumedCellId`). This is runner-remit even though the rest of the Ch.6 refiner
   chain is not.
+- **A builtin's attribution needs a labeled read.** `TransformedBy` is minted
+  only over a nonempty flow join, so a builtin's transaction that reads nothing
+  labeled writes nothing stamped. Host operations work around it: the custody
+  seal reads an anchor it wrote first. A way for a builtin to stamp what it
+  writes without a read would remove the workaround and the ordering it
+  forces. ([Sealed custody](./cfc-custody-seal.md#attribution).)
+- **Write-once documents.** Nothing makes a document immutable after its first
+  write. A builtin's document stays as written only because its address is
+  unpredictable and its writer claim refuses other writers; a claim governs
+  its own location and not those below it, so such a document repeats it on
+  every member and stores nested values as one leaf string. Create-only marks are
+  enforced only under `experimental.commitPreconditions`. A write-once
+  primitive would state the property directly; the custody seal raises the
+  same question for which instance a room shows
+  ([sealed custody](./cfc-custody-seal.md)).
 - **Projection binding-scoped atom survival (§8.3).** A value-bound atom should
   survive a projection only if the runtime verifies the projected value still
   matches its scope digest. No per-atom conditional survival today (safe: drops or
@@ -379,8 +394,8 @@ spec test failing.
   map ([`atom-classes.ts:30`,`:34`](../../packages/runner/src/cfc/atom-classes.ts),
   both `provenance`) — so no runner code is needed. The residual is spec-side:
   promote them from spec example-only into the §15 atom registry, and reconcile the
-  `structure`/`external-ingest` `LabelComponent` values that extend the spec's
-  3-value enum. (SC-10/20.)
+  `structure`/`minted`/`external-ingest` `LabelComponent` values that extend
+  the spec's 3-value enum. (SC-10/20.)
 
 ---
 

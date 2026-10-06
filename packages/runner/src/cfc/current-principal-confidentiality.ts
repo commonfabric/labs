@@ -10,7 +10,7 @@ import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 import { isDID } from "@commonfabric/identity/did";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import type { JSONSchema } from "../builder/types.ts";
+import type { JSONSchema, JSONValue } from "../builder/types.ts";
 import { registerSchemaDocument } from "../schema-registry.ts";
 import { resolveExternalCfcSchemaRefAsDocument } from "./schema-refs.ts";
 
@@ -48,12 +48,53 @@ export function bindCurrentPrincipalConfidentiality(
   schema: JSONSchema,
   principal: string | undefined,
 ): JSONSchema {
+  return bindCurrentPrincipalClauses(schema, (clause) => {
+    if (!isCurrentPrincipalUserClause(clause)) {
+      throw new Error(
+        "CurrentPrincipal confidentiality requires a User subject",
+      );
+    }
+    if (!isDID(principal)) {
+      throw new Error(
+        "CurrentPrincipal confidentiality requires an authenticated creator",
+      );
+    }
+    return [cfcAtom.user(principal)];
+  });
+}
+
+/**
+ * Like `bindCurrentPrincipalConfidentiality()`, except that each creator-bound
+ * declaration in `schema` is bound to the concrete readers in `stored`, as
+ * `bindCurrentPrincipalToStoredClauses()` binds one clause list. A declaration
+ * stays symbolic where `stored` names no concrete reader, and so does a
+ * placeholder in any other shape, for the principal binding to settle.
+ */
+export function bindCurrentPrincipalToStoredConfidentiality(
+  schema: JSONSchema,
+  stored: readonly JSONValue[],
+): JSONSchema {
+  return bindCurrentPrincipalClauses(
+    schema,
+    (clause) => bindCurrentPrincipalToStoredClauses([clause], stored),
+  );
+}
+
+/**
+ * Helper for the two binders above, which replaces each confidentiality clause
+ * in `schema` that holds a `CurrentPrincipal` placeholder with the clauses
+ * `bind()` returns for it, through local and external schema references alike.
+ */
+function bindCurrentPrincipalClauses(
+  schema: JSONSchema,
+  bind: (clause: JSONValue) => readonly JSONValue[],
+): JSONSchema {
   if (!isObjectNotArray(schema)) return schema;
   let result = schema;
   if (typeof schema.$ref === "string" && isExternalSchemaRef(schema.$ref)) {
     const document = resolveExternalCfcSchemaRefAsDocument(schema.$ref);
     if (document !== undefined) {
-      const bound = bindCurrentPrincipalConfidentiality(document, principal);
+      const bound = bindCurrentPrincipalClauses(document, bind);
       if (internSchema(bound) !== internSchema(document)) {
         const { taggedHashString } = internSchema(bound, true);
         registerSchemaDocument(taggedHashString, bound);
@@ -65,20 +106,11 @@ export function bindCurrentPrincipalConfidentiality(
     isObjectNotArray(schema.ifc) && Array.isArray(schema.ifc.confidentiality)
   ) {
     let changed = false;
-    const confidentiality = schema.ifc.confidentiality.map((clause) => {
-      if (!hasCurrentPrincipal(clause)) return clause;
-      if (!isCurrentPrincipalUserClause(clause)) {
-        throw new Error(
-          "CurrentPrincipal confidentiality requires a User subject",
-        );
-      }
-      if (!isDID(principal)) {
-        throw new Error(
-          "CurrentPrincipal confidentiality requires an authenticated creator",
-        );
-      }
-      changed = true;
-      return cfcAtom.user(principal);
+    const confidentiality = schema.ifc.confidentiality.flatMap((clause) => {
+      if (!hasCurrentPrincipal(clause)) return [clause];
+      const bound = bind(clause);
+      if (bound.length !== 1 || bound[0] !== clause) changed = true;
+      return bound;
     });
     if (changed) {
       result = { ...result, ifc: { ...schema.ifc, confidentiality } };
@@ -86,7 +118,7 @@ export function bindCurrentPrincipalConfidentiality(
   }
   return mapSubschemas(
     result,
-    (child) => bindCurrentPrincipalConfidentiality(child, principal),
+    (child) => bindCurrentPrincipalClauses(child, bind),
     { includeDefs: true, includeUnused: true, visitBooleans: true },
   );
 }

@@ -67,14 +67,14 @@ describe("topic-author-migration", () => {
     );
     const seed = runtime.edit();
     argument.withTx(seed).set(input);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const originalComments = argument.key("comments").getRaw({
       lastNode: "value",
     });
     const tx = runtime.edit();
     runtime.run(tx, compiled, argument, result);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return { argument, result, originalComments };
   };
 
@@ -177,7 +177,7 @@ describe("topic-author-migration", () => {
 
     const edit = runtime.edit();
     argument.withTx(edit).key("createdByName").set("Changed legacy name");
-    expect((await edit.commit()).error).toBeUndefined();
+    expect((await edit.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await runtime.storageManager.synced();
     await runtime.dispose();
@@ -205,7 +205,7 @@ describe("topic-author-migration", () => {
     const tx = runtime.edit();
     runtime.run(tx, loaded, reopenedArgument, reopenedResult);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(await reopenedResult.key("createdBy").pull()).toEqual({
       kind: "legacy",
       name: "Fable",
@@ -245,7 +245,7 @@ describe("topic-author-migration", () => {
         body: "Arrived",
         sentAt: 2,
       });
-      expect((await arrival.commit()).error).toBeUndefined();
+      expect((await arrival.commit().settled).error).toBeUndefined();
       expect(await result.key("createdBy").pull()).toEqual({
         name: "Creator",
         kind: "legacy",
@@ -378,7 +378,7 @@ describe("topic-author-migration", () => {
 
         const arrival = runtime.edit();
         pendingName.withTx(arrival).set("  Delayed name  ");
-        expect((await arrival.commit()).error).toBeUndefined();
+        expect((await arrival.commit().settled).error).toBeUndefined();
         expect(await result.key("createdBy").pull()).toEqual({
           name: field === "creator" ? "  Delayed name  " : "Creator",
           kind: "legacy",
@@ -491,7 +491,7 @@ describe("topic-author-migration", () => {
           ? "person"
           : "Delayed name",
       );
-      expect((await arrival.commit()).error).toBeUndefined();
+      expect((await arrival.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await runtime.storageManager.synced();
       expect(argument.key("topicStateVersion").getRaw()).toBe(1);

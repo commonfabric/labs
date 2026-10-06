@@ -133,7 +133,7 @@ describe("personalized book invitation", () => {
         properties: { name: { type: "string" } },
       }, profileTx);
       profile.set({ name: "Originator" });
-      expect((await profileTx.commit()).error).toBeUndefined();
+      expect((await profileTx.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
       const factory = await runtime.patternManager.compilePattern(program, {
         space: identity.did(),
@@ -165,7 +165,7 @@ describe("personalized book invitation", () => {
         tx,
       );
       home.key("profiles").set([profile]);
-      home.key("defaultProfile").set(profile);
+      home.key("defaultProfile").set({ profile });
       const library = runtime.run(
         tx,
         factory,
@@ -178,7 +178,7 @@ describe("personalized book invitation", () => {
         ),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const run = library.key("seeding", "run");
       await waitForCellValue(runtime, run, (value) => value !== undefined, {
         stuckLabel: "the personal library submits its seeding request",
@@ -194,7 +194,7 @@ describe("personalized book invitation", () => {
       });
       run.withTx(complete).key("result").set(seed);
       run.withTx(complete).key("state").set("completed");
-      expect((await complete.commit()).error).toBeUndefined();
+      expect((await complete.commit().settled).error).toBeUndefined();
       await waitForCellValue(
         runtime,
         library.key("reading", "books"),

@@ -145,11 +145,11 @@ export default pattern<{ sql: ${scoped} }, { query: any }>(({ sql }) => {
       await result.sync();
       const seed = runtime.edit();
       argument.withTx(seed).key("sql").set("SELECT body FROM notes");
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       if (create) {
         const start = runtime.edit();
         runtime.run(start, pattern, argument, result);
-        expect((await start.commit()).error).toBeUndefined();
+        expect((await start.commit().settled).error).toBeUndefined();
       }
       client.cancel = result.sink(() => {});
       return { runtime, result };

@@ -95,7 +95,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
@@ -178,7 +178,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
@@ -249,7 +249,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
@@ -306,7 +306,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "projection claim failed at /firstLatitude",
       );
@@ -333,7 +333,7 @@ describe("CFC projection claims", () => {
       cell.update({ measurement: { lat: 37.77, long: -122.41 } });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
@@ -377,7 +377,7 @@ describe("CFC projection claims", () => {
       cell.set({ latitude: 37.77 });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "malformed projection claim at /latitude",
       );
@@ -404,7 +404,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "projection claim failed at /latitude",
       );
@@ -453,7 +453,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "projection claim under an array wildcard is unsupported",
       );
@@ -498,7 +498,7 @@ describe("CFC projection claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "malformed projection claim at /latitude",
       );

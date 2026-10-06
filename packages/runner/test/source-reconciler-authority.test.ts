@@ -99,13 +99,13 @@ describe("a system release reaching a followed profile", () => {
         sourceOrigin: origin,
       });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await profile.pull();
 
       const edit = runtime.edit();
       profile.withTx(edit).key("setAvatar").send(setAvatarEvent("🦊"));
       runtime.prepareTxForCommit(edit);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
       await profile.pull();
       await runtime.idle();
       await profile.pull();
@@ -127,7 +127,7 @@ describe("a system release reaching a followed profile", () => {
       const again = runtime.edit();
       profile.withTx(again).key("setAvatar").send(setAvatarEvent("🐙"));
       runtime.prepareTxForCommit(again);
-      expect((await again.commit()).error).toBeUndefined();
+      expect((await again.commit().settled).error).toBeUndefined();
       await profile.pull();
       await runtime.idle();
       await profile.pull();

@@ -292,12 +292,12 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     {
       const seed = alice.edit();
       aliceArg.withTx(seed).set({ n: 1 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, aliceArg, aliceResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -354,7 +354,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       // writer's instance (scopes.md §2 Permanence) — the group-chat
       // shape, where the client types the draft first.
       typedAliceArg.key("saved").withTx(tx).set("");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const typedBobArg = bob.getCell<{ draft: string }>(
       space,
@@ -365,7 +365,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     {
       const tx = bob.edit();
       typedBobArg.key("draft").withTx(tx).set("B");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await bob.idle();
@@ -577,12 +577,12 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       {
         const seed = creator.edit();
         arg.withTx(seed).set({ n: 1 });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
       }
       {
         const tx = creator.edit();
         creator.run(tx, compiled, arg, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await creator.idle();
       argId = arg.getAsNormalizedFullLink().id;
@@ -597,7 +597,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       const tx = creator.edit();
       typed.key("draft").withTx(tx).set("A");
       typed.key("saved").withTx(tx).set("");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await creator.storageManager.synced();
       const creatorSession = manager.id;
       await creator.dispose();
@@ -719,7 +719,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     {
       const tx = bob.edit();
       typedBobArg.key("draft").withTx(tx).set("B2");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await bob.idle();
     await bob.storageManager.synced();
@@ -731,7 +731,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     {
       const tx = setup.alice.edit();
       setup.typedAliceArg.key("draft").withTx(tx).set("A2");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await setup.alice.idle();
     await setup.alice.storageManager.synced();
@@ -796,7 +796,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     {
       const tx = alice.edit();
       typedAliceArg.key("draft").withTx(tx).set("A-blip");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();

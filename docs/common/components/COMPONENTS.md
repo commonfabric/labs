@@ -414,6 +414,15 @@ the policy placeholder in the same places. The exceptions:
   an authorship boundary the piece's own text shows whether or not it carries
   the required endorsement.
 
+`cf-picker` shows each of its `$items` through a `cf-render` of its own, so
+each item passes the same gates as a piece bound to `cf-render`, with the same
+exceptions. Where a `cf-render` would show nothing for one item, the picker
+shows nothing at all, since it is handed the whole list or none of it.
+`cf-map` shows each marker's and circle's `popup` the same way. Where the
+`$value`'s type holds each popup as a cell, each popup passes the gates of a
+piece bound to `cf-render`; otherwise the map reads everything its popups
+reach, and shows its value only when the viewer may see all of it.
+
 [Render-boundary composition](../../specs/cfc-render-boundary-composition.md)
 holds the rules.
 
@@ -1293,6 +1302,17 @@ author can make previously display-only text require matching authorship
 integrity. Use an explicit `requiredTextIntegrity` when a component needs a
 different policy, and avoid cell-backed `$author` for purely decorative author
 names.
+
+The badge reads `loading` until the label on `$value` and the label on
+`$author` have both loaded. Meanwhile it shows a neutral marker with no warning
+icon, the words "Checking author", and the claimed author's name when the claim
+gives one.
+After that it reads `verified`, `unverified`, or `unknown`, so `unknown` says
+that the loaded labels establish no authorship, never that they have yet to
+arrive. The element's `authorshipState` property holds the same word. The
+element reads and decides the labels through `observeAuthorship()` from
+`@commonfabric/runtime-client`, which a host that draws no Lit component can
+call directly.
 
 The component itself checks its value's `authored-by` against the same
 principal, and marks the content verified when they match. Verified means

@@ -18,6 +18,7 @@ import {
   type VNode,
 } from "commonfabric";
 import { type FabriChatPlacementView, type PlacedRoom } from "./placement.tsx";
+import { type ChatDisplay } from "./schemas.tsx";
 
 /** A placement as an adapter reads it through its link. */
 export interface AdaptedPlacement {
@@ -60,9 +61,14 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
     // Whether the viewer can read the room differs by viewer, so both parts
     // are always rendered and one is hidden by a prop: a tree built
     // differently per viewer is stored once for everyone, and runtimes that
-    // built it differently overwrite each other without end.
-    const roomDisplay = computed(() => (isMember ? "block" : "none"));
-    const unavailableDisplay = computed(() => (isMember ? "none" : "block"));
+    // built it differently overwrite each other without end. Each part is
+    // `hidden` until its display has a value, as `FabriChatMessageRow` says.
+    const roomDisplay = computed(
+      (): ChatDisplay => (isMember ? "block" : "none"),
+    );
+    const unavailableDisplay = computed(
+      (): ChatDisplay => (isMember ? "none" : "block"),
+    );
 
     return {
       [NAME]: computed(() =>
@@ -70,11 +76,16 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
       ),
       [UI]: (
         <cf-vstack>
-          <div id="fabrichat-adapter-room" style={{ display: roomDisplay }}>
+          <div
+            id="fabrichat-adapter-room"
+            hidden
+            style={{ display: roomDisplay }}
+          >
             <cf-render $cell={placement.room} />
           </div>
           <div
             id="fabrichat-adapter-unavailable"
+            hidden
             style={{ display: unavailableDisplay }}
           >
             <cf-empty-state message="This chat can't be read right now." />

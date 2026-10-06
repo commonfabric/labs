@@ -109,7 +109,7 @@ const seedConfidential = async (
     id: `cid:${CONFIDENTIAL_SCHEMA.taggedHashString}`,
     path: [],
   }, { value: CONFIDENTIAL_SCHEMA.schema });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return targetId;
 };
 
@@ -160,7 +160,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
     try {
       const secretId = await seedConfidential(runtime, "h5-off-secret");
       const tx = scheduledEgress(runtime, "h5-off-out", secretId);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       // With gating off the trigger read is not in the consumed set, so the
       // public-only sink ceiling is not tripped.
       expect(result.error).toBeUndefined();
@@ -185,7 +185,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
     try {
       const secretId = await seedConfidential(runtime, "h5-on-secret");
       const tx = scheduledEgress(runtime, "h5-on-out", secretId);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
         "exceeds ceiling for fetchJson",
@@ -248,7 +248,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         runtime.getCell(signer.did(), "h5-length-out", OUT_SCHEMA.schema, tx)
@@ -268,7 +268,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
           () => {},
         );
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isCfcEnforcementRejection(result.error)).toBe(true);
         expect(String((result.error as Error).message)).toContain(
           "exceeds ceiling for fetchJson",
@@ -304,7 +304,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
         () => {},
       );
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -314,9 +314,9 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
 
   it("flag ON: a cid: trigger read is excluded (content-addressed docs never gate)", async () => {
     // Trigger entries for content-addressed schema/program docs (cid:) are
-    // structural plumbing, dropped at ingest by addCfcTriggerReads
-    // (flowReadExcluded), so a run whose only trigger is a cid: address has an
-    // empty trigger set and egresses freely even with the gate on.
+    // structural plumbing, dropped at ingest by addCfcTriggerReads, so a run
+    // whose only trigger is a cid: address has an empty trigger set and
+    // egresses freely even with the gate on.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({
       storageManager,
@@ -345,7 +345,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
         () => {},
       );
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -400,7 +400,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
         () => {},
       );
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
         "exceeds ceiling for fetchJson",
@@ -498,7 +498,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
         () => {},
       );
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
         "exceeds ceiling for fetchJson",
@@ -549,7 +549,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const sink = runtime.getCell(
@@ -572,7 +572,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
           path: ["value"],
         }]);
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return String((result.error as Error | undefined)?.message ?? "");
       } finally {
         await runtime.dispose();
@@ -623,7 +623,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const sink = runtime.getCell(
@@ -649,7 +649,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
           path: ["value", field],
         }]);
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return String((result.error as Error | undefined)?.message ?? "");
       } finally {
         await runtime.dispose();

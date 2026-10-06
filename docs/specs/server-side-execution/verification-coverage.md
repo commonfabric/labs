@@ -6437,7 +6437,9 @@ supply; OW29/OW32/OW34 closed):
     classifies (review note F5). Deliberately NOT matched, each with
     its reason in the predicate's docstring: `pending dependency not
     resolved` (own-commit fate), `entity-value-hash precondition
-    target changed` (create-only double-handling), and the
+    target changed` (a failed value pin, which its transaction
+    converges on by running again and re-pinning, not by a catch-up
+    of the commit's reads), and the
     same-family preempt-mode client shape (`commit preempted: …`,
     experimental `CF_CONFLICT_ADMISSION=preempt`, default off) —
     recorded, not silently extended; a b04-shaped death under THAT

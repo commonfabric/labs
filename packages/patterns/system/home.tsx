@@ -23,6 +23,17 @@ import FabriChatManager, {
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
 import {
+  changeSharedSpaceMembership,
+  readSharedSpaceCatalog,
+  registerSharedSpace,
+  type SharedSpaceCatalog,
+  type SharedSpaceCatalogStorage,
+  type SharedSpaceMembershipChange,
+  type SharedSpaceMembershipResult,
+  type SharedSpaceRegistration,
+  type SharedSpaceRegistrationResult,
+} from "./shared-space-catalog.ts";
+import {
   type CreateProfileEvent,
   seedProfileName,
   submitProfileCreation,
@@ -81,11 +92,15 @@ export type HomeOutput = {
   // profile-home spells externalLinks/verifiedIdentities. An empty default
   // carries no elements and therefore asserts no writer claims; the contract
   // governs every real element appended through the trusted create surface.
-  // `defaultProfile` is semantically optional: a home may have no selected
-  // profile. Requiredness is decided by the `?` marker, not by including
-  // `undefined` in the value type.
+  // `defaultProfile` is the slot holding the selected profile's link under
+  // `profile`, and no `profile` while none is selected (`DefaultProfileSlot`).
+  // It is optional, decided by the `?` marker, because a home can hold none.
+  // `legacyDefaultProfile` is a default held as a link at the root of the
+  // `defaultProfile` cell, the shape a home holds one in when it was chosen
+  // before the slot. It is the default while the slot holds none.
   profiles: Default<TrustedProfileList, []>;
   defaultProfile?: TrustedDefaultProfile;
+  legacyDefaultProfile?: BackwardsCompatibleProfile;
   mru: Default<TrustedProfileMru, []>;
   // The user's agent queue: the index of their agent runs and their
   // registered runner. `wish({ query: "#agent_queue" })` resolves to it, and
@@ -94,6 +109,15 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
+  sharedSpaceCatalog: SharedSpaceCatalog;
+  registerSharedSpace: Stream<
+    SharedSpaceRegistration,
+    SharedSpaceRegistrationResult
+  >;
+  changeSharedSpaceMembership: Stream<
+    SharedSpaceMembershipChange,
+    SharedSpaceMembershipResult
+  >;
   createProfile: Stream<CreateProfileEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
@@ -249,6 +273,10 @@ const Home = pattern(
     const favorites = new Writable<Favorite[]>([]).for("favorites");
     const journal = new Writable<JournalEntry[]>([]).for("journal");
     const spaces = new Writable<SpaceEntry[]>([]).for("spaces");
+    const catalog = new Writable<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }).for("sharedSpaceCatalog");
     const defaultAppUrl = new Writable("").for("defaultAppUrl");
     // NOTE(CT-1628): the `as any` casts around the profile cells below are
     // required because the CFC wrapper types (TrustedProfile*) don't yet compose
@@ -256,16 +284,25 @@ const Home = pattern(
     // fix.
     //
     // Multi-profile model: a user has many profiles, each in its own `inSpace`
-    // space. `profiles` is the durable list (appended on create). `defaultProfile`
-    // is the one `#profile` resolves to in headless mode and orders first in the
-    // picker; `mru` is the recency-ordered list driving the rest of the ordering.
+    // space. `profiles` is the durable list (appended on create).
+    // `defaultProfile` holds, under `profile`, the one `#profile` resolves to
+    // in headless mode and orders first in the picker; `mru` is the
+    // recency-ordered list driving the rest of the ordering. The default's cell
+    // carries its trusted type, so its write contract labels the document
+    // `setDefaultProfile` writes.
     const profiles = new Writable<BackwardsCompatibleProfile[]>([]).for(
       "profiles",
     );
-    const defaultProfile = new Writable<BackwardsCompatibleProfile | undefined>(
-      undefined,
-    )
-      .for("defaultProfile");
+    const defaultProfile = new Writable<TrustedDefaultProfile>({}).for(
+      "defaultProfileSlot",
+    );
+    // A default chosen before the slot: a link at the root of this cell. It
+    // stays the default until one is chosen in the slot, and nothing writes
+    // it, since a handle to a cell whose root holds a link denotes the linked
+    // profile rather than the cell.
+    const legacyDefaultProfile = new Writable<
+      BackwardsCompatibleProfile | undefined
+    >(undefined).for("defaultProfile");
     const mru = new Writable<BackwardsCompatibleProfile[]>([]).for("mru");
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
@@ -279,6 +316,8 @@ const Home = pattern(
     const profilePicker = ProfilePicker({
       profiles: profiles as any,
       defaultProfile: defaultProfile as any,
+      legacyDefaultProfile: legacyDefaultProfile as any,
+      offersSetDefault: true,
       mru: mru as any,
     });
 
@@ -417,11 +456,16 @@ const Home = pattern(
       defaultAppUrl,
       profiles: profiles as any,
       defaultProfile: defaultProfile as any,
+      legacyDefaultProfile: legacyDefaultProfile as any,
       mru: mru as any,
       agentQueue,
       chatManager,
 
+      sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
+
       // Exported handlers
+      registerSharedSpace: registerSharedSpace({ catalog }),
+      changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

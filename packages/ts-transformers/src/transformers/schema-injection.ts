@@ -2828,11 +2828,12 @@ function reportAnyResultSchema(
 
 /**
  * Reports on a pattern's inferred result schema. A top-level `any`/`unknown`
- * result is an error (the whole output is permissive). A concrete result that
- * nests `unknown` fields is also an error: those fields lower to
- * `{ type: "unknown" }`, which a consumer does not materialize — it reads
- * them back as opaque references carrying no properties, the producer-side
- * form of the unknown-capture bug.
+ * result is an error (the whole output is permissive). Detected nested
+ * `unknown` fields report an error when authoring and a warning under
+ * `TransformationOptions.storedSource`, so a stored-source reload reconstructs
+ * the admitted pattern. Those fields lower to `{ type: "unknown" }`, which a
+ * consumer does not materialize: it reads them back as opaque references
+ * carrying no properties.
  */
 function reportUnknownPatternResult(
   context: TransformationContext,
@@ -2862,7 +2863,10 @@ function reportUnknownPatternResult(
   if (paths.length === 0) return;
   const fields = paths.map((p) => `\`${p}\``).join(", ");
   context.reportDiagnosticOnce({
-    severity: "error",
+    // A reload of stored source reconstructs what was admitted when it was
+    // deployed, so a shape this check has covered only since then reports
+    // there without refusing the reload.
+    severity: context.options.storedSource ? "warning" : "error",
     type: "pattern-result:unknown-type",
     message:
       `pattern() output ${paths.length > 1 ? "fields" : "field"} ${fields} ` +
@@ -2885,6 +2889,11 @@ function reportUnknownPatternResult(
  * index, written `[i...]` for a rest element, whose own element is the one
  * walked; a union member's path is the union's. A top-level `unknown` is
  * handled by the error path above, so this only sees nested occurrences.
+ *
+ * It stops at a type reference. A named type is a declaration, and `unknown`
+ * in a declaration is the form for a reference to another piece
+ * (`docs/common/concepts/types-and-schemas/unknown.md`), so what a name
+ * declares is not reported.
  */
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
   const paths: string[] = [];
@@ -2941,7 +2950,9 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
  * no node for. It descends an object type with no name, which a print writes
  * out as structure; an instance of a class expression with no name, which is
  * what leaves a type with no print; an array's element; a tuple's elements;
- * and each member of a union, along the paths the node walk gives them.
+ * and each member of a union, along the paths the node walk gives them. It
+ * stops at a named type, as the node walk stops at a reference, since what a
+ * name declares is not reported.
  */
 function collectUnknownResultTypePaths(
   type: ts.Type,
@@ -2957,6 +2968,9 @@ function collectUnknownResultTypePaths(
       paths.push(path || "(result)");
       return;
     }
+    // An alias names its type whatever shape it has, an array or a union as
+    // much as an object, so the walk stops at one before reading its shape.
+    if (current.aliasSymbol) return;
     if (enclosing.has(current)) return;
     enclosing.add(current);
     if (current.isUnion()) {

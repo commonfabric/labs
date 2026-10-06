@@ -238,7 +238,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
       id: `cid:${SECRET_SCHEMA.taggedHashString}`,
       path: [],
     }, { value: SECRET_SCHEMA.schema });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
   };
 
   // The §13.4.4 rule at the network egress boundary (grant-records shape).
@@ -324,7 +324,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
       singleUse: true,
       ...overrides,
     });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.ok).toBeDefined();
     return written;
   };
@@ -528,7 +528,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         });
         const release = buildRelease(runtime, "consumed-check");
         expect(release.reasons).toEqual([]);
-        expect((await release.tx.commit()).ok).toBeDefined();
+        expect((await release.tx.commit().settled).ok).toBeDefined();
         expect(readReceipt(runtime, receiptId)).toBeDefined();
 
         // Now the consuming query fails closed and records the receipt as
@@ -568,7 +568,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
           type: "application/json",
           path: ["value"],
         }, { forged: "garbage" });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const resolver = createTxCfcGrantResolver(tx);
@@ -606,7 +606,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
           type: "application/json",
           path: [],
         }, { source: { note: "metadata-only" } } as never);
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const resolver = createTxCfcGrantResolver(tx);
@@ -836,7 +836,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         expect(first.reasons).toEqual([]);
         // The receipt write is staged in the SAME transaction (atomic).
         expect(stagedReceiptWrite(first.tx, receiptId)).toBe(true);
-        expect((await first.tx.commit()).ok).toBeDefined();
+        expect((await first.tx.commit().settled).ok).toBeDefined();
         // The receipt committed with the release.
         expect(readReceipt(runtime, receiptId)).toMatchObject({
           grantConsumed: { grantId: grantIdFor(runtime) },
@@ -880,7 +880,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
             expect(consulted.some((g) => g.id === grantId)).toBe(true);
             expect(consulted.some((g) => g.id === receiptId)).toBe(false);
           }
-          expect((await release.tx.commit()).ok).toBeDefined();
+          expect((await release.tx.commit().settled).ok).toBeDefined();
         }
         expect(readReceipt(runtime, receiptId)).toBeUndefined();
       });
@@ -901,7 +901,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         expect(first.reasons).toEqual([]);
         expect(second.reasons).toEqual([]);
 
-        expect((await first.tx.commit()).ok).toBeDefined();
+        expect((await first.tx.commit().settled).ok).toBeDefined();
         // SAME-replica loser: the local replica already applied the winner,
         // so the loser dies on the client-side consistency guard
         // (StorageTransactionInconsistent — retryable class) before its
@@ -910,7 +910,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         // receipt exists, the rule does not fire. The server-side
         // receipt-exists classification proper (a REMOTE second replica
         // that could not know) is pinned by the next test.
-        const lost = await second.tx.commit();
+        const lost = await second.tx.commit().settled;
         expect(lost.error).toBeDefined();
 
         // Exactly one release: the winner's receipt.
@@ -980,12 +980,12 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         // The local release wins.
         const local = buildRelease(runtime, "remote-racing-release");
         expect(local.reasons).toEqual([]);
-        expect((await local.tx.commit()).ok).toBeDefined();
+        expect((await local.tx.commit().settled).ok).toBeDefined();
 
         // The remote claim reaches the server unaware — and dies on the
         // entity-absent precondition as the PERMANENT receipt-exists
         // rejection the scheduler never retries.
-        const lost = await remoteTx.commit();
+        const lost = await remoteTx.commit().settled;
         expect(lost.error).toBeDefined();
         expect(lost.error!.name).toBe("PreconditionFailedError");
         expect(
@@ -1015,7 +1015,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
           type: "application/json",
           path: ["value"],
         }, { rev: 1 });
-        expect((await seedY.commit()).ok).toBeDefined();
+        expect((await seedY.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         expect(
@@ -1053,9 +1053,9 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
           type: "application/json",
           path: ["value"],
         }, { rev: 2 });
-        expect((await interloper.commit()).ok).toBeDefined();
+        expect((await interloper.commit().settled).ok).toBeDefined();
 
-        const failed = await tx.commit();
+        const failed = await tx.commit().settled;
         expect(failed.error).toBeDefined();
         // The staged receipt rode the failed transaction: nothing landed.
         expect(readReceipt(runtime, receiptId)).toBeUndefined();
@@ -1064,7 +1064,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         // re-resolves the grant — the receipt is still absent — and lands.
         const retry = buildRelease(runtime, "failed-release", "-retry");
         expect(retry.reasons).toEqual([]);
-        expect((await retry.tx.commit()).ok).toBeDefined();
+        expect((await retry.tx.commit().settled).ok).toBeDefined();
         expect(readReceipt(runtime, receiptId)).toBeDefined();
       });
     });
@@ -1084,7 +1084,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         release.tx.invalidateCfc("test-reprepare");
         release.tx.prepareCfc();
         expect(release.tx.getCfcState().prepare.status).toBe("prepared");
-        expect((await release.tx.commit()).ok).toBeDefined();
+        expect((await release.tx.commit().settled).ok).toBeDefined();
         expect(readReceipt(runtime, receiptId)).toBeDefined();
 
         // Spent: the next evaluation fails closed.
@@ -1232,7 +1232,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         const first = readThenGatedWrite(runtime, "-1");
         expect(first.reasons).toEqual([]);
         expect(stagedReceiptWrite(first.tx, receiptId)).toBe(true);
-        expect((await first.tx.commit()).ok).toBeDefined();
+        expect((await first.tx.commit().settled).ok).toBeDefined();
         expect(readReceipt(runtime, receiptId)).toBeDefined();
 
         // Spent: the same gated write no longer releases.
@@ -1276,7 +1276,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
               `unprivileged write to protected runtime surface ${receiptId}`,
             );
           }
-          const result = await tx.commit();
+          const result = await tx.commit().settled;
           // The refusal, rather than any error at all. The message prefix is
           // what tells a CFC refusal apart from an ordinary abort or a storage
           // failure.

@@ -69,6 +69,13 @@ decision is reversed or superseded).
 
 ### Contextual flow control and security
 
+Contextual Flow Control is specified in `commonfabric/specs` under `cfc/`. The
+documents here describe how this runtime arranges what that specification
+requires, and
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+is the procedure for changing either. The change list below is closed to new
+entries; a new gap is filed as a specs pull request.
+
 - [CFC commit preparation](cfc-commit-preparation.md)
 - [Content-addressed CFC labels](content-addressed-cfc-labels.md)
 - [CFC enforcement mode matrix](cfc-enforcement-matrix.md)

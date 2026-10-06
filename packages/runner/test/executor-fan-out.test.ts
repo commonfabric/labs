@@ -234,7 +234,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     await poke.sync();
     const tx = poker.edit();
     poke.withTx(tx).set({ n: pokes });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await settleServing(engine, poker, space);
   };
 
@@ -351,12 +351,12 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
           }
           : {}),
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, aliceArg, aliceResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -769,7 +769,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
       await arg.sync();
       const tx = alice.edit();
       arg.key("n").withTx(tx).set(2);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await awaitAdmitted(
       server,
@@ -830,7 +830,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
       await arg.sync();
       const tx = alice.edit();
       arg.key("flag").withTx(tx).set(true);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await alice.idle();
       await alice.storageManager.synced();
     }
@@ -1036,12 +1036,12 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
         {
           const seed = creator.edit();
           arg.withTx(seed).set({ n: 1 });
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
         }
         {
           const tx = creator.edit();
           creator.run(tx, compiled, arg, result);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         await creator.idle();
         await creator.storageManager.synced();
@@ -1066,7 +1066,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
           const tx = creator.edit();
           typed.key("draft").withTx(tx).set("");
           typed.key("saved").withTx(tx).set("");
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await creator.storageManager.synced();
         }
         const creatorSession = manager.id;
@@ -1174,7 +1174,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
         await bobTyped.sync();
         const tx = bob.edit();
         bobTyped.key("draft").withTx(tx).set("B2");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await append("save", {});
       await awaitAdmitted(server, allConsequenced);

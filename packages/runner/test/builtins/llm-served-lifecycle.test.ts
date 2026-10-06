@@ -150,7 +150,7 @@ async function fixture(
       const tx = runtime.edit();
       if (as) tx.tx.scopeKeyIdentity = as;
       stage(tx, prompt, messages);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await tx.postCommitEffectsSettled();
       await runtime.idle();
     };
@@ -178,7 +178,7 @@ async function fixture(
             : { prompt: "", schema: { type: "object" } },
         );
         action(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await tx.postCommitEffectsSettled();
         await runtime.idle();
       },
@@ -223,7 +223,7 @@ async function fixture(
         const tx = runtime.edit();
         stampWaveRunContext(tx, { actionId: "held-llm", kind: "derivation" });
         stage(tx, prompt);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         runtime.clearSealDestination();
         expect(waveSettlementOf(tx)).toBeDefined();
         return { settlement: waveSettlementOf(tx)! };
@@ -368,13 +368,13 @@ describe("llm-served-lifecycle", () => {
         try {
           const first = f.runtime.edit();
           f.stage(first, "A", false, "ordered-llm-queue");
-          expect((await first.commit()).error).toBeUndefined();
+          expect((await first.commit().settled).error).toBeUndefined();
           await first.postCommitEffectsSettled();
           await f.issued(1);
           const firstWork = f.works.at(-1)!;
           const second = f.runtime.edit();
           f.stage(second, "B", false, "ordered-llm-queue");
-          expect((await second.commit()).error).toBeUndefined();
+          expect((await second.commit().settled).error).toBeUndefined();
           await second.postCommitEffectsSettled();
           f.requests[0].resolve({
             role: "assistant",
@@ -415,7 +415,7 @@ describe("llm-served-lifecycle", () => {
         try {
           await entered.promise;
           f.stage(tx, "A", false, "held-llm-queue");
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await tx.postCommitEffectsSettled();
           await f.runtime.idle();
           expect(f.requests).toHaveLength(0);
@@ -545,7 +545,7 @@ describe("llm-served-lifecycle", () => {
         await scoped.sync();
         const seed = f.runtime.edit();
         scoped.withTx(seed).set("new scope");
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         await f.run(scoped);
         await f.issued(1);
         f.release("current-scope");
@@ -591,7 +591,7 @@ describe("llm-served-lifecycle", () => {
         await scoped.sync();
         const seed = f.runtime.edit();
         scoped.withTx(seed).set("newer");
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         f.stage(newer, scoped);
         newer.abort(refusal);
         newer.abandonStagedWork(refusal);
@@ -627,7 +627,7 @@ describe("llm-served-lifecycle", () => {
           await scoped.sync();
           const seed = f.runtime.edit();
           scoped.withTx(seed).set(empty ? name === "llm" ? [] : "" : "memo");
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           if (!empty) {
             await f.run(scoped);
             await f.issued(1);
@@ -674,7 +674,7 @@ describe("llm-served-lifecycle", () => {
         await scoped.sync();
         const seed = f.runtime.edit();
         scoped.withTx(seed).set("new scope");
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const { settlement } = await f.seal(scoped);
         f.wave.abandon("New scope withdrawn");
         expect((await settlement).error).toBeDefined();
@@ -746,7 +746,7 @@ describe("llm-served-lifecycle", () => {
           });
         };
         f.stage(older, "A");
-        expect((await older.commit()).error).toBeUndefined();
+        expect((await older.commit().settled).error).toBeUndefined();
         await older.postCommitEffectsSettled();
         await f.run("B");
         for (const callback of callbacks) callback();
@@ -832,7 +832,7 @@ describe("llm-served-lifecycle", () => {
         await scoped.sync();
         const seed = f.runtime.edit();
         scoped.withTx(seed).set("new scope");
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         await f.run(scoped);
         await f.issued(2);
         f.release("current-scope");
@@ -870,7 +870,7 @@ describe("llm-served-lifecycle", () => {
           const seed = f.runtime.edit();
           scoped.withTx(seed).set("B");
           shared.withTx(seed).set("C");
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           let index = 0;
           for (const prompt of ["A", scoped, shared]) {
             await f.run(prompt);

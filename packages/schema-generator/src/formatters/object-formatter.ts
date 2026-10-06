@@ -41,7 +41,6 @@ import {
 } from "../typescript/type-node.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -323,13 +322,14 @@ export class ObjectFormatter implements TypeFormatter {
         checker,
       );
       // Get the actual property type and recursively delegate to the main schema generator
-      const resolvedPropType = propTypeNode && context.boundTypeParameters &&
-          holdsTypeParameter(
-            propTypeNode,
-            checker,
-            context.boundTypeParameters.arguments,
-          ) &&
-          !usesParameterUnreachably(propTypeNode, checker)
+      const readsBoundNode = propTypeNode && context.boundTypeParameters &&
+        holdsTypeParameter(
+          propTypeNode,
+          checker,
+          context.boundTypeParameters.arguments,
+        ) &&
+        !usesParameterUnreachably(propTypeNode, checker);
+      const resolvedPropType = readsBoundNode && propTypeNode
         ? checker.getTypeFromTypeNode(propTypeNode)
         : safeGetPropertyType(prop, type, checker, propTypeNode);
 
@@ -367,12 +367,20 @@ export class ObjectFormatter implements TypeFormatter {
       }
 
       // Delegate to the main generator (specific formatters handle wrappers/defaults)
-      const generated = this.#schemaGenerator.formatChildType(
-        resolvedPropType,
-        context,
-        propTypeNode,
-        instantiatedPropType,
-      );
+      const readsOptionalBound = readsBoundNode && isOptionalSymbol(prop);
+      const generated = readsOptionalBound
+        ? this.#schemaGenerator.formatOptionalProperty(
+          resolvedPropType,
+          context,
+          propTypeNode!,
+          instantiatedPropType,
+        )
+        : this.#schemaGenerator.formatChildType(
+          resolvedPropType,
+          context,
+          propTypeNode,
+          instantiatedPropType,
+        );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(
           generated as Record<string, unknown>,
@@ -421,7 +429,7 @@ export class ObjectFormatter implements TypeFormatter {
       const apSchema = this.#schemaGenerator.formatChildType(
         readIndex ? checker.getTypeFromTypeNode(indexNode) : chosenIndex,
         context,
-        boundIndex ? indexNode : undefined,
+        indexNode,
         instantiatedValueType(context.instantiatedAs, checker),
       );
       // Attempt to read JSDoc from index signature declarations
@@ -462,12 +470,12 @@ export class ObjectFormatter implements TypeFormatter {
     }
     if (required.length > 0) schema.required = required;
 
-    const labels = carrier &&
-      this.#schemaGenerator.labelsCarriedBy(carrier, context);
-    return labels
-      ? labels.reduce<MutableJSONSchema>(
-        (labelled, label) => withIfcLabels(labelled, label),
+    return carrier
+      ? this.#schemaGenerator.withLabelsCarriedBy(
         schema,
+        type,
+        carrier,
+        context,
       )
       : schema;
   }

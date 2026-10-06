@@ -202,6 +202,7 @@ describe("CFOwnerView", () => {
       let notify:
         | ((value: unknown, cfcLabel?: CfcLabelView) => void)
         | undefined;
+      let notifyRefused: (() => void) | undefined;
       const writes: (boolean | null)[] = [];
       const reads: Promise<CfcLabelView | undefined>[] = [];
       element.runtime = {
@@ -215,11 +216,14 @@ describe("CFOwnerView", () => {
         },
         subscribe: (
           callback: (value: unknown, cfcLabel?: CfcLabelView) => void,
+          options: { onRefused: () => void },
         ) => {
           notify = callback;
+          notifyRefused = options.onRefused;
           callback(undefined, label);
           return () => {
             notify = undefined;
+            notifyRefused = undefined;
           };
         },
       });
@@ -243,6 +247,8 @@ describe("CFOwnerView", () => {
           notify?.(undefined, delivered ? view : undefined);
         },
         lastRead: () => reads.at(-1),
+        // The worker refuses the origin's read from here on.
+        refuse: () => notifyRefused?.(),
       };
     };
 
@@ -285,6 +291,20 @@ describe("CFOwnerView", () => {
       await origin.lastRead();
 
       expect(origin.writes).toEqual([null, false, null]);
+    });
+
+    it("closes the presentation when the worker refuses the origin, reading no label", async () => {
+      const element = new HeadlessOwnerView();
+      const origin = followedOrigin(element);
+      await element.refresh();
+      origin.arrive(attestationOf("did:key:bob"));
+      expect(origin.writes).toEqual([null, true]);
+      const readsBefore = origin.reads.length;
+
+      origin.refuse();
+
+      expect(origin.writes).toEqual([null, true, null]);
+      expect(origin.reads).toHaveLength(readsBefore);
     });
 
     it("stops following the origin once disconnected", async () => {
@@ -522,12 +542,13 @@ describe("CFOwnerView", () => {
       relabel(label: CfcLabelView): void {
         this.#label = label;
         for (const cell of this.#labelled) {
-          const update: CellUpdateNotification = {
+          // What the worker's host-read gate posts; a test stands in for it.
+          const update = {
             type: NotificationType.CellUpdate,
             cell,
             value: {},
             cfcLabel: label,
-          };
+          } as CellUpdateNotification;
           this.emit("message", update);
         }
       }
@@ -552,7 +573,9 @@ describe("CFOwnerView", () => {
         path: [],
       };
       const valueOnly = new CellHandle(runtime, origin);
-      const stopValueOnly = valueOnly.subscribe(() => {});
+      const stopValueOnly = valueOnly.subscribe(() => {}, {
+        onRefused: () => {},
+      });
       const writes: (boolean | null)[] = [];
       const element = new HeadlessOwnerView();
       element.runtime = runtime;

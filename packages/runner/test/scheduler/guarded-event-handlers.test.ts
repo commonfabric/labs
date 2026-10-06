@@ -46,7 +46,7 @@ describe("guarded-event-handlers", () => {
     stream = env.runtime.getCell(space, "guarded-events");
     selection.withTx(env.tx).set({ [alice]: "a", [bob]: "b" });
     stream.withTx(env.tx).set(0);
-    await env.tx.commit();
+    await env.tx.commit().settled;
     env.tx = env.runtime.edit();
   });
 

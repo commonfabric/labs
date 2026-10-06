@@ -53,7 +53,7 @@ Deno.test("precondition-only transactions send and validate their commit", async
       kind: "origin-committed",
       originLocalSeq: 99,
     });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
 
     assertEquals(drafts.length, 1);
     assertEquals(drafts[0].operations, []);

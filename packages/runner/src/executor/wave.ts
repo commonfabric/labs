@@ -384,9 +384,9 @@ export function delegatedCarriageOf(
 }
 
 // The DURABLE-acceptance settlement of a tx sealed into a wave: the seal
-// resolves the tx's commit() (acceptance into the wave), but the writes
+// resolves the tx's `commit().settled` (acceptance into the wave). Its writes
 // become durable only at the wave commit — and a conflict there can
-// WITHDRAW the contribution after its commit() already resolved ok. A
+// withdraw the contribution after `commit().settled` resolved `ok`. A
 // caller whose side effects must wait for durability (the pattern swap's
 // teardown + reinstantiation, §3e) awaits this instead. Attached by the
 // accumulator at seal, same side-table mechanism as the run context.

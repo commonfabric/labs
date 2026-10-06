@@ -190,7 +190,7 @@ async function setupDemoAgent(
   );
   recipientCell.set(USER_EMAIL_RECIPIENT);
   seedTx.prepareCfc();
-  expect((await seedTx.commit()).ok).toBeDefined();
+  expect((await seedTx.commit().settled).ok).toBeDefined();
   await runtime.idle();
   const linkPath = createLLMFriendlyLink(
     recipientCell.getAsNormalizedFullLink(),
@@ -358,7 +358,7 @@ async function setupDemoAgent(
   );
   const result = runtime.run(tx, testPattern, {}, resultCell);
   runtime.prepareTxForCommit(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   const dispose = async () => {
