@@ -40,6 +40,7 @@ import {
   createWebFetchTool,
   toModelFacingWebFetchOutput,
 } from "../src/tools/web-fetch.ts";
+import { parseIpAddress } from "../src/network-address.ts";
 import { viewImageTool } from "../src/tools/view-image.ts";
 import { writeFileTool } from "../src/tools/write-file.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
@@ -678,7 +679,7 @@ Deno.test("web_fetch validates redirect targets before following them", async ()
     url: "https://example.com/login",
     code: "blocked_url",
     message:
-      "web_fetch redirect target denied: web_fetch host 127.0.0.1 is private and is not allowed",
+      "web_fetch redirect target denied: web_fetch host 127.0.0.1 is not on the open internet and is not allowed",
     finalUrl: "https://example.com/login",
     fetchedAt: "2026-05-01T17:54:00.000Z",
   });
@@ -706,7 +707,7 @@ Deno.test("web_fetch rejects DNS targets that resolve to private addresses befor
     url: "https://public.example/private",
     code: "blocked_url",
     message:
-      "web_fetch host public.example resolved to private address 10.0.0.7 and is not allowed",
+      "web_fetch host public.example resolved to 10.0.0.7, which is not on the open internet, and is not allowed",
     fetchedAt: "2026-05-01T17:54:00.000Z",
   });
 });
@@ -756,7 +757,7 @@ Deno.test("web_fetch rejects DNS rebinding between validation and connect", asyn
     url: "https://rebind.example/private",
     code: "blocked_url",
     message:
-      "web_fetch host rebind.example resolved to private address 10.0.0.7 and is not allowed",
+      "web_fetch host rebind.example resolved to 10.0.0.7, which is not on the open internet, and is not allowed",
     finalUrl: "https://rebind.example/private",
     fetchedAt: "2026-05-01T17:54:00.000Z",
   });
@@ -790,8 +791,142 @@ Deno.test("web_fetch rejects non-global IP literals before fetching", async () =
       throw new Error(`expected web_fetch error for ${url}`);
     }
     assertEquals(output.code, "blocked_url");
-    assertStringIncludes(output.message, "is private and is not allowed");
+    assertStringIncludes(
+      output.message,
+      "is not on the open internet and is not allowed",
+    );
   }
+});
+
+const localNetwork = (text: string, prefixLength: number) => {
+  const address = parseIpAddress(text);
+  if (address === undefined) {
+    throw new Error(`${text} did not parse`);
+  }
+  return { address, prefixLength };
+};
+
+const TEST_LOCAL_NETWORKS = [
+  localNetwork("2a02:8071:1234:5600::1", 64),
+  localNetwork("81.2.69.142", 24),
+  localNetwork("81.2.70.5", 0),
+];
+
+/**
+ * What web_fetch makes of `url` when `host.example` resolves to `resolved`
+ * and this device's interfaces are on `TEST_LOCAL_NETWORKS`: the URLs it
+ * fetched, and its output.
+ */
+const webFetchOnLocalNetworks = async (url: string, resolved: string) => {
+  const calls: string[] = [];
+  const tool = createWebFetchTool({
+    resolveHostAddresses: () => Promise.resolve([resolved]),
+    localNetworks: () => TEST_LOCAL_NETWORKS,
+    fetchFn: (input) => {
+      calls.push(String(input));
+      return Promise.resolve(
+        new Response("fetched", { headers: { "content-type": "text/plain" } }),
+      );
+    },
+  });
+  const output = await tool.invoke(createContext(new FakeSandboxRuntime()), {
+    url,
+  });
+  return { calls, output };
+};
+
+Deno.test("web_fetch rejects public addresses on this device's interface networks", async () => {
+  for (
+    const address of [
+      "2a02:8071:1234:5600::99",
+      "81.2.69.160",
+      "::ffff:81.2.69.160",
+      "81.2.70.5",
+    ]
+  ) {
+    const { calls, output } = await webFetchOnLocalNetworks(
+      "https://host.example/",
+      address,
+    );
+    assertEquals(calls, []);
+    if (output.type !== "cf-harness.web-fetch-error") {
+      throw new Error(`expected web_fetch error for ${address}`);
+    }
+    assertEquals(
+      output.message,
+      `web_fetch host host.example resolved to ${address}, which is not on the open internet, and is not allowed`,
+    );
+  }
+  for (
+    const url of [
+      "https://[2a02:8071:1234:5600::99]/",
+      "https://81.2.69.160/",
+      "https://[::ffff:81.2.69.160]/",
+    ]
+  ) {
+    const host = new URL(url).hostname;
+    const { calls, output } = await webFetchOnLocalNetworks(url, host);
+    assertEquals(calls, []);
+    if (output.type !== "cf-harness.web-fetch-error") {
+      throw new Error(`expected web_fetch error for ${url}`);
+    }
+    assertEquals(
+      output.message,
+      `web_fetch host ${host} is not on the open internet and is not allowed`,
+    );
+  }
+});
+
+Deno.test("web_fetch fetches public addresses outside this device's interface networks", async () => {
+  for (
+    const address of [
+      "2a02:8071:1234:5601::99",
+      "81.2.70.160",
+      "::ffff:81.2.70.160",
+      "81.2.70.6",
+    ]
+  ) {
+    const { calls, output } = await webFetchOnLocalNetworks(
+      "https://host.example/",
+      address,
+    );
+    assertEquals(calls, ["https://host.example/"]);
+    assertEquals(output.type, "cf-harness.web-fetch-result");
+  }
+  for (
+    const url of ["https://[2a02:8071:1234:5601::99]/", "https://81.2.70.160/"]
+  ) {
+    const { calls, output } = await webFetchOnLocalNetworks(
+      url,
+      new URL(url).hostname,
+    );
+    assertEquals(calls, [url]);
+    assertEquals(output.type, "cf-harness.web-fetch-result");
+  }
+});
+
+Deno.test("web_fetch reads this device's interface networks again when it connects", async () => {
+  const networkLists = [[], TEST_LOCAL_NETWORKS];
+  const tool = createWebFetchTool({
+    resolveHostAddresses: () => Promise.resolve(["81.2.69.160"]),
+    localNetworks: () => networkLists.shift() ?? TEST_LOCAL_NETWORKS,
+  });
+
+  const output = await tool.invoke(createContext(new FakeSandboxRuntime()), {
+    url: "https://joined.example/",
+  });
+
+  assertEquals(networkLists, []);
+  assertEquals(output, {
+    type: "cf-harness.web-fetch-error",
+    outputId: "run-1:web_fetch:1",
+    url: "https://joined.example/",
+    code: "blocked_url",
+    message:
+      "web_fetch host joined.example resolved to 81.2.69.160, which is not on the open internet, and is not allowed",
+    finalUrl: "https://joined.example/",
+    fetchedAt: "2026-05-01T17:54:00.000Z",
+  });
 });
 
 Deno.test("web_fetch rejects unsupported content types without returning the body", async () => {

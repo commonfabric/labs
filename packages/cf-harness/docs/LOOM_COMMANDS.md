@@ -23,6 +23,7 @@ refused at argument parsing.
 ```json
 {
   "cliPath": "/opt/loom/src/bin/loom",
+  "jobIdEnvVar": "LOOM_COMMAND_JOB_ID",
   "transport": {
     "kind": "broker",
     "queuePath": "/private/loom/run/command-queue"
@@ -40,6 +41,17 @@ Each call runs the host's CLI over a cleared environment with
 `LOOM_PAGE_RPC_QUEUE` set to the queue, the same way the
 [authoring tools](LOOM_AUTHORING.md) and the
 [retrieval tools](LOOM_RETRIEVAL.md) reach the host:
+
+The optional `jobIdEnvVar` names the variable that carries the current host job
+id. The embedder supplies that id through
+`RunCfHarnessCliDependencies.commandJobId`, independently for each invocation; a
+`jobId` in the configuration file is ignored. Both discovery and execution
+receive the id in their cleared host environment when the variable and id are
+present. Without a supplied id the variable is omitted; the broker decides
+whether such a request is valid. The variable name must use uppercase letters,
+digits, and underscores, starting with a letter or underscore, and cannot
+replace `PATH` or `LOOM_PAGE_RPC_QUEUE`. Neither the model's arguments nor
+ambient process environment select the id.
 
 | Tool            | Host command                                                     |
 | --------------- | ---------------------------------------------------------------- |

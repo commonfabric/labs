@@ -310,6 +310,748 @@ describe("runtime-processor", () => {
       });
     }
 
+    for (const serverExecution of [false, true]) {
+      for (
+        const [otherSpace, otherScope] of [[false, false], [true, false], [
+          false,
+          true,
+        ]]
+      ) {
+        it(
+          otherScope
+            ? `selects a space value while a same-id user-scope commit remains pending with serverExecution=${serverExecution}`
+            : `selects a backing value while an unrelated ordinary commit is pending with otherSpace=${otherSpace} serverExecution=${serverExecution}`,
+          async () => {
+            const server = newLoopbackServer();
+            const storageManager = EmulatedStorageManager.connectTo(server, {
+              as: cfcSigner,
+            });
+            const runtime = new Runtime({
+              apiUrl: new URL(import.meta.url),
+              storageManager,
+              experimental: { serverExecution },
+            });
+            const entered = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            let committing: Promise<unknown> | undefined;
+            let initializing: Promise<unknown> | undefined;
+            try {
+              const target = runtime.getCell<number>(
+                cfcSigner.did(),
+                "narrow-initialize-target",
+              );
+              const unrelated = runtime.getCell<number>(
+                otherSpace
+                  ? (await Identity.fromPassphrase(
+                    "narrow-initialize-other-space",
+                  ))
+                    .did()
+                  : cfcSigner.did(),
+                otherScope
+                  ? "narrow-initialize-target"
+                  : "narrow-initialize-unrelated",
+                undefined,
+                undefined,
+                otherScope ? "user" : "space",
+              );
+              await Promise.all([target.sync(), unrelated.sync()]);
+              const seed = runtime.edit();
+              target.withTx(seed).set(6);
+              expect((await seed.commit().settled).error).toBeUndefined();
+              const transact = server.transact.bind(server);
+              let holdNext = true;
+              using _transact = stub(server, "transact", async (...args) => {
+                if (holdNext) {
+                  holdNext = false;
+                  entered.resolve();
+                  await release.promise;
+                }
+                return transact(...args);
+              });
+              const tx = runtime.edit();
+              tx.writeValueOrThrow(unrelated.getAsNormalizedFullLink(), 7);
+              committing = tx.commit().settled;
+              await entered.promise;
+              const barrier = Promise.withResolvers<void>();
+              const settled = storageManager.pendingCommitsSettled.bind(
+                storageManager,
+              );
+              using _barrier = stub(
+                storageManager,
+                "pendingCommitsSettled",
+                () => {
+                  barrier.resolve();
+                  return settled();
+                },
+              );
+              initializing = buildProcessor({ runtime }).handleCellInitialize({
+                type: RequestType.CellInitialize,
+                cell: createCellRef(target),
+                value: 99,
+              });
+              expect(
+                await Promise.race([
+                  initializing.then(() => "initialized"),
+                  barrier.promise.then(() => "unrelated-barrier"),
+                ]),
+              ).toBe("initialized");
+              await expect(initializing).resolves.toEqual({ value: 6 });
+              expect(target.get()).toBe(6);
+              expect(storageManager.hasPendingCommits()).toBe(true);
+            } finally {
+              release.resolve();
+              await committing;
+              await initializing;
+              await runtime.dispose();
+              await storageManager.close();
+              await server.close();
+            }
+          },
+        );
+      }
+    }
+
+    it("returns a stored value while a running pattern in another space awaits its output commit", async () => {
+      const other = await Identity.fromPassphrase("initialize-running-pattern");
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let committing: Promise<unknown> | undefined;
+      let initializing: Promise<unknown> | undefined;
+      let cancel: (() => void) | undefined;
+      try {
+        const target = runtime.getCell<number>(cfcSigner.did(), "initialize-a");
+        const source = runtime.getCell<number>(other.did(), "producer-input-b");
+        const root = runtime.getCell<{ doubled: number }>(
+          other.did(),
+          "producer-root-b",
+        );
+        await Promise.all([target.sync(), source.sync(), root.sync()]);
+        const seed = runtime.edit();
+        target.withTx(seed).set(6);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const input = runtime.edit();
+        source.withTx(input).set(3);
+        expect((await input.commit().settled).error).toBeUndefined();
+        const { commonfabric: cf } = createTrustedBuilder(runtime);
+        const pattern = cf.pattern<{ value: number }>(({ value }) => ({
+          doubled: cf.lift((value: number) => value * 2)(value),
+        }));
+        const setup = runtime.edit();
+        runtime.run(setup, pattern, { value: source }, root.withTx(setup));
+        expect((await setup.commit().settled).error).toBeUndefined();
+        const output = root.key("doubled");
+        cancel = output.sink(() => {});
+        expect(await output.pull({ awaitDurability: true })).toBe(6);
+        const transact = server.transact.bind(server);
+        let holdNextOutput = true;
+        using _held = stub(server, "transact", async (message, publish) => {
+          if (
+            holdNextOutput && message.space === other.did() &&
+            !message.commit.operations.some((op) =>
+              "id" in op && op.id === source.getAsNormalizedFullLink().id
+            )
+          ) {
+            holdNextOutput = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return transact(message, publish);
+        });
+        const update = runtime.edit();
+        source.withTx(update).set(4);
+        committing = update.commit().settled;
+        await entered.promise;
+        await committing;
+        await runtime.scheduler.idle();
+        expect(output.get()).toBe(8);
+        const barrier = Promise.withResolvers<void>();
+        const settled = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        using _barrier = stub(
+          storageManager,
+          "pendingCommitsSettled",
+          () => {
+            barrier.resolve();
+            return settled();
+          },
+        );
+        initializing = buildProcessor({ runtime }).handleCellInitialize({
+          type: RequestType.CellInitialize,
+          cell: createCellRef(target),
+          value: 99,
+        });
+        expect(
+          await Promise.race([
+            initializing.then(() => "initialized"),
+            barrier.promise.then(() => "producer-barrier"),
+          ]),
+        ).toBe("initialized");
+        await expect(initializing).resolves.toEqual({ value: 6 });
+        expect(storageManager.hasPendingCommits()).toBe(true);
+      } finally {
+        release.resolve();
+        await committing;
+        await initializing;
+        cancel?.();
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
+    it("retains the durability barrier when the transaction cannot report its reads", async () => {
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let committing: Promise<unknown> | undefined;
+      let initializing: Promise<unknown> | undefined;
+      try {
+        const target = runtime.getCell<number>(
+          cfcSigner.did(),
+          "initialize-without-read-observations",
+        );
+        const unrelated = runtime.getCell<number>(
+          cfcSigner.did(),
+          "initialize-without-read-observations-unrelated",
+        );
+        await Promise.all([target.sync(), unrelated.sync()]);
+        const seed = runtime.edit();
+        target.withTx(seed).set(6);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const transact = server.transact.bind(server);
+        let holdNext = true;
+        using _transact = stub(server, "transact", async (...args) => {
+          if (holdNext) {
+            holdNext = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return transact(...args);
+        });
+        const tx = runtime.edit();
+        unrelated.withTx(tx).set(7);
+        committing = tx.commit().settled;
+        await entered.promise;
+        const edit = runtime.edit.bind(runtime);
+        using _edit = stub(runtime, "edit", (...args) => {
+          const tx = edit(...args);
+          const reads = tx.tx.getReadActivities;
+          Object.defineProperty(tx.tx, "getReadActivities", {
+            configurable: true,
+            value: undefined,
+          });
+          return interceptTransaction(tx, (method, _args, proceed) => {
+            // The probe cannot observe reads; native commit preparation
+            // still uses the backend's read journal.
+            if (method === "prepareForCommit") {
+              Object.defineProperty(tx.tx, "getReadActivities", {
+                value: reads,
+              });
+            }
+            return proceed();
+          });
+        });
+        const barrier = Promise.withResolvers<void>();
+        const settled = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        using _barrier = stub(storageManager, "pendingCommitsSettled", () => {
+          barrier.resolve();
+          return settled();
+        });
+        initializing = buildProcessor({ runtime }).handleCellInitialize({
+          type: RequestType.CellInitialize,
+          cell: createCellRef(target),
+          value: 99,
+        });
+        expect(
+          await Promise.race([
+            initializing.then(() => "initialized"),
+            barrier.promise.then(() => "unknown-read-barrier"),
+          ]),
+        ).toBe("unknown-read-barrier");
+        expect(target.get()).toBe(6);
+        release.resolve();
+        await expect(initializing).resolves.toEqual({ value: 6 });
+      } finally {
+        release.resolve();
+        await committing;
+        await initializing;
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
+    it("propagates an unexpected readiness failure without storing an initializer", async () => {
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const target = runtime.getCell<number>(
+          cfcSigner.did(),
+          "initialize-readiness-failure",
+        );
+        await target.sync();
+        const idle = runtime.scheduler.idle.bind(runtime.scheduler);
+        let failNext = true;
+        using _idle = stub(runtime.scheduler, "idle", (...args) => {
+          if (failNext) {
+            failNext = false;
+            return Promise.reject(new Error("unexpected readiness failure"));
+          }
+          return idle(...args);
+        });
+        await expect(
+          buildProcessor({ runtime }).handleCellInitialize({
+            type: RequestType.CellInitialize,
+            cell: createCellRef(target),
+            value: 99,
+          }),
+        ).rejects.toThrow("unexpected readiness failure");
+        expect(target.getRaw()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
+    for (
+      const shape of ["number", "incompatible", "cyclic-redirect"] as const
+    ) {
+      for (const stored of [false, true]) {
+        it(
+          shape === "cyclic-redirect"
+            ? `repairs an optimistic redirect cycle before initializing with stored=${stored}`
+            : shape === "incompatible"
+            ? `repairs an incompatible optimistic backing value before initializing with stored=${stored}`
+            : `waits for rejection repair before selecting an optimistic backing value with stored=${stored}`,
+          async () => {
+            const server = newLoopbackServer();
+            const storageManager = EmulatedStorageManager.connectTo(server, {
+              as: cfcSigner,
+            });
+            const runtime = new Runtime({
+              apiUrl: new URL(import.meta.url),
+              storageManager,
+            });
+            const entered = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            let committing: Promise<unknown> | undefined;
+            let initializing: Promise<unknown> | undefined;
+            try {
+              const target = runtime.getCell<number>(
+                cfcSigner.did(),
+                "initialize-rejected-target",
+                shape === "incompatible" ? { type: "number" } : undefined,
+              );
+              await target.sync();
+              if (stored) {
+                const seed = runtime.edit();
+                target.withTx(seed).set(6);
+                expect((await seed.commit().settled).error).toBeUndefined();
+              }
+              const targetRef = createCellRef(target);
+              const transact = server.transact.bind(server);
+              let rejectNext = true;
+              using _held = stub(
+                server,
+                "transact",
+                async (message, publish) => {
+                  if (!rejectNext) return transact(message, publish);
+                  rejectNext = false;
+                  entered.resolve();
+                  await release.promise;
+                  const response = {
+                    type: "response" as const,
+                    requestId: message.requestId,
+                    error: {
+                      name: "ConflictError",
+                      message: "refuse optimistic write",
+                    },
+                  };
+                  publish?.(response);
+                  return response;
+                },
+              );
+              const tx = runtime.edit();
+              target.withTx(tx).setRawUntyped(
+                shape === "cyclic-redirect"
+                  ? target.getAsWriteRedirectLink({ includeSchema: false })
+                  : shape === "incompatible"
+                  ? "invalid"
+                  : 7,
+              );
+              committing = tx.commit().settled;
+              await entered.promise;
+              if (shape === "cyclic-redirect") {
+                expect(() => target.get()).toThrow("Link cycle detected");
+              } else {
+                expect(target.get()).toBe(
+                  shape === "incompatible" ? undefined : 7,
+                );
+              }
+              const barrier = Promise.withResolvers<void>();
+              const settled = storageManager.pendingCommitsSettled.bind(
+                storageManager,
+              );
+              using _barrier = stub(
+                storageManager,
+                "pendingCommitsSettled",
+                () => {
+                  barrier.resolve();
+                  return settled();
+                },
+              );
+              initializing = buildProcessor({ runtime }).handleCellInitialize({
+                type: RequestType.CellInitialize,
+                cell: targetRef,
+                value: 99,
+              });
+              expect(
+                await Promise.race([
+                  initializing.then(() => "initialized"),
+                  barrier.promise.then(() => "repair-barrier"),
+                ]),
+              ).toBe("repair-barrier");
+              release.resolve();
+              await expect(initializing).resolves.toEqual({
+                value: stored ? 6 : 99,
+              });
+              expect(target.get()).toBe(stored ? 6 : 99);
+            } finally {
+              release.resolve();
+              await Promise.allSettled([committing, initializing]);
+              await runtime.dispose();
+              await storageManager.close();
+              await server.close();
+            }
+          },
+        );
+      }
+    }
+
+    it("waits for rejection repair of a linked value before returning its confirmed parent", async () => {
+      const other = await Identity.fromPassphrase("initialize-linked-repair");
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let committing: Promise<unknown> | undefined;
+      let initializing: Promise<unknown> | undefined;
+      try {
+        const target = runtime.getCell<{ value: number }>(
+          cfcSigner.did(),
+          "initialize-linked-parent",
+          {
+            type: "object",
+            properties: { value: { type: "number" } },
+            required: ["value"],
+          },
+        );
+        const child = runtime.getCell<number>(
+          other.did(),
+          "initialize-linked-child",
+        );
+        await Promise.all([target.sync(), child.sync()]);
+        const childSeed = runtime.edit();
+        child.withTx(childSeed).set(6);
+        expect((await childSeed.commit().settled).error).toBeUndefined();
+        const parentSeed = runtime.edit();
+        target.withTx(parentSeed).setRawUntyped({ value: child.getAsLink() });
+        expect((await parentSeed.commit().settled).error).toBeUndefined();
+        const transact = server.transact.bind(server);
+        let rejectNext = true;
+        using _held = stub(server, "transact", async (message, publish) => {
+          if (!rejectNext) return transact(message, publish);
+          rejectNext = false;
+          entered.resolve();
+          await release.promise;
+          const response = {
+            type: "response" as const,
+            requestId: message.requestId,
+            error: {
+              name: "ConflictError",
+              message: "refuse optimistic child",
+            },
+          };
+          publish?.(response);
+          return response;
+        });
+        const tx = runtime.edit();
+        child.withTx(tx).set(7);
+        committing = tx.commit().settled;
+        await entered.promise;
+        expect(target.get().value).toBe(7);
+        const barrier = Promise.withResolvers<void>();
+        const settled = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        using _barrier = stub(
+          storageManager,
+          "pendingCommitsSettled",
+          () => {
+            barrier.resolve();
+            return settled();
+          },
+        );
+        initializing = buildProcessor({ runtime }).handleCellInitialize({
+          type: RequestType.CellInitialize,
+          cell: createCellRef(target),
+          value: { value: 99 },
+        });
+        expect(
+          await Promise.race([
+            initializing.then(() => "initialized"),
+            barrier.promise.then(() => "child-barrier"),
+          ]),
+        ).toBe("child-barrier");
+        release.resolve();
+        await expect(initializing).resolves.toEqual({ value: { value: 6 } });
+        expect(target.get().value).toBe(6);
+      } finally {
+        release.resolve();
+        await committing;
+        await initializing;
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
+    it("waits for an input repair that can write an undeclared initialization target", async () => {
+      const server = newLoopbackServer({
+        subscriptionRefreshDelayMs: "manual",
+      });
+      const peerStorage = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const peer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: peerStorage,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      let committing: Promise<unknown> | undefined;
+      let initializing: Promise<unknown> | undefined;
+      let cancel: (() => void) | undefined;
+      let cancelValue: (() => void) | undefined;
+      try {
+        const source = runtime.getCell<number>(cfcSigner.did(), "repair-input");
+        const target = runtime.getCell<number>(
+          cfcSigner.did(),
+          "undeclared-output",
+        );
+        const declared = runtime.getCell<number>(
+          cfcSigner.did(),
+          "declared-output",
+        );
+        const peerSource = peer.getCell<number>(
+          cfcSigner.did(),
+          "repair-input",
+        );
+        const seed = peer.edit();
+        peerSource.withTx(seed).set(1);
+        expect(
+          (await seed.commit({ holdSyncedUntilCovered: false }).verdict).error,
+        ).toBeUndefined();
+        await Promise.all([source.sync(), target.sync(), declared.sync()]);
+        const stale = runtime.edit();
+        expect(source.withTx(stale).get()).toBe(1);
+        source.withTx(stale).set(2);
+        const update = peer.edit();
+        peerSource.withTx(update).set(3);
+        expect(
+          (await update.commit({ holdSyncedUntilCovered: false }).verdict)
+            .error,
+        ).toBeUndefined();
+        const receipt = stale.commit();
+        committing = receipt.settled;
+        expect((await receipt.verdict).error?.name).toBe("ConflictError");
+        const action = (tx: IExtendedStorageTransaction) => {
+          if (source.withTx(tx).get() === 3) target.withTx(tx).set(6);
+        };
+        cancel = runtime.scheduler.subscribe(action, {
+          reads: [],
+          shallowReads: [],
+          writes: [{ ...declared.getAsNormalizedFullLink(), path: [] }],
+        }, { isEffect: true, noDebounce: true });
+        await runtime.scheduler.idle();
+        expect(target.get()).toBeUndefined();
+        const entered = Promise.withResolvers<void>();
+        const settled = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        using _barrier = stub(
+          storageManager,
+          "pendingCommitsSettled",
+          () => {
+            entered.resolve();
+            return settled();
+          },
+        );
+        initializing = buildProcessor({ runtime }).handleCellInitialize({
+          type: RequestType.CellInitialize,
+          cell: createCellRef(target),
+          value: 99,
+        });
+        expect(
+          await Promise.race([
+            initializing.then(() => "initialized"),
+            entered.promise.then(() => "repair-barrier"),
+          ]),
+        ).toBe("repair-barrier");
+        const valueReady = Promise.withResolvers<void>();
+        cancelValue = target.sink((value) => {
+          if (value === 6) valueReady.resolve();
+        });
+        await server.flushSessions();
+        await valueReady.promise;
+        await server.flushSessions();
+        await expect(initializing).resolves.toEqual({ value: 6 });
+      } finally {
+        cancel?.();
+        cancelValue?.();
+        await server.flushSessions();
+        await committing;
+        await initializing;
+        await runtime.dispose();
+        await peer.dispose();
+        await storageManager.close();
+        await peerStorage.close();
+        await server.close();
+      }
+    });
+
+    for (const redirected of [false, true]) {
+      it(`waits for the target in a later space of an ordinary commit with redirected=${redirected}`, async () => {
+        const server = newLoopbackServer();
+        const storageManager = EmulatedStorageManager.connectTo(server, {
+          as: cfcSigner,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let committing: Promise<unknown> | undefined;
+        let initializing: Promise<unknown> | undefined;
+        try {
+          const other = await Identity.fromPassphrase(
+            "narrow-initialize-later-space",
+          );
+          const first = runtime.getCell<number>(
+            cfcSigner.did(),
+            "narrow-initialize-first",
+          );
+          const target = runtime.getCell<number>(
+            other.did(),
+            "narrow-initialize-later-target",
+            undefined,
+            undefined,
+            redirected ? "user" : "space",
+          );
+          const alias = runtime.getCell<number>(
+            cfcSigner.did(),
+            "narrow-initialize-alias",
+          );
+          await Promise.all([first.sync(), target.sync(), alias.sync()]);
+          if (redirected) {
+            const link = runtime.edit();
+            alias.withTx(link).setRawUntyped(
+              target.getAsWriteRedirectLink({ includeSchema: false }),
+            );
+            expect((await link.commit().settled).error).toBeUndefined();
+          }
+          const transact = server.transact.bind(server);
+          let holdNext = true;
+          using _transact = stub(server, "transact", async (...args) => {
+            if (holdNext) {
+              holdNext = false;
+              entered.resolve();
+              await release.promise;
+            }
+            return transact(...args);
+          });
+          const tx = runtime.edit();
+          tx.enableMultiSpaceWrites?.();
+          first.withTx(tx).set(1);
+          target.withTx(tx).set(6);
+          committing = tx.commit().settled;
+          await entered.promise;
+          expect(target.get()).toBeUndefined();
+          const barrier = Promise.withResolvers<void>();
+          const settled = storageManager.pendingCommitsSettled.bind(
+            storageManager,
+          );
+          using _barrier = stub(
+            storageManager,
+            "pendingCommitsSettled",
+            () => {
+              barrier.resolve();
+              return settled();
+            },
+          );
+          const selected = redirected ? alias : target;
+          initializing = buildProcessor({ runtime }).handleCellInitialize({
+            type: RequestType.CellInitialize,
+            cell: createCellRef(selected),
+            value: 99,
+          });
+          expect(
+            await Promise.race([
+              initializing.then(() => "initialized"),
+              barrier.promise.then(() => "target-barrier"),
+            ]),
+          ).toBe("target-barrier");
+          release.resolve();
+          await expect(initializing).resolves.toEqual({ value: 6 });
+          expect(target.get()).toBe(6);
+        } finally {
+          release.resolve();
+          await committing;
+          await initializing;
+          await runtime.dispose();
+          await storageManager.close();
+          await server.close();
+        }
+      });
+    }
+
     for (const initialize of [false, true]) {
       it(
         initialize

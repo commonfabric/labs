@@ -37,6 +37,12 @@ export interface HarnessLoomCommandsConfig {
   /** Absolute path to the host's executable Loom CLI. */
   cliPath: string;
 
+  /** Host-chosen environment variable carrying the current job's identity. */
+  jobIdEnvVar?: string;
+
+  /** Current job identity supplied by the embedder, outside the config file. */
+  jobId?: string;
+
   /**
    * The scoped broker the host launched. Only a broker is accepted: it is
    * what stamps the actor and run on every command and narrows what is
@@ -113,6 +119,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const validateLoomCommandsConfig = (
   config: HarnessLoomCommandsConfig,
 ): void => {
+  if (
+    config.jobIdEnvVar !== undefined &&
+    (typeof config.jobIdEnvVar !== "string" ||
+      !/^[A-Z_][A-Z0-9_]*$/.test(config.jobIdEnvVar) ||
+      ["PATH", "LOOM_PAGE_RPC_QUEUE"].includes(config.jobIdEnvVar))
+  ) {
+    throw new Error(
+      "Loom commands require a valid, nonreserved `jobIdEnvVar`.",
+    );
+  }
   if (!isAbsolute(config.cliPath)) {
     throw new Error("Loom commands require an absolute `cliPath`.");
   }
@@ -136,6 +152,7 @@ export const validateLoomCommandsConfig = (
 export const readLoomCommandsConfig = async (
   path: string | undefined,
   readTextFile: (path: string) => Promise<string> = Deno.readTextFile,
+  jobId?: string,
 ): Promise<HarnessLoomCommandsConfig | undefined> => {
   if (path === undefined) return undefined;
   if (!isAbsolute(path)) {
@@ -145,7 +162,9 @@ export const readLoomCommandsConfig = async (
   if (!isRecord(value) || typeof value.cliPath !== "string") {
     throw new Error("Loom commands require a host CLI and a transport.");
   }
-  const config = value as unknown as HarnessLoomCommandsConfig;
+  const config = { ...value } as unknown as HarnessLoomCommandsConfig;
+  if (jobId === undefined) delete config.jobId;
+  else config.jobId = jobId;
   validateLoomCommandsConfig(config);
   return config;
 };
@@ -266,6 +285,9 @@ const runCli = (
 ) => {
   const env = createClearedHostProcessEnv();
   env.LOOM_PAGE_RPC_QUEUE = config.transport.queuePath;
+  if (config.jobIdEnvVar !== undefined && config.jobId !== undefined) {
+    env[config.jobIdEnvVar] = config.jobId;
+  }
   return runner.run({
     command: config.cliPath,
     args,

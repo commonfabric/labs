@@ -48,11 +48,23 @@ install a lazy producer that the pull then computes, and includes the writes
 that computation produces. The barrier also covers pending pattern work.
 `RuntimeClient.idle()` crosses the same barrier without adding a cell demand.
 Hosts use pending-write notifications to guard teardown independently of reads.
-Bridge `initialize()` keeps that demand through the commit-aware barrier before
-atomically selecting an existing value or storing the default. It can therefore
-initialize a cell whose producer is being installed without replacing the value
-that producer supplies. This barrier is runtime-wide: an unrelated pending
-commit can delay initialization, including iframe bootstrap.
+Bridge `initialize()` first demands the cell's producers and required loads. It
+can return an existing backing value while unrelated commits remain pending,
+including commits from a running pattern in another space. Every document
+consumed to build the returned value, including redirect and linked-value
+targets, must be free of pending local writes. The returned value is the snapshot
+selected by that transaction; later writes can still change it.
+Later branches of a multi-space commit become pending local writes only when
+they start in their replica. Before such a branch starts, initialization can
+return this stored snapshot; the branch can subsequently change the cell.
+
+For an absent or optimistic backing value, or an inconclusive read, initialization
+keeps demand active through the full commit-aware barrier before atomically
+selecting a value or storing the default. That lets a pending commit or conflict
+repair install a producer without initialization replacing the value it supplies.
+This fallback is runtime-wide: unrelated pending work can delay a first-use
+default, including iframe bootstrap. Read failures defer to this barrier only
+when recorded reads show a pending local write; other failures propagate.
 
 Observe `receipt.verdict` when the next step requires knowing the commit's
 fate. Use `receipt.settled` when a retry needs the repaired read basis, when a

@@ -1,9 +1,5 @@
 # Security and privacy: current boundaries and roadmap
 
-<!-- Publication prerequisite: verify that CFC enforcement is enabled by default
-and direct sandbox fetch has been removed in the deployed release. The prose
-below assumes both changes have shipped. -->
-
 ## Overview
 
 Common Fabric is designed to let untrusted programs work with sensitive data
