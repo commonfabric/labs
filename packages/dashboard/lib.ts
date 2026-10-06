@@ -859,8 +859,9 @@ export function sparkline(
 // fraction of the chart. `showSinglePoint` draws explicit markers for a
 // one-sample series and for points isolated by those breaks. All overlays are
 // HTML or gradients, so preserveAspectRatio="none" cannot distort them. The
-// span it covers is drawn separately by a tile's `duration` slot. `opts.scale`
-// has the same trimming behavior as `sparkline`. With `opts.scale.highlighted`,
+// span it covers is drawn separately by a tile's `duration` slot. The vertical
+// scale has the same 25% headroom as `sparkline`, and `opts.scale` has the
+// same trimming behavior. With `opts.scale.highlighted`,
 // a line that draws a highlight contributes only its highlighted points to the
 // vertical scale, so its older extremes can extend outside the chart. A line
 // that draws no highlight contributes all of its points.
@@ -904,9 +905,7 @@ export function multiSparkline(
     : all;
   const scaled = scaleValues(basis, opts.scale);
   const lo = minOf(scaled), hi = maxOf(scaled);
-  // Match sparkline's centered flat range when trimming or the highlight leaves
-  // out values and the rest are equal.
-  const pad = scaled.length === all.length || lo !== hi ? 0 : 0.5;
+  const pad = (hi - lo) * 0.125 || 0.5; // as in sparkline
   const w = 220, h = 34, min = lo - pad, max = hi + pad, rng = (max - min) || 1;
   const yv = (v: number) => h - 3 - ((v - min) / rng) * (h - 6);
 
