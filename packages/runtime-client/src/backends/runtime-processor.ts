@@ -89,6 +89,7 @@ import {
   runtimePresets,
   RuntimeTelemetry,
   RuntimeTelemetryEvent,
+  sendEvent,
   setPatternEnvironment,
   type SigilLink,
   SlugResolutionError,
@@ -121,6 +122,7 @@ import {
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   NameSchema,
   rendererVDOMSchema,
@@ -181,6 +183,7 @@ import {
   type CellResolveAsCellRequest,
   CellResponse,
   type CellSendRequest,
+  type CellSendReviewedRequest,
   type CellSetRequest,
   type CellSubscribeRequest,
   type CellUnsubscribeRequest,
@@ -2100,12 +2103,84 @@ export class RuntimeProcessor {
   }
 
   handleCellSend(request: CellSendRequest): void | Promise<void> {
+    const event = mapCellRefsToSigilLinks(request.event);
+    return this.#sendCellEvent(
+      request.cell,
+      (send) => send(event),
+      request.awaitHandling
+        ? "handling"
+        : request.awaitCommit
+        ? "commit"
+        : undefined,
+    );
+  }
+
+  /**
+   * Applies a `CellSendReviewedRequest`: sends the request's payload through
+   * a native control bound to the request's surface and action, which stamps
+   * the event with `native` provenance for them, replacing any `provenance`
+   * the payload carries, and marks it renderer-trusted. Reached only through
+   * a client of this worker, which a pattern the worker runs is not.
+   *
+   * @throws If the payload is not a record, or the surface or action is
+   *   blank, and when the event's commit, or with `awaitHandling` its
+   *   handling, is refused.
+   */
+  async handleCellSendReviewed(
+    request: CellSendReviewedRequest,
+  ): Promise<void> {
+    const payload = mapCellRefsToSigilLinks(request.event);
+    if (!isPlainObject(payload)) {
+      throw new Error("A reviewed action's event must be a record.");
+    }
+    if (
+      typeof request.surface !== "string" || typeof request.action !== "string"
+    ) {
+      throw new Error("A reviewed action requires a surface and an action.");
+    }
+    const control = { surface: request.surface, action: request.action };
+    await this.#sendCellEvent(
+      request.cell,
+      (send) => bindNativeUiControl({ send }, control)(payload),
+      request.awaitHandling ? "handling" : "commit",
+    );
+  }
+
+  /**
+   * Helper for `handleCellSend()` and `handleCellSendReviewed()`, which sends
+   * an event to `ref` in a transaction of its own. `deliver` sends the event
+   * through the function it is given. With `wait` undefined the outcome is
+   * logged; `commit` waits for the transaction's commit, and `handling` for
+   * the commit of the handler's run as well, and either rejects with the
+   * refusal.
+   */
+  #sendCellEvent(
+    ref: CellRef,
+    deliver: (send: (event: unknown) => void) => void,
+    wait: "commit" | "handling" | undefined,
+  ): void | Promise<void> {
     const tx = this.#runtime.edit();
-    const cell = getCell(this.#runtime, request.cell);
-    cell.withTx(tx).send(mapCellRefsToSigilLinks(request.event));
+    const cell = getCell(this.#runtime, ref).withTx(tx);
+    const handled = wait === "handling"
+      ? Promise.withResolvers<IExtendedStorageTransaction>()
+      : undefined;
+    try {
+      deliver((event) => sendEvent(cell, event, handled?.resolve));
+    } catch (error) {
+      tx.abort(error);
+      throw error;
+    }
     this.#runtime.prepareTxForCommit(tx);
     const commit = tx.commit().settled;
-    if (request.awaitCommit) return this.#requireCellCommit(commit);
+    if (handled !== undefined) {
+      return this.#requireCellCommit(commit).then(async () => {
+        const handling = (await handled.promise).status();
+        if (handling.status === "error") {
+          throw new Error(handling.error.message);
+        }
+      });
+    }
+    if (wait === "commit") return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "send");
   }
 
@@ -3572,6 +3647,8 @@ export class RuntimeProcessor {
         return this.handleCellPush(request);
       case RequestType.CellSend:
         return this.handleCellSend(request);
+      case RequestType.CellSendReviewed:
+        return await this.handleCellSendReviewed(request);
       case RequestType.CellSubscribe:
         return this.handleCellSubscribe(request, client);
       case RequestType.CellUnsubscribe:

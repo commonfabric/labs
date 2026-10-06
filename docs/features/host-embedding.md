@@ -512,6 +512,21 @@ surface. This is the sanctioned issuance path §6 calls for, for a host's own
 surface, in place of a host building the provenance and marking the event
 itself.
 
+A host whose runtime runs in a worker it owns through a `RuntimeClient` sends
+the same action with `CellHandle.sendReviewed(event, { surface, action },
+options?)` on a handle naming the stream. It reaches the worker as the
+dedicated `cell:send-reviewed` request, which the worker answers by sending the
+request's payload through `bindNativeUiControl()`, bound to the request's
+surface and action, so the event delivered is the one that function sends. The
+payload must be a record. The send rejects when the runtime refuses the event.
+With `{ awaitHandling: true }` it also waits for the run of the stream's
+handler, and rejects with the reason when that run's gated write is refused, or
+when the run throws or its event is dropped or refused admission; under server
+execution the run is the served one, and its outcome is the consequence the
+serving loop recorded for the event. Without it, the send resolving says
+nothing of the handling. `sendStrict()` takes the same option, and without it
+likewise confirms only that the runtime took the event.
+
 The runtime's ordinary checks still apply: the writer the contract names, the
 surface and action, the actor, and the space's access list. The mark reaches a
 served handler the way a DOM event's does, through the attestation the firing
@@ -521,18 +536,40 @@ events of `dom` origin, so a native control cannot confirm a snapshot share, a
 custody seal, a reviewed intent, or a change to a space's access list.
 
 This is a trusted host capability that mints trusted events. The host calls the
-returned function only from the control's real user-input path, with exactly
-the values the control showed, and keeps it away from pattern code, loaded web
-content, automation and agent interfaces, generic IPC, URL handlers, and
-restored state. A host that cannot hold that boundary renders the pattern's
-reviewed surface for the write instead. The generic `cell:send` request marks
-nothing, and pattern source cannot import the module.
+returned function, or `sendReviewed()`, only from the control's real user-input
+path, with exactly the values the control showed and the surface and action
+from the control's own definition, and keeps it away from pattern code, loaded
+web content, automation and agent interfaces, generic IPC, URL handlers, and
+restored state. The worker answers `cell:send-reviewed` from any client
+attached to it, so the host's runtime connection, and any relay carrying it, is
+part of the host, held to the same boundary. A host that cannot hold that
+boundary renders the pattern's reviewed surface for the write instead. The
+generic `cell:send` request marks nothing. Pattern code reaches neither door:
+pattern source cannot import the module or the runtime client, and no module it
+can import exports the binding or the renderer-trust mark.
 
-**Test.** `packages/runner/test/native-ui.test.ts` covers a gated write
+The CFC specification names such a control a host-reviewed control, in §8.15.9.1
+of `cfc/08-15-write-authority.md`, "Attested UI Evidence", which
+commonfabric/specs pull request 55 proposes. It holds the host to the boundary
+above: "The host MUST take the surface and action from the control's own
+definition when it binds the control, never from an event or a payload; MUST
+mint evidence only from that control's own user-input path, with exactly the
+values the control displayed; and MUST keep the minting path out of reach of
+pattern code, loaded content, automation and agent interfaces, generic message
+channels, URL handlers, and restored state."
+
+**Tests.** `packages/runner/test/native-ui.test.ts` covers a gated write
 committing through a real handler and one bound to another action being
 refused, the provenance and payload sent, capture of the descriptor, a
-replaced payload `provenance`, an unmarked copy matching nothing, and the
-event not counting as a trusted gesture.
+replaced payload `provenance`, an unmarked copy matching nothing, the event
+not counting as a trusted gesture, and the binding being out of a pattern's
+reach. `packages/runtime-client/test/send-reviewed.test.ts` drives
+`sendReviewed()` from a real `RuntimeClient`, with the handler run in the
+worker and under server execution: a gated write committing, one bound to
+another surface or action refused with its reason, a payload `provenance`
+deciding nothing, the same payload refused through `sendStrict()`, a refused
+handling resolving without `awaitHandling`, the event the worker delivers, and
+the requests it refuses.
 
 ---
 
