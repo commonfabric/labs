@@ -101,6 +101,9 @@ describe("runHarnessJob()", () => {
         env: {
           CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
           CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+          // Named, so a job selects the same sandbox on every machine: a Mac
+          // otherwise takes the native runtime, from a store this has none of.
+          CF_HARNESS_SANDBOX_RUNTIME: "docker",
         },
         fabricSessionFactory: () =>
           Promise.reject(new Error("this job opens no fabric session")),
@@ -383,6 +386,57 @@ describe("runHarnessJob()", () => {
         errorCode: "PROVIDER_FAILURE",
       });
     });
+
+    for (
+      const [given, flags] of [
+        ["", {}],
+        [", even where its caller's deps say flags can be passed", {
+          sandboxSelectionFlags: true,
+        }],
+      ] as const
+    ) {
+      it(`ends \`failed\` as \`PROVIDER_FAILURE\`, reporting the harness's refusal naming the variable alone, where the harness refuses its sandbox${given}`, async () => {
+        // A Mac with no native runtime set up, and no runtime named. By the
+        // path the file system has for it: a home reached through a link is
+        // refused for that before its store is looked at.
+        const home = await Deno.realPath(runRoot);
+        const reported: string[] = [];
+        let looped = false;
+
+        const result = await runHarnessJob(plainSpec(), {
+          runRoot,
+          signal: new AbortController().signal,
+          report: (message) => reported.push(message),
+          harnessDeps: {
+            ...flags,
+            env: {
+              CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+              HOME: home,
+            },
+            platform: "darwin",
+            createPromptLoop: () => {
+              looped = true;
+              throw new Error("no loop is built for a refused job");
+            },
+          },
+        });
+
+        expect([result, looped]).toEqual([
+          { outcome: "failed", errorCode: "PROVIDER_FAILURE" },
+          false,
+        ]);
+        const refusal = reported.find((message) =>
+          message.includes("No sandbox runtime is named")
+        );
+        // The job's argument list is written for it, so the way to Docker it
+        // is told is the variable, and no flag.
+        expect(refusal).toContain(
+          "select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+        );
+        expect(refusal).not.toContain("--sandbox-runtime");
+      });
+    }
 
     it("ends `failed` as `INVALID_RESULT`, with its report, when the model submitted no result", async () => {
       const reported: string[] = [];
