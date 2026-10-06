@@ -57,8 +57,9 @@ followed, and so is a redirect stored there, which is where a write to `target`
 would land; a link `target` holds as its value is not. The claims are read in
 the same places relative to that field, and the copies of the linked document's
 claims that the link carries are not counted, as in the default read. For a
-field holding no link, the two reads are the same. `options` in any other form
-throws.
+field holding no link, the two reads are the same. `options` throws when it is
+not an object, or when its `followLink` is neither a boolean nor absent; an
+absent `followLink` means the default, and other keys are not read.
 
 ## What it returns
 

@@ -432,8 +432,8 @@ const inviteBaker = handler<
   is fine but one someone else attests is not.
 - A field that links a document has its own label, separate from the linked
   document's. `principalOf(field, kind, { followLink: false })` reads the
-  field's: who wrote the link, where the default reads whom the linked
-  document represents.
+  field's claim of `kind`, such as who wrote the link, while the default reads
+  the linked document's claim of `kind`.
 - `spaceAccess(target, principal)` returns another principal's level, so a
   handler can tell whether the principal a label names is still a member.
 
