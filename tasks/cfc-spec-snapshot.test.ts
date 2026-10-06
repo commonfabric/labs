@@ -80,9 +80,9 @@ describe("cfc-spec-snapshot", () => {
   });
 
   describe("functionsOf()", () => {
-    it("returns each declared function under the nearest numbered heading, sharing its block's hash", async () => {
-      const found = await functionsOf("08-12.md", chapter);
-      const hash = await sha256Hex(
+    it("returns each declared function under the nearest numbered heading, sharing its block's hash", () => {
+      const found = functionsOf("08-12.md", chapter);
+      const hash = sha256Hex(
         normalizeBlock([
           "function atomLe(proposed: Atom, current: Atom): boolean {  ",
           "  return proposed === current;",
@@ -103,19 +103,19 @@ describe("cfc-spec-snapshot", () => {
       expect(found[2].sha256).not.toBe(hash);
     });
 
-    it("gives a block the same hash at any indentation, as inside a list", async () => {
-      const [flat] = await functionsOf(
+    it("gives a block the same hash at any indentation, as inside a list", () => {
+      const [flat] = functionsOf(
         "x.md",
         "## 1\n```ts\nfunction f() {\n  return 1;\n}\n```",
       );
-      const [listed] = await functionsOf(
+      const [listed] = functionsOf(
         "x.md",
         "## 1\n- item\n\n  ```ts\n  function f() {\n    return 1;\n  }\n  ```",
       );
       expect(listed.sha256).toBe(flat.sha256);
     });
 
-    it("reads a heading inside a non-pseudocode fence as text, and a fence inside a longer fence as text", async () => {
+    it("reads a heading inside a non-pseudocode fence as text, and a fence inside a longer fence as text", () => {
       const text = [
         "## 1 Real",
         "```text",
@@ -135,19 +135,38 @@ describe("cfc-spec-snapshot", () => {
       ].join("\n");
       expect(sectionsOf(text)).toEqual(["1"]);
       expect(
-        (await functionsOf("x.md", text)).map(({ section, name }) => [
+        (functionsOf("x.md", text)).map(({ section, name }) => [
           section,
           name,
         ]),
       ).toEqual([["1", "tilde"], ["1", "titled"]]);
     });
 
-    it("gives a block the same hash whatever its trailing whitespace", async () => {
-      const [a] = await functionsOf(
+    it("reads a function whose type parameters nest angle brackets", () => {
+      const text =
+        "## 1\n```ts\nfunction f<T extends Map<string, Set<number>>>(\n  a: T,\n): T {\n  return a;\n}\nfunction g<K, V>(m: Map<K, V>): void {}\n```";
+      expect(functionsOf("x.md", text).map(({ name }) => name)).toEqual([
+        "f",
+        "g",
+      ]);
+    });
+
+    it("throws on a fence the chapter never closes, naming the chapter and the line", () => {
+      const text = "## 1\n\n```ts\nfunction f() {}\n## 2 swallowed\n";
+      expect(() => functionsOf("08-12.md", text)).toThrow(
+        "08-12.md: the fence opened at line 3 is never closed",
+      );
+      expect(() => sectionsOf(text, "08-12.md")).toThrow(
+        "08-12.md: the fence opened at line 3 is never closed",
+      );
+    });
+
+    it("gives a block the same hash whatever its trailing whitespace", () => {
+      const [a] = functionsOf(
         "x.md",
         "## 1\n```ts\nfunction f() {}\n```",
       );
-      const [b] = await functionsOf(
+      const [b] = functionsOf(
         "x.md",
         "## 1\n```ts\nfunction f() {}   \n```",
       );
@@ -156,9 +175,9 @@ describe("cfc-spec-snapshot", () => {
   });
 
   describe("buildSnapshot()", () => {
-    it("reads sections from every numbered chapter and functions from the pseudocode chapters only", async () => {
+    it("reads sections from every numbered chapter and functions from the pseudocode chapters only", () => {
       const text = "## 5.1 A\n```ts\nfunction g() {}\n```\n";
-      const snapshot = await buildSnapshot("abc", [
+      const snapshot = buildSnapshot("abc", [
         { name: "README.md", text: "## 9.9 Ignored\n" },
         { name: "11-developer-guide.md", text },
         { name: "05-policy-architecture.md", text },
@@ -170,7 +189,7 @@ describe("cfc-spec-snapshot", () => {
           file: "05-policy-architecture.md",
           section: "5.1",
           name: "g",
-          sha256: await sha256Hex("function g() {}"),
+          sha256: sha256Hex("function g() {}"),
         }],
       });
     });
