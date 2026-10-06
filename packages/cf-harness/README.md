@@ -116,7 +116,8 @@ What works today:
   with the Docker-registered `runsc-cfc` runtime, or a `runsc` binary the
   harness invokes directly. `--sandbox-runtime` names one. Where nothing does,
   macOS runs the direct driver from its native cfc-vm store, and every other
-  platform runs Docker; see [Sandbox runtimes](#sandbox-runtimes)
+  platform runs Docker, except through the Loom local host, which refuses a run
+  that names none; see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions on the direct driver: a long-lived container that later
   calls execute in, offered to the model only where the run's sandbox has
   sessions and its CFC enforcement mode allows them
@@ -1001,8 +1002,9 @@ read the environment variables alone. The console refuses the three selection
 flags, `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy`, and
 reads their variables alone.
 
-Where neither the flag nor the variable names a runtime, the platform decides,
-and the choice is never a fallback from one driver to the other:
+Where neither the flag nor the variable names a runtime, the entrypoint's
+platform decides, except on the Loom local host, and the choice is never a
+fallback from one driver to the other:
 
 - **On macOS** the run uses the direct driver with the native runtime: the
   `runsc` shim, the rootfs image and the VM of the cfc-vm store that gVisor's

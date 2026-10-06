@@ -27,17 +27,18 @@ The runtime has four main boundaries:
 3. Most tool execution runs in a gVisor sandbox through one of two drivers: one
    drives Docker with a configurable Docker-registered runtime, normally
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
-   A run names one, and where it names none macOS takes the direct driver and
-   every other platform takes Docker. [Sandbox runtimes](#sandbox-runtimes)
-   describes both. The browser child is a constrained host-adjacent profile
-   whose typed `browser` tool the harness sends to a browser host attached to
-   the run, such as the Weaver, or else binds to a leased local CDP endpoint
-   itself. The optional `run_pattern` tool is a distinct trusted-host path whose
-   Fabric identity stays outside the sandbox. It runs pieces in the configured
-   space and admits input references from that space or foreign DIDs the
-   operator lists with their hosts. The agent result writer is a second such
-   path, invoked by a host caller rather than by the model, writing a run's
-   structured result into the configured space.
+   A run names one. Where it names none, macOS takes the direct driver and every
+   other platform takes Docker, except through the Loom local host, which
+   refuses the run. [Sandbox runtimes](#sandbox-runtimes) describes both. The
+   browser child is a constrained host-adjacent profile whose typed `browser`
+   tool the harness sends to a browser host attached to the run, such as the
+   Weaver, or else binds to a leased local CDP endpoint itself. The optional
+   `run_pattern` tool is a distinct trusted-host path whose Fabric identity
+   stays outside the sandbox. It runs pieces in the configured space and admits
+   input references from that space or foreign DIDs the operator lists with
+   their hosts. The agent result writer is a second such path, invoked by a host
+   caller rather than by the model, writing a run's structured result into the
+   configured space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child

@@ -141,8 +141,9 @@ advertised capability as dependency readiness.
   with no Docker and with a configurable rootfs, CFC policy, and binary. A run
   names its driver; where it names none, macOS takes the direct driver over its
   native cfc-vm store, refusing where that is not set up, and every other
-  platform takes Docker. [Sandbox runtimes](CURRENT_STATE.md#sandbox-runtimes)
-  describes both.
+  platform takes Docker, except that the Loom local host refuses a run that
+  names none. [Sandbox runtimes](CURRENT_STATE.md#sandbox-runtimes) describes
+  both.
 - CFC authority: Common Fabric runner/runtime evidence and trusted sandbox
   sidecars. Harness-local policy logic is conservative transport/enforcement,
   not the source of label meaning.
