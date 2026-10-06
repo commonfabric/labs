@@ -60,7 +60,7 @@ describe("protected initialization", () => {
     const cell = runtime.getCell(signer.did(), "argument", undefined, tx);
     cell.set(value);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
 
   it("persists a new default's policy and refuses a later plain-schema write", async () => {
@@ -73,14 +73,14 @@ describe("protected initialization", () => {
     }, { guarded: [], note: "saved" });
     cell.set({ guarded: [], note: "saved" });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const attack = runtime.edit();
     expect(readStoredCfcMetadata(attack, link)).toBeDefined();
     runtime.getCell(signer.did(), "argument", undefined, attack).key("guarded")
       .set(["other"]);
     runtime.prepareTxForCommit(attack);
-    expect((await attack.commit()).error?.message).toContain(
+    expect((await attack.commit().settled).error?.message).toContain(
       "writeAuthorizedBy",
     );
     expect(runtime.getCell(signer.did(), "argument").get()).toEqual({
@@ -103,7 +103,7 @@ describe("protected initialization", () => {
     const result = runtime.getCell(signer.did(), "seed-result", undefined, tx);
     result.set({ name: seed });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain(
+    expect((await tx.commit().settled).error?.message).toContain(
       "ownerPrincipal mismatch",
     );
     expect(runtime.getCell(signer.did(), "foreign-owner-seed").getRaw())
@@ -160,7 +160,7 @@ describe("protected initialization", () => {
       guarded: backing,
     });
     runtime.prepareTxForCommit(setup);
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
 
     const referenceSetup = runtime.edit();
     const reference = runtime.getCell(
@@ -172,7 +172,7 @@ describe("protected initialization", () => {
     const address = reference.getAsNormalizedFullLink();
     referenceSetup.writeValueOrThrow(address, backing.getAsLink());
     runtime.prepareTxForCommit(referenceSetup);
-    expect((await referenceSetup.commit()).error).toBeUndefined();
+    expect((await referenceSetup.commit().settled).error).toBeUndefined();
 
     const rerun = runtime.edit();
     expect(readStoredCfcMetadata(rerun, address)).toBeUndefined();
@@ -194,7 +194,7 @@ describe("protected initialization", () => {
       "new result",
     );
     runtime.prepareTxForCommit(rerun);
-    expect((await rerun.commit()).error?.message).toContain(
+    expect((await rerun.commit().settled).error?.message).toContain(
       "writeAuthorizedBy",
     );
     const inspect = runtime.edit();
@@ -223,7 +223,7 @@ describe("protected initialization", () => {
     const address = reference.getAsNormalizedFullLink();
     setup.writeValueOrThrow(address, backing.getAsLink());
     runtime.prepareTxForCommit(setup);
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
     expect(runtime.getCell(signer.did(), "absent-backing").getRaw())
       .toBeUndefined();
 
@@ -238,7 +238,7 @@ describe("protected initialization", () => {
       schemaRole: "output",
     });
     runtime.prepareTxForCommit(rerun);
-    expect((await rerun.commit()).error).toBeUndefined();
+    expect((await rerun.commit().settled).error).toBeUndefined();
     expect(runtime.getCell(signer.did(), "absent-backing").getRaw()).toEqual(
       [],
     );
@@ -261,7 +261,9 @@ describe("protected initialization", () => {
     );
     cell.set({ guarded: [] });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("rejects the public seed-provenance marker as initialization authority", async () => {
@@ -276,7 +278,9 @@ describe("protected initialization", () => {
     });
     cell.set({ guarded: [] });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   for (const initial of ["saved", null, undefined, []]) {
@@ -293,7 +297,9 @@ describe("protected initialization", () => {
       }, runtimeWritePolicyAuthorization);
       cell.set({ guarded: [] });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+      expect((await tx.commit().settled).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
     });
   }
 
@@ -309,7 +315,9 @@ describe("protected initialization", () => {
     });
     cell.set({ guarded: [] });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("does not infer absence from an undefined previous value without a presence flag", async () => {
@@ -329,7 +337,9 @@ describe("protected initialization", () => {
         detail
       );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("rejects an overwrite after a permitted initialization in the same transaction", async () => {
@@ -347,7 +357,9 @@ describe("protected initialization", () => {
     cell.set({ guarded: [] });
     cell.key("guarded").set(["changed"]);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("rejects deleting and recreating an existing field in one transaction", async () => {
@@ -366,7 +378,9 @@ describe("protected initialization", () => {
     );
     cell.set({ guarded: [] });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("rejects replacing an ancestor before recreating a protected child", async () => {
@@ -380,7 +394,9 @@ describe("protected initialization", () => {
     }, { guarded: [] });
     cell.key("guarded").set([]);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("rejects an ancestor overwrite after initializing a protected child", async () => {
@@ -394,7 +410,9 @@ describe("protected initialization", () => {
     cell.key("guarded").set([]);
     tx.writeValueOrThrow(link, { guarded: ["changed"] });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("retains the owner gate during initialization", async () => {
@@ -412,7 +430,7 @@ describe("protected initialization", () => {
     );
     cell.set({ guarded: [] });
     tx.prepareCfc();
-    expect((await tx.commit()).error?.message).toContain(
+    expect((await tx.commit().settled).error?.message).toContain(
       "ownerPrincipal mismatch",
     );
   });
@@ -464,7 +482,9 @@ describe("protected initialization", () => {
       );
       cell.set(next);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+      expect((await tx.commit().settled).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
     });
   }
 });

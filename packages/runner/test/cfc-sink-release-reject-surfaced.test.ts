@@ -158,7 +158,7 @@ describe("CFC sink-release reject surfacing", () => {
           }))
           : undefined;
 
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await tx.postCommitEffectsSettled();
         expect(dispatched).toBe(refused ? 0 : 1);
         expect(released).toBe(refused ? 1 : 0);

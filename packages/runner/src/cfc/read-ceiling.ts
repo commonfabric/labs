@@ -164,20 +164,21 @@ export function assertCfcReadCeiling(
   const linkProbe = isLinkResolutionProbe(options?.meta);
   if (
     ceiling === undefined ||
-    (address.path.length > 0 && address.path[0] !== "value") ||
     isInternalVerifierRead(options?.meta) ||
     isDereferenceResolutionProbe(options?.meta) ||
     (linkProbe && isMachineryRead(options?.meta)) ||
     isWriteDestinationRead(options?.meta) ||
     isSchedulerDependencyRead(options?.meta)
   ) return;
-  const metadata = readStoredCfcLabelsForReader(tx, address);
-  // A read addresses the stored document, so its path is rooted there.
+  // A read addresses the stored document, so its path is rooted there. A read
+  // of one of the document's own members observes no payload, so no payload
+  // label limits it.
   const documentPath = toDocumentPath(address.path);
-  let entries = cfcLabelViewFromMetadata(
-    metadata,
-    canonicalizeDocumentPath(documentPath),
-  )?.entries ?? [];
+  const payloadPath = canonicalizeDocumentPath(documentPath);
+  if (payloadPath === undefined) return;
+  const metadata = readStoredCfcLabelsForReader(tx, address);
+  let entries = cfcLabelViewFromMetadata(metadata, payloadPath)?.entries ??
+    [];
   if (linkProbe) {
     entries = entries.filter((entry) => readConsumesEntry("followRef", entry));
   } else if (documentPath.at(-1) === "length") {
@@ -189,10 +190,11 @@ export function assertCfcReadCeiling(
       meta: internalVerifierRead,
       nonRecursive: true,
     });
-    if (Array.isArray(parent)) {
+    const parentPayloadPath = canonicalizeDocumentPath(parentPath);
+    if (Array.isArray(parent) && parentPayloadPath !== undefined) {
       const parentEntries = cfcLabelViewFromMetadata(
         metadata,
-        canonicalizeDocumentPath(parentPath),
+        parentPayloadPath,
       )?.entries ?? [];
       const membershipEntries = parentEntries.filter((entry) =>
         entry.path.length === 0 && readConsumesEntry("shape", entry)

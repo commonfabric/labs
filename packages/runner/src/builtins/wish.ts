@@ -19,8 +19,8 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
-// commit can be withdrawn AFTER commit() resolves — runner.ts's pattern-swap
-// settlement precedent) so a withdrawn one-shot is at least named.
+// contribution can be withdrawn after `commit().settled` resolves — the
+// pattern-swap settlement precedent in runner.ts) so a withdrawn one-shot is at least named.
 import { waveSettlementOf } from "../executor/wave.ts";
 import {
   type CellScope,
@@ -60,6 +60,7 @@ import {
 import { scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
+  DocumentLoadError,
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
@@ -288,6 +289,10 @@ export function tagMatchesHashtag(
 type WishContext = {
   runtime: Runtime;
   readiness: ReturnType<typeof createDocumentReadiness>;
+
+  /** Candidate load failures encountered during this resolution. */
+  candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -644,9 +649,28 @@ function formatTarget(parsed: ParsedWishTarget): string {
     (parsed.path.length > 0 ? "/" + parsed.path.join("/") : "");
 }
 
-/**
- * Search favorites in home space for pieces matching a hashtag.
- */
+/** Checks a discovery candidate, retaining load failures for an empty search. */
+function requireDiscoveryCandidate(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (!(error instanceof DocumentLoadError)) throw error;
+    ctx.candidateFailures.set(cell, error);
+    return false;
+  }
+}
+
+/** Reports a candidate load failure when no readable match remains. */
+function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
+  const failure = ctx.candidateFailures.values().next().value;
+  if (failure) throw failure;
+  throw new WishError(message);
+}
+
+/** Searches favorites in home space for pieces matching a hashtag. */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
@@ -692,7 +716,7 @@ function searchFavoritesForHashtag(
     () =>
       matches.flatMap((match) => {
         const cell = match.cell.resolveAsCell();
-        return ctx.readiness.requireDocument(cell, ctx.tx)
+        return requireDiscoveryCandidate(cell, ctx)
           ? [{ cell, pathPrefix }]
           : [];
       }),
@@ -736,6 +760,8 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
+        const resolved = pieceCell.resolveAsCell();
+        if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",
@@ -836,9 +862,13 @@ function searchProfileForHashtag(
     "profile-elements-result-map",
     queryKey,
     () =>
-      matches.flatMap((match) =>
-        match.cell ? [{ cell: match.cell, pathPrefix }] : []
-      ),
+      matches.flatMap((match) => {
+        if (!match.cell) return [];
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -910,10 +940,39 @@ function searchByHashtag(
       parts.push(`${arbitraryDIDs.length} space(s)`);
     }
     const scopeDesc = parts.join(" or ") || "favorites";
-    throw new WishError(`No ${scopeDesc} found matching "${searchTerm}"`);
+    throwNoDiscoveryMatch(
+      ctx,
+      `No ${scopeDesc} found matching "${searchTerm}"`,
+    );
   }
 
   return allMatches;
+}
+
+/**
+ * Throws a `WishError` naming the remedies when the home pattern in
+ * `homeSpaceCell` holds nothing at `field`, which it names to the user as
+ * `what`. The system home pattern gains a field its current source adds only
+ * when the home space is next opened, since nothing updates a piece nobody
+ * opens, so a home set up before the field existed lacks it until then. A
+ * custom home pattern follows no source of the system's, and holds the field
+ * only if it says so. The wish does not open the home itself.
+ */
+function requireHomeField(
+  homeSpaceCell: Cell<unknown>,
+  field: string,
+  what: string,
+  ctx: WishContext,
+): void {
+  const held = resolvePath(homeSpaceCell, ["defaultPattern", field], ctx);
+  if (held.getRaw() === undefined) {
+    throw new WishError(
+      `The home space holds no ${what}. If its home pattern is the system ` +
+        `one, set up before it had one, open the home space once, which ` +
+        `brings it up to date. A custom home pattern needs to hold the ` +
+        `${what} itself.`,
+    );
+  }
 }
 
 /**
@@ -950,16 +1009,19 @@ function resolveHomeSpaceTarget(
 
       const match = favorites.find((entry) => {
         const userTags = entry.userTags ?? [];
-        for (const t of userTags) {
-          if (t.toLowerCase().includes(searchTerm)) return true;
-        }
-
         // Match the discovery tags snapshotted when favorited.
-        return (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        const tagged = userTags.some((t) =>
+          t.toLowerCase().includes(searchTerm)
+        ) || (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        return tagged &&
+          requireDiscoveryCandidate(entry.cell.resolveAsCell(), ctx);
       });
 
       if (!match) {
-        throw new WishError(`No favorite found matching "${searchTerm}"`);
+        throwNoDiscoveryMatch(
+          ctx,
+          `No favorite found matching "${searchTerm}"`,
+        );
       }
 
       return [{
@@ -1017,8 +1079,10 @@ function resolveHomeSpaceTarget(
           "User identity DID not available for #chatManager",
         );
       }
+      const homeSpaceCell = getHomeSpaceCell(ctx);
+      requireHomeField(homeSpaceCell, "chatManager", "chat manager", ctx);
       return [{
-        cell: getHomeSpaceCell(ctx),
+        cell: homeSpaceCell,
         pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
@@ -1515,7 +1579,7 @@ function resolveBase(
 
     throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
   } finally {
-    ctx.readiness.requireLoadedReads(ctx.tx);
+    ctx.readiness.requireLoadedReads(ctx.tx, ctx.candidateFailures.keys());
   }
 }
 
@@ -1585,6 +1649,7 @@ function createSharedHashtagResolver(
     const sharedContext: WishContext = {
       runtime: ctx.runtime,
       readiness,
+      candidateFailures: new Map(),
       tx,
       parentCell: ctx.parentCell,
       scope: sharedScope,
@@ -2432,7 +2497,7 @@ export function wish(
       >[1],
     );
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     if (error === undefined) return;
     if (
       attempt < 2 &&
@@ -2590,7 +2655,7 @@ export function wish(
       sidecarError: message,
     });
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     // The account of the failure failed to land, so the surface stays blank
     // and this is the only place the reason exists. Writing it again would
     // meet whatever refused it the first time.
@@ -2675,7 +2740,7 @@ export function wish(
           sidecarRunOptions(surface),
         );
         runtime.prepareTxForCommit(runTx);
-        const { error } = await runTx.commit();
+        const { error } = await runTx.commit().settled;
         if (error) {
           const disposition = await sidecarRunFailureDisposition(
             error,
@@ -2693,7 +2758,8 @@ export function wish(
           );
           return;
         }
-        // Under a serving wave, commit() resolving ok is not durability:
+        // Under a serving wave, `commit().settled` resolving `ok` accepts
+        // the contribution into the wave:
         // the commit step can still withdraw the contribution (runner.ts's
         // pattern-swap settlement precedent). Nothing re-issues a withdrawn
         // sidecar instantiation, so at least SAY so — the silent one-shot
@@ -2845,7 +2911,7 @@ export function wish(
               });
               readyCell.withTx(readyTx).set(true);
               runtime.prepareTxForCommit(readyTx);
-              trackSidecarLaunch(readyTx.commit());
+              trackSidecarLaunch(readyTx.commit().settled);
             }
             return runSidecarInOwnTx(
               slot.resultCell,
@@ -3111,6 +3177,7 @@ export function wish(
           const ctx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3422,6 +3489,7 @@ export function wish(
           const suggestionCtx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,

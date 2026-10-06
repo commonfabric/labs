@@ -40,6 +40,7 @@ import {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
+import { COMPILE_CACHE_WRITER } from "./writer-identity.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("cell-cache");
@@ -1007,7 +1008,7 @@ function withCompileCacheBuiltin<T>(
   const priorIdentity = tx.getCfcState().implementationIdentity;
   setCfcImplementationIdentity(tx, {
     kind: "builtin",
-    builtinId: "compile-cache",
+    builtinId: COMPILE_CACHE_WRITER,
   });
   try {
     return action();

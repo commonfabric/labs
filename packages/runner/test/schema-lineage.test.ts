@@ -34,7 +34,7 @@ describe("Schema Lineage", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -281,7 +281,7 @@ describe("Schema propagation end-to-end example", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

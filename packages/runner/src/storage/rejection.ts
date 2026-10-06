@@ -1,7 +1,12 @@
 /**
- * Permanent rejections are commit-time precondition failures (spec
- * scheduler-v2 §7.6): retrying can never succeed and MUST not happen —
- * for `receipt-exists` a retry would double-handle an event.
+ * Permanent rejections are the commit-time precondition failures the engine
+ * reports as `PreconditionFailedError` (spec scheduler-v2 §7.6): a failed
+ * `origin-committed` precondition, of kind `origin-committed`, and a failed
+ * `entity-absent` precondition, of kind `receipt-exists`, which is also how a
+ * create-only mark fails, since the commit sends each mark as one. Retrying
+ * can never succeed and MUST not happen — for `receipt-exists` a retry would
+ * double-handle an event. A failed `entity-value-hash` precondition is a
+ * `ConflictError` instead, and is not one of these.
  */
 export function isPermanentRejection(
   error: { name?: string } | undefined | null,
@@ -134,9 +139,12 @@ export function isConflictRejection(
  *
  * - `pending dependency not resolved: <localSeq>` — this session's own
  *   earlier commit is unresolved; that commit's fate decides, not a read.
- * - `entity-value-hash precondition target changed: <id>` — a commit
- *   PRECONDITION (the create-only / value-hash class) failed on the
- *   committed data's own merits; re-running double-handles.
+ * - `entity-value-hash precondition target changed: <id>` — a value pin
+ *   the commit carried no longer holds. That is a stale basis for the
+ *   transaction that took the pin, which converges by running again and
+ *   pinning the new value, as an event handler's commit does under
+ *   {@link isConflictRejection}; it is not a read whose catch-up repairs
+ *   the commit as it stands.
  *
  * Beyond the engine, `ConflictError`s are also CLIENT-FABRICATED
  * (storage/v2.ts `makeLocalRejection`) with verbatim caller messages —

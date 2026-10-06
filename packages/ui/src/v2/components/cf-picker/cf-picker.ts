@@ -395,23 +395,25 @@ export class CFPicker extends BaseElement {
   // Selection methods
   //
 
-  private _selectPrevious = (): void => {
-    const items = this._getItems();
-    if (this.disabled || !items.length) return;
-    const len = items.length;
-    this._selectIndex(
-      this._currentIndex <= 0 ? len - 1 : this._currentIndex - 1,
-    );
-  };
+  private _selectPrevious = (): void => this._step(-1);
 
-  private _selectNext = (): void => {
-    const items = this._getItems();
-    if (this.disabled || !items.length) return;
-    const len = items.length;
-    this._selectIndex(
-      this._currentIndex >= len - 1 ? 0 : this._currentIndex + 1,
-    );
-  };
+  private _selectNext = (): void => this._step(1);
+
+  /**
+   * Moves the selection `by` one place, wrapping at either end. The place it
+   * moves from is what the cell holds, so the cell controller computes it,
+   * asking the worker first where it has read nothing.
+   */
+  private _step(by: 1 | -1): void {
+    const len = this._getItems().length;
+    if (this.disabled || !len) return;
+    void this._indexCellController.updateValue((held) =>
+      ((held ?? 0) + by + len) % len
+    ).then(() => {
+      this._updateAriaAttributes();
+      this.requestUpdate();
+    });
+  }
 
   private _selectIndex(index: number): void {
     const len = this._getItems().length;

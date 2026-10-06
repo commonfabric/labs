@@ -102,12 +102,13 @@ for measured transactions, exclusions, and settlement behavior.
 `--cfc-enforcement-mode <disabled|observe|enforce-explicit|enforce-strict>`.
 `derive` is an alias for the runtime's `observe` flow mode: compute the join
 without persisting derived labels. `--cfc-shell-posture` selects
-`enforce-explicit` and `persist`, the shell's two CFC dial defaults. It
-conflicts with either individual dial, in either argument order. The shorthand
-changes these two dials only; it does not simulate the browser or enable every
-CFC gate. An omitted dial retains the pattern-test preset (enforcement
-`enforce-explicit`, flow labels `off`). Every runtime prints its resolved
-posture, including each multi-user participant. Programmatic callers use
+`enforce-explicit` and `persist`, which is laxer than the shell's current
+`enforce-strict` posture. It conflicts with either individual dial, in either
+argument order. The shorthand changes these two dials only; it does not simulate
+the browser or enable every CFC gate. An omitted dial retains the pattern-test
+preset, which inherits the runtime defaults (enforcement `enforce-strict`, flow
+labels `persist`). Every runtime prints its resolved posture, including each
+multi-user participant. Programmatic callers use
 `TestRunnerOptions.cfcFlowLabels` with the runtime names `off`, `observe`, or
 `persist`.
 
@@ -1223,8 +1224,10 @@ vocabulary and live run ids from the home queue.
 
 `cf agent` groups the commands over agent requests, and prints its help when
 given no subcommand. `cf agent runner` is the per-user process that runs agent
-requests. A pattern's `agent()` call becomes an `AgentRun` record in the
-requesting space, listed in the requester's home-space agent queue
+requests through independent local and Fabric lanes. The local lane serves a
+host-owned Unix socket; `--local-only` needs neither an identity nor a toolshed
+connection. On the Fabric lane, a pattern's `agent()` call becomes an `AgentRun`
+record in the requesting space, listed in the requester's home-space agent queue
 (`wish '#agent_queue'`,
 [`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md#agent-queue)). The
 runner holds the requester's identity, sits on the machine where their Loom
@@ -1248,13 +1251,18 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                                               |
 | `--work-root`               | Where run workspaces and artifacts go. Defaults to `$CF_HARNESS_HOME/agent-runs`, falling back to `$HOME/.cf-harness/agent-runs`. |
 | `--model`                   | The model name passed to `cf-harness`.                                                                                            |
+| `--local-jobs-socket`       | Serve local jobs on this Unix socket (see [Local jobs](#local-jobs)). Off unless named.                                           |
+| `--local-job-profiles`      | The host-owned JSON file naming the profiles local jobs run under. Required with `--local-jobs-socket`.                           |
+| `--local-jobs-store`        | The local job store. Defaults to `jobs.sqlite` beside the socket.                                                                 |
+| `--max-concurrent-local`    | How many local jobs run at once, beside and apart from `--max-concurrent`. Defaults to 2.                                         |
+| `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
 The model provider is the one `cf-harness` is configured with under its harness
-home directory. The runner uses the `context` prompt role, so the default
+home directory. The Fabric lane uses the `context` prompt role, so the default
 `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
-What the runner does, in order:
+What the Fabric lane does, in order:
 
 1. Connects to the home toolshed as the identity, creates the home pattern if
    the home space has none, and writes the queue's `agentRunner` entry
@@ -1280,7 +1288,8 @@ What the runner does, in order:
 | ----------------------------------------------------- | ---------------------------- |
 | produced a result the writer wrote                    | `completed`                  |
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
-| failed in the model, a tool, or its result            | `failed`, `PROVIDER_FAILURE` |
+| finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
+| failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
@@ -1296,6 +1305,56 @@ records, the runner opens and reuses one storage-only runtime for each distinct
 record host without changing the process's deployment settings. The runner and
 inspection commands share this connection path. The runner is the one command
 that the next section's rule does not bound to a single deployment.
+
+### Local jobs
+
+With `--local-jobs-socket` and `--local-job-profiles`, the runner also runs
+local jobs: work a local caller hands it directly, which never enters the
+fabric. It serves them first and on its own, so they run whether or not the
+Fabric lane starts; a Fabric lane that fails to start is reported and leaves the
+local jobs served. With `--local-only` there is no Fabric lane.
+
+The service exclusively locks both its socket and store for its lifetime. An
+active listener is refused; a socket whose listener is gone is reclaimed.
+Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
+the kernel releases ownership on shutdown or crash. Startup cleanup aborts
+active runs and waits for them to settle, closes the store and listener, and
+removes its token. Active job rows remain `running`; the next start recovers
+them as `interrupted` with `RUNNER_RESTARTED`. Requests receive 503 until
+initialization completes.
+
+The door is HTTP on the Unix socket, mode 0600, with a bearer token in
+`<socket>.token`, also 0600 and minted at each start: reaching the socket is the
+authority. A caller enqueues
+`{caller, profile, idempotencyKey, task,
+instructions?, context?, resultSchema, tools?, maxModelTurns?}`
+with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
+`GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
+with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
+ends after the job's terminal state. `GET /health` says which lanes run.
+
+A profile, named in the host's file, is the authority a job runs with: its
+tools, its host Loom files, its model-turn cap, and the prompt-slot role its
+task binds as. A request may name fewer tools and fewer turns, and nothing else.
+A job runs through the same `cf-harness` path as an agent run, with no fabric
+session, and reports a `step` event for each tool its loop calls and a `command`
+event for each command the host ran for it.
+
+Each `command` event carries `{command, ok, outputs?}`. A refused command also
+carries the outcome's `code` and `hostCode` when present, and `error` from an
+admitted host answer, limited to 500 characters. An answer withheld by CFC
+contributes no reason text or outputs. The job snapshot's `commands` array holds
+these same bodies in execution order.
+
+The lane binds each harness invocation to the stored job's `id`. A host command
+configuration may name `jobIdEnvVar`; command discovery and execution then
+receive that job id in the named variable of their cleared host environment. The
+request and model tool arguments cannot select the identity, and concurrent jobs
+have separate bindings.
+
+A job the runner was running when it stopped or crashed ends `interrupted`
+(`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
+have changed things.
 
 ## One deployment per process
 

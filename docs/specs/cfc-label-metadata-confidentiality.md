@@ -119,19 +119,20 @@ fail-closed direction (a release that cannot be evaluated does not happen).
 ## 3. The read side: label metadata becomes an observation
 
 Representation limits what B's replicas contain; inv-12 additionally requires
-that *observing* label metadata is itself a labeled observation. Today the
-read side has no channel at all: `["cfc"]` reads are excluded from flow/PC
-(`flowReadExcluded`), runtime reads go through `INTERNAL_VERIFIER_META`, and
-one **raw unredacted IPC seam is open** — `handleCellGet` with `meta: "cfc"`
-returns the raw envelope (`runtime-processor.ts` `getMetaRaw`; zero live
-callers). SC-6 records the exclusion as "a profile decision that must be
-revisited when invariant 12 is implemented." This is that revisit:
+that *observing* label metadata is itself a labeled observation. Today the read
+side has no channel at all: a `["cfc"]` read names no payload path, so flow/PC
+never counts it (`canonicalizeDocumentPath`), runtime reads go through
+`INTERNAL_VERIFIER_META`, and one **raw unredacted IPC seam is open** —
+`handleCellGet` with `meta: "cfc"` returns the raw envelope
+(`runtime-processor.ts` `getMetaRaw`; zero live callers). SC-6 records the
+exclusion as "a profile decision that must be revisited when invariant 12 is
+implemented." This is that revisit:
 
 1. **Close the raw seam.** `meta: "cfc"` over IPC either returns the same
    redacted view as `getCfcLabel` or is removed (no callers today — remove).
-2. **`inspectConfLabel` and `principalOf` are the only pattern-facing
-   surfaces**, both reading inside the observing transaction and taking their
-   target as a cell. `inspectConfLabel` is implemented per
+2. **`inspectConfLabel`, `principalOf` and `principalsOf` are the only
+   pattern-facing surfaces**, all reading inside the observing transaction and
+   taking their target as a cell. `inspectConfLabel` is implemented per
    §4.6.4.1: equality predicates only; result is a runtime-labeled value
    whose label joins the consumed metadata observations + query-input
    confidentiality + PC; `notAvailable` normalization for unobservable /
@@ -258,9 +259,9 @@ consumes inbound views, redacting the outbound copies is safe.
   pattern-facing surfaces are the `inspectConfLabel` BUILTIN
   (`runner/src/builtins/inspect-conf-label.ts`, exposed as
   `commonfabric.inspectConfLabel`), whose node runs inside the observing
-  transaction, and `principalOf`, a plain function
-  (`runner/src/builder/principal-of.ts`) that reads through the calling
-  handler's or computation's own transaction; both take their target as a
+  transaction, and `principalOf` and `principalsOf`, plain functions
+  (`runner/src/builder/principal-of.ts`) that read through the calling
+  handler's or computation's own transaction; all take their target as a
   cell, so inspecting a label never reads the labeled payload; the display
   path (`getCfcLabel`) is untouched.
   Consumption is a `labelMetadata` observation class beside
@@ -338,7 +339,8 @@ keep-source-intact scope comment (`cfc/label-view-core.ts`), the three IPC
 redaction sites + the open `meta:"cfc"` raw seam
 (`runtime-client/src/backends/runtime-processor.ts`), sigil label views
 (`cfc/link-label-view.ts`, `cell.ts` `convertCellsToLinks`),
-`flowReadExcluded` + S18 write guard (`cfc/prepare.ts`),
+`canonicalizeDocumentPath` (`cfc/canonical.ts`) + S18 write guard
+(`cfc/prepare.ts`),
 `CFC_LABEL_READ_FAILED_ATOM` ungrantable marker (`cfc/observation.ts`),
 digest idiom (`cfc/canonical.ts`, `UserSurfaceInput.valueDigest` et al.),
 session partitioning (`memory/v2/session-open-auth.ts`), ACL point query

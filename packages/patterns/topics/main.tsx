@@ -39,6 +39,7 @@ import Topic, {
   type TopicCrossrefRow,
   type TopicMentionable,
   type TopicMentionSource,
+  TOPICS_SCREEN_STYLE,
   TOPICS_THEME,
   type TopicSummary,
   whenLabel,
@@ -745,7 +746,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     [NAME]: `Topics (${topicCount})`,
     [UI]: (
       <cf-theme theme={TOPICS_THEME}>
-        <cf-screen>
+        <cf-screen style={TOPICS_SCREEN_STYLE}>
           <cf-vstack slot="header" gap="2" padding="4">
             <cf-hstack justify="between" align="center">
               <cf-vstack gap="0">

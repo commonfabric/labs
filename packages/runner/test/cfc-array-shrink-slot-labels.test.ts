@@ -66,7 +66,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -125,7 +125,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     const el1 = runtime.getCell(space, "shrink-el-1", undefined, setup);
     const listCell = runtime.getCell(space, "shrink-list", listSchema, setup);
     listCell.set([el0, el1]);
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const listId = listCell.getAsNormalizedFullLink().id;
     // Precondition: both slots carry their element's link label.
@@ -137,7 +137,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     const shrinkTx = runtime.edit();
     const lc = runtime.getCell(space, "shrink-list", listSchema, shrinkTx);
     lc.set([el0]);
-    expect((await shrinkTx.commit()).ok).toBeDefined();
+    expect((await shrinkTx.commit().settled).ok).toBeDefined();
 
     expect(linkConfidentialityAt(listId, "0")).toEqual(["alice-secret"]);
     // The truncated slot's stale entry is the echo carrier — it must go.
@@ -150,7 +150,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     el2.get(); // a content read: carol joins the growing tx's flow join
     const lc2 = runtime.getCell(space, "shrink-list", listSchema, growTx);
     lc2.set([el0, el2]);
-    expect((await growTx.commit()).ok).toBeDefined();
+    expect((await growTx.commit().settled).ok).toBeDefined();
 
     expect(linkConfidentialityAt(listId, "1")).toEqual(["carol-secret"]);
 

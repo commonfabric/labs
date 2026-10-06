@@ -98,7 +98,7 @@ describe("setup-argument-projection", () => {
     const seed = runtime.edit();
     runtime.getCell(space, board, undefined, seed).set({ note: "saved" });
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const first = runtime.edit();
     first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
@@ -113,7 +113,7 @@ describe("setup-argument-projection", () => {
     );
     cell.set({ items: [], note: "saved" });
     runtime.prepareTxForCommit(first);
-    expect((await first.commit()).error).toBeUndefined();
+    expect((await first.commit().settled).error).toBeUndefined();
   }
 
   /** A write redirect to the owner's list on `board`, as a binding is passed. */
@@ -153,7 +153,7 @@ describe("setup-argument-projection", () => {
   /** Prepares and commits `tx`, and returns the refusal, if any. */
   async function commit(tx: IExtendedStorageTransaction) {
     runtime.prepareTxForCommit(tx);
-    return (await tx.commit()).error?.message;
+    return (await tx.commit().settled).error?.message;
   }
 
   /** The owner's list on `board`, read outside any transaction under test. */

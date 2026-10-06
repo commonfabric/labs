@@ -362,7 +362,7 @@ describe("spaceAccess()", () => {
         tx,
       );
       link.set(runtime.getCell<unknown>(space, "space-access target"));
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callIn(runtime, runtime.edit(), { frameSpace: home, target: link }),
@@ -386,7 +386,7 @@ describe("spaceAccess()", () => {
         tx,
       );
       link.set(runtime.getCell<unknown>(space, "space-access target"));
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       expect(
         callIn(runtime, runtime.edit(), {
@@ -588,7 +588,7 @@ describe("spaceAccess()", () => {
       );
       const target = runtime.getCell<unknown>(space, "space-access target");
       const result = runtime.run(tx, levelPattern, { target }, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       return result as Cell<{ level?: string; derived?: string }>;
     }
 
@@ -828,7 +828,7 @@ describe("spaceAccess()", () => {
           (runtime.run(tx, notePattern, { target }, resultCell) as Cell<
             { note?: string }
           >).key("note");
-        await tx.commit();
+        await tx.commit().settled;
         await waitForCellValue(runtime, note, (v) => v === "unread", {
           stuckLabel: "dave's note to arrive as `unread`",
         });
@@ -1001,12 +1001,12 @@ describe("spaceAccess()", () => {
       {
         const tx = aliceRuntime.edit();
         argument.withTx(tx).set({ anchor: "here" });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = aliceRuntime.edit();
         aliceRuntime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await aliceRuntime.idle();
       await aliceRuntime.storageManager.synced();

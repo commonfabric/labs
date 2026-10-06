@@ -29,6 +29,7 @@ import {
 import type { HarnessDocumentReferentDraft } from "../contracts/handle-table.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
 import {
+  LOOM_PAGE_DISCOVERY_KINDS,
   type LoomCalendarListInput,
   type LoomContextInput,
   type LoomPageDiscoverInput,
@@ -307,9 +308,11 @@ const HANDLE_SIZE_STAND_IN = "cfh:v:22222";
  * measured in order, and an entry is added only while the serialized result
  * — the `reserved` size of everything beside the entries, the entries so
  * far, and this entry — stays within the output bound; the rows left out are
- * counted rather than carried.
+ * counted rather than carried. Every tool that shows the model Loom data
+ * measures it here, a host command's answer as one row, so one label rule
+ * covers all of it.
  */
-const measureRows = async (
+export const measureLoomRows = async (
   rows: readonly JSONValue[],
   ceiling: readonly CfcConfClause[] | undefined,
   queryLabel: IFCLabel | undefined,
@@ -467,7 +470,7 @@ const invoke = async <C extends LoomRetrievalCommand>(
     ...(envelope !== undefined ? { envelope } : {}),
   };
   const mint = context.mintReferentHandle?.bind(context);
-  const measured = await measureRows(
+  const measured = await measureLoomRows(
     split.rows,
     ceiling,
     context.toolInputCfcLabel,
@@ -585,12 +588,17 @@ export const loomPageDiscoverTool: HarnessToolDefinition<
     title: "Loom Page Discover",
     effectClass: "read",
     description:
-      `List the user's canonical Pages, one identity row per Page (kind, page id, title, source path, capabilities). Inspect a Page for the rest. ${MEASUREMENT_NOTE}`,
+      `List the user's canonical project and entity Pages, one identity row per Page (kind, page id, title, source path, capabilities). Filter with all, project (or projects), or entity (or entities); all is the default. This lists Pages in the File Cabinet; looms and their panels are a separate inventory. Inspect a Page for the rest. ${MEASUREMENT_NOTE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        kind: { ...text, description: "Page kind filter; all by default." },
+        kind: {
+          type: "string",
+          enum: [...LOOM_PAGE_DISCOVERY_KINDS],
+          description:
+            "Page kind filter; all by default. projects and entities are plural aliases.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 500 },
       },
     },

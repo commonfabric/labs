@@ -331,7 +331,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         },
       },
     });
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assertEquals(commitResult.ok !== undefined, true);
 
     const confidential = runtime.getCell<string>(
@@ -696,7 +696,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           declassifyConfidentiality: [healthRecordAtom],
           $value: confidential.getAsLink({ includeSchema: true }),
         });
-        const propsCommitResult = await propsTx.commit();
+        const propsCommitResult = await propsTx.commit().settled;
         assertEquals(propsCommitResult.ok !== undefined, true);
 
         const boundaryProps = runtime.getCell(
@@ -971,7 +971,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           maxConfidentiality: [],
           $value: confidential.getAsLink({ includeSchema: true }),
         });
-        const propsCommitResult = await propsTx.commit();
+        const propsCommitResult = await propsTx.commit().settled;
         assertEquals(propsCommitResult.ok !== undefined, true);
 
         const boundaryProps = runtime.getCell(
@@ -1026,7 +1026,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           declassifyConfidentiality: [healthRecordAtom],
           $value: confidential.getAsLink({ includeSchema: true }),
         });
-        const propsCommitResult = await propsTx.commit();
+        const propsCommitResult = await propsTx.commit().settled;
         assertEquals(propsCommitResult.ok !== undefined, true);
 
         const boundaryProps = runtime.getCell(
@@ -2276,7 +2276,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             }),
           ],
         });
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2397,7 +2397,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             children: [],
           }],
         });
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2508,7 +2508,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             children: [],
           }],
         });
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2556,7 +2556,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         requiredIntegrity.set(signedReleaseAtom);
         runtime.prepareTxForCommit(tx);
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2585,7 +2585,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           const updateTx = runtime.edit();
           liveRequiredIntegrity.withTx(updateTx).set(otherReleaseAtom);
           runtime.prepareTxForCommit(updateTx);
-          const updateResult = await updateTx.commit();
+          const updateResult = await updateTx.commit().settled;
           assertEquals(updateResult.ok !== undefined, true);
           await t.settle();
 
@@ -2606,7 +2606,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           const relaxTx = runtime.edit();
           liveRequiredIntegrity.withTx(relaxTx).set(signedReleaseAtom);
           runtime.prepareTxForCommit(relaxTx);
-          const relaxResult = await relaxTx.commit();
+          const relaxResult = await relaxTx.commit().settled;
           assertEquals(relaxResult.ok !== undefined, true);
           await t.settle();
 
@@ -2946,7 +2946,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         },
       },
     });
-    assertEquals((await caveatTx.commit()).ok !== undefined, true);
+    assertEquals((await caveatTx.commit().settled).ok !== undefined, true);
 
     const plainRoot = (child: unknown): WorkerVNode => ({
       type: "vnode",
@@ -3205,7 +3205,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           "Other user's note",
           otherUserDid,
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         // The H3a initial profile shape: acting-user DID string plus the
         // influence-class caveat-kind allow-list.
@@ -3309,7 +3309,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           "Owner's note under another caveat",
           "https://example.test/cfc/concepts/not-a-prompt-caveat",
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         const collector = createOpsCollector();
         const reconciler = new WorkerReconciler({
@@ -3421,7 +3421,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           "Other-space note",
           cfcAtom.space("did:key:z6MkOtherSpaceOutsideRoles"),
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         // The §8.10.6 default display ceiling: acting-user identity + personal
         // space principal forms. The acting user's own space is the one
@@ -3542,7 +3542,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             ],
           },
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         // Marker + caveat under a root ceiling that allow-lists the influence
         // kind: the caveat renders, the marker stays blocked.
@@ -3673,7 +3673,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const markerLabeled = runtime.getCell<string>(
           signer.did(),
           "cfc-render-policy-read-failed",
@@ -3807,7 +3807,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const teamLabeled = runtime.getCell<string>(
           signer.did(),
           "cfc-stage4-team-note",
@@ -3822,7 +3822,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         {
           const seed = runtime.edit();
           plainCell.withTx(seed).set("Plain note");
-          assertEquals((await seed.commit()).ok !== undefined, true);
+          assertEquals((await seed.commit().settled).ok !== undefined, true);
         }
 
         // Start denying (ACL unsynced), then grant + fire the subscription.
@@ -4061,7 +4061,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const sealed = runtime.getCell<string>(
           signer.did(),
           "cfc-policy-of-awaiting-manifest",
@@ -4243,7 +4243,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const sealed = runtime.getCell<string>(
           signer.did(),
           "cfc-policy-of-reactive-ballot",
@@ -4343,7 +4343,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const teamLabeled = runtime.getCell<string>(
           signer.did(),
           "cfc-stage4-root-note",

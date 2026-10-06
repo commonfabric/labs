@@ -108,7 +108,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:writer-root" as URI, scope: "space", path: [] },
       { person: sigil },
     );
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.ok).toBeDefined();
 
     // The same commit materialized the whole closure into the space: the
@@ -160,7 +160,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:reinstall-a" as URI, scope: "space", path: [] },
       { person: sigilA },
     );
-    expect((await first.commit()).ok).toBeDefined();
+    expect((await first.commit().settled).ok).toBeDefined();
 
     // A second transaction referencing the same closure materializes the
     // same documents again. The commit boundary accepts only a first
@@ -171,7 +171,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:reinstall-b" as URI, scope: "space", path: [] },
       { person: sigilB },
     );
-    expect((await second.commit()).ok).toBeDefined();
+    expect((await second.commit().settled).ok).toBeDefined();
 
     // Every stored closure document verifies against its id.
     const rootHash = parseExternalSchemaRef(refA)!.taggedHash;
@@ -214,7 +214,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:elide-a" as URI, scope: "space", path: [] },
       { person: sigilA },
     );
-    expect((await first.commit()).ok).toBeDefined();
+    expect((await first.commit().settled).ok).toBeDefined();
     await writerStorage.synced();
 
     const sigilB = sigilFor(schema);
@@ -227,7 +227,7 @@ describe("schema-doc-writer", () => {
       detail.address.id
     );
     expect(staged.some((id) => id.startsWith("cid:"))).toBe(false);
-    expect((await second.commit()).ok).toBeDefined();
+    expect((await second.commit().settled).ok).toBeDefined();
   });
 
   it("stages for a replica that has not confirmed the closure", async () => {
@@ -245,7 +245,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:restage-a" as URI, scope: "space", path: [] },
       { person: sigilA },
     );
-    expect((await first.commit()).ok).toBeDefined();
+    expect((await first.commit().settled).ok).toBeDefined();
     await writerStorage.synced();
 
     const otherStorage = EmulatedStorageManager.connectTo(server, {
@@ -267,7 +267,7 @@ describe("schema-doc-writer", () => {
         detail.address.id
       );
       expect(staged.some((id) => id.startsWith("cid:"))).toBe(true);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     } finally {
       await other.dispose();
       await otherStorage.close();
@@ -328,7 +328,7 @@ describe("schema-doc-writer", () => {
     const staged = [...tx.getWriteDetails?.(space) ?? []].map((detail) =>
       detail.address.id
     );
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     expect(staged.some((id) => id.startsWith("cid:"))).toBe(true);
 
@@ -410,7 +410,7 @@ describe("schema-doc-writer", () => {
       { address: schemaDocAddress, value: document as never },
       { address: schemaDocAddress, value: document as never },
     ]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const provider = readerStorage.open(space);
     const synced = await provider.sync(`cid:${rootHash}` as URI, {
@@ -502,7 +502,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:unsupplied-root" as URI, scope: "space", path: [] },
       { crafted: handCrafted },
     );
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(materializeLogger.countsByKey[skipKey]?.warn ?? 0).toBe(
       skipsBefore + 1,
     );
@@ -549,7 +549,7 @@ describe("schema-doc-writer", () => {
         },
         { crafted: handCrafted },
       );
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeUndefined();
       expect(materializeLogger.countsByKey[skipKey]?.warn ?? 0).toBe(
         skipsBefore + 1,
@@ -584,7 +584,7 @@ describe("schema-doc-writer", () => {
         { space, id: "of:flag-off-root" as URI, scope: "space", path: [] },
         { person: sigil },
       );
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeUndefined();
       expect(String(result.error?.message)).toContain(
         "neither included in the commit nor stored in the space",
@@ -615,7 +615,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:shared-root-b" as URI, scope: "space", path: [] },
       { person: second },
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
   });
 
   it("scans past a delete while collecting references", async () => {
@@ -624,7 +624,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:doomed-doc" as URI, scope: "space", path: [] },
       { shortLived: true },
     );
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     // A transaction carrying both a delete (a write detail with no value)
     // and a reference-bearing link: the scan passes over the former and
@@ -649,7 +649,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:survivor-root" as URI, scope: "space", path: [] },
       { person: sigil },
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
   });
 
   it("leaves inline-vintage links readable with the flag on", async () => {
@@ -676,7 +676,7 @@ describe("schema-doc-writer", () => {
       { space, id: "of:vintage-root" as URI, scope: "space", path: [] },
       { vintage: inlineSigil },
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const provider = readerStorage.open(space);
     const synced = await provider.sync("of:vintage-root" as URI, {

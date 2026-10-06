@@ -1,0 +1,11 @@
+{
+  "sessionId": "session-1",
+  "turnId": "turn-1",
+  "protocol": {
+    "protocolVersion": 1,
+    "features": [
+      "client_actions",
+      "typed_commands"
+    ]
+  }
+}

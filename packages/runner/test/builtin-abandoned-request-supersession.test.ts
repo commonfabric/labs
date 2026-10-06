@@ -106,7 +106,7 @@ describe("whose cells an abandoned request's ending writes", () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     setPatternEnvironment(originalPatternEnvironment);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.dispose();
     await storageManager.close();
@@ -165,7 +165,7 @@ describe("whose cells an abandoned request's ending writes", () => {
     );
     const result = runtime.run(tx, testPattern, inputs, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const answered = await waitForCellValue<{ result?: { from?: string } }>(
       runtime,
@@ -233,7 +233,7 @@ describe("whose cells an abandoned request's ending writes", () => {
     );
     const result = runtime.run(tx, testPattern, inputs, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     // A reader has to demand the fetch before it is issued; the runtime's
     // disposal ends the subscription.
     result.sink(() => {});
@@ -295,7 +295,7 @@ describe("whose cells an abandoned request's ending writes", () => {
       const seedTx = runtime.edit();
       seedTx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
       runtime.prepareTxForCommit(seedTx);
-      const seeded = await seedTx.commit();
+      const seeded = await seedTx.commit().settled;
       if (seeded.error) throw seeded.error;
     };
     await seed("INSERT INTO notes (body) VALUES (?)", ["one"]);
@@ -327,7 +327,7 @@ describe("whose cells an abandoned request's ending writes", () => {
     );
     const result = runtime.run(tx, testPattern, inputs, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const answered = await waitForCellValue<
       { result?: Array<Record<string, unknown>> }

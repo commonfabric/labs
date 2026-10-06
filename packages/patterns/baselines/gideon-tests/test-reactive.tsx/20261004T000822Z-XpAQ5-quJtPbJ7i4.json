@@ -1,0 +1,317 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Email": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "emails": {
+        "items": {
+          "$ref": "#/$defs/Email"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "emails"
+    ],
+    "type": "object"
+  },
+  "pattern": "gideon-tests/test-reactive.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BuiltInLLMContent": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMContentPart"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BuiltInLLMContentPart": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BuiltInLLMTextPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMImagePart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolCallPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolResultPart"
+          }
+        ]
+      },
+      "BuiltInLLMImagePart": {
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "image"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMMessage": {
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/BuiltInLLMContent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMTextPart": {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolCallPart": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-call"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "input"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolResultPart": {
+        "properties": {
+          "output": {
+            "anyOf": [
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-result"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "output"
+        ],
+        "type": "object"
+      },
+      "Email": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "type": "object"
+      },
+      "ExtractedData": {
+        "properties": {
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "data": {
+        "properties": {
+          "analyses": {
+            "items": {
+              "properties": {
+                "analysis": {
+                  "properties": {
+                    "cancelGeneration": {
+                      "asCell": [
+                        "stream",
+                        "opaque"
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "messages": {
+                      "items": {
+                        "$ref": "#/$defs/BuiltInLLMMessage"
+                      },
+                      "type": "array"
+                    },
+                    "partial": {
+                      "type": "string"
+                    },
+                    "pending": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/ExtractedData"
+                        },
+                        {
+                          "type": "undefined"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pending",
+                    "cancelGeneration"
+                  ],
+                  "type": "object"
+                },
+                "email": {
+                  "$ref": "#/$defs/Email"
+                },
+                "result": {
+                  "anyOf": [
+                    {
+                      "type": "undefined"
+                    },
+                    {
+                      "$ref": "#/$defs/ExtractedData"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "email",
+                "analysis",
+                "result"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "analyses"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "data"
+    ],
+    "type": "object"
+  }
+}

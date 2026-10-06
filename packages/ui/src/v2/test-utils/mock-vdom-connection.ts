@@ -87,6 +87,7 @@ export function createRenderableCellHandle<T>(
     request: () => Promise.resolve({}),
     subscribe: () => Promise.resolve(),
     unsubscribe: () => Promise.resolve(),
+    peersOf: () => [],
     signal: lifetime.signal,
     onDispose: (teardown: () => void) => {
       lifetime.signal.addEventListener("abort", teardown, { once: true });
@@ -105,6 +106,10 @@ export function createRenderableCellHandle<T>(
   } as unknown as InitializedRuntimeConnection;
 
   const rt = { [$conn]: () => conn } as unknown as RuntimeClient;
-  const cell = new CellHandle<T>(rt, { ...DEFAULT_REF, ...ref }, value);
+  const cell = new CellHandle<T>(
+    rt,
+    { ...DEFAULT_REF, ...ref },
+    value === undefined ? { unread: true } : { value },
+  );
   return { cell, log };
 }

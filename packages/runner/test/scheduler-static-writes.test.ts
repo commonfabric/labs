@@ -55,7 +55,7 @@ async function runActionOnce(
   action(actionTx);
   const log = txToReactivityLog(actionTx);
   runtime.prepareTxForCommit(actionTx);
-  expect((await actionTx.commit()).error).toBeUndefined();
+  expect((await actionTx.commit().settled).error).toBeUndefined();
   return log;
 }
 
@@ -96,7 +96,7 @@ describe("static write surface demand", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -123,7 +123,7 @@ describe("static write surface demand", () => {
     );
 
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
 
@@ -146,7 +146,7 @@ describe("static write surface demand", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -173,7 +173,7 @@ describe("static write surface demand", () => {
     );
 
     source.withTx(tx).send(3);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
     expect(runs).toBe(0);
@@ -219,7 +219,7 @@ describe("static write surface demand", () => {
     source.set(1);
     middle.set(0);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let sourceWriterRuns = 0;
@@ -268,10 +268,10 @@ describe("static write surface demand", () => {
     expect(sourceWriterRuns).toBe(1);
     expect(outputWriterRuns).toBe(1);
 
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     source.withTx(tx).send(2);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.scheduler.idle();
     expect(sourceWriterRuns).toBe(1);
@@ -313,7 +313,7 @@ describe("static write surface demand", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let writerRuns = 0;
@@ -352,10 +352,10 @@ describe("static write surface demand", () => {
       expect(effectRuns).toBe(2);
       runtime.scheduler.unsubscribe(effect);
 
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = runtime.edit();
       source.withTx(tx).send(2);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = runtime.edit();
       await runtime.scheduler.idle();
       expect(writerRuns).toBe(1);
@@ -395,7 +395,7 @@ describe("static write surface demand", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -432,10 +432,10 @@ describe("static write surface demand", () => {
     }
     expect(computationRuns).toBe(1);
 
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     source.withTx(tx).send(2);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.scheduler.idle();
     expect(computationRuns).toBe(1);
@@ -450,7 +450,7 @@ describe("static write surface demand", () => {
     // Resubscribe must preserve the concurrent invalid status and use the
     // action's false-to-true liveness transition to schedule another run.
     source.withTx(tx).send(3);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     expect(runtime.scheduler.isDirty(computation)).toBe(true);
 
@@ -494,7 +494,7 @@ describe("static write surface demand", () => {
     source.set(1);
     intermediate.set(0);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let writerRuns = 0;
@@ -541,10 +541,10 @@ describe("static write surface demand", () => {
     expect(output.get()).toBe(10);
 
     runtime.scheduler.unsubscribe(materializer);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     source.withTx(tx).send(2);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.scheduler.idle();
     expect(writerRuns).toBe(1);
@@ -594,7 +594,7 @@ describe("static write surface demand", () => {
     );
     source.set(1);
     declared.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Per-user/per-session slots are runtime-mediated (scope defaults,
@@ -631,7 +631,7 @@ describe("static write surface demand", () => {
     const cancel = declared.withTx(tx).sink(() => {});
     try {
       source.withTx(tx).send(2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
 
@@ -669,7 +669,7 @@ describe("static write surface demand", () => {
     source.set(1);
     declared.set(0);
     undeclared.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -698,7 +698,7 @@ describe("static write surface demand", () => {
     const cancel = declared.withTx(tx).sink(() => {});
     try {
       source.withTx(tx).send(2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
 

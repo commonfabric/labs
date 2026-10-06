@@ -55,7 +55,7 @@ describe("wish built-in", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   });
@@ -78,7 +78,7 @@ describe("wish built-in", () => {
     ).withTx(tx);
     spaceCell.key("pieceRegistry").set(pieceRegistryCell.withTx(tx));
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     tx = runtime.edit();
 
@@ -100,7 +100,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Pull to trigger computation
@@ -145,7 +145,7 @@ describe("wish built-in", () => {
     );
     (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     tx = runtime.edit();
 
@@ -166,7 +166,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Pull to trigger computation
@@ -188,7 +188,7 @@ describe("wish built-in", () => {
     defaultPatternCell.set(defaultData);
     (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     tx = runtime.edit();
 
@@ -209,7 +209,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Pull to trigger computation
@@ -231,7 +231,7 @@ describe("wish built-in", () => {
     });
     (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     tx = runtime.edit();
 
@@ -252,7 +252,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -277,7 +277,7 @@ describe("wish built-in", () => {
     );
     const before = Date.now();
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -315,7 +315,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -354,7 +354,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -381,7 +381,7 @@ describe("wish built-in", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -423,7 +423,7 @@ describe("wish built-in", () => {
       );
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -434,7 +434,7 @@ describe("wish built-in", () => {
         pieceRegistry?: { result?: unknown[] };
       }>(space, "wish canonical registry result", undefined, tx);
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await runtime.idle();
@@ -445,7 +445,7 @@ describe("wish built-in", () => {
       const canonicalResult = result.key("pieceRegistry").key("result")
         .resolveAsCell();
       canonicalResult.withTx(tx).push({ name: "Beta", title: "Beta" });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
       expect(canonicalRegistryCell.get()).toEqual([
@@ -479,7 +479,7 @@ describe("wish built-in", () => {
       );
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -500,7 +500,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await runtime.idle();
@@ -534,7 +534,7 @@ describe("wish built-in", () => {
       );
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -554,7 +554,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await runtime.idle();
@@ -568,7 +568,7 @@ describe("wish built-in", () => {
       const spaceData = { testField: "space cell value" };
       spaceCell.set(spaceData);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -586,7 +586,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await runtime.idle();
@@ -602,7 +602,7 @@ describe("wish built-in", () => {
         nested: { deep: { data: ["Alpha"] } },
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -623,7 +623,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -649,7 +649,7 @@ describe("wish built-in", () => {
       );
       const before = Date.now();
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -679,7 +679,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -704,7 +704,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -718,7 +718,7 @@ describe("wish built-in", () => {
       const spaceData = { testField: "space cell value" };
       spaceCell.set(spaceData);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -736,7 +736,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -777,7 +777,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         await result.pull();
@@ -810,7 +810,7 @@ describe("wish built-in", () => {
       const spaceData = { testField: "unified shape test" };
       spaceCell.set(spaceData);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -828,7 +828,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -870,7 +870,7 @@ describe("wish built-in", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.dispose();
       await storageManager.close();
     });
@@ -895,7 +895,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: ["test-tag"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -935,7 +935,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -953,7 +953,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -989,7 +989,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: ["test-tag"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1027,7 +1027,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1045,7 +1045,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -1080,7 +1080,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: ["structured-tag"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1094,7 +1094,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
 
@@ -1125,7 +1125,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: [], userTags: ["mine"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1139,7 +1139,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
 
@@ -1168,7 +1168,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: ["fav-tag"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1206,7 +1206,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1224,7 +1224,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result1 = runtime.run(tx, wishPattern1, {}, resultCell1);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result1.pull();
@@ -1249,7 +1249,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result2 = runtime.run(tx, wishPattern2, {}, resultCell2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result2.pull();
@@ -1282,7 +1282,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: ["test-tag"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1320,7 +1320,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1338,7 +1338,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -1363,7 +1363,7 @@ describe("wish built-in", () => {
       favoritesCell.set([]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1383,7 +1383,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1401,7 +1401,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -1433,7 +1433,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tags: ["test-tag"] }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1453,7 +1453,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1471,7 +1471,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -1499,7 +1499,7 @@ describe("wish built-in", () => {
         homeDefaultPatternCell,
       );
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1520,7 +1520,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(currentDefaultPattern);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -1543,7 +1543,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -1599,7 +1599,7 @@ describe("wish built-in", () => {
         });
         (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -1622,7 +1622,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         await result.pull();
@@ -1653,7 +1653,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         const arrived = Promise.withResolvers<void>();
@@ -1697,7 +1697,7 @@ describe("wish built-in", () => {
           (otherSpaceCell as any).key("defaultPattern").set(
             otherDefaultPattern,
           );
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           tx = runtime.edit();
 
           await arrived.promise;
@@ -1748,7 +1748,7 @@ describe("wish built-in", () => {
         });
         (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.storageManager.synced();
         await runtime.idle();
         tx = runtime.edit();
@@ -1787,7 +1787,7 @@ describe("wish built-in", () => {
         });
         (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.storageManager.synced();
         await runtime.idle();
         tx = runtime.edit();
@@ -1811,7 +1811,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         await runtime.storageManager.synced();
         await runtime.idle();
@@ -1852,7 +1852,7 @@ describe("wish built-in", () => {
           homeDefaultPatternCell,
         );
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.storageManager.synced();
         await runtime.idle();
         tx = runtime.edit();
@@ -1891,7 +1891,7 @@ describe("wish built-in", () => {
         });
         (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.storageManager.synced();
         await runtime.idle();
         tx = runtime.edit();
@@ -1915,7 +1915,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         await runtime.storageManager.synced();
         await runtime.idle();
@@ -1951,7 +1951,7 @@ describe("wish built-in", () => {
         });
         (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -1974,7 +1974,7 @@ describe("wish built-in", () => {
           currentDefaultPattern,
         );
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -1997,7 +1997,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         await result.pull();
@@ -2038,7 +2038,7 @@ describe("wish built-in", () => {
         });
         (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -2061,7 +2061,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         await result.pull();
@@ -2094,7 +2094,7 @@ describe("wish built-in", () => {
         });
         (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -2117,7 +2117,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         await result.pull();
@@ -2142,7 +2142,7 @@ describe("wish built-in", () => {
       mentionableData[NAME] = "shared-tag";
       sharedPiece.set(mentionableData);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2161,7 +2161,7 @@ describe("wish built-in", () => {
       }]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2190,7 +2190,7 @@ describe("wish built-in", () => {
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2208,7 +2208,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2240,7 +2240,7 @@ describe("wish built-in", () => {
         pieceRegistryCell.withTx(tx),
       );
       spaceCell.key("defaultPattern").set(defaultPatternCell);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2275,7 +2275,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, loadedPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -2292,7 +2292,7 @@ describe("wish built-in", () => {
       const spaceData = { testField: "compiled pattern value" };
       spaceCell.set(spaceData);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2327,7 +2327,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, loadedPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2342,7 +2342,7 @@ describe("wish built-in", () => {
         nested: { deep: { value: "found it" } },
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2376,7 +2376,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, loadedPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2411,7 +2411,7 @@ describe("wish built-in", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.dispose();
       await storageManager.close();
     });
@@ -2438,7 +2438,7 @@ describe("wish built-in", () => {
       ]);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2456,7 +2456,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2498,7 +2498,7 @@ describe("wish built-in", () => {
       ]);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2518,7 +2518,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       return result.key("result").get();
@@ -2594,7 +2594,7 @@ describe("wish built-in", () => {
       defaultPatternCell.key(key).set(value);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2608,7 +2608,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       return result.key("result").get();
@@ -2636,7 +2636,7 @@ describe("wish built-in", () => {
         result?: { error?: string; result?: unknown };
       }>(patternSpace.did(), "agent-queue-no-identity", undefined, tx);
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       const resolved = result.key("result").get();
@@ -2669,7 +2669,7 @@ describe("wish built-in", () => {
         result?: { error?: string; result?: unknown };
       }>(patternSpace.did(), "chat-manager-no-identity", undefined, tx);
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       const resolved = result.key("result").get();
@@ -2690,6 +2690,36 @@ describe("wish built-in", () => {
       expect(resolved?.error).toBeUndefined();
       expect((resolved?.result as any)?.direct?.["did:key:z6MkBob"]?.kind)
         .toBe("direct");
+    });
+
+    it("resolves #agent_queue to nothing, with no error, for a home with no agent queue", async () => {
+      // A caller listing agent runs reads an absent queue as no runs, and the
+      // agent builtin refuses a request on its own, so the wish reports no
+      // error here, unlike `#chatManager`.
+
+      const resolved = await resolveHomeTarget(
+        "agent-queue-absent",
+        "journal",
+        [],
+        "#agent_queue",
+      );
+      expect(resolved?.error).toBeUndefined();
+      expect(resolved?.result).toBeUndefined();
+    });
+
+    it("reports a home with no chat manager for #chatManager, naming the remedy", async () => {
+      const resolved = await resolveHomeTarget(
+        "chat-manager-absent",
+        "journal",
+        [],
+        "#chatManager",
+      );
+      expect(resolved?.error).toContain(
+        "The home space holds no chat manager",
+      );
+      expect(resolved?.error).toContain("open the home space once");
+      expect(resolved?.error).toContain("A custom home pattern needs");
+      expect(resolved?.result).toBeUndefined();
     });
 
     it("resolves #learned to the home learned object", async () => {
@@ -2738,7 +2768,7 @@ describe("wish built-in", () => {
       });
       profileSpaceCell.key("defaultPattern").set(profileDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2752,7 +2782,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("profiles").set([profileDefaultCell]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2773,7 +2803,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2807,7 +2837,7 @@ describe("wish built-in", () => {
         bio: "",
         elements: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
       const spaceB = (await Identity.fromPassphrase(
@@ -2822,7 +2852,7 @@ describe("wish built-in", () => {
         elements: [],
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2837,7 +2867,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("defaultProfile").set({ profile: profileA });
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2852,7 +2882,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2887,7 +2917,7 @@ describe("wish built-in", () => {
         elements: [],
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2901,7 +2931,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("profiles").set([profileDefaultCell]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2916,7 +2946,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2944,7 +2974,7 @@ describe("wish built-in", () => {
         elements: [],
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2958,7 +2988,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("profiles").set([profileDefaultCell]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -2973,7 +3003,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -2997,7 +3027,7 @@ describe("wish built-in", () => {
       );
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3012,7 +3042,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3054,7 +3084,7 @@ describe("wish built-in", () => {
       );
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3068,7 +3098,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3095,7 +3125,7 @@ describe("wish built-in", () => {
       );
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3114,7 +3144,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         // A sink is the demand that runs the wish. `idle()` would wait on the
@@ -3155,7 +3185,7 @@ describe("wish built-in", () => {
       );
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3181,7 +3211,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
 
         await result.pull();
@@ -3232,7 +3262,7 @@ describe("wish built-in", () => {
         }],
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3246,7 +3276,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("profiles").set([profileDefaultCell]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3262,7 +3292,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3286,7 +3316,7 @@ describe("wish built-in", () => {
         avatar: "ada.png",
         elements: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
       const p2Space = (await Identity.fromPassphrase(
@@ -3300,7 +3330,7 @@ describe("wish built-in", () => {
         elements: [],
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3317,7 +3347,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("defaultProfile").set({ profile: p2 });
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3333,7 +3363,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
 
@@ -3361,7 +3391,7 @@ describe("wish built-in", () => {
         tx,
       );
       ada.set({ name: "Ada", initialNameApplied: "Ada", elements: [] });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
       const grace = runtime.getCell(
@@ -3371,7 +3401,7 @@ describe("wish built-in", () => {
         tx,
       );
       grace.set({ name: "Grace", initialNameApplied: "Grace", elements: [] });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3392,7 +3422,7 @@ describe("wish built-in", () => {
       home.key("profiles").set([ada, grace]);
       arrange(home, { ada, grace, legacy });
       (homeSpaceCell as any).key("defaultPattern").set(home);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3410,7 +3440,7 @@ describe("wish built-in", () => {
         {},
         resultCell,
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       return result.key("profileName").get()?.result;
@@ -3465,7 +3495,7 @@ describe("wish built-in", () => {
         avatar: "",
         elements: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
       const p2Space = (await Identity.fromPassphrase(
@@ -3479,7 +3509,7 @@ describe("wish built-in", () => {
         elements: [],
       });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3495,7 +3525,7 @@ describe("wish built-in", () => {
       homeDefaultCell.key("mru").set([p2]);
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3509,7 +3539,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
 
@@ -3528,7 +3558,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3551,7 +3581,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3574,7 +3604,7 @@ describe("wish built-in", () => {
       homeDefaultCell.set({ title: "Home Default", value: "home" });
       homeSpaceCell.key("defaultPattern").set(homeDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3590,7 +3620,7 @@ describe("wish built-in", () => {
       patternDefaultCell.set({ title: "Pattern Default", value: "pattern" });
       patternSpaceCell.key("defaultPattern").set(patternDefaultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3608,7 +3638,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3641,7 +3671,7 @@ describe("wish built-in", () => {
       favoritesCell.set([{ cell: favoriteItem, tag: "mixed test" }]);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3652,7 +3682,7 @@ describe("wish built-in", () => {
       ).withTx(tx);
       patternSpaceCell.set({ data: { type: "pattern" } });
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3674,7 +3704,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3720,7 +3750,7 @@ describe("wish built-in", () => {
       ]);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3740,7 +3770,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3785,7 +3815,7 @@ describe("wish built-in", () => {
       ]);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3803,7 +3833,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3846,7 +3876,7 @@ describe("wish built-in", () => {
       ]);
       (homeSpaceCell as any).key("defaultPattern").set(defaultPatternCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       tx = runtime.edit();
 
@@ -3864,7 +3894,7 @@ describe("wish built-in", () => {
         tx,
       );
       const result = runtime.run(tx, wishingPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       await result.pull();
@@ -3910,7 +3940,7 @@ describe("wish built-in", () => {
         );
         profileSpaceCell.key("defaultPattern").set(profileDefaultCell);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -3924,7 +3954,7 @@ describe("wish built-in", () => {
         homeDefaultCell.key("profiles").set([profileDefaultCell]);
         (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -3942,7 +3972,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await result.pull();
 
@@ -3970,7 +4000,7 @@ describe("wish built-in", () => {
         );
         (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -3984,7 +4014,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await result.pull();
 
@@ -4004,7 +4034,7 @@ describe("wish built-in", () => {
         );
         (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -4018,7 +4048,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await result.pull();
 
@@ -4078,7 +4108,7 @@ describe("wish built-in", () => {
             bio: "",
             elements: [],
           });
-          await tx.commit();
+          await tx.commit().settled;
           await runtime.idle();
           tx = runtime.edit();
           profileCells.push(cell);
@@ -4123,7 +4153,7 @@ describe("wish built-in", () => {
         }
         (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -4141,7 +4171,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await result.pull();
 
@@ -4157,7 +4187,7 @@ describe("wish built-in", () => {
           tx,
         );
         (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -4171,7 +4201,7 @@ describe("wish built-in", () => {
           tx,
         );
         const result = runtime.run(tx, wishPattern, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await result.pull();
 
@@ -4289,7 +4319,7 @@ describe("wish built-in", () => {
           .resolveAsCell()
           .key("mru") as any;
         liveMru.set([profileCells[1].withTx(tx)]);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         tx = runtime.edit();
 
@@ -4307,7 +4337,7 @@ describe("wish built-in", () => {
           tx,
         );
         const r2 = runtime.run(tx, wishPattern2, {}, rc2);
-        await tx.commit();
+        await tx.commit().settled;
         tx = runtime.edit();
         await r2.pull();
 
@@ -4421,7 +4451,7 @@ describe("wish built-in", () => {
               tx,
             );
             alias.set(value);
-            await tx.commit();
+            await tx.commit().settled;
             await runtime.idle();
             tx = runtime.edit();
             profileCells.push(cell);
@@ -4465,7 +4495,7 @@ describe("wish built-in", () => {
           // deno-lint-ignore no-explicit-any
           (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
-          await tx.commit();
+          await tx.commit().settled;
           await runtime.idle();
           tx = runtime.edit();
 
@@ -4479,7 +4509,7 @@ describe("wish built-in", () => {
             tx,
           );
           const result = runtime.run(tx, wishPattern, {}, resultCell);
-          await tx.commit();
+          await tx.commit().settled;
           tx = runtime.edit();
           await result.pull();
           return { result };
@@ -4601,7 +4631,7 @@ describe("interval #now wish", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   });
@@ -4618,7 +4648,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4650,7 +4680,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4659,7 +4689,7 @@ describe("interval #now wish", () => {
 
     await clock.tick(1100);
     triggerCell.withTx(tx).set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4676,7 +4706,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4690,7 +4720,7 @@ describe("interval #now wish", () => {
     await clock.tick(1100);
 
     const result2 = runtime.run(tx, wishPattern, {}, resultCell.withTx(tx));
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result2.pull();
@@ -4712,7 +4742,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4735,7 +4765,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4760,7 +4790,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4782,7 +4812,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4805,7 +4835,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4830,7 +4860,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4854,7 +4884,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4878,7 +4908,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4902,7 +4932,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4926,7 +4956,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4950,7 +4980,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4974,7 +5004,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();
@@ -4996,7 +5026,7 @@ describe("interval #now wish", () => {
       tx,
     );
     const result = runtime.run(tx, wishPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await result.pull();

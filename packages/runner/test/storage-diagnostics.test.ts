@@ -71,7 +71,7 @@ describe("pending storage diagnostics", () => {
     const commitNative = replica.commitNative;
     if (!commitNative) throw new Error("fixture needs native commits");
     let commit:
-      | ReturnType<ReturnType<typeof runtime.edit>["commit"]>
+      | ReturnType<ReturnType<typeof runtime.edit>["commit"]>["settled"]
       | undefined;
     try {
       replica.commitNative = async (...args) => {
@@ -84,7 +84,7 @@ describe("pending storage diagnostics", () => {
       runtime.getCell(signer.did(), "diagnostic-value", undefined, tx).set(
         "private payload",
       );
-      commit = tx.commit();
+      commit = tx.commit().settled;
       await accepted.promise;
       const snapshot = storage.getDiagnostics();
       expect(snapshot.pendingCommits).toHaveLength(1);

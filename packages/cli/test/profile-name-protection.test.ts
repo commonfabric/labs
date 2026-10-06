@@ -45,7 +45,7 @@ describe("profileNameProtection()", () => {
       sourceOrigin: systemPatternSource("system/profile-home.tsx"),
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await profile.pull();
     await runtime.idle();
     const descriptor = pattern.derivedInternalCells!.find((item) =>
@@ -59,7 +59,7 @@ describe("profileNameProtection()", () => {
     >;
     seedStoredEnvelope(strip, target, { ...legacy, value: "Saved name" });
     runtime.prepareTxForCommit(strip);
-    expect((await strip.commit()).error).toBeUndefined();
+    expect((await strip.commit().settled).error).toBeUndefined();
     requests = [];
     disposals = 0;
   });

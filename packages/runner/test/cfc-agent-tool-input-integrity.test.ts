@@ -135,7 +135,7 @@ async function setupSendMail(
   );
   const result = runtime.run(tx, testPattern, {}, resultCell);
   runtime.prepareTxForCommit(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -189,7 +189,7 @@ async function setupSendMail(
     );
     cell.set(value);
     seedTx.prepareCfc();
-    const commit = await seedTx.commit();
+    const commit = await seedTx.commit().settled;
     expect(commit.ok).toBeDefined();
     await runtime.idle();
     return {
@@ -228,7 +228,7 @@ async function setupSendMail(
     const list = runtime.getCell(space, name, stampingSchema, seedTx);
     list.push({ role: "tool", content: value });
     seedTx.prepareCfc();
-    const commit = await seedTx.commit();
+    const commit = await seedTx.commit().settled;
     expect(commit.ok).toBeDefined();
     await runtime.idle();
 
@@ -267,7 +267,7 @@ async function setupSendMail(
     );
     cell.set(value);
     seedTx.prepareCfc();
-    const commit = await seedTx.commit();
+    const commit = await seedTx.commit().settled;
     expect(commit.ok).toBeDefined();
     await runtime.idle();
     return {
@@ -524,7 +524,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       // builtinTools=true → the generic `invoke` tool is available.
@@ -641,7 +641,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -760,7 +760,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -856,7 +856,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -959,7 +959,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(

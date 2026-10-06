@@ -29,7 +29,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
 
   it("observes and then fails closed for writeAuthorizedBy claims emitted from authored types", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       function localFunction() {}
 
@@ -66,7 +66,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
         },
       });
 
-      const observeResult = await observeTx.commit();
+      const observeResult = await observeTx.commit().settled;
       expect(observeResult.ok).toBeDefined();
       expect(observeTx.getCfcState().diagnostics).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /value",
@@ -88,7 +88,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
       });
       enforceTx.prepareCfc();
 
-      const enforceResult = await enforceTx.commit();
+      const enforceResult = await enforceTx.commit().settled;
       expect(enforceResult.error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /value",
       );
@@ -125,7 +125,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
           name: "/main.tsx",
           contents: `/// <cts-enable />
             import { lift, pattern } from "commonfabric";
-            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
             type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
 
             function localFunction(value: string) {

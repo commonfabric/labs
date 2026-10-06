@@ -11,8 +11,10 @@ import {
 import { type NameSchema, stringSchema } from "@commonfabric/runner/schemas";
 import { parseCellReference } from "@commonfabric/runner/shared";
 import { slugIdForSpace, validateSlug } from "@commonfabric/runner/slugs";
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type Cancel,
+  type CellHandleRead,
   type ErrorNotification,
   type FavoritePieceAddress,
   NAME,
@@ -222,6 +224,16 @@ interface ShownResolution {
 
   /** What that run reached, or `undefined` where it reached nothing. */
   readonly answer: SlugReferenceTarget | SlugReferenceRefusal | undefined;
+}
+
+/**
+ * The title a piece's name read gives: the name, or the placeholder a render
+ * shows where the display ceiling refuses what it holds, rather than the
+ * "Untitled" of a piece that has no name.
+ */
+function titleOf(read: CellHandleRead<string | undefined>): string | undefined {
+  if ("refused" in read) return CFC_POLICY_PLACEHOLDER_TEXT;
+  return "value" in read ? read.value : undefined;
 }
 
 /**
@@ -669,13 +681,16 @@ export class XAppView extends BaseView {
       }, 1000);
 
       let sawInitialCallback = false;
-      watch.cancel = cell.subscribe(() => {
+      // A refusal of the slug's read is a change to what it names as far as
+      // this view can tell, so it re-resolves the slug as a value would.
+      const refresh = () => {
         if (!sawInitialCallback) {
           sawInitialCallback = true;
           return;
         }
         void this.#refreshSlugTarget(watch);
-      });
+      };
+      watch.cancel = cell.subscribe(refresh, { onRefused: refresh });
     }).catch((error) => {
       if (!this.#isCurrentSlugWatch(watch)) return;
       if (rt.signal.aborted) {
@@ -877,18 +892,13 @@ export class XAppView extends BaseView {
         return;
       }
       this.titleSubscription = new CellEventTarget(cell);
-      try {
-        this.pieceTitle = cell.get();
-      } catch {
-        // Cell not synced yet
-        this.pieceTitle = undefined;
-      }
+      this.pieceTitle = titleOf(cell.lastRead());
     }
   }
 
   #onPieceTitleChange = (e: Event) => {
     const event = e as CellUpdateEvent<string | undefined>;
-    this.pieceTitle = event.detail ?? "";
+    this.pieceTitle = titleOf(event.detail) ?? "";
   };
 
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {

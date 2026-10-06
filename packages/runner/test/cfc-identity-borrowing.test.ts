@@ -65,7 +65,7 @@ describe("CFC write-policy identity borrowing", () => {
 
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
     } finally {
       await runtime.dispose();
@@ -112,7 +112,7 @@ describe("CFC write-policy identity borrowing", () => {
         );
         tx.recordCfcWritePolicyInput({ kind: "schema", target, schema: field });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isCfcEnforcementRejection(result.error)).toBe(!firstAttributed);
         if (firstAttributed) expect(result.error).toBeUndefined();
       } finally {

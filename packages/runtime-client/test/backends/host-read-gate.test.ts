@@ -11,6 +11,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { rootRenderPolicyFor } from "@commonfabric/html/worker";
 import { Identity } from "@commonfabric/identity";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
@@ -91,7 +92,7 @@ async function shelf() {
         },
       }),
     } as FabricValue);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(space, id);
   };
   const link = (cell: Cell<unknown>) =>
@@ -171,6 +172,7 @@ async function shelf() {
   return {
     runtime,
     write,
+    credential,
     importer,
     inlineImporter,
     sealedEntry,
@@ -204,6 +206,12 @@ function gateFor(runtime: Runtime, viewer: Identity): HostReadGate {
     membership,
     modulePolicies,
   });
+}
+
+/** `cell`'s address, as a ref carries it with no label view. */
+function address(cell: Cell<unknown>) {
+  const { cfcLabelView: _withheld, ...ref } = createCellRef(cell);
+  return ref;
 }
 
 /** Whether `text` appears anywhere in `answer`. */
@@ -411,6 +419,32 @@ describe("HostReadGate", () => {
       expect(holds([openPath, sidebar], CREDENTIAL)).toBe(false);
     });
 
+    it("returns the owner the rest of a credential's document, field by field", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+
+      expect("refused" in gate.read(docs.credential.asSchema(true))).toBe(true);
+      expect(
+        gate.read(docs.credential.key("account").asSchema(stringSchema)),
+      ).toEqual({ value: "owner account" });
+    });
+
+    it("names the cell a refused read started from when asked, with no label view", async () => {
+      await using docs = await shelf();
+      const answer = gateFor(docs.runtime, owner).read(
+        docs.importer.asSchema(true),
+        { includeRef: true, includeCfcLabel: true },
+      );
+
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+        cell: expect.objectContaining({ id: expect.any(String), path: [] }),
+      });
+      if (answer.cell === undefined) throw new Error("no cell was named");
+      expect("cfcLabelView" in answer.cell).toBe(false);
+      expect(holds(answer, CREDENTIAL)).toBe(false);
+    });
+
     it("answers both reads of a piece that exports neither with neither", async () => {
       await using docs = await shelf();
       const gate = gateFor(docs.runtime, visitor);
@@ -431,6 +465,101 @@ describe("HostReadGate", () => {
           refused: { refusedBy: "display-ceiling" },
         });
       }
+    });
+  });
+
+  describe("fields()", () => {
+    it("lists the owner every field of a piece holding a credential in a document of its own, whose whole read it refuses", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      expect("refused" in gate.read(docs.importer.asSchema(true))).toBe(true);
+
+      const answer = gate.fields(docs.importer);
+
+      expect(holds(answer, CREDENTIAL)).toBe(false);
+      expect(answer).toEqual({
+        fields: Object.fromEntries(
+          ["$NAME", "openPath", "sidebarUI", "auth"].map((name) => [
+            name,
+            { ...address(docs.importer), path: [name] },
+          ]),
+        ),
+      });
+      // Each field's own read is decided on its own.
+      expect(gate.read(docs.importer.key("auth").asSchema(true))).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+      });
+      expect(gate.read(docs.importer.key(NAME).asSchema(true))).toEqual({
+        value: "Importer",
+      });
+    });
+
+    it("refuses the owner the list of a piece holding a credential in its own document, under a fit that decides on every label the document stores", async () => {
+      await using docs = await shelf();
+
+      const answer = gateFor(docs.runtime, owner).fields(docs.inlineImporter);
+
+      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(answer, CREDENTIAL)).toBe(false);
+    });
+
+    it("refuses a visitor the list of a piece only its owner may see", async () => {
+      await using docs = await shelf();
+
+      const answer = gateFor(docs.runtime, visitor).fields(docs.sealedPiece);
+
+      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(answer, SEALED_NAME)).toBe(false);
+    });
+
+    it("decides the list on the record's own schema, which the list's read does not carry", async () => {
+      await using docs = await shelf();
+      // No stored label: only the record's schema says who may see it.
+      const keys = await docs.write("keys", {
+        "alice-secret-key": "alice's value",
+        "bob-secret-key": "bob's value",
+      });
+      const record = keys.asSchema({
+        type: "object",
+        additionalProperties: { type: "string" },
+        ifc: { confidentiality: [ownerOnly] },
+      });
+      const visitorGate = gateFor(docs.runtime, visitor);
+      expect("refused" in visitorGate.read(record)).toBe(true);
+
+      const refused = visitorGate.fields(record);
+
+      expect(refused).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(refused, "alice-secret-key")).toBe(false);
+      expect(gateFor(docs.runtime, owner).fields(record)).toEqual({
+        fields: Object.fromEntries(
+          ["alice-secret-key", "bob-secret-key"].map((name) => [
+            name,
+            address(record.key(name)),
+          ]),
+        ),
+      });
+    });
+
+    it("answers a cell that holds no record with no list, and an empty record with an empty one", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const notRecords = {
+        "a-list": ["first", "second"],
+        "a-string": "a string",
+        "a-number": 7,
+        // An instance, which holds its bytes in no field.
+        "some-bytes": new FabricBytes(new Uint8Array([1, 2, 3])),
+      };
+      for (const [id, value] of Object.entries(notRecords)) {
+        expect(gate.fields(await docs.write(id, value))).toEqual({});
+      }
+      expect(gate.fields(docs.runtime.getCell(space, "never-written")))
+        .toEqual({});
+
+      expect(gate.fields(await docs.write("an-empty-record", {}))).toEqual({
+        fields: {},
+      });
     });
   });
 

@@ -27,6 +27,7 @@ import {
   type RenderPolicy,
 } from "@commonfabric/html/worker";
 import type { FabricValue } from "@commonfabric/data-model";
+import { isPlainObject } from "@commonfabric/utils/types";
 import {
   type Cancel,
   type Cell,
@@ -46,15 +47,27 @@ import {
 } from "@commonfabric/runner/cfc";
 
 import {
+  type CellFieldsResponse,
   type CellGetResponse,
   type CellReadRefusal,
   type CellRef,
+  type CellRefusedAnswer,
   type CellUpdateNotification,
   type CellValueResponse,
   type HostReadDecided,
   NotificationType,
 } from "@/protocol/mod.ts";
 import { createCellRef } from "./utils.ts";
+
+/**
+ * The read that lists a record's fields: each field as a link to its own
+ * cell, so that nothing a field holds is read, and the read consumes the
+ * record's own label and no field's.
+ */
+const FIELDS_SCHEMA = {
+  type: "object",
+  additionalProperties: { asCell: ["cell"] },
+} as const;
 
 /** What the display ceiling's refusal of a host's read says. */
 const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
@@ -76,6 +89,16 @@ function decided<T>(answer: T): T & HostReadDecided {
  */
 function holdsEvents(cell: Cell<unknown>): boolean {
   return isStream(cell);
+}
+
+/**
+ * The names of the fields a {@link FIELDS_SCHEMA} read listed, or `undefined`
+ * where the cell holds no record: nothing, a list, or a single value.
+ */
+function fieldNamesOf(value: unknown): string[] | undefined {
+  // A record is a plain object: a class instance such as `FabricBytes` holds
+  // no fields to list, whatever own properties it has.
+  return isPlainObject(value) ? Object.keys(value) : undefined;
 }
 
 /** The label view a read asked for, with each caveat's source redacted. */
@@ -131,7 +154,14 @@ export class HostReadGate {
         policy,
         this.#sources,
       );
-      if (refusal !== undefined) return this.#refuse(refusal, policy);
+      if (refusal !== undefined) {
+        const refused = this.#refuse(refusal, policy);
+        if (!options.includeRef) return refused;
+        // The address alone, without the label view a ref carries: a
+        // refused read gives no label.
+        const { cfcLabelView: _withheld, ...address } = createCellRef(cell);
+        return decided({ ...refused, cell: address });
+      }
       value = read.value;
     }
     const refField = options.includeRef ? { cell: createCellRef(cell) } : {};
@@ -288,8 +318,61 @@ export class HostReadGate {
     return cancel;
   }
 
+  /**
+   * The fields the record `cell` holds, each as the address of the field
+   * within it, or the refusal that stands in place of the list. The list is
+   * read under {@link FIELDS_SCHEMA}, which reads nothing a field holds.
+   *
+   * The list is decided as a read of the record itself is: on what the read
+   * consumed, and on the record's own labels, the stored ones or, where it
+   * stores none, its own schema's. The schema the list is read under carries
+   * no information-flow constraint, so it is never what the list is decided
+   * on. How much of the record's document that covers is the display fit's to
+   * say. A fit that decides on every label the document stores refuses the
+   * list of a record holding one field the viewer may not see; one that
+   * decides on the record's own node and on what the read consumed, which
+   * includes no field's label, lists every field of it.
+   *
+   * The names come from the record, not its schema, which a host may hold
+   * only as a reference it cannot resolve. An address carries no label view,
+   * and each field's own read is decided as any read is. A cell that holds no
+   * record, nothing at all, a list or a single value, is answered with no
+   * list, which is not the empty list of a record that holds no fields.
+   */
+  fields(cell: Cell<unknown>): CellFieldsResponse {
+    const listed = cell.asSchema(FIELDS_SCHEMA);
+    const policy = this.#policy;
+    let names: string[] | undefined;
+    if (policy === undefined) {
+      names = fieldNamesOf(listed.get());
+    } else {
+      const read = readProjected(listed, fieldNamesOf);
+      const refusal = readRefusal(
+        cell,
+        [read.consumed],
+        policy,
+        this.#sources,
+      );
+      if (refusal !== undefined) return this.#refuse(refusal, policy);
+      names = read.value;
+    }
+    // Nothing to list, which is not a record that holds no fields.
+    if (names === undefined) return decided({});
+    const fields: Record<string, CellRef> = {};
+    for (const name of names) {
+      const { cfcLabelView: _withheld, ...address } = createCellRef(
+        cell.key(name),
+      );
+      fields[name] = address;
+    }
+    return decided({ fields });
+  }
+
   /** A refusal of a read, reported as a refused render is. */
-  #refuse(refusal: RenderLabelSummary, policy: RenderPolicy): CellGetResponse {
+  #refuse(
+    refusal: RenderLabelSummary,
+    policy: RenderPolicy,
+  ): CellGetResponse & CellRefusedAnswer {
     this.#report(refusal, policy);
     return decided({ refused: DISPLAY_CEILING_REFUSAL });
   }

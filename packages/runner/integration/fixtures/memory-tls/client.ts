@@ -76,7 +76,7 @@ try {
     const value = { body: `${body}${version}`, version };
     const tx = writer.edit();
     cell.withTx(tx).set(value);
-    await tx.commit();
+    await tx.commit().settled;
     await writer.storageManager.synced();
     const reader = createRuntime();
     try {

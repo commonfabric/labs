@@ -34,7 +34,7 @@ describe("view-equality", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -179,7 +179,7 @@ describe("view-equality", () => {
         },
       }, seed);
       record.set({ description: "private note", amount: 12 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await record.sync();
 
       const read = strict.edit();
@@ -192,7 +192,7 @@ describe("view-equality", () => {
         .set(same);
 
       expect(same).toBe(true);
-      expect((await read.commit()).error).toBeUndefined();
+      expect((await read.commit().settled).error).toBeUndefined();
     } finally {
       await strict.dispose();
       await storage.close();

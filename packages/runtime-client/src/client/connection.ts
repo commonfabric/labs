@@ -415,20 +415,24 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       if (!instances.has(cell)) {
         this.#recordSubscriptionDiagnostic(key, "localSubscribes");
         instances.add(cell);
-        // Copy the cached value (and label) from an existing subscriber to the
-        // new one so late subscribers get the initial value, or the refusal
-        // that stands in its place.
+        // Copy what an existing subscriber holds (and its label) to the new
+        // one so late subscribers get the initial value, or the refusal that
+        // stands in its place. One that has read nothing yet has nothing to
+        // copy; the new one hears the worker's answer with it.
         const existingInstance = instances.values().next().value;
-        const refusal = existingInstance?.refusal;
-        if (refusal !== undefined) {
-          cell[$onCellRefused](refusal);
-        } else if (existingInstance) {
-          const cachedValue = existingInstance.get();
-          if (cachedValue !== undefined) {
-            cell[$onCellUpdate](cachedValue, {
-              cfcLabel: existingInstance.cfcLabel,
-            });
-          }
+        const existing = existingInstance?.lastRead();
+        if (existing !== undefined && "refused" in existing) {
+          cell[$onCellRefused](existing.refused);
+        } else if (
+          existing !== undefined && "value" in existing &&
+          "unread" in cell.lastRead()
+        ) {
+          // A value seeds only a handle that holds nothing yet: what another
+          // handle holds may be a write it made or a copy it was made with,
+          // which ends no refusal the new one holds.
+          cell[$onCellUpdate](existing.value, {
+            cfcLabel: existingInstance?.cfcLabel,
+          });
         }
       }
       return;
@@ -480,6 +484,12 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       }
     });
     return;
+  }
+
+  /** The handles other than `cell` subscribed under its ref key. */
+  peersOf(cell: CellHandle<any>): CellHandle[] {
+    const subscribed = this.#subscribed.get(cellRefToKey(cell.ref()));
+    return [...subscribed ?? []].filter((instance) => instance !== cell);
   }
 
   async dispose(): Promise<void> {
@@ -689,9 +699,11 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     }
     const value = message.value;
     if (value === undefined) {
-      // A value can be reported as `undefined` only when there's been a
-      // conflict, and will be followed by the settled value. Ignore
-      // `undefined` callbacks here.
+      // The worker reports `undefined` for a cell that holds nothing, for a
+      // document it has not loaded yet, and after a conflict, before the
+      // settled value. A handle cannot tell these apart, so the update is
+      // dropped and the handle holds what it held: one that has read
+      // nothing stays unread until a read answers it.
       return;
     }
 

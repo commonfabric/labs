@@ -30,7 +30,7 @@ describe("Nested Cell Array", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

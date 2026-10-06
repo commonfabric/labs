@@ -56,7 +56,7 @@ Deno.test(
         tx,
       );
       counterCell.set({ count: 1 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -89,7 +89,7 @@ Deno.test(
       await writerCell.sync();
       tx = writerRuntime.edit();
       writerCell.withTx(tx).set({ count: 2 });
-      await tx.commit();
+      await tx.commit().settled;
       await writerRuntime.storageManager.synced();
 
       await gotReconnectUpdate.promise;

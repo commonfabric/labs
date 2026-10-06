@@ -113,7 +113,7 @@ describe("derived-internal-cell-seed", () => {
           runtime.getCell<Result>(space, "result", compiled.resultSchema, tx),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         await runtime.idle();
 
