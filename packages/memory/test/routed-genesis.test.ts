@@ -5,7 +5,7 @@ import { Database } from "@db/sqlite";
 import { Identity } from "@commonfabric/identity";
 
 import type { MemorySpace } from "../interface.ts";
-import type { ServerMessage } from "../v2.ts";
+import type { Operation, ServerMessage } from "../v2.ts";
 import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
 import * as Engine from "../v2/engine.ts";
 import { Server } from "../v2/server.ts";
@@ -52,6 +52,23 @@ function modeA(
       } catch {
         return false;
       }
+    },
+    /** Write `commits` to `space`'s store directly, past every ACL check. */
+    async seed(space: string, ...commits: Operation[][]) {
+      const url = resolveSpaceStoreUrl(store, space as MemorySpace);
+      Deno.mkdirSync(dirname(fromFileUrl(url)), { recursive: true });
+      const engine = await Engine.open({ url });
+      commits.forEach((operations, index) =>
+        Engine.applyCommit(engine, {
+          sessionId: "seed",
+          commit: {
+            localSeq: index + 1,
+            reads: { confirmed: [], pending: [] },
+            operations,
+          },
+        })
+      );
+      Engine.close(engine);
     },
     async close() {
       await server.close();
@@ -258,26 +275,143 @@ describe("Mode A space creation", () => {
     }
   });
 
+  it("lets a service DID give a populated space without an ACL its ACL", async () => {
+    const service = await did(52);
+    const mode = modeA({ serviceDids: [service] });
+    try {
+      const space = await did(53);
+      await mode.seed(space, [{
+        op: "set",
+        id: "of:legacy",
+        value: { value: { written: "before ACLs" } },
+      }]);
+      const before = await (await connect(mode.server, stranger)).open(space);
+      expect(before.error?.name).toBe("AuthorizationError");
+      // The backfill for a space whose owner is unknown: an operator owns it
+      // and every signed-in user keeps the write access they had.
+      const operator = await connect(mode.server, service);
+      const opened = await operator.open(space);
+      expect(opened.error).toBeUndefined();
+      const backfill = await operator.write(
+        space,
+        sessionOf(opened),
+        `of:${space}`,
+        { [service]: "OWNER", "*": "WRITE" },
+      );
+      expect(backfill.error).toBeUndefined();
+      const after = await connect(mode.server, stranger);
+      const session = await after.open(space);
+      expect(session.error).toBeUndefined();
+      const write = await after.write(
+        space,
+        sessionOf(session),
+        "of:legacy",
+        { written: "after the backfill" },
+      );
+      expect(write.error).toBeUndefined();
+    } finally {
+      await mode.close();
+    }
+  });
+
+  it("refuses a service DID's open of a DID with no store, and creates none", async () => {
+    const service = await did(54);
+    const mode = modeA({ serviceDids: [service] });
+    try {
+      const space = await did(55);
+      const refused = await (await connect(mode.server, service)).open(space);
+      expect(refused.error?.name).toBe("AuthorizationError");
+      expect(mode.storeExists(space)).toBe(false);
+    } finally {
+      await mode.close();
+    }
+  });
+
+  it("refuses a service DID on a space with no history, so its own DID writes the genesis ACL", async () => {
+    const service = await did(56);
+    const mode = modeA({ serviceDids: [service] });
+    try {
+      const space = await did(57);
+      const creator = await connect(mode.server, space);
+      const opened = await creator.open(space);
+      expect(opened.error).toBeUndefined();
+      // The store exists now, with no history. Admitted here, an operator
+      // could write a genesis ACL the space's key never chose.
+      const operator = await connect(mode.server, service);
+      const refused = await operator.open(space);
+      expect(refused.error?.name).toBe("AuthorizationError");
+      const genesis = await creator.write(
+        space,
+        sessionOf(opened),
+        `of:${space}`,
+        { [owner]: "OWNER" },
+      );
+      expect(genesis.error).toBeUndefined();
+      // With an ACL, the operator acts as OWNER, as on every such space.
+      expect((await operator.open(space)).error).toBeUndefined();
+    } finally {
+      await mode.close();
+    }
+  });
+
+  it("lets a service DID repair an ownerless or retracted ACL", async () => {
+    const service = await did(58);
+    const mode = modeA({ serviceDids: [service] });
+    try {
+      const ownerless = await did(59);
+      await mode.seed(ownerless, [{
+        op: "set",
+        id: `of:${ownerless}`,
+        value: { value: { [stranger]: "WRITE" } },
+      }]);
+      const retracted = await did(60);
+      await mode.seed(
+        retracted,
+        [{
+          op: "set",
+          id: `of:${retracted}`,
+          value: { value: { [owner]: "OWNER" } },
+        }],
+        [{ op: "delete", id: `of:${retracted}` }],
+      );
+      for (const space of [ownerless, retracted]) {
+        const before = await (await connect(mode.server, owner)).open(space);
+        expect(before.error?.name).toBe("AuthorizationError");
+        const operator = await connect(mode.server, service);
+        const opened = await operator.open(space);
+        expect(opened.error).toBeUndefined();
+        const repair = await operator.write(
+          space,
+          sessionOf(opened),
+          `of:${space}`,
+          { [owner]: "OWNER" },
+        );
+        expect(repair.error).toBeUndefined();
+        const after = await connect(mode.server, owner);
+        const session = await after.open(space);
+        expect(session.error).toBeUndefined();
+        const write = await after.write(
+          space,
+          sessionOf(session),
+          "of:profile",
+          { name: "owner" },
+        );
+        expect(write.error).toBeUndefined();
+      }
+    } finally {
+      await mode.close();
+    }
+  });
+
   it("refuses a populated space without an ACL, even to its own DID", async () => {
     const mode = modeA();
     try {
       const space = await did(47);
-      const url = resolveSpaceStoreUrl(mode.store, space as MemorySpace);
-      Deno.mkdirSync(dirname(fromFileUrl(url)), { recursive: true });
-      const engine = await Engine.open({ url });
-      Engine.applyCommit(engine, {
-        sessionId: "legacy",
-        commit: {
-          localSeq: 1,
-          reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "set",
-            id: "of:legacy",
-            value: { value: { written: "before ACLs" } },
-          }],
-        },
-      });
-      Engine.close(engine);
+      await mode.seed(space, [{
+        op: "set",
+        id: "of:legacy",
+        value: { value: { written: "before ACLs" } },
+      }]);
       const refused = await (await connect(mode.server, space)).open(space);
       expect(refused.error?.name).toBe("AuthorizationError");
     } finally {

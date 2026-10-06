@@ -26,15 +26,16 @@ assess the shared multiplexer compromise and crash blast radius, including
 sharding per toolshed. Section 5.3 of the multiplexing design must be reconciled
 with those constraints before Mode B is implemented.
 
-This stage assumes that spaces have the intended access-control documents and no
-legacy spaces are served. Those are deployment prerequisites, not properties
-established by the router. Space creation is open to any authenticated client
-when the directory has an `unlisted` rule (requirement 9); a registry the router
-enforces is planned to restrict it. Because any client can then own a space,
-operator requests such as disk-source registration are refused to the router's
-clients and accepted elsewhere only from service DIDs. The router protects
-Memory WebSockets; public HTTP routes need their own ingress and authorization
-review.
+This stage assumes that spaces have the intended access-control documents. That
+is a deployment prerequisite, not a property established by the router. Legacy
+spaces, which have history but no ACL, are refused until a service DID gives
+them an ACL, which it may do at any time. Space creation is open to any
+authenticated client when the directory has an `unlisted` rule (requirement 9);
+a registry the router enforces is planned to restrict it. Because any client can
+then own a space, operator requests such as disk-source registration are refused
+to the router's clients and accepted elsewhere only from service DIDs. The
+router protects Memory WebSockets; public HTTP routes need their own ingress and
+authorization review.
 
 ## Trust boundary
 

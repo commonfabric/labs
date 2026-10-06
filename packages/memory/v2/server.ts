@@ -2408,7 +2408,8 @@ export class Server {
       /**
        * Mode A: refuse missing ACLs and implicit legacy grants. A space with
        * no history admits only its own DID, to write its genesis ACL, and an
-       * open by anyone else creates no store for it.
+       * open by anyone else creates no store for it. A service DID may still
+       * give a space with history an ACL, or repair an invalid one.
        */
       requireExplicitAcl?: boolean;
       /**
@@ -2847,7 +2848,15 @@ export class Server {
       // admits its own DID alone, which `#resolveCapability` makes OWNER.
       const genesis = kind === "missing" && principal === space &&
         Engine.serverSeq(engine) === 0;
-      if (kind !== "valid" && !genesis) {
+      // Operators: a service DID may give a space with history an ACL, or
+      // repair an invalid one, as in direct mode, so legacy spaces can be
+      // given ACLs after cutover. It already acts as OWNER of every space
+      // that has one. A space with no history is its own DID's to create,
+      // so no operator writes its genesis ACL. An invalid ACL is a stored
+      // document, so its space has history too.
+      const operator = principal !== undefined &&
+        this.#isServicePrincipal(principal) && Engine.serverSeq(engine) > 0;
+      if (kind !== "valid" && !genesis && !operator) {
         return toError("AuthorizationError", "Routed memory request denied");
       }
     }

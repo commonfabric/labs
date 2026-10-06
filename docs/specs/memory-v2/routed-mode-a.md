@@ -128,8 +128,10 @@ or delegation ACL entries. A space is created by its own key, as
 places it on: a routed open of a DID with no store is refused, before a store is
 created, unless the space's own DID opens it there, so a listed space whose
 store has not arrived is never re-created empty. Until its genesis ACL lands,
-that DID is the space's only principal and may commit only the ACL. A populated
-space without an ACL document is refused to everyone. Routed connections refuse
+that DID is the space's only principal and may commit only the ACL. A space with
+history but no valid ACL is refused to everyone but a service DID, which may
+give it an ACL or repair an invalid one, as in direct mode, so legacy spaces can
+be given ACLs after cutover. Routed connections refuse
 `sqlite.register-disk-source`, an operator request, and in Mode A other
 connections accept it only from a service DID. Principal leases are admitted
 into the existing Server connection authority; each session and protected engine
