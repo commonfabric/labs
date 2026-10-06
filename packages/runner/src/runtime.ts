@@ -165,7 +165,9 @@ import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
 import { SpaceAccessWatch } from "./space-access-watch.ts";
 import {
+  namesApiOrigin,
   normalizeSpaceHost,
+  parseMemoryUrl,
   type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "./space-host.ts";
@@ -595,6 +597,22 @@ export interface RuntimeOptions {
    * one. Fixed for the runtime's lifetime.
    */
   spaceHostMap?: Record<string, string>;
+
+  /**
+   * Optional memory URL, for a deployed client whose deployment publishes
+   * one, such as a memory router's: the HTTP or HTTPS origin `storageManager`
+   * was opened on (StorageManager Options.memoryHost). The `remoteClient` and
+   * `browserWorker` presets set it from the host their caller opened storage
+   * on. While it is set, a host hint cannot move a space's Memory (see
+   * {@link Runtime.registerSpaceHostDetailed}). Absent, empty, or naming
+   * `apiUrl`'s own origin, there is none. Fixed for the runtime's lifetime.
+   *
+   * It is an input of its own because a storage manager does not report the
+   * host it was opened on, and because a server's own runtime opens storage
+   * on its host-internal Memory address and passes none: hints there follow
+   * storage's rules.
+   */
+  memoryUrl?: URL;
 
   storageManager: IStorageManager;
   consoleHandler?: ConsoleHandler;
@@ -1292,6 +1310,12 @@ export class Runtime {
   readonly spaceHostMap?: Record<string, string>;
 
   /**
+   * The memory URL Memory opens on, when it is not `apiUrl`
+   * ({@link RuntimeOptions.memoryUrl}).
+   */
+  readonly memoryUrl?: URL;
+
+  /**
    * Outbound `fetch` used by network builtins (e.g. `fetchJson`). Defaults to
    * the host `globalThis.fetch`; a test harness can inject a mock via
    * `RuntimeOptions.fetch`.
@@ -1901,6 +1925,7 @@ export class Runtime {
 
       this.id = options.storageManager.id;
       this.apiUrl = new URL(options.apiUrl);
+      this.memoryUrl = parseMemoryUrl(options.memoryUrl, this.apiUrl);
       // Validate eagerly, mirroring the storage layer's resolver: a
       // malformed host should fail at configuration time naming the
       // space, not mid-builtin as a bare Invalid URL.
@@ -4677,8 +4702,10 @@ export class Runtime {
    * The host explicitly known to serve a space, if any: the seed map
    * wins, then runtime-learned hints (site table). Undefined means
    * "no per-space fact" — callers choose their own default (storage
-   * and hostForSpace use apiUrl; LLM/fetch keep their module-level
-   * defaults, which may deliberately differ from apiUrl).
+   * uses the host it was opened on, which for a deployed client is
+   * `memoryUrl` where one is set and apiUrl otherwise; hostForSpace uses
+   * apiUrl; LLM/fetch keep their module-level defaults, which may
+   * deliberately differ from apiUrl).
    */
   mappedHostFor(space: MemorySpace): string | undefined {
     return this.spaceHostMap?.[space] ?? this.#dynamicHosts.get(space);
@@ -4703,7 +4730,10 @@ export class Runtime {
    * storage accepted or confirmed the hint.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
-    const normalized = this.#normalizedSpaceHost(space, host);
+    const route = this.#normalizedSpaceHost(space, host);
+    const routed = this.#memoryRoutedRegistration(space, route);
+    if (routed !== undefined) return routed.accepted;
+    const normalized = route.toString();
     const storage = this.storageManager;
     const accept = storage.registerSpaceHost !== undefined
       ? storage.registerSpaceHost(space, normalized)
@@ -4718,12 +4748,23 @@ export class Runtime {
    * says why when storage refuses it. A storage manager that gives only a
    * verdict has its refusal reported as `unspecified`, and one that takes no
    * hints at all as `no-remote-resolution`.
+   *
+   * While a memory URL is set, the runtime decides an unseeded space's hint
+   * before storage sees it: Memory stays on the memory URL, which places
+   * every space itself, and a hint carries a space's Memory as well as its
+   * HTTP work. A hint naming `apiUrl`'s origin names the default route, and
+   * is accepted without being recorded. Any other host is refused as
+   * `memory-routed`. A seeded space keeps the seed's rules, since the seed is
+   * the embedder's own configuration.
    */
   registerSpaceHostDetailed(
     space: MemorySpace,
     host: string,
   ): SpaceHostRegistration {
-    const normalized = this.#normalizedSpaceHost(space, host);
+    const route = this.#normalizedSpaceHost(space, host);
+    const routed = this.#memoryRoutedRegistration(space, route);
+    if (routed !== undefined) return routed;
+    const normalized = route.toString();
     const storage = this.storageManager;
     let registration: SpaceHostRegistration;
     if (storage.registerSpaceHostDetailed !== undefined) {
@@ -4740,13 +4781,28 @@ export class Runtime {
   }
 
   /**
-   * Returns the normalized origin of `host`. A host that is not an HTTP or
-   * HTTPS origin throws an error naming `space`, with the validation error as
-   * its cause.
+   * The verdict on a hint while a memory URL is set, or `undefined` when
+   * storage decides: there is no memory URL, or the seed map lists the space.
+   * See {@link registerSpaceHostDetailed}.
    */
-  #normalizedSpaceHost(space: MemorySpace, host: string): string {
+  #memoryRoutedRegistration(
+    space: MemorySpace,
+    route: URL,
+  ): SpaceHostRegistration | undefined {
+    if (this.memoryUrl === undefined) return undefined;
+    if (this.spaceHostMap?.[space] !== undefined) return undefined;
+    return namesApiOrigin(route, this.apiUrl)
+      ? { accepted: true }
+      : { accepted: false, reason: "memory-routed" };
+  }
+
+  /**
+   * Returns `host` parsed as an HTTP or HTTPS origin. A host that is not one
+   * throws an error naming `space`, with the validation error as its cause.
+   */
+  #normalizedSpaceHost(space: MemorySpace, host: string): URL {
     try {
-      return normalizeSpaceHost(host).toString();
+      return normalizeSpaceHost(host);
     } catch (cause) {
       if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(

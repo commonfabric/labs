@@ -1,5 +1,10 @@
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { parseFlagValue } from "@commonfabric/runner/experimental-posture";
+import {
+  holdMemoryUrl,
+  resolveMemoryUrl,
+  type ShellMemoryUrl,
+} from "./memory-url.ts";
 
 declare global {
   var $ENVIRONMENT: string | undefined;
@@ -56,6 +61,25 @@ export const ENVIRONMENT: "development" | "production" =
 export const API_URL: URL = new URL(
   API_URL_DEFINE ||
     `${globalThis.location.protocol}//${globalThis.location.host}`,
+);
+
+/**
+ * The memory URL this page's worker opens Memory on ({@link resolveMemoryUrl}).
+ * The shell's entry calls `prefetch` as early as it can, so that a page which
+ * has to read the API URL's meta document does so alongside the rest of
+ * startup, and the root view awaits `get` before creating each runtime. The
+ * first runtime takes that read's result, unless it is a transient failure
+ * more than ten seconds old. A result that is not a transient failure is kept
+ * for the page's lifetime; a transient failure is not ({@link holdMemoryUrl}),
+ * so the next runtime the page creates reads again.
+ */
+export const shellMemoryUrl: ShellMemoryUrl = holdMemoryUrl(
+  () =>
+    resolveMemoryUrl(
+      globalThis.document,
+      API_URL,
+      globalThis.location?.origin,
+    ),
 );
 
 export const COMMIT_SHA: string | undefined = COMMIT_SHA_DEFINE;

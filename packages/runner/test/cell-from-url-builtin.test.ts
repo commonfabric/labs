@@ -189,6 +189,63 @@ describe("cellFromUrl builtin", () => {
     expect(resolved).toBeUndefined();
   });
 
+  for (const memoryUrl of [undefined, new URL("https://router.example/")]) {
+    describe(
+      `an explicit toolshed ${
+        memoryUrl === undefined ? "without" : "under"
+      } a memory URL`,
+      () => {
+        // Storage that takes every hint, so a refusal comes from the runtime.
+        beforeEach(() => {
+          storageManager = Object.assign(
+            StorageManager.emulate({ as: signer }),
+            { registerSpaceHostDetailed: () => ({ accepted: true }) as const },
+          );
+          runtime = new Runtime({
+            apiUrl: new URL("https://app.example/"),
+            ...(memoryUrl === undefined ? {} : { memoryUrl }),
+            storageManager,
+          });
+          tx = runtime.edit();
+          const { commonfabric } = createTrustedBuilder(runtime);
+          pattern = commonfabric.pattern;
+          byRef = commonfabric.byRef;
+        });
+
+        it("resolves through the API host, which is the default route", async () => {
+          const id = anExistingCell();
+          const { id: resolved } = await resolve(
+            `//${space}/${id}`,
+            undefined,
+            "https://app.example",
+          );
+          expect(resolved).toBe(id);
+          expect(runtime.mappedHostFor(space)).toBe(
+            memoryUrl === undefined ? "https://app.example/" : undefined,
+          );
+        });
+
+        it(
+          memoryUrl === undefined
+            ? "resolves through another host"
+            : "cannot route the space to another host",
+          async () => {
+            const id = anExistingCell();
+            const { id: resolved } = await resolve(
+              `//${space}/${id}`,
+              undefined,
+              "https://remote.example",
+            );
+            expect(resolved).toBe(memoryUrl === undefined ? id : undefined);
+            expect(runtime.mappedHostFor(space)).toBe(
+              memoryUrl === undefined ? "https://remote.example/" : undefined,
+            );
+          },
+        );
+      },
+    );
+  }
+
   it("resolves a slug to the document that redirects to the piece", async () => {
     const { id: resolved } = await resolve(
       `https://fabric.example/${space}/my-note`,

@@ -6,10 +6,11 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
-  experimentalOptionsForDeployedClient,
+  memoryHostNote,
   type MemorySpace,
   Runtime,
   runtimePresets,
+  settingsForDeployedClient,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { AgentFabricTarget } from "@commonfabric/agents-connector/fabric";
@@ -64,7 +65,9 @@ export async function openAgentFabricRuntime(options: {
   // own stage, ahead of the storage manager, so a startup cancelled while the
   // deployment is slow to answer leaves nothing allocated behind — the
   // request carries the signal, and every later stage is already cancellable.
-  const experimental = await experimentalOptionsForDeployedClient({
+  // The same document names the memory URL Memory opens on, where the
+  // deployment has one.
+  const { experimental, memoryHost } = await settingsForDeployedClient({
     apiUrl,
     env: (key) => Deno.env.get(key),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
@@ -74,13 +77,14 @@ export async function openAgentFabricRuntime(options: {
   const createRuntime = () => {
     const storageManager = StorageManager.open({
       as: session.as,
-      memoryHost: apiUrl,
+      memoryHost,
     });
     const resourceIndex = allocatedResources.push(
       () => storageManager.close(),
     ) - 1;
     const runtime = new Runtime(runtimePresets.remoteClient({
       apiUrl,
+      memoryHost,
       storageManager,
       experimental,
       trustSnapshotProvider: () => ({
@@ -127,7 +131,10 @@ export async function openAgentFabricRuntime(options: {
     const runtime = createRuntime();
     const graphRuntime = createRuntime();
     if (!(await stage(runtime.healthCheck(options.signal)))) {
-      throw new Error(`could not connect to ${apiUrl.origin}`);
+      throw new Error(
+        `could not connect to ${apiUrl.origin}` +
+          memoryHostNote(memoryHost, apiUrl),
+      );
     }
     options.signal?.throwIfAborted();
     const manager = new PiecesController(session, runtime);

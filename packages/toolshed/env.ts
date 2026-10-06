@@ -1,6 +1,10 @@
 import * as Path from "@std/path";
 
 import { z } from "zod";
+import {
+  isLoopbackHostname,
+  readMemoryUrl,
+} from "@commonfabric/runner/space-host";
 
 // Parse CLI args for --port (needed because deno --watch doesn't pass env vars)
 function parseCliArgs(): Record<string, string> {
@@ -119,6 +123,13 @@ export const EnvSchema = z.object({
   //  - DB_PATH is an optional absolute path to a single SQLite database file
   //    holding every space (single-file mode - takes precedence over MEMORY_DIR)
   //  - MEMORY_URL is used by toolshed to connect to memory endpoint
+  //  - MEMORY_PUBLIC_URL is where this deployment's clients open Memory, for a
+  //    deployment that puts a memory router in front of its toolsheds. It is
+  //    published on /api/meta and in the shell page. MEMORY_URL is this
+  //    server's own, host-internal address and is never published. Empty:
+  //    clients open Memory on the API host. A value that is not an HTTP or
+  //    HTTPS origin refuses startup, and an http:// one that is not loopback
+  //    is warned about, since an https page cannot open its socket.
   //
 
   MEMORY_DIR: z.string().default(
@@ -129,6 +140,28 @@ export const EnvSchema = z.object({
     { message: "DB_PATH must be an absolute path" },
   ).optional(),
   MEMORY_URL: z.string().default("http://localhost:8000"),
+  MEMORY_PUBLIC_URL: z.string().default("").transform((value, ctx) => {
+    const read = readMemoryUrl(value);
+    if ("refused" in read) {
+      ctx.addIssue({
+        code: "custom",
+        message: `MEMORY_PUBLIC_URL must be an HTTP or HTTPS origin: ` +
+          `${read.refused}`,
+      });
+      return z.NEVER;
+    }
+    const memoryUrl = read.memoryUrl;
+    if (
+      memoryUrl?.protocol === "http:" &&
+      !isLoopbackHostname(memoryUrl.hostname)
+    ) {
+      console.warn(
+        `MEMORY_PUBLIC_URL ${memoryUrl.origin} is http://: a shell served ` +
+          `over https cannot open its Memory socket.`,
+      );
+    }
+    return memoryUrl?.origin;
+  }),
 
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),

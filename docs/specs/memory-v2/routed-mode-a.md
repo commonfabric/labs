@@ -51,14 +51,41 @@ or saturated, not whether a space exists or what its ACL grants; without an
 `sharedMemoryConnection` controls the runner's socket topology. Both topologies
 supply a `SessionPrincipal`, so authentication follows the peer's advertised
 capabilities. A routed peer always requires signed `connection.auth`; a direct
-peer without that capability receives signed `session.open`. A deployment can
-install routed-capable clients and toolsheds with sharing off, move Memory
-WebSockets from nginx to this router, verify dedicated connections, then enable
-sharing. Clients that only sign direct session opens require an SDK update
-before that switch. Each dedicated socket consumes its own isolated worker and
-source-admission slot. A retriable reopen denial holds only its session, which
-retries on the same connection, so on a shared socket one toolshed that is down
-does not stall the other spaces.
+peer without that capability receives signed `session.open`. Clients learn the
+router from the deployment: the shell from the page a compiled toolshed serves,
+or from its API URL's `/api/meta` when the page states none or came from
+another origin, such as a CDN copy; `cf`, FUSE mounts and the connector hosts
+from `/api/meta`. Only Memory moves; the HTTP APIs stay on the API host, and a
+host hint cannot move a space's Memory off the router. A deployment rolls the
+router out in this order:
+
+1. Install routed-capable clients and toolsheds with sharing off.
+2. Give the router its own hostname, set it as every toolshed's
+   `MEMORY_PUBLIC_URL`, and restart the toolsheds.
+3. Verify that clients open dedicated connections to the router: in a browser,
+   the shell's `/api/storage/memory` WebSocket connects to the router's
+   hostname, and `cf acl ls --space <space>` run against the API URL succeeds
+   while the app host's access log shows no Memory upgrade from it.
+4. Enable sharing: set `EXPERIMENTAL_SHARED_MEMORY_CONNECTION=true` on every
+   toolshed and restart them. The flag is server-authoritative, so `cf`, FUSE
+   mounts and the connector hosts adopt it from `/api/meta`. The shell does
+   not; it takes the build define of the same name, so build the toolshed, and
+   any CDN shell copy, with the variable set as well.
+5. Stop the app host forwarding `/api/storage/memory` to the toolsheds, and
+   close the toolsheds' public direct Memory listeners (see the infra router
+   README), once the app host's access log has shown no WebSocket upgrade on
+   `/api/storage/memory` for seven days. Until then some clients still open
+   Memory on the API host: `cf` binaries and connector hosts built before the
+   memory URL existed, CDN shell copies built before it, shell tabs opened
+   before step 2, and any client that could not read `/api/meta` when it
+   started, which logs a `[deployment-meta]` warning naming the API host. A
+   client that only signs direct session opens cannot use the router at all,
+   so it is one of these until it is updated.
+
+Each dedicated socket consumes its own isolated worker and source-admission
+slot. A retriable reopen denial holds only its session, which retries on the
+same connection, so on a shared socket one toolshed that is down does not stall
+the other spaces.
 
 The router issues a challenge through its link agent's channel-assigned context.
 A client completes it within 60 seconds. The agent verifies the fixed-format
@@ -180,7 +207,9 @@ resource bounds and exact values are in the infra router README.
 deployment, private bind hostname/port, certificate/key paths, shared
 authoritative directory, durable epoch ledger and per-router DID/network-peer
 allowlists. Directory storage, `MEMORY_ACL_MODE=enforce` and
-`EXPERIMENTAL_MODERN_CELL_REP=true` are mandatory. The policy initializes the
+`EXPERIMENTAL_MODERN_CELL_REP=true` are mandatory. `MEMORY_PUBLIC_URL` names
+the router's public origin, the same on every toolshed, which clients open
+Memory on (see the configuration reference). The policy initializes the
 Memory encoder before listening; Runtime startup reads the same required flag.
 Only owned spaces open a Memory session: explicit-ACL spaces, and a space with
 no history to its own DID. The toolshed's HTTP routes, such as blobs and

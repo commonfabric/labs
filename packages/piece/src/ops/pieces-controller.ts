@@ -31,7 +31,6 @@ import {
   type EntityIdListResult,
   type EnvReader,
   type ExperimentalOptions,
-  experimentalOptionsForDeployedClient,
   getEntityId,
   getMetaLink,
   getPatternIdentityRef,
@@ -46,6 +45,7 @@ import {
   isStream,
   type JSONSchema,
   KeepAsCell,
+  memoryHostNote,
   type MemorySpace,
   type Module,
   type ModuleByteCache,
@@ -65,6 +65,7 @@ import {
   sendEvent,
   setPatternRepository,
   setPatternSource,
+  settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
@@ -260,6 +261,10 @@ export class PiecesController<T = unknown> {
    * authorization error. A connection that does not complete takes its socket
    * and its replica down with it.
    *
+   * Memory opens on the memory URL the deployment publishes on its meta
+   * document, where it publishes one (`settingsForDeployedClient`), and on
+   * `apiUrl` otherwise. The health check does not ask the memory host.
+   *
    * A pattern that reaches the LLM reaches this deployment's service.
    */
   static async initialize(
@@ -304,7 +309,7 @@ export class PiecesController<T = unknown> {
       /**
        * The experimental posture the controller's runtime runs under. Absent,
        * it is the deployment's own, with this process's explicit
-       * `EXPERIMENTAL_*` winning per flag (`experimentalOptionsForDeployedClient`).
+       * `EXPERIMENTAL_*` winning per flag (`settingsForDeployedClient`).
        * A caller that had to know the posture before opening the session — a
        * host that decides something on it, a test that states the arm it
        * exercises — passes what it resolved, so the runtime runs the posture
@@ -362,9 +367,16 @@ export class PiecesController<T = unknown> {
       identity,
       spaceDid: isDID(space) ? space : await legacySpaceDid(space),
     });
+    // The deployment's meta document names the memory URL Memory opens on,
+    // where it has one, so it is read even when the caller states the flags.
+    const deployment = await settingsForDeployedClient({
+      apiUrl: api,
+      env: readEnv,
+    });
+    const memoryHost = deployment.memoryHost;
     const storageManager = StorageManager.open({
       as: session.as,
-      memoryHost: api,
+      memoryHost,
     });
     // Shared first-party posture for client runtimes against a deployed API
     // (CT-1814); the CFC pin this site previously restated lives in the
@@ -382,12 +394,9 @@ export class PiecesController<T = unknown> {
     try {
       runtime = new Runtime(runtimePresets.remoteClient({
         apiUrl: api,
+        memoryHost,
         storageManager,
-        experimental: experimental ??
-          await experimentalOptionsForDeployedClient({
-            apiUrl: api,
-            env: readEnv,
-          }),
+        experimental: experimental ?? deployment.experimental,
         moduleByteCache,
         patternCoverage,
         ...(cfcEnforcementMode !== undefined ? { cfcEnforcementMode } : {}),
@@ -408,7 +417,10 @@ export class PiecesController<T = unknown> {
         }),
       }));
       if (!await runtime.healthCheck()) {
-        throw new Error(`Could not connect to "${api.toString()}".`);
+        throw new Error(
+          `Could not connect to "${api.toString()}".` +
+            memoryHostNote(memoryHost, api),
+        );
       }
       const pieces = new PiecesController(session, runtime, {
         deferSpaceCellSync,

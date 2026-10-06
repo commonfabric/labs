@@ -164,11 +164,20 @@ async () => {
   }
   try {
     for (const [space, host] of Object.entries(foreignSpaces)) {
-      if (
-        !isDIDKey(space) || space === pieces.getSpace() ||
-        !pieces.runtime.registerSpaceHost(space, host)
-      ) {
+      if (!isDIDKey(space) || space === pieces.getSpace()) {
         throw new Error("Foreign space host route was refused by the session");
+      }
+      const registration = pieces.runtime.registerSpaceHostDetailed(
+        space,
+        host,
+      );
+      if (!registration.accepted) {
+        // `memory-routed` is the deployment's: it opens Memory on a memory
+        // URL, which no foreign host can join.
+        throw new Error(
+          "Foreign space host route was refused by the session " +
+            `(${registration.reason})`,
+        );
       }
     }
   } catch (error) {

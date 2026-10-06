@@ -2,7 +2,10 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fabricAuthorityMatchesSpaceHost,
+  namesApiOrigin,
   normalizeSpaceHost,
+  parseMemoryUrl,
+  readMemoryUrl,
   spaceHostFromFabricAuthority,
   SpaceHostValidationError,
 } from "../src/space-host.ts";
@@ -184,6 +187,105 @@ describe("space-host", () => {
           )
         ).toThrow();
       }
+    });
+  });
+
+  describe("parseMemoryUrl", () => {
+    const apiUrl = new URL("https://app.example/base/");
+
+    it("reads an origin of another host, and none for the API host's own", () => {
+      expect(parseMemoryUrl("https://router.example", apiUrl)?.href).toBe(
+        "https://router.example/",
+      );
+      for (const none of [undefined, "", "https://app.example"]) {
+        expect(parseMemoryUrl(none, apiUrl)).toBeUndefined();
+      }
+    });
+
+    it("returns none for the API URL itself, path and all, before the origin rule applies", () => {
+      // A client with no memory URL hands on the host its storage opened on,
+      // which is the API URL as it stands.
+      for (
+        const value of [
+          "https://app.example/base/",
+          new URL("https://app.example/base/"),
+          "https://app.example/other?q",
+        ]
+      ) {
+        expect(parseMemoryUrl(value, apiUrl)).toBeUndefined();
+      }
+      // Without an API URL to compare with, the origin rule decides.
+      expect(captureError(() => parseMemoryUrl("https://app.example/base/")))
+        .toBeInstanceOf(SpaceHostValidationError);
+    });
+
+    it("refuses what is not an origin, calling it a memory URL", () => {
+      for (
+        const [value, message] of [
+          ["router.example", "Invalid memory URL"],
+          ["wss://router.example", "Unsupported memory URL protocol"],
+          [
+            "https://u@router.example",
+            "Memory URL must not include credentials",
+          ],
+          ["https://router.example/api", "Memory URL must not include a path"],
+          ["https://router.example/?a", "Memory URL must not include a query"],
+          [
+            "https://router.example/#a",
+            "Memory URL must not include a fragment",
+          ],
+          [
+            "https://router.example\\",
+            "Memory URL must contain only an origin",
+          ],
+        ]
+      ) {
+        const error = captureError(() => parseMemoryUrl(value, apiUrl));
+        expect(error).toBeInstanceOf(SpaceHostValidationError);
+        expect(error.message, value).toBe(message);
+      }
+    });
+
+    it("leaves a space host's refusals worded for a space host", () => {
+      expect(
+        captureError(() => normalizeSpaceHost("https://h.example/api")).message,
+      )
+        .toBe("Space host must not include a path");
+    });
+  });
+
+  describe("readMemoryUrl", () => {
+    it("returns the reason it refuses a value rather than throwing", () => {
+      expect(readMemoryUrl("https://router.example/api")).toEqual({
+        refused: "Memory URL must not include a path",
+      });
+      expect(readMemoryUrl(42)).toEqual({ refused: "expected a string" });
+      expect(readMemoryUrl(null)).toEqual({ memoryUrl: undefined });
+      expect(readMemoryUrl("https://router.example")).toEqual({
+        memoryUrl: new URL("https://router.example/"),
+      });
+    });
+  });
+
+  describe("namesApiOrigin", () => {
+    it("compares origins, so a path on the API URL is the same host", () => {
+      const apiUrl = new URL("https://app.example/base/");
+      expect(namesApiOrigin(new URL("https://app.example"), apiUrl)).toBe(true);
+      expect(namesApiOrigin(new URL("https://app.example:8443"), apiUrl))
+        .toBe(false);
+      expect(namesApiOrigin(new URL("http://app.example"), apiUrl)).toBe(false);
+    });
+
+    it("names nothing with an opaque origin", () => {
+      expect(namesApiOrigin(new URL("memory://a"), new URL("memory://b")))
+        .toBe(false);
+    });
+
+    it("names nothing with a URL that is not HTTP or HTTPS, even one that reports the API URL's origin", () => {
+      const apiUrl = new URL("https://app.example/");
+      const blob = new URL("blob:https://app.example/x");
+      expect(blob.origin).toBe(apiUrl.origin);
+      expect(namesApiOrigin(blob, apiUrl)).toBe(false);
     });
   });
 });

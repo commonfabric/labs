@@ -46,6 +46,7 @@ const spaceSigner = await Identity.fromPassphrase(
 const space = spaceSigner.did();
 const federatedSpace = "did:key:z6MkInitializationDataReachFederated" as DID;
 const apiUrl = "http://initialization-data-reach.test/";
+const memoryUrl = "http://router.initialization-data-reach.test/";
 const federatedHost = "http://federated.initialization-data-reach.test/";
 
 /**
@@ -55,6 +56,7 @@ const federatedHost = "http://federated.initialization-data-reach.test/";
  */
 const SENT = {
   apiUrl,
+  memoryUrl,
   spaceHostMap: { [federatedSpace]: federatedHost },
   identity: signer.keyPair,
   spaceDid: space,
@@ -128,6 +130,11 @@ const REACH = {
   apiUrl: {
     reads: (o) => o.runtime.apiUrl.href,
     expected: apiUrl,
+  },
+  memoryUrl: {
+    // Storage's default host, which is the only thing it moves.
+    reads: (o) => o.storage.memoryHost.href,
+    expected: memoryUrl,
   },
   spaceHostMap: {
     reads: (o) => o.runtime.spaceHostMap,

@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
-  experimentalOptionsForDeployedClient,
   SERVER_EXPERIMENTAL_PATH,
+  settingsForDeployedClient,
 } from "@commonfabric/runner";
 import env from "@/env.ts";
 import createApp from "@/lib/create-app.ts";
@@ -32,7 +32,32 @@ Deno.test("meta routes", async (t) => {
     // A source run has no compiled marker: the shell's baked
     // server-execution define is unknown (null), like gitSha.
     assertEquals(json.shellServerExecutionDefine, null);
+    // No MEMORY_PUBLIC_URL: clients open Memory on the API host.
+    assertEquals(json.memoryUrl, null);
   });
+
+  await t.step(
+    "GET /api/meta publishes MEMORY_PUBLIC_URL, which a deployed client opens Memory on",
+    async () => {
+      const previous = env.MEMORY_PUBLIC_URL;
+      env.MEMORY_PUBLIC_URL = "https://router.test";
+      try {
+        const json = await (await app.request("/api/meta")).json();
+        assertEquals(json.memoryUrl, "https://router.test");
+        // The client and the route agree on the field's name and form,
+        // through the real handler.
+        const settings = await settingsForDeployedClient({
+          apiUrl: new URL("http://toolshed.test"),
+          env: () => undefined,
+          fetch: async (input) =>
+            await app.request(new URL(String(input)).pathname),
+        });
+        assertEquals(settings.memoryHost.href, "https://router.test/");
+      } finally {
+        env.MEMORY_PUBLIC_URL = previous;
+      }
+    },
+  );
 
   await t.step(
     "GET /api/meta reports no posture until one is published",
@@ -125,7 +150,7 @@ Deno.test("meta routes", async (t) => {
 
   await t.step("a client resolves its posture from this response", async () => {
     // The two halves meet only in the shape of this document: the route
-    // decides the field, `experimentalOptionsForDeployedClient` reads it, and
+    // decides the field, `settingsForDeployedClient` reads it, and
     // nothing else would notice one of them renaming it. Driven through the
     // real handler rather than a fixture, for exactly that reason.
     publishExperimentalPosture({
@@ -133,7 +158,7 @@ Deno.test("meta routes", async (t) => {
       lazyMaterialization: false,
     });
     try {
-      const adopted = await experimentalOptionsForDeployedClient({
+      const { experimental: adopted } = await settingsForDeployedClient({
         apiUrl: new URL("http://toolshed.test"),
         // An explicit override still outranks what the server publishes.
         env: (name) =>

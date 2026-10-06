@@ -133,6 +133,141 @@ describe("Runtime.registerSpaceHost", () => {
       }
     });
 
+    describe("under a memory URL", () => {
+      /** A runtime whose storage takes every hint and records what it saw. */
+      function routedRuntime(
+        options: {
+          apiUrl?: URL;
+          memoryUrl?: URL;
+          spaceHostMap?: Record<string, string>;
+        },
+      ) {
+        const seen: string[] = [];
+        const storageManager = Object.assign(
+          StorageManager.emulate({ as: signer }),
+          {
+            registerSpaceHostDetailed(_space: string, host: string) {
+              seen.push(host);
+              return { accepted: true } as const;
+            },
+          },
+        );
+        const runtime = new Runtime({
+          apiUrl: new URL("http://host-a.test/"),
+          storageManager,
+          ...options,
+        });
+        return { runtime, seen };
+      }
+
+      it("accepts the API host as the default route without recording it", async () => {
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+        });
+        try {
+          expect(runtime.memoryUrl?.href).toBe("http://router.test/");
+          expect(
+            runtime.registerSpaceHostDetailed(spaceB, "http://host-a.test"),
+          )
+            .toEqual({ accepted: true });
+          expect(runtime.registerSpaceHost(spaceB, "http://host-a.test/"))
+            .toBe(true);
+          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+          expect(seen).toEqual([]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("refuses any other host as `memory-routed`", async () => {
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+        });
+        try {
+          for (const host of ["http://host-b.test/", "http://router.test/"]) {
+            expect(runtime.registerSpaceHostDetailed(spaceB, host))
+              .toEqual({ accepted: false, reason: "memory-routed" });
+            expect(runtime.registerSpaceHost(spaceB, host)).toBe(false);
+          }
+          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+          expect(seen).toEqual([]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("leaves a seeded space to storage", async () => {
+        const spaceC = "did:key:z6Mk-host-for-space-c" as MemorySpace;
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://router.test/"),
+          spaceHostMap: { [spaceC]: "http://seed.test/" },
+        });
+        try {
+          expect(runtime.registerSpaceHostDetailed(spaceC, "http://seed.test/"))
+            .toEqual({ accepted: true });
+          expect(seen).toEqual(["http://seed.test/"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("has none when it names the API host's own origin", async () => {
+        const { runtime, seen } = routedRuntime({
+          memoryUrl: new URL("http://host-a.test"),
+        });
+        try {
+          expect(runtime.memoryUrl).toBeUndefined();
+          expect(
+            runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test/"),
+          )
+            .toEqual({ accepted: true });
+          expect(seen).toEqual(["http://host-b.test/"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("accepts the API host's origin as the default route when the API URL has a path", async () => {
+        const { runtime, seen } = routedRuntime({
+          apiUrl: new URL("http://host-a.test/fabric/"),
+          memoryUrl: new URL("http://router.test/"),
+        });
+        try {
+          expect(
+            runtime.registerSpaceHostDetailed(spaceB, "http://host-a.test"),
+          )
+            .toEqual({ accepted: true });
+          expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+          expect(seen).toEqual([]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("has none when it is the API URL itself, path and all", async () => {
+        // A deployed client whose deployment publishes no memory URL hands
+        // the runtime the host its storage opened on, which is the API URL.
+        const apiUrl = new URL("http://host-a.test/fabric/");
+        const { runtime, seen } = routedRuntime({ apiUrl, memoryUrl: apiUrl });
+        try {
+          expect(runtime.memoryUrl).toBeUndefined();
+          expect(
+            runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test/"),
+          )
+            .toEqual({ accepted: true });
+          expect(seen).toEqual(["http://host-b.test/"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("refuses construction when it is not an HTTP or HTTPS origin", () => {
+        expect(() =>
+          routedRuntime({ memoryUrl: new URL("http://router.test/api") })
+        ).toThrow(SpaceHostValidationError);
+      });
+    });
+
     it("returns `no-remote-resolution` from an emulated manager", async () => {
       const runtime = makeRuntime();
       try {

@@ -27,8 +27,8 @@
  *    that is not built alongside its server follows the deployment or runs
  *    its own value — type-gated the same way, because a `cf` binary silently
  *    disagreeing with the server it talks to is the same drift one release
- *    further out. {@link experimentalOptionsForDeployedClient} is what such
- *    a client calls instead of {@link experimentalOptionsFromEnv}.
+ *    further out. `settingsForDeployedClient` (`deployment-meta.ts`) is what
+ *    such a client calls instead of {@link experimentalOptionsFromEnv}.
  * 4. Every preset composes the same {@link coreOptions}, so the invariant
  *    posture (today: the CFC dials) is written once. The conformance test
  *    (`runner/test/runtime-presets.test.ts`) pins each preset's full output
@@ -55,8 +55,7 @@
  * |                            | `serverExecution` to the first-party default     |
  * |                            | constant; the single-process presets keep the    |
  * |                            | constructor default (OFF). A deployed CLIENT     |
- * |                            | passes what                                      |
- * |                            | `experimentalOptionsForDeployedClient` resolved  |
+ * |                            | passes what `settingsForDeployedClient` resolved |
  * |                            | from the server it talks to (Gate 3)             |
  * | cfcEnforcementMode         | core-pinned `"enforce-strict"`; overridable in   |
  * |                            | patternTest/unitTest (per-test laxer mode) and   |
@@ -121,6 +120,9 @@
  * | trustSnapshotProvider      | delta (remoteClient, browserWorker)              |
  * | spaceHostMap               | delta (browserWorker only — federation routing   |
  * |                            | is decided by the shell host)                    |
+ * | memoryUrl                  | delta (remoteClient, browserWorker) — from the   |
+ * |                            | `memoryHost` param, the host the caller opened   |
+ * |                            | its storage manager on                           |
  * | commitBackpressure         | core-default; unitTest delta (scheduler tests    |
  * |                            | shrink the backoff window)                       |
  * | debug                      | core-default everywhere                          |
@@ -192,6 +194,7 @@ import type { RuntimeTelemetry } from "./telemetry.ts";
 export const RUNTIME_OPTION_KEYS = [
   "apiUrl",
   "spaceHostMap",
+  "memoryUrl",
   "storageManager",
   "consoleHandler",
   "errorHandlers",
@@ -239,12 +242,10 @@ const _unclassifiedOptions: never[] = [] as MissingOptionKeys[];
 export {
   ADOPT_SERVER_FLAGS_ENV,
   adoptServerExperimentalOptions,
-  type DeployedClientExperimentalParams,
   type EnvReader,
   EXPERIMENTAL_ENV_VARS,
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
-  experimentalOptionsForDeployedClient,
   experimentalOptionsFromEnv,
   parseFlagValue,
   parseServerExperimentalOptions,
@@ -530,6 +531,13 @@ export interface ProductionServerPresetParams extends CoreParams {
 }
 
 export interface RemoteClientPresetParams extends CoreParams {
+  /**
+   * The host `storageManager` was opened on, as `settingsForDeployedClient`
+   * gives it: the deployment's memory URL, or `apiUrl`. It becomes
+   * `RuntimeOptions.memoryUrl`, which reads `apiUrl`'s origin as none.
+   */
+  memoryHost?: URL;
+
   errorHandlers?: ErrorHandler[];
   navigateCallback?: NavigateCallback;
 
@@ -605,6 +613,13 @@ export interface PatternTestPresetParams extends CoreParams {
 export interface BrowserWorkerPresetParams extends CoreParams {
   /** Map from space DIDs to HTTP or HTTPS origins selected by the shell host. */
   spaceHostMap?: Record<string, string>;
+
+  /**
+   * The host `storageManager` was opened on, from `InitializationData`: its
+   * memory URL, or `apiUrl`. It becomes `RuntimeOptions.memoryUrl`, which
+   * reads `apiUrl`'s origin as none.
+   */
+  memoryHost?: URL;
 
   /** Host-controlled rollout dial, from `InitializationData`. */
   cfcEnforcementMode?: CfcEnforcementMode;
@@ -713,6 +728,9 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.apiUrl },
+      ...(params.memoryHost !== undefined
+        ? { memoryUrl: params.memoryHost }
+        : {}),
       ...(params.cfcEnforcementMode !== undefined
         ? { cfcEnforcementMode: params.cfcEnforcementMode }
         : {}),
@@ -797,6 +815,9 @@ export const runtimePresets = {
       patternEnvironment: { apiUrl: params.apiUrl },
       ...(params.spaceHostMap !== undefined
         ? { spaceHostMap: params.spaceHostMap }
+        : {}),
+      ...(params.memoryHost !== undefined
+        ? { memoryUrl: params.memoryHost }
         : {}),
       ...(params.cfcEnforcementMode !== undefined
         ? { cfcEnforcementMode: params.cfcEnforcementMode }

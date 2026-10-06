@@ -4,10 +4,13 @@ import * as path from "@std/path";
 import { cors } from "@hono/hono/cors";
 import env from "@/env.ts";
 import createApp, { createRouter } from "@/lib/create-app.ts";
-import router from "@/routes/shell/shell.index.ts";
+import { generateETag } from "@commonfabric/static/etag";
+import { MEMORY_URL_META_NAME } from "@commonfabric/runner/deployment-meta";
+import router, { compiledShellRouter } from "@/routes/shell/shell.index.ts";
 import {
   createShellStaticRouter,
   StaticResponse,
+  withMemoryUrlMeta,
 } from "@/routes/shell/shell-static.ts";
 
 if (env.ENV !== "test") {
@@ -252,6 +255,192 @@ describe("createShellStaticRouter", () => {
     const first = await staticApp.request("/app.js");
     const second = await staticApp.request("/app.js");
     expect(first.headers.get("ETag")).toBe(second.headers.get("ETag"));
+  });
+});
+
+describe("a compiled toolshed's shell router", () => {
+  const PAGE =
+    "<!doctype html><html><head><title>shell</title></head><body>index</body></html>";
+  const pageWith = (content: string) =>
+    PAGE.replace(
+      "</head>",
+      `<meta name="${MEMORY_URL_META_NAME}" content="${content}"></head>`,
+    );
+  const PUBLISHED = pageWith("https://router.test");
+  let pageDir: string;
+  let plain: ReturnType<typeof createApp>;
+  let published: ReturnType<typeof createApp>;
+  let unpublished: ReturnType<typeof createApp>;
+
+  beforeAll(async () => {
+    pageDir = await Deno.makeTempDir();
+    await Deno.writeTextFile(path.join(pageDir, "index.html"), PAGE);
+    await Deno.writeTextFile(path.join(pageDir, "app.js"), APP_JS);
+    plain = createApp().route("/", createShellStaticRouter(pageDir));
+    published = createApp().route(
+      "/",
+      await compiledShellRouter(
+        pageDir,
+        { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
+        "commit-123",
+      ),
+    );
+    unpublished = createApp().route(
+      "/",
+      await compiledShellRouter(
+        pageDir,
+        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        null,
+      ),
+    );
+  });
+
+  afterAll(async () => {
+    await Deno.remove(pageDir, { recursive: true });
+  });
+
+  it("serves the page as built from a router given no index", async () => {
+    expect(await (await plain.request("/")).text()).toBe(PAGE);
+  });
+
+  it("publishes the memory URL on every path that resolves to index.html", async () => {
+    for (
+      const url of [
+        "/",
+        "/index.html",
+        "//index.html",
+        "///index.html",
+        "/.//index.html",
+        "/notes/42",
+        "/builds/commit-123/",
+        "/builds/commit-123/index.html",
+        "/builds/commit-123//index.html",
+      ]
+    ) {
+      const response = await published.request(url);
+      expect(response.headers.get("Content-Type")).toBe("text/html");
+      expect(await response.text(), url).toBe(PUBLISHED);
+    }
+  });
+
+  it("publishes an empty element where the deployment has none", async () => {
+    // The shell takes it as conclusive and requests nothing more.
+    for (const url of ["/", "//index.html", "/builds/production/"]) {
+      expect(await (await unpublished.request(url)).text(), url).toBe(
+        pageWith(""),
+      );
+    }
+  });
+
+  it("builds the page once, at startup, and reads each other file once", async () => {
+    // Reads by file name, through a router of its own so that no other
+    // test's requests fill its cache first.
+    const reads = new Map<string, number>();
+    const counted = createApp().route(
+      "/",
+      await compiledShellRouter(
+        pageDir,
+        { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
+        "commit-123",
+        {
+          readFile: (filePath) => {
+            const name = path.basename(filePath);
+            reads.set(name, (reads.get(name) ?? 0) + 1);
+            return Deno.readFile(filePath);
+          },
+          generateETag,
+        },
+      ),
+    );
+    // Three spellings of one file, each of which must find what the first
+    // cached under the path it resolves to.
+    for (
+      const url of [
+        "/",
+        "/notes/1",
+        "//index.html",
+        "//app.js",
+        "/app.js",
+        "///app.js",
+      ]
+    ) {
+      await counted.request(url);
+    }
+    expect(reads.get("index.html")).toBe(1);
+    expect(reads.get("app.js")).toBe(1);
+  });
+
+  it("refuses to start on a bundle whose page has no </head>", async () => {
+    const bare = await Deno.makeTempDir();
+    try {
+      await Deno.writeTextFile(path.join(bare, "index.html"), INDEX_HTML);
+      await expect(compiledShellRouter(
+        bare,
+        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        null,
+      )).rejects.toThrow("no </head>");
+    } finally {
+      await Deno.remove(bare, { recursive: true });
+    }
+  });
+
+  it("leaves other files alone", async () => {
+    expect(await (await published.request("/app.js")).text()).toBe(APP_JS);
+  });
+
+  it("validates a cached page against the ETag of what it served", async () => {
+    const first = await published.request("/");
+    const etag = first.headers.get("ETag");
+    expect(etag).toBeTruthy();
+    expect(etag).not.toBe((await plain.request("/")).headers.get("ETag"));
+    const second = await published.request("/notes/42", {
+      headers: { "If-None-Match": etag! },
+    });
+    expect(second.status).toBe(304);
+  });
+});
+
+describe("withMemoryUrlMeta", () => {
+  const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+  const encode = (text: string) => new TextEncoder().encode(text);
+
+  it("inserts the element before </head>, whatever its case", () => {
+    expect(decode(withMemoryUrlMeta(
+      encode("<HEAD><title>t</title></HEAD ><body></body>"),
+      "https://router.test",
+    ))).toBe(
+      '<HEAD><title>t</title><meta name="cf-memory-url" ' +
+        'content="https://router.test"></HEAD ><body></body>',
+    );
+  });
+
+  it("inserts an empty element for a deployment without a memory URL", () => {
+    expect(decode(withMemoryUrlMeta(encode("<head></head>"), undefined)))
+      .toBe('<head><meta name="cf-memory-url" content=""></head>');
+  });
+
+  it("escapes the value for an attribute", () => {
+    expect(decode(withMemoryUrlMeta(
+      encode("<head></head>"),
+      `https://a.test/"><script>&'`,
+    ))).toBe(
+      '<head><meta name="cf-memory-url" content="https://a.test/&#34;&#62;' +
+        '&#60;script&#62;&#38;&#39;"></head>',
+    );
+  });
+
+  it("finds </head> in the shell's own page", async () => {
+    const page = await Deno.readFile(
+      new URL("../../../shell/public/index.html", import.meta.url),
+    );
+    expect(decode(withMemoryUrlMeta(page, "https://router.test"))).toContain(
+      '<meta name="cf-memory-url" content="https://router.test"></head>',
+    );
+  });
+
+  it("refuses a page with no </head>", () => {
+    expect(() => withMemoryUrlMeta(encode(INDEX_HTML), "https://router.test"))
+      .toThrow("no </head>");
   });
 });
 

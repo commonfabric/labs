@@ -22,11 +22,9 @@ import { stub } from "@std/testing/mock";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 
 import {
-  ADOPT_SERVER_FLAGS_ENV,
   adoptServerExperimentalOptions,
   EXPERIMENTAL_ENV_VARS,
   EXPERIMENTAL_FLAG_AUTHORITY,
-  experimentalOptionsForDeployedClient,
   experimentalOptionsFromEnv,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
@@ -127,6 +125,7 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   // Everything below rides the constructor default unless a preset's
   // declared delta param supplies it (covered by the routing tests).
   spaceHostMap: { treat: "absent" },
+  memoryUrl: { treat: "absent" },
   consoleHandler: { treat: "absent" },
   errorHandlers: { treat: "absent" },
   navigateCallback: { treat: "absent" },
@@ -249,6 +248,7 @@ describe("runtimePresets conformance", () => {
     } as unknown as NonNullable<RuntimeOptions["telemetry"]>;
     const commitBackpressure = { retryWindowMs: 100 };
     const spaceHostMap = { "did:key:zSpace": "https://host.example" };
+    const memoryUrl = new URL("https://router.example");
     const readCeiling = ["did:key:zOwner", { anyOf: ["a", "b"] }];
     const onPatternInstantiated = () => {};
     const trustConfig = {
@@ -279,6 +279,7 @@ describe("runtimePresets conformance", () => {
     it("remoteClient", () => {
       expect(runtimePresets.remoteClient({
         ...minimalCore,
+        memoryHost: memoryUrl,
         errorHandlers,
         navigateCallback,
         moduleByteCache,
@@ -292,6 +293,7 @@ describe("runtimePresets conformance", () => {
         cfcReadOnExceed: "skip",
       })).toEqual({
         ...minimalOutputs.remoteClient,
+        memoryUrl,
         errorHandlers,
         navigateCallback,
         moduleByteCache,
@@ -334,6 +336,7 @@ describe("runtimePresets conformance", () => {
       expect(runtimePresets.browserWorker({
         ...minimalCore,
         spaceHostMap,
+        memoryHost: memoryUrl,
         cfcEnforcementMode: "observe",
         cfcFlowLabels: "observe",
         cfcReadMaxConfidentiality: readCeiling,
@@ -349,6 +352,7 @@ describe("runtimePresets conformance", () => {
       })).toEqual({
         ...minimalOutputs.browserWorker,
         spaceHostMap,
+        memoryUrl,
         cfcEnforcementMode: "observe",
         cfcFlowLabels: "observe",
         cfcReadMaxConfidentiality: readCeiling,
@@ -562,321 +566,6 @@ describe("runtimePresets conformance", () => {
         expect(adoptServerExperimentalOptions({}, {})).toEqual({});
       });
     });
-
-    describe("experimentalOptionsForDeployedClient", () => {
-      const metaResponse = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
-          status,
-          headers: { "content-type": "application/json" },
-        });
-
-      it("adopts the posture the server publishes on its meta document", async () => {
-        const requested: string[] = [];
-        const adopted = await experimentalOptionsForDeployedClient({
-          apiUrl: new URL("https://deployment.example/api/"),
-          env: (name) =>
-            name === "EXPERIMENTAL_MODERN_CELL_REP" ? "false" : undefined,
-          fetch: (input) => {
-            requested.push(String(input));
-            return Promise.resolve(metaResponse({
-              did: "did:key:z",
-              experimental: { modernCellRep: true, serverExecution: true },
-            }));
-          },
-        });
-        // Spelled out rather than composed from the constant: the point is
-        // WHICH document the client reads, and a test that reuses the
-        // constant cannot tell a changed path from an unchanged one. The
-        // toolshed side pins the constant against the route that serves it.
-        expect(requested).toEqual(["https://deployment.example/api/meta"]);
-        // The env's explicit `false` outranks the server; the flag it says
-        // nothing about is adopted — and a posture with no
-        // readerSchemaPrecedence declaration is a pre-flag server, adopted
-        // as the legacy strict `false`.
-        expect(adopted).toEqual({
-          modernCellRep: false,
-          serverExecution: true,
-          readerSchemaPrecedence: false,
-          agentBuiltin: false,
-        });
-      });
-
-      it("falls back to the environment when the server answers an error", async () => {
-        // The body of an error response is not a posture even when it parses
-        // as one — an error page, or a proxy standing in for the deployment.
-        expect(
-          await experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: (name) =>
-              name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
-            fetch: () =>
-              Promise.resolve(metaResponse({
-                experimental: { serverExecution: true },
-              }, 404)),
-          }),
-        ).toEqual({ modernCellRep: true });
-      });
-
-      it("falls back to the environment when the request fails", async () => {
-        // A deployment that is simply down. The caller is about to fail
-        // loudly on its real work; failing here first would only obscure it.
-        expect(
-          await experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: () => undefined,
-            fetch: () => Promise.reject(new TypeError("connection refused")),
-          }),
-        ).toEqual({});
-      });
-
-      it("falls back to the environment when the body is not JSON", async () => {
-        expect(
-          await experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: () => undefined,
-            fetch: () => Promise.resolve(new Response("<html>nope</html>")),
-          }),
-        ).toEqual({});
-      });
-
-      it("falls back to the environment when successful JSON is not a meta object", async () => {
-        for (const body of [null, [], "not metadata", 42, true]) {
-          expect(
-            await experimentalOptionsForDeployedClient({
-              apiUrl: new URL("https://deployment.example"),
-              env: (name) =>
-                name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
-              fetch: () => Promise.resolve(metaResponse(body)),
-            }),
-          ).toEqual({ modernCellRep: true });
-        }
-      });
-
-      it("falls back to the environment for a server that publishes no posture", async () => {
-        // An older server's meta document predates both flags, so each
-        // adopts its legacy `false` rather than staying unset.
-        expect(
-          await experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: () => undefined,
-            fetch: () =>
-              Promise.resolve(metaResponse({ did: "did:key:z", gitSha: null })),
-          }),
-        ).toEqual({ readerSchemaPrecedence: false, agentBuiltin: false });
-      });
-
-      it("hands the request the caller's cancellation signal", async () => {
-        // Without it, a deployment that accepts the connection and then says
-        // nothing holds a cancellable startup here for as long as it stays
-        // silent, and no shutdown can reach it.
-        const controller = new AbortController();
-        let passed: AbortSignal | undefined;
-        await experimentalOptionsForDeployedClient({
-          apiUrl: new URL("https://deployment.example"),
-          env: () => undefined,
-          signal: controller.signal,
-          fetch: (_input, init) => {
-            passed = init?.signal ?? undefined;
-            return Promise.resolve(metaResponse({ experimental: {} }));
-          },
-        });
-        expect(passed).toBe(controller.signal);
-      });
-
-      it("throws the abort reason even under CF_ADOPT_SERVER_FLAGS=false", async () => {
-        // The opt-out is over adopting a posture, not over the caller's
-        // cancellation: a startup that has already stopped gets the abort
-        // whichever way it was going to resolve its flags.
-        const controller = new AbortController();
-        controller.abort(new Error("shutting down"));
-        await expect(experimentalOptionsForDeployedClient({
-          apiUrl: new URL("https://deployment.example"),
-          env: (name) => name === ADOPT_SERVER_FLAGS_ENV ? "false" : undefined,
-          signal: controller.signal,
-          fetch: () => Promise.reject(new Error("must not be reached")),
-        })).rejects.toThrow("shutting down");
-      });
-
-      it("refuses cancellation that arrives with a successfully decoded response", async () => {
-        for (const body of [{ experimental: {} }, null]) {
-          const controller = new AbortController();
-          const response = new Response();
-          response.json = () => {
-            controller.abort(new Error("decoded startup cancelled"));
-            return Promise.resolve(body);
-          };
-          await expect(experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: () => undefined,
-            signal: controller.signal,
-            fetch: () => Promise.resolve(response),
-          })).rejects.toThrow("decoded startup cancelled");
-        }
-      });
-
-      it("throws the abort reason when the body read is cancelled", async () => {
-        // The signal rides the request, so aborting it errors the response
-        // stream: a deployment that sends headers and then stalls its body
-        // cannot hold a cancellable startup open.
-        const controller = new AbortController();
-        await expect(experimentalOptionsForDeployedClient({
-          apiUrl: new URL("https://deployment.example"),
-          env: () => undefined,
-          signal: controller.signal,
-          fetch: (_input, init) =>
-            Promise.resolve(
-              new Response(
-                new ReadableStream({
-                  start(chunk) {
-                    chunk.enqueue(new TextEncoder().encode('{"experimental":'));
-                    init?.signal?.addEventListener(
-                      "abort",
-                      () => chunk.error(init.signal!.reason),
-                    );
-                    controller.abort(new Error("shutting down"));
-                  },
-                }),
-                { headers: { "content-type": "application/json" } },
-              ),
-            ),
-        })).rejects.toThrow("shutting down");
-      });
-
-      it("throws the abort reason instead of resolving a cancelled startup", async () => {
-        // The one failure that is NOT read as "the server said nothing": the
-        // caller asked to stop, so handing back a posture would feed a
-        // runtime construction it is abandoning.
-        const controller = new AbortController();
-        controller.abort(new Error("shutting down"));
-        await expect(experimentalOptionsForDeployedClient({
-          apiUrl: new URL("https://deployment.example"),
-          env: () => undefined,
-          signal: controller.signal,
-          fetch: (_input, init) => {
-            init?.signal?.throwIfAborted();
-            return Promise.resolve(metaResponse({ experimental: {} }));
-          },
-        })).rejects.toThrow("shutting down");
-      });
-
-      it("ignores the server's posture under CF_ADOPT_SERVER_FLAGS=false", async () => {
-        let fetched = false;
-        expect(
-          await experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: (name) =>
-              name === ADOPT_SERVER_FLAGS_ENV ? "false" : undefined,
-            fetch: () => {
-              fetched = true;
-              return Promise.resolve(metaResponse({
-                experimental: { serverExecution: true },
-              }));
-            },
-          }),
-        ).toEqual({});
-        expect(fetched).toBe(false);
-      });
-
-      it("adopts under a non-canonical CF_ADOPT_SERVER_FLAGS, with a warning", async () => {
-        // Same discipline as the EXPERIMENTAL_* mapping: a value that is
-        // neither "true" nor "false" leaves the default (adopting) in place
-        // rather than being read as an opt-out.
-        const { warnings, result } = captureWarnings(() =>
-          experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: (name) => name === ADOPT_SERVER_FLAGS_ENV ? "0" : undefined,
-            fetch: () =>
-              Promise.resolve(metaResponse({
-                experimental: { serverExecution: true },
-              })),
-          })
-        );
-        expect(await result).toEqual({
-          serverExecution: true,
-          readerSchemaPrecedence: false,
-          agentBuiltin: false,
-        });
-        expect(warnings.length).toBe(1);
-        expect(String(warnings[0][0])).toContain(ADOPT_SERVER_FLAGS_ENV);
-      });
-
-      it("an adopted server-OFF posture rides the deployed-topology presets explicitly, immune to the first-party default", async () => {
-        // The separately-installed-host shape: nothing declared in the
-        // environment, talking to a
-        // server held on the explicit-OFF rollback posture. Adoption hands
-        // the preset an EXPLICIT `false`, and the presets' `??` fill then
-        // never consults `SERVER_EXECUTION_DEFAULT_ENABLED` — which is why
-        // the first arm of this pin references no constant: it must hold
-        // under EITHER value (that immunity is the rollback lever working
-        // across a staggered upgrade, not a restatement of the absolute
-        // pin in toolshed's server-execution-flag.test.ts).
-        const adopted = await experimentalOptionsForDeployedClient({
-          apiUrl: new URL("https://deployment.example"),
-          env: () => undefined,
-          fetch: () =>
-            Promise.resolve(metaResponse({
-              did: "did:key:z",
-              experimental: { serverExecution: false },
-            })),
-        });
-        expect(adopted.serverExecution).toBe(false);
-        for (const preset of ["remoteClient", "productionServer"] as const) {
-          expect(
-            runtimePresets[preset]({
-              apiUrl,
-              storageManager,
-              experimental: adopted,
-            })
-              .experimental?.serverExecution,
-          ).toBe(false);
-        }
-        // The arm adoption replaces: an env-only resolution leaves the
-        // unset flag ABSENT, and the preset fills it with the first-party
-        // constant — under a flipped default that is an ON client against
-        // the rolled-back OFF server, the mixed topology the adoption
-        // exists to prevent. Compared against the imported constant, not a
-        // literal, so this documents the exposure without pinning the
-        // constant's value.
-        expect(
-          runtimePresets.remoteClient({
-            apiUrl,
-            storageManager,
-            experimental: experimentalOptionsFromEnv(() => undefined),
-          }).experimental?.serverExecution,
-        ).toBe(SERVER_EXECUTION_DEFAULT_ENABLED);
-      });
-
-      it("an explicit environment outranks the published posture in both directions, through the preset", async () => {
-        // Both arms stay selectable on a deployed client: the env is the
-        // documented rollback lever and CI's way to pin a lane, so it must
-        // survive adoption AND the preset fill in each direction.
-        for (
-          const arm of [
-            { env: "true", server: false, resolved: true },
-            { env: "false", server: true, resolved: false },
-          ] as const
-        ) {
-          const adopted = await experimentalOptionsForDeployedClient({
-            apiUrl: new URL("https://deployment.example"),
-            env: (name) =>
-              name === "EXPERIMENTAL_SERVER_EXECUTION" ? arm.env : undefined,
-            fetch: () =>
-              Promise.resolve(metaResponse({
-                did: "did:key:z",
-                experimental: { serverExecution: arm.server },
-              })),
-          });
-          expect(adopted.serverExecution).toBe(arm.resolved);
-          expect(
-            runtimePresets.remoteClient({
-              apiUrl,
-              storageManager,
-              experimental: adopted,
-            }).experimental?.serverExecution,
-          ).toBe(arm.resolved);
-        }
-      });
-    });
   });
 
   describe("cfcPosture: max-enforcement", () => {
@@ -975,6 +664,30 @@ describe("runtimePresets conformance", () => {
         await emulated.close();
       }
     });
+  });
+
+  it("constructs a runtime with no memory URL from a memory host that is the API URL, path and all", async () => {
+    // A deployed client whose deployment publishes no memory URL opens storage
+    // on its API URL and hands that same host to the preset. An API URL with a
+    // path names the API host, so it is no memory URL rather than one refused
+    // for its path.
+    const pathful = new URL("https://deployment.example/fabric/");
+    for (const preset of ["remoteClient", "browserWorker"] as const) {
+      const emulated = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime(runtimePresets[preset]({
+        apiUrl: pathful,
+        storageManager: emulated,
+        experimental: {},
+        memoryHost: pathful,
+      }));
+      try {
+        expect(runtime.apiUrl.href).toBe(pathful.href);
+        expect(runtime.memoryUrl).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await emulated.close();
+      }
+    }
   });
 
   it("preset output constructs a working Runtime", async () => {

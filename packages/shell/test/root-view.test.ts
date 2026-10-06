@@ -60,6 +60,15 @@ function installBrowserGlobals(): () => void {
       appendChild() {},
     }),
     createTreeWalker: () => ({}),
+    // The page publishes a memory URL, as a toolshed with MEMORY_PUBLIC_URL
+    // serves it.
+    querySelector: (selector: string) =>
+      selector === 'meta[name="cf-memory-url"]'
+        ? {
+          getAttribute: (name: string) =>
+            name === "content" ? "https://router.root-view.test" : null,
+        }
+        : null,
   });
   setGlobal("devicePixelRatio", 1);
   setGlobal("screen", { deviceXDPI: 1, logicalXDPI: 1 });
@@ -68,6 +77,7 @@ function installBrowserGlobals(): () => void {
     protocol: "http:",
     host: "localhost:8000",
     hostname: "localhost",
+    origin: "http://localhost:8000",
     href: "http://localhost:8000/common-knowledge",
   });
 
@@ -157,6 +167,47 @@ describe("XRootView", () => {
       expect(runs).toHaveLength(1);
     } finally {
       console.error = originalError;
+      restore();
+    }
+  });
+
+  it("passes the page's memory URL to RuntimeInternals", async () => {
+    const restore = installBrowserGlobals();
+    const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+    const originalCreate = RuntimeInternals.create;
+    const captured: { apiUrl?: URL; memoryUrl?: URL }[] = [];
+    RuntimeInternals.create = ((options) => {
+      captured.push({ apiUrl: options.apiUrl, memoryUrl: options.memoryUrl });
+      return Promise.resolve({
+        runtime: () => ({
+          on: () => {},
+          off: () => {},
+          listEventAttention: () => Promise.resolve([]),
+        }),
+        dispose: () => Promise.resolve(),
+      } as unknown as Awaited<ReturnType<typeof RuntimeInternals.create>>);
+    }) as typeof RuntimeInternals.create;
+
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      view.app = {
+        ...view.app,
+        identity: await Identity.fromPassphrase("root-view-memory-url-test"),
+      };
+      const task = view.accessForTestingOnly.rt;
+      task.run([view.app]);
+      await task.taskComplete;
+      expect(captured.map(({ apiUrl, memoryUrl }) => [
+        apiUrl?.href,
+        memoryUrl?.href,
+      ])).toEqual([[
+        "http://localhost:8000/",
+        "https://router.root-view.test/",
+      ]]);
+    } finally {
+      RuntimeInternals.create = originalCreate;
+      delete (globalThis as { commonfabric?: unknown }).commonfabric;
       restore();
     }
   });

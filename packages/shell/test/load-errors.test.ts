@@ -55,6 +55,18 @@ function installBrowserGlobals(
     }),
     createTreeWalker: () => ({}),
   });
+  // The root view reads the API URL's meta document for the memory URL
+  // before it creates a runtime. Say there is none, rather than reach for
+  // whatever listens on the page's host.
+  const realFetch = globalThis.fetch;
+  setGlobal(
+    "fetch",
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      new URL(input instanceof Request ? input.url : String(input)).pathname ===
+          "/api/meta"
+        ? Promise.resolve(new Response(null, { status: 404 }))
+        : realFetch(input, init),
+  );
   setGlobal("devicePixelRatio", 1);
   setGlobal("screen", { deviceXDPI: 1, logicalXDPI: 1 });
   setGlobal("navigator", { platform: "", userAgent: "deno" });

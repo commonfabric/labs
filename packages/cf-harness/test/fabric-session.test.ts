@@ -81,9 +81,9 @@ describe("fabric-session", () => {
       const controller = {
         getSpace: () => "did:key:zLocal",
         runtime: {
-          registerSpaceHost: (space: string, host: string) => {
+          registerSpaceHostDetailed: (space: string, host: string) => {
             routed.push([space, host]);
-            return true;
+            return { accepted: true };
           },
         },
       } as unknown as PiecesController;
@@ -108,11 +108,14 @@ describe("fabric-session", () => {
       expect(session.identity).toBe(identity);
     });
 
-    it("disposes the session when an admitted route is refused", async () => {
+    it("disposes the session when an admitted route is refused, naming why", async () => {
       const disposed: string[] = [];
       const controller = controllerBoundedBy({}, disposed);
       controller.getSpace = () => "did:key:zLocal";
-      controller.runtime.registerSpaceHost = () => false;
+      controller.runtime.registerSpaceHostDetailed = () => ({
+        accepted: false,
+        reason: "memory-routed",
+      });
       const factory = createHarnessFabricSessionFactory({
         apiUrl: "https://local.example/",
         identityKeyPath: "/fixture.key",
@@ -122,7 +125,9 @@ describe("fabric-session", () => {
         loadIdentity: () => Promise.resolve(identity),
         initialize: () => Promise.resolve(controller),
       });
-      await expect(factory()).rejects.toThrow("host route was refused");
+      await expect(factory()).rejects.toThrow(
+        "host route was refused by the session (memory-routed)",
+      );
       expect(disposed).toEqual(["runtime"]);
     });
 

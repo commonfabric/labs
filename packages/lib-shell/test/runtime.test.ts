@@ -873,6 +873,16 @@ describe("RuntimeInternals", () => {
     });
     expect(options.spaceDid).toBe(session.space);
     expect(options.experimental).toBe(experimental);
+    // A host that names no memory URL sends none, so Memory opens on
+    // `apiUrl`; one that names one has it carried to the worker.
+    expect(options.memoryUrl).toBeUndefined();
+    expect(
+      createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://shell.test/"),
+        memoryUrl: new URL("http://router.shell.test/"),
+      }).memoryUrl?.href,
+    ).toBe("http://router.shell.test/");
     // A page that names no outer frame has none, and one that names one has
     // that one.
     expect(options.iframeOuterFrameUrl).toBeUndefined();
@@ -1110,6 +1120,7 @@ describe("RuntimeInternals", () => {
     // create() aborts without a real runtime.
 
     type CapturedInitData = {
+      memoryUrl?: string;
       forwardWorkerConsole?: boolean;
       concurrentWatchRefresh?: boolean;
       awaitHealth?: boolean;
@@ -1221,6 +1232,20 @@ describe("RuntimeInternals", () => {
           initRequests[0].data.trustSnapshot!.actingPrincipal as DID,
         ),
       );
+    });
+
+    it("includes the memory URL in the Initialize request, and none when the host names none", async () => {
+      const routed = refusingWorker();
+      await createAgainst(routed.StubWorker, {
+        memoryUrl: new URL("http://router.shell.test/"),
+      });
+      expect(routed.initRequests[0].data.memoryUrl).toBe(
+        "http://router.shell.test/",
+      );
+
+      const direct = refusingWorker();
+      await createAgainst(direct.StubWorker);
+      expect(direct.initRequests[0].data.memoryUrl).toBeUndefined();
     });
 
     it("terminates the worker it spawned when the worker refuses Initialize", async () => {

@@ -1881,19 +1881,21 @@ there, the operator has to know a deployment's flags and set them by hand, and
 nothing reports it when they do not.
 
 These clients take the posture from the server instead. Each one calls
-`experimentalOptionsForDeployedClient` in place of `experimentalOptionsFromEnv`
-before constructing its `Runtime`:
+`settingsForDeployedClient` in place of `experimentalOptionsFromEnv` before
+constructing its `Runtime`:
 
 ```
 cf / pieces controller / agents host / github host
   |
-  +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... } }
-  |     the posture the SERVER runs at
+  +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... },
+  |                                memoryUrl: <origin> | null }
+  |     the posture the SERVER runs at, and where its clients open Memory
   |
-  +-- runner/experimental-posture.ts --> experimentalOptionsForDeployedClient()
-  |     explicit EXPERIMENTAL_* > server declaration > built-in default
+  +-- runner/deployment-meta.ts --> settingsForDeployedClient()
+  |     experimental: explicit EXPERIMENTAL_* > server declaration > default
+  |     memoryHost:   the published memory URL, else apiUrl
   |
-  +-- runtimePresets.remoteClient({ experimental, ... })
+  +-- runtimePresets.remoteClient({ experimental, memoryHost, ... })
 ```
 
 What the server publishes is the posture its constructed `Runtime` resolved —
@@ -1946,14 +1948,29 @@ Three rules govern what a client does with a declaration:
 `CF_ADOPT_SERVER_FLAGS=false` turns the whole mechanism off for one process,
 for the case where a deployment publishes something a client cannot run and you
 do not yet know which flag it is. Per-flag `EXPERIMENTAL_*` overrides are the
-answer when you do.
+answer when you do. The client still reads `/api/meta`, which also names the
+memory URL a deployment with a memory router publishes (`MEMORY_PUBLIC_URL` in
+[the configuration reference](./CONFIGURATION.md#memory-store)).
+
+A server that returns 404, 405 or 410, as one without the route does, has said
+it publishes nothing: there is no posture and no memory URL to adopt, and it is
+not asked again. Any other failure leaves the document unread, and the posture
+then falls back to the environment and Memory to the API URL, with a warning
+that names it. A transient failure (the server is unreachable, or it returns
+408, 429, 502, 503 or 504) is asked again first: three attempts in all, a
+quarter of a second and then a second apart. One that would come out the same,
+such as a 401, a 403, a 500 or a body that is not a JSON object, is not, and
+neither is an attempt that takes more than five seconds, since the health check
+a client runs next would wait on that server too. The bound covers the read
+alone: the health check has no timeout. A redirect that leaves the API URL's
+deployment (anything but its own origin, or the same host on https where the
+API URL names http) still gives the posture, as before, but no memory URL; a
+warning names where the redirect ended.
 
 A caller whose startup can be cancelled passes its `AbortSignal`, and the
-request carries it. Without one, a deployment that accepts the connection and
-then says nothing holds that startup for as long as it stays silent, with no
-shutdown able to reach it. An aborted signal is the one failure that does not
-resolve to the environment: it throws the abort reason, because the caller has
-stopped wanting a posture at all.
+request carries it, joined with each attempt's timeout. An aborted signal is
+the one failure that does not resolve to the environment: it throws the abort
+reason, because the caller has stopped wanting settings at all.
 
 Presets that run against local emulated storage — `cf test`, `cf check`, the
 pattern harnesses — have no server to ask and keep reading the environment
@@ -2064,8 +2081,7 @@ registries:
 - `EXPERIMENTAL_FLAG_AUTHORITY` classifies every flag as `"server"` or
   `"client"` for a client that is not built alongside its server, typed the same
   way, so a new flag forces that decision too.
-  `experimentalOptionsForDeployedClient` resolves one client's posture through
-  it; see
+  `settingsForDeployedClient` resolves one client's posture through it; see
   [Clients that are not built alongside their
 server](#clients-that-are-not-built-alongside-their-server).
 

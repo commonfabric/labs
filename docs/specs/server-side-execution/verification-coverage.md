@@ -3696,6 +3696,9 @@ discharge OW28. The flip's changes and validation record follow:
   (`connectors/agents/host`) shares the same
   `experimentalOptionsForDeployedClient` + remoteClient seam and is
   covered at it (no dedicated lane exists for it — recorded).
+  (Note added 2026-10-06: that function is now `settingsForDeployedClient`
+  in `runner/src/deployment-meta.ts`, which reads the memory URL from the
+  same /api/meta request.)
 - The UNIFORM-posture reconciliation the swap needs: 4 runner
   integration files and the runtime-client integration host (worker
   declaration + `onArmStepSkip` guard) resolve env-else-default via

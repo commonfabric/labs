@@ -43,10 +43,12 @@ function createWorkerRuntime(
     {
       ...options,
       apiUrl: options.apiUrl.toString(),
+      memoryUrl: options.memoryUrl?.toString(),
       identity: options.identity.keyPair,
     },
     storageManager,
     new RuntimeTelemetry(),
+    options.memoryUrl ?? options.apiUrl,
   );
   return new Runtime(runtimePresets.browserWorker(params));
 }

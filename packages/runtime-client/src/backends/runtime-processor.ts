@@ -83,6 +83,7 @@ import {
   PatternCoverageCollector,
   popFrame,
   pushFrame,
+  readMemoryUrl,
   resolveExternalRootRefForStructure,
   resolveSlugReference,
   resolveSlugTargetInPiece,
@@ -315,6 +316,7 @@ import {
 import type { RemoteResponse, VDomOp } from "@/protocol/types.ts";
 import {
   type EveryFieldOf,
+  normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
   securityContextDifferences,
@@ -507,12 +509,14 @@ export function assertServerExecutionPostureAgreement(
  * Maps host-decided `InitializationData` onto `runtimePresets.browserWorker`
  * params. The shared first-party posture (CFC pins, patternEnvironment from
  * apiUrl) lives in the preset; this function carries only what the host
- * actually decided. Exported for testing.
+ * actually decided. `memoryHost` is the host `storageManager` was opened on,
+ * which the caller has already read from `data`. Exported for testing.
  */
 export function browserWorkerParamsFromInitializationData(
   data: InitializationData,
   storageManager: RuntimeOptions["storageManager"],
   telemetry: RuntimeTelemetry,
+  memoryHost: URL,
 ): BrowserWorkerPresetParams {
   return {
     apiUrl: new URL(data.apiUrl),
@@ -524,6 +528,9 @@ export function browserWorkerParamsFromInitializationData(
     ...(data.spaceHostMap !== undefined
       ? { spaceHostMap: data.spaceHostMap }
       : {}),
+    // The runtime holds the host the storage manager was opened on, so that
+    // a host hint cannot move a space's Memory off a memory URL.
+    memoryHost,
     ...(data.cfcEnforcementMode !== undefined
       ? { cfcEnforcementMode: data.cfcEnforcementMode }
       : {}),
@@ -816,11 +823,13 @@ export function mountErrorSink(
 
 /**
  * The security posture a worker's runtime runs under, read off the payload it
- * was initialized from. The backend and the per-space host map are normalized
- * here, so an attach that spells the same backend another way agrees. The
- * render policy and the render ceiling are recorded as the payload spelled
- * them, while the processor applies a normalized form of each, so two
- * spellings of one render posture refuse each other.
+ * was initialized from. The backend, the memory URL and the per-space host map
+ * are normalized here, so an attach that spells the same backend another way
+ * agrees, and one that names no memory URL agrees with a runtime whose memory
+ * URL is the backend's own origin. The render policy and the render ceiling
+ * are recorded as the payload spelled them, while the processor applies a
+ * normalized form of each, so two spellings of one render posture refuse each
+ * other.
  *
  * Every field the context declares is named, held by the `satisfies` clause.
  * What is recorded here is what an attach is compared against, so a field this
@@ -833,6 +842,7 @@ export function securityContextFrom(
   return {
     identity,
     apiUrl: normalizeOrigin(data.apiUrl),
+    memoryUrl: normalizeMemoryUrl(data.memoryUrl, data.apiUrl),
     spaceHostMap: normalizeSpaceHostMap(data.spaceHostMap),
     spaceDid: data.spaceDid,
     experimental: data.experimental,
@@ -871,6 +881,22 @@ function unreachableHostMessage(data: InitializationData): string {
   const quoted = [...spaceHosts].map((host) => `"${host}"`).join(", ");
   return `Could not connect to "${data.apiUrl}"` +
     (spaceHosts.size > 0 ? ` or to a space host (${quoted})` : "");
+}
+
+/**
+ * The host Memory opens on for a space `spaceHostMap` does not list:
+ * `memoryUrl` where the payload names one, else the backend itself. An empty
+ * `memoryUrl` names none. The memory URL is held to the rule a space host is,
+ * an HTTP or HTTPS origin, since storage uses it the same way.
+ *
+ * @throws If `memoryUrl` is not an HTTP or HTTPS origin, naming the value.
+ */
+function defaultStorageHost(data: InitializationData, apiUrl: URL): URL {
+  const read = readMemoryUrl(data.memoryUrl, apiUrl);
+  if ("refused" in read) {
+    throw new Error(`Invalid memoryUrl "${data.memoryUrl}": ${read.refused}`);
+  }
+  return read.memoryUrl ?? apiUrl;
 }
 
 /** Builds the refusal for a detached client's or a disposed runtime's seal. */
@@ -1194,6 +1220,7 @@ export class RuntimeProcessor {
 
   #siteTableCancel: Cancel | undefined;
   #siteTableWarned = new Set<string>();
+  #memoryRoutedCountsWarned = new Set<number>();
 
   /**
    * Subscribes to the home-space site table and registers the last entry for
@@ -1204,9 +1231,20 @@ export class RuntimeProcessor {
    * toolshed as the machine that wrote the row sees it, so it is no route for a
    * page that reached the toolshed by another name — and a browser refuses the
    * `ws://` socket it implies from an `https` page. When the entry is loopback
-   * and this runtime's `apiUrl` is not, the space stays on `apiUrl`, and the
-   * row retires any earlier row for that space. A page that did reach loopback
-   * registers it as usual.
+   * and this runtime's `apiUrl` is not, the space stays on the default hosts
+   * (Memory on `memoryUrl`, else `apiUrl`; everything else on `apiUrl`), and
+   * the row retires any earlier row for that space. A page that did reach
+   * loopback registers it as usual. `apiUrl` decides because the entry would
+   * carry the space's HTTP work as well as its Memory, and `apiUrl` is where
+   * this page reached that work.
+   *
+   * Under a memory URL the runtime decides each remaining entry
+   * (`Runtime.registerSpaceHostDetailed`): one naming `apiUrl`'s origin is
+   * the default route and is accepted without being recorded, which also
+   * retires an earlier row for the space, since only the last row per space
+   * is offered; one naming any other host is refused as `memory-routed`. The
+   * refused rows are warned about together, with their count, once for each
+   * count seen.
    *
    * ORDERING CONTRACT for embedders: push a newly learned hint through the
    * RegisterSpaceHost IPC before relying on that space, and proceed only when
@@ -1255,8 +1293,9 @@ export class RuntimeProcessor {
               // A loopback entry names the toolshed from the machine that
               // wrote it, so a page served from anywhere else cannot reach it
               // — and a browser on an https page refuses the ws:// socket it
-              // implies. Leave those spaces on the URL this runtime already
-              // reached its toolshed at.
+              // implies. Leave those spaces on the hosts this runtime already
+              // reached: Memory on the default storage host, the rest on
+              // `apiUrl`.
               if (
                 isLoopbackHostname(host.hostname) &&
                 !isLoopbackHostname(this.#runtime.apiUrl.hostname)
@@ -1264,9 +1303,15 @@ export class RuntimeProcessor {
                 const key = `${entry.did}|${host.toString()}`;
                 if (!this.#siteTableWarned.has(key)) {
                   this.#siteTableWarned.add(key);
+                  const api = this.#runtime.apiUrl.toString();
+                  const memory = this.#runtime.memoryUrl?.toString();
                   console.debug(
                     `[RuntimeProcessor] Ignoring loopback site-table entry for ${entry.did} ` +
-                      `(${host.toString()}); using ${this.#runtime.apiUrl.toString()}`,
+                      `(${host.toString()}); using ${
+                        memory === undefined
+                          ? api
+                          : `${memory} for Memory and ${api} otherwise`
+                      }`,
                   );
                 }
                 // The table is last-row-wins, so this row also retires an
@@ -1280,29 +1325,35 @@ export class RuntimeProcessor {
                 host: host.toString(),
               });
             }
+            // Rows a memory URL refuses are counted rather than warned
+            // about one by one: the refusal is the deployment's, not the
+            // row's, and a table holding many rows from before the router
+            // would otherwise print one line per row.
+            let memoryRouted = 0;
             for (const entry of latestEntries.values()) {
               try {
-                const accepted = this.#runtime.registerSpaceHost(
+                const registration = this.#runtime.registerSpaceHostDetailed(
                   entry.did,
                   entry.host,
                 );
+                if (registration.accepted) continue;
+                if (registration.reason === "memory-routed") {
+                  memoryRouted++;
+                  continue;
+                }
                 // Warn once per rejected fact. A seeded route or an earlier
                 // accepted hint can fix a different host.
-                if (!accepted) {
-                  const key = `${entry.did}|${entry.host}`;
-                  const effective = this.#runtime.hostForSpace(
-                    entry.did,
-                  ).toString();
-                  if (
-                    effective !== new URL(entry.host).toString() &&
-                    !this.#siteTableWarned.has(key)
-                  ) {
-                    this.#siteTableWarned.add(key);
-                    console.warn(
-                      `[RuntimeProcessor] Site-table hint for ${entry.did} not in effect ` +
-                        `(explicit space route already fixed); using ${effective}`,
-                    );
-                  }
+                const key = `${entry.did}|${entry.host}`;
+                if (this.#siteTableWarned.has(key)) continue;
+                const effective = this.#runtime.hostForSpace(
+                  entry.did,
+                ).toString();
+                if (effective !== entry.host) {
+                  this.#siteTableWarned.add(key);
+                  console.warn(
+                    `[RuntimeProcessor] Site-table hint for ${entry.did} not in effect ` +
+                      `(explicit space route already fixed); using ${effective}`,
+                  );
                 }
               } catch (error) {
                 console.warn(
@@ -1310,6 +1361,21 @@ export class RuntimeProcessor {
                   error instanceof Error ? error.message : error,
                 );
               }
+            }
+            // Once per distinct count, so an unchanged table does not repeat
+            // it on every change. A refused space is unseeded and has no
+            // recorded host, so it uses `apiUrl` for everything but Memory.
+            if (
+              memoryRouted > 0 &&
+              !this.#memoryRoutedCountsWarned.has(memoryRouted)
+            ) {
+              this.#memoryRoutedCountsWarned.add(memoryRouted);
+              console.warn(
+                `[RuntimeProcessor] ${memoryRouted} site-table ` +
+                  `${memoryRouted === 1 ? "hint is" : "hints are"} not in ` +
+                  `effect: Memory is routed through ${this.#runtime.memoryUrl}, ` +
+                  `and their spaces use ${this.#runtime.apiUrl} otherwise`,
+              );
             }
           },
         );
@@ -4135,6 +4201,9 @@ export class RuntimeProcessor {
     clients: () => Iterable<WorkerClient> = () => [ownerClient],
   ): Promise<RuntimeProcessor> {
     const apiUrlObj = new URL(data.apiUrl);
+    // Memory alone moves to the memory URL. LLM requests, patterns and the
+    // health check below stay on `apiUrl`.
+    const memoryHost = defaultStorageHost(data, apiUrlObj);
     const identity = await Identity.fromKeyPair(
       data.identity,
     );
@@ -4151,7 +4220,7 @@ export class RuntimeProcessor {
 
     const storageManager = StorageManager.open({
       as: identity,
-      memoryHost: apiUrlObj,
+      memoryHost,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap
       // watch-refresh round trips up to a bounded window. Off unless the host
@@ -4183,6 +4252,7 @@ export class RuntimeProcessor {
         data,
         storageManager,
         telemetry,
+        memoryHost,
       ),
       consoleHandler: ({ metadata, method, args }) => {
         postToClient({
@@ -4233,6 +4303,10 @@ export class RuntimeProcessor {
     // it: storage reconnects with its own backoff, and a host that stays
     // unreachable is reported below. The check cannot reject on its own; a
     // rejection is treated as an unreachable host all the same.
+    //
+    // `memoryUrl` is not checked. The check asks each host for `/_health`,
+    // which a memory router does not serve, and the Memory socket reconnects
+    // to that host with the same backoff as to any other.
     const health = runtime.healthCheck().then(
       (healthy) => healthy,
       () => false,

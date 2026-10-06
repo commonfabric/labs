@@ -86,6 +86,7 @@ import {
 import { assertNoKeyMaterial } from "./shared/key-material.ts";
 import {
   type EveryFieldOf,
+  normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
 } from "./shared/security-context.ts";
@@ -109,9 +110,16 @@ export interface RuntimeClientPageSettings {
 
 export interface RuntimeClientOptions
   extends
-    Omit<InitializationData, "apiUrl" | "identity">,
+    Omit<InitializationData, "apiUrl" | "memoryUrl" | "identity">,
     RuntimeClientPageSettings {
   apiUrl: URL;
+
+  /**
+   * The default storage host, where it is not `apiUrl`
+   * ({@link InitializationData.memoryUrl}).
+   */
+  memoryUrl?: URL;
+
   identity: Identity;
 }
 
@@ -138,11 +146,14 @@ export interface RuntimeClientOptions
 export interface RuntimeAttachOptions extends
   Omit<
     RuntimeSecurityContext,
-    "apiUrl" | "spaceHostMap" | "identity"
+    "apiUrl" | "memoryUrl" | "spaceHostMap" | "identity"
   >,
   RuntimeClientPageSettings {
   /** The backend this client believes the runtime reads from. */
   apiUrl: URL;
+
+  /** The default storage host this client believes the runtime opens. */
+  memoryUrl?: URL;
 
   /** The per-space hosts this client believes the runtime resolves against. */
   spaceHostMap?: Record<string, string>;
@@ -185,6 +196,7 @@ export function attachOptionsFrom(
 ): RuntimeAttachOptions {
   return {
     apiUrl: options.apiUrl,
+    memoryUrl: options.memoryUrl,
     spaceHostMap: options.spaceHostMap,
     identity: options.identity.did(),
     spaceDid: options.spaceDid,
@@ -829,6 +841,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       // that agreeing on a backend does not depend on agreeing on how to spell
       // one.
       apiUrl: normalizeOrigin(options.apiUrl.toString()),
+      memoryUrl: normalizeMemoryUrl(
+        options.memoryUrl?.toString(),
+        options.apiUrl.toString(),
+      ),
       spaceHostMap: normalizeSpaceHostMap(options.spaceHostMap),
       spaceDid: options.spaceDid,
       experimental: options.experimental,
@@ -865,6 +881,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // it. `initialize()` checks the values.
     const data = {
       apiUrl: options.apiUrl.toString(),
+      memoryUrl: options.memoryUrl?.toString(),
       spaceHostMap: options.spaceHostMap,
       identity: options.identity.keyPair,
       spaceDid: options.spaceDid,
@@ -1360,8 +1377,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * return the reason along with a refusal. `known-different-host` carries the
    * host the space is routed to. `default-route-in-use` is about this session alone:
    * the space issued a stateful operation through the default host, and a
-   * runtime created later can still take the hint. Callers must not mount the
-   * space under this hint unless `accepted` is true.
+   * runtime created later can still take the hint. `memory-routed` holds for
+   * the runtime's lifetime: it opens Memory on a memory URL, and the hint names
+   * a host other than the API host. Callers must not mount the space under this
+   * hint unless `accepted` is true.
    */
   async registerSpaceHostDetailed(
     space: DID,

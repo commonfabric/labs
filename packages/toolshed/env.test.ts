@@ -9,7 +9,7 @@
  * `packages/runner/test/runtime-presets.test.ts`.
  */
 
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { EnvSchema } from "@/env.ts";
 
 Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
@@ -85,4 +85,69 @@ Deno.test("INGEST_SELF_SERVE_ENABLED is off unless explicitly enabled", () => {
 
   assertEquals(flag("true"), true);
   assertEquals(flag("1"), true);
+});
+
+Deno.test("MEMORY_PUBLIC_URL is an HTTP or HTTPS origin, or nothing", () => {
+  const parse = (value: string | undefined) =>
+    EnvSchema.safeParse(
+      value === undefined ? {} : { MEMORY_PUBLIC_URL: value },
+    );
+
+  // Unset or empty: clients open Memory on the API host.
+  assertEquals(parse(undefined).data?.MEMORY_PUBLIC_URL, undefined);
+  assertEquals(parse("").data?.MEMORY_PUBLIC_URL, undefined);
+  // Published as the bare origin, however it is spelled.
+  assertEquals(
+    parse("https://router.example/").data?.MEMORY_PUBLIC_URL,
+    "https://router.example",
+  );
+  // Anything else fails the parse, which refuses startup, and the reason
+  // calls the value a memory URL.
+  for (
+    const [value, reason] of [
+      ["router.example", "Invalid memory URL"],
+      ["wss://router.example", "Unsupported memory URL protocol"],
+      ["https://router.example/api", "Memory URL must not include a path"],
+      [
+        "https://user@router.example",
+        "Memory URL must not include credentials",
+      ],
+    ]
+  ) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "MEMORY_PUBLIC_URL"
+    );
+    assertEquals(
+      issue?.message,
+      `MEMORY_PUBLIC_URL must be an HTTP or HTTPS origin: ${reason}`,
+    );
+  }
+});
+
+Deno.test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
+  const warned: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warned.push(args);
+  try {
+    const parse = (value: string) =>
+      EnvSchema.safeParse({ MEMORY_PUBLIC_URL: value }).data
+        ?.MEMORY_PUBLIC_URL;
+    // An https page cannot open a ws:// socket, so this one is published
+    // with a warning.
+    assertEquals(
+      parse("http://router.example:9000"),
+      "http://router.example:9000",
+    );
+    assertEquals(warned.length, 1);
+    assert(String(warned[0][0]).includes("http://router.example:9000"));
+    // Loopback and https are what a local run and a deployment use.
+    parse("http://localhost:9000");
+    parse("http://127.0.0.1:9000");
+    parse("https://router.example");
+    assertEquals(warned.length, 1);
+  } finally {
+    console.warn = warn;
+  }
 });

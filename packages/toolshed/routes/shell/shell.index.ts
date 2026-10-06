@@ -9,10 +9,42 @@ import { buildInfo } from "@/lib/build-info.ts";
 import { createRouter } from "@/lib/create-app.ts";
 import {
   createShellStaticRouter,
+  loadShellIndex,
+  type ShellStaticDeps,
   StaticResponse,
 } from "@/routes/shell/shell-static.ts";
 
 export { createShellStaticRouter, StaticResponse };
+
+/**
+ * The router a compiled toolshed serves its shell with: the immutable build
+ * namespace, and the page built once, at startup, carrying the memory URL its
+ * clients open Memory on (`MEMORY_PUBLIC_URL`), or an empty element where the
+ * deployment has none.
+ *
+ * @throws If the bundle's `index.html` cannot carry the element, which
+ * refuses startup.
+ */
+export async function compiledShellRouter(
+  staticRoot: string,
+  environment: Pick<typeof env, "ENV" | "MEMORY_PUBLIC_URL">,
+  commitSha: string | null | undefined,
+  deps?: ShellStaticDeps,
+) {
+  return createShellStaticRouter(staticRoot, {
+    // build-binaries uses the mode name when no commit SHA was supplied;
+    // mirror that fallback so locally compiled binaries retain a working
+    // default worker URL too.
+    immutableBuildId: commitSha ??
+      (environment.ENV === "production" ? "production" : "development"),
+    index: await loadShellIndex(
+      staticRoot,
+      environment.MEMORY_PUBLIC_URL,
+      deps,
+    ),
+    ...(deps !== undefined ? { deps } : {}),
+  });
+}
 
 const router = createRouter();
 
@@ -67,13 +99,7 @@ if (COMPILED) {
   // Production mode - serve static files
   router.route(
     "/",
-    createShellStaticRouter(shellStaticRoot, {
-      // build-binaries uses the mode name when no commit SHA was supplied;
-      // mirror that fallback so locally compiled binaries retain a working
-      // default worker URL too.
-      immutableBuildId: buildInfo.commitSha ??
-        (env.ENV === "production" ? "production" : "development"),
-    }),
+    await compiledShellRouter(shellStaticRoot, env, buildInfo.commitSha),
   );
 } else if (SHELL_URL) {
   // Development mode with proxy
