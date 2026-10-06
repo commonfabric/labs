@@ -75,7 +75,7 @@ describe("CFC prepareCfc verification bypass", () => {
       // the ignored extra argument.
       expect(tx.getCfcState().prepare.status).toBe("invalidated");
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
     } finally {
       await runtime.dispose();

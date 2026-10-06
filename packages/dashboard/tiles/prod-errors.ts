@@ -90,14 +90,13 @@ async function traceCounts(
 }
 
 export const prodErrors: Tile = {
-  id: "prod-errors",
+  label: "prod errors",
   intervalMs: 60_000,
   async collect(ctx): Promise<TileView> {
-    const label = "prod errors";
     const base = ctx.env("SIGNOZ_URL");
     const key = ctx.env("SIGNOZ_API_KEY");
     if (!base || !key) {
-      return { label, status: "unknown", value: "—", sub: "set SIGNOZ_URL + SIGNOZ_API_KEY" };
+      return { status: "unknown", value: "—", sub: "set SIGNOZ_URL + SIGNOZ_API_KEY" };
     }
     // Pop out to the SigNoz logs explorer, where the actual error logs live. The
     // server may reach SigNoz over an in-cluster URL the browser can't, so the link
@@ -113,7 +112,7 @@ export const prodErrors: Tile = {
       // SigNoz being down/unreachable is a gap in our own instrumentation, not a
       // production error — gray, never red.
       const msg = e instanceof Error ? e.message : "";
-      return { ...drill, label, status: "unknown", value: "—", sub: msg.startsWith("HTTP") ? `SigNoz ${msg}` : "SigNoz unavailable" };
+      return { ...drill, status: "unknown", value: "—", sub: msg.startsWith("HTTP") ? `SigNoz ${msg}` : "SigNoz unavailable" };
     }
 
     // Hourly buckets, oldest -> newest; empty hours are absent from the response,
@@ -122,7 +121,7 @@ export const prodErrors: Tile = {
     // skipping quiet hours.
     const stamps = [...trend.total.keys()].sort((a, b) => a - b);
     if (stamps.length === 0) {
-      return { ...drill, label, status: "unknown", value: "—", sub: `no ${service} spans` };
+      return { ...drill, status: "unknown", value: "—", sub: `no ${service} spans` };
     }
     const stepMs = STEP_S * 1000;
     const first = stamps[0], last = stamps[stamps.length - 1];
@@ -151,7 +150,6 @@ export const prodErrors: Tile = {
       : undefined;
     return {
       ...drill,
-      label,
       status,
       value: rate === undefined ? "—" : `${rate.toFixed(2)}%`,
       sub: rate === undefined ? "no traces · last 12h" : `${recentErr} err / ${recentTotal} spans · last 12h`,

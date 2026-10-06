@@ -1,4 +1,10 @@
-import { env, Page, waitForCondition } from "@commonfabric/integration";
+import { debugStr } from "@commonfabric/data-model";
+import {
+  createTestSpace,
+  env,
+  Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
@@ -9,7 +15,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 describe("cfc authorship chat integration test", () => {
   const shell = new ShellIntegration();
@@ -23,7 +29,7 @@ describe("cfc authorship chat integration test", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -61,7 +67,7 @@ describe("cfc authorship chat integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId: piece.id,
       },
       identity,
@@ -153,9 +159,8 @@ async function waitForAuthorshipStates(
   } catch (cause) {
     probe = await readAuthorshipProbe(page);
     throw new Error(
-      `Timed out waiting for CFC authorship states. Last probe: ${
-        JSON.stringify(probe, null, 2)
-      }`,
+      `Timed out waiting for CFC authorship states. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }

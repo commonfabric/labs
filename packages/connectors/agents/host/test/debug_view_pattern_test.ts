@@ -11,9 +11,13 @@ import {
   agentOwnerSchema,
 } from "@commonfabric/agents-connector/fabric-graph";
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
+import {
+  type ImplementationIdentity,
+  loadStoredCfcEnvelope,
+} from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { assertEquals, assertNotEquals } from "@std/assert";
 import {
@@ -39,11 +43,15 @@ import {
   tableRowWithFirstCell,
   tableWithHeaders,
 } from "./debug_view_support.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug pattern accepts empty target cells before collection", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-empty-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -123,9 +131,9 @@ Deno.test("debug pattern accepts empty target cells before collection", async ()
 });
 
 Deno.test("debug pattern renders sessions published after deployment", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-publish-after-deploy-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -184,9 +192,9 @@ Deno.test("debug pattern renders sessions published after deployment", async () 
 });
 
 Deno.test("debug pattern submits commands and links row data to separate views", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-command-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   let actingPrincipal = session.as.did();
@@ -276,13 +284,13 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     );
     resultInspect.abort();
     const resultAttack = runtime.edit();
-    resultAttack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(resultAttack, {
       id: "principal:did:key:other-debug-owner",
       actingPrincipal: "did:key:other-debug-owner",
     });
     resultCell.withTx(resultAttack).setRawUntyped({ compromised: true });
     resultAttack.prepareCfc();
-    const resultAttackCommit = await resultAttack.commit();
+    const resultAttackCommit = await resultAttack.commit().settled;
     assertEquals(resultAttackCommit.error !== undefined, true);
 
     let result = await piece.result.get() as Record<string, unknown>;
@@ -313,7 +321,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     (promptCell as Cell<string>).withTx(promptTx).set(
       "Continue from the deployed debug view",
     );
-    const promptCommit = await promptTx.commit();
+    const promptCommit = await promptTx.commit().settled;
     if (promptCommit.error) throw promptCommit.error;
     await runtime.settled();
 
@@ -700,11 +708,17 @@ Deno.test("debug pattern submits commands and links row data to separate views",
         }),
     );
     let commandTx = runtime.edit();
+    // The queue answers to the handler that submits commands, so the fixture
+    // writes it as that handler.
+    setCfcImplementationIdentity(
+      commandTx,
+      commandWriterIdentity(runtime, protectedCommandLink),
+    );
     target.cells.commands.resolveAsCell()
       .asSchema(agentOwnerSchema(session.as.did(), false)).withTx(commandTx)
       .setRawUntyped(pageCommands);
     commandTx.prepareCfc();
-    let commandCommit = await commandTx.commit();
+    let commandCommit = await commandTx.commit().settled;
     if (commandCommit.error) throw commandCommit.error;
     await runtime.settled();
 
@@ -728,6 +742,10 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     )[0];
 
     commandTx = runtime.edit();
+    setCfcImplementationIdentity(
+      commandTx,
+      commandWriterIdentity(runtime, protectedCommandLink),
+    );
     target.cells.commands.resolveAsCell()
       .asSchema(agentOwnerSchema(session.as.did(), false)).withTx(commandTx)
       .setRawUntyped([
@@ -740,7 +758,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
         }),
       ]);
     commandTx.prepareCfc();
-    commandCommit = await commandTx.commit();
+    commandCommit = await commandTx.commit().settled;
     if (commandCommit.error) throw commandCommit.error;
     await runtime.settled();
 
@@ -771,13 +789,13 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     );
 
     const attack = runtime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: "principal:did:key:other-owner",
       actingPrincipal: "did:key:other-owner",
     });
     attack.writeValueOrThrow(commandLink, []);
     attack.prepareCfc();
-    const attackResult = await attack.commit();
+    const attackResult = await attack.commit().settled;
     assertEquals(attackResult.error !== undefined, true);
   } finally {
     await runtime.dispose();
@@ -786,9 +804,9 @@ Deno.test("debug pattern submits commands and links row data to separate views",
 });
 
 Deno.test("debug pattern bounds raw-data links to one session page", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-session-page-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -839,7 +857,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
       path: [],
     });
     const staleIndexTx = runtime.edit();
-    staleIndexTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(staleIndexTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -847,7 +865,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
       "claude-agent-sdk",
     );
     staleIndexTx.prepareCfc();
-    const staleIndexCommit = await staleIndexTx.commit();
+    const staleIndexCommit = await staleIndexTx.commit().settled;
     if (staleIndexCommit.error) throw staleIndexCommit.error;
     const piece = await deployDebugPiece(manager, target);
     await runtime.settled();
@@ -1054,7 +1072,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
     );
     const filterTx = runtime.edit();
     (filter as Cell<string>).withTx(filterTx).set("No matching session");
-    await filterTx.commit();
+    await filterTx.commit().settled;
     await runtime.settled();
 
     const filteredResult = await piece.result.get();
@@ -1086,7 +1104,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
     );
     const clearFilterTx = runtime.edit();
     (filter as Cell<string>).withTx(clearFilterTx).set("");
-    await clearFilterTx.commit();
+    await clearFilterTx.commit().settled;
     await runtime.settled();
 
     const unfilteredResult = await piece.result.get();
@@ -1131,10 +1149,10 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
 
 Deno.test("debug pattern resumes sessions published while it was stopped", async () => {
   const server = newSharedServer();
-  const spaceName = `debug-resume-published-${crypto.randomUUID()}`;
+  const spaceDid = (await Identity.generate()).did();
   let debugPieceId = "";
 
-  const deploySession = await createSession({ identity, spaceName });
+  const deploySession = createSession({ identity, spaceDid });
   const deployStorage = SharedServerStorageManager.connectTo(server, {
     as: deploySession.as,
   });
@@ -1157,7 +1175,7 @@ Deno.test("debug pattern resumes sessions published while it was stopped", async
     await deployStorage.close();
   }
 
-  const publishSession = await createSession({ identity, spaceName });
+  const publishSession = createSession({ identity, spaceDid });
   const publishStorage = SharedServerStorageManager.connectTo(server, {
     as: publishSession.as,
   });
@@ -1189,7 +1207,7 @@ Deno.test("debug pattern resumes sessions published while it was stopped", async
     await publishStorage.close();
   }
 
-  const readerSession = await createSession({ identity, spaceName });
+  const readerSession = createSession({ identity, spaceDid });
   const readerStorage = SharedServerStorageManager.connectTo(server, {
     as: readerSession.as,
   });
@@ -1220,7 +1238,7 @@ Deno.test("debug pattern resumes sessions published while it was stopped", async
 
 Deno.test("debug pattern loads connector child cells on a cold replica", async () => {
   const server = newSharedServer();
-  const spaceName = `debug-cold-${crypto.randomUUID()}`;
+  const spaceDid = (await Identity.generate()).did();
   const sessionCount = SESSION_PAGE_SIZE + 1;
   let debugPieceId = "";
   let rawPieceId = "";
@@ -1229,7 +1247,7 @@ Deno.test("debug pattern loads connector child cells on a cold replica", async (
   let lastSessionRowDocumentId = "";
   let indexSourceRowDocumentId = "";
   try {
-    const writerSession = await createSession({ identity, spaceName });
+    const writerSession = createSession({ identity, spaceDid });
     const writerStorage = SharedServerStorageManager.connectTo(server, {
       as: writerSession.as,
     });
@@ -1381,7 +1399,7 @@ Deno.test("debug pattern loads connector child cells on a cold replica", async (
       await writerStorage.close();
     }
 
-    const readerSession = await createSession({ identity, spaceName });
+    const readerSession = createSession({ identity, spaceDid });
     const readerStorage = SharedServerStorageManager.connectTo(server, {
       as: readerSession.as,
     });
@@ -1657,3 +1675,38 @@ Deno.test("debug pattern loads connector child cells on a cold replica", async (
     await server.close();
   }
 });
+
+/** The verified identity of the writer the stored command queue names. */
+function commandWriterIdentity(
+  runtime: Runtime,
+  link: Parameters<typeof loadStoredCfcEnvelope>[1],
+): ImplementationIdentity {
+  const tx = runtime.edit();
+  try {
+    const envelope = loadStoredCfcEnvelope(tx, link);
+    const writer = envelope.status === "loaded"
+      ? (envelope.schema as {
+        ifc?: {
+          writeAuthorizedBy?: {
+            __ctWriterIdentityOf?: {
+              file?: string;
+              path?: string[];
+              moduleIdentity?: string;
+            };
+          };
+        };
+      }).ifc?.writeAuthorizedBy?.__ctWriterIdentityOf
+      : undefined;
+    if (!writer?.moduleIdentity || !writer.path) {
+      throw new Error("the command queue names no writer");
+    }
+    return {
+      kind: "verified",
+      moduleIdentity: writer.moduleIdentity,
+      sourceFile: writer.file,
+      bindingPath: writer.path,
+    };
+  } finally {
+    tx.abort();
+  }
+}

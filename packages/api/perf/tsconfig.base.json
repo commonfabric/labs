@@ -27,7 +27,7 @@
       // `packages/api/cfc.ts` reaches the barrel for one function,
       // `deepFreeze()`. Resolving the specifier to the module that defines it
       // keeps the real signature in the compile, and keeps the rest of the
-      // barrel -- and the workspace packages `value-hash.ts` pulls in, each
+      // barrel -- and the workspace packages `value-hash/` pulls in, each
       // with its own `@/` alias this flat map cannot express -- out of a
       // profile whose whole subject is compile cost.
       "@commonfabric/data-model": [

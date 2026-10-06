@@ -46,7 +46,7 @@ import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 
@@ -133,7 +133,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       const cell = rt.getCell(space, id, ambiguousWishShapedSchema, tx);
       cell.set({ candidates: [{ name: "Bob" }] });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     }
 
@@ -172,7 +172,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       tx.addCommitCallback((_tx, result) => {
         observed.push(result.error);
       });
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.name).toBe("CommitPreparationError");
       expect(String(result.error?.message)).toMatch(/divergent anyOf/);
       // ...and commit callbacks observed the same failure (rollback ran).
@@ -204,7 +204,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
         // crash is recorded. Today the crash escapes commit() as a thrown
         // error.
         const tx = secondWriterTx(observeRuntime, id);
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
       } finally {
         await observeRuntime.dispose();
@@ -228,7 +228,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       try {
         const tx = secondWriterTx(runtime, id);
         runtime.prepareTxForCommit(tx);
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.name).toBe("CommitPreparationError");
       } finally {
         console.error = realConsoleError;
@@ -308,15 +308,9 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
     // prepareCfc fix above). The wish must then SHOW that refusal.
 
     const makeServer = () =>
-      new MemoryV2Server.Server({
+      newSharedServer({
         sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 600_000 }),
         subscriptionRefreshDelayMs: 0,
-        authorizeSessionOpen(message) {
-          const principal = (message.authorization as { principal?: unknown })
-            ?.principal;
-          return typeof principal === "string" ? principal : undefined;
-        },
-        sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
       });
 
     type Journey = {
@@ -395,7 +389,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           );
           const result = rt.runtime.run(tx, wishPattern, {}, resultCell);
           rt.runtime.prepareTxForCommit(tx);
-          await tx.commit();
+          await tx.commit().settled;
           await result.pull().catch(() => {});
           await rt.runtime.idle();
           // Let the failure-surfacing bookkeeping transaction (spawned from a
@@ -436,7 +430,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           secretCell.set({ name });
           spaceCell.withTx(tx).key("secret").set(secretCell.withTx(tx));
           rt.runtime.prepareTxForCommit(tx);
-          const res = await tx.commit();
+          const res = await tx.commit().settled;
           expect(res.error).toBeUndefined();
           await rt.runtime.idle();
         } finally {
@@ -513,7 +507,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           );
           cell.set({ candidates: [{ name: "Bob" }] });
           rt.runtime.prepareTxForCommit(tx);
-          const res = await tx.commit();
+          const res = await tx.commit().settled;
           expect(res.error).toBeUndefined();
           await rt.runtime.idle();
         } finally {

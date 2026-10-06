@@ -15,9 +15,9 @@
 # item 16 of the plan records as belonging to commands that declare no options
 # at all. They read no state, so a fabric cannot change what they answer, and
 # they are asserted one by one — kind and glob — in
-# packages/cli/test/completion-providers.test.ts, which is where a constant
-# belongs. Nothing here re-checks them, and `deno task check-completion-slots`
-# is what catches a slot with no entry at all.
+# packages/cli/test/completion-providers.serial.test.ts, which is where a
+# constant belongs. Nothing here re-checks them, and `deno task
+# check-completion-slots` is what catches a slot with no entry at all.
 #
 # The exception is an option name that means two things on two commands —
 # --from, --to, --root, --scope. There the answer turns on which command was
@@ -129,10 +129,26 @@ succeeds() {
   if "$@" >/dev/null 2>&1; then printf '1\n'; else printf '0\n'; fi
 }
 
-SPACE="${SPACE:-$(mktemp -u compXXXXXXXX)}"
 if [ -z "${CF_IDENTITY:-}" ]; then
   CF_IDENTITY=$(mktemp)
   $CF id new >"$CF_IDENTITY" 2>/dev/null
+fi
+# A space named in $SPACE is used as it stands; otherwise the identity creates
+# one, since opening a space never creates it. `cf space create` prints the
+# new space's DID. A create that fails and one that prints nothing are two
+# outcomes, so its status is kept apart from its output, as `run` keeps it.
+if [ -z "${SPACE:-}" ]; then
+  SPACE=$($CF space create --quiet --api-url="$API_URL" \
+    --identity="$CF_IDENTITY")
+  CREATE_STATUS=$?
+  if [ "$CREATE_STATUS" -ne 0 ]; then
+    echo "cf space create exited $CREATE_STATUS" >&2
+    exit 1
+  fi
+fi
+if [ -z "$SPACE" ]; then
+  echo "cf space create printed no space" >&2
+  exit 1
 fi
 ARGS="--api-url=$API_URL --identity=$CF_IDENTITY --space=$SPACE"
 # The same three, written the way a caller types them on the line being
@@ -533,6 +549,9 @@ check "1" "$(complete_at "cf piece link $LINE_ARGS $BOARD/revision ${BOARD%?????
 # The id half offers what the listing holds — registered pieces — while the key
 # half reads whichever id was typed. So the child, which the listing does not
 # name, still completes its own keys once its address is pasted in.
+check "1" "$(complete_at "cf piece link $CONN_ARGS //$SPACE_DID/of:$BOARD@space/settings/den" |
+  grep -Fc "//$SPACE_DID/of:$BOARD@space/settings/density")" \
+  "a full reference retains its space, scope, and parent path while completing keys"
 check "1" "$(complete_at "cf piece link $LINE_ARGS $BOARD/revision $ITEM_ID/rec" |
   grep -c "^$ITEM_ID/recorded\$")" \
   "and a pasted child address completes its keys, which the listing cannot name"

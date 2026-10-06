@@ -1,9 +1,9 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   Page,
   type ProbeApi,
   waitForCondition,
 } from "@commonfabric/integration";
-import { toIndentedDebugString } from "@commonfabric/data-model";
 import {
   clickMarked,
   markTargetsArgs,
@@ -158,11 +158,11 @@ async function settleAndClickNoteButton(
   } catch (cause) {
     const probe = await readNoteButtonCandidates(page, selector, match, needle)
       .catch(() => undefined);
-    // Indented for readable test-log output
     throw new Error(
       `Unable to find a ${
         match === "title" ? "button titled" : "button matching"
-      } "${needle}" to click. Last probe: ${toIndentedDebugString(probe)}`,
+      } "${needle}" to click. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -58,7 +59,7 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
       return { storageManager, runtime, sourceId };
     } catch (error) {
       await runtime.dispose();
@@ -84,11 +85,11 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
       space,
       scope: "space",
       id: targetId,
-      path: ["value", "field"],
-    }, "v");
+      path: ["field"],
+    }, linkRefFrom({ space, id: sourceId, path: [] }));
     tx.recordCfcWritePolicyInput({
       kind: "link-write",
-      target: { space, scope: "space", id: targetId, path: ["value", "field"] },
+      target: { space, scope: "space", id: targetId, path: ["field"] },
       source: { space, scope: "space", id: sourceId, path: [] },
       cfcLabelView: {
         version: 1,
@@ -104,7 +105,7 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
     const cidWrites = [...tx.getWriteDetails?.(space) ?? []]
       .map((detail) => detail.address.id)
       .filter((id) => id.startsWith("cid:"));
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const stored = (runtime.storageManager.open(space).replica as unknown as {
       getDocument(id: string): { cfc?: { schemaHash?: string } } | undefined;
     }).getDocument(targetId);

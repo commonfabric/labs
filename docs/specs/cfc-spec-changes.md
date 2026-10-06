@@ -2,12 +2,18 @@
 
 Changes `~/src/specs/cfc` needs so the spec can answer the questions that came
 up while designing implementation work. Started 2026-06-10 during the S16
-(default transition) design; intended to grow as later sessions hit new gaps.
-Each item: where, what's missing or contradictory, proposed edit. Tags:
+(default transition) design. **Closed to new entries since 2026-10-05:** a new
+gap is filed as a specs pull request, as
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+describes, and the `open` entries below are being migrated to specs pull
+requests one group at a time, after which this list is archived. Each item: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
-Status legend: `open` (not yet applied to the spec), `applied`.
+Status legend: `open` (not yet before the spec), `proposed` (a specs pull
+request carrying it is open, named in the entry), `applied` (the proposed edit
+landed as written), `adopted` (the spec has ruled on the entry and carries the
+requirement in its own words, in the section named).
 
 ## From the S16 default-transition design
 
@@ -320,35 +326,26 @@ already calls its own exclusion "a profile decision, not a core-semantics
 fact" and mirrors it to "the write-side rule that the same addresses are not
 value-write targets".
 
-One narrowing landed alongside: the measurement quantifies over paths a
-schema could have declared a policy at, and the raw meta seam is not one.
+One narrowing landed alongside: the measurement quantifies over payload
+writes, and a write to one of a document's own members is not one.
 `setMetaRaw` lands on a document-root sibling of `value` (`schema`,
 `internal`, `patternIdentity`, and the rest of the `MetaField` union), which
-no value schema describes. The seam is outside the check at every rung, so a
-meta path raises neither a strict reject nor a persist-and-flag diagnostic.
+no value schema describes. Such a write names no payload path (§4.6.5), so it
+is neither a flow-label target nor measured, and raises neither a strict
+reject nor a persist-and-flag diagnostic. No declared entry reaches it
+either: a document-root declared entry labels the payload root, which a
+member is not. Measuring the seam would leave a piece un-updatable under
+strict whenever its pattern declares on a single result field, which is how a
+pattern normally labels one, because the pattern updater, `setsrc`, and setup
+over an existing piece all write meta.
 
-A ceiling can still resolve at a meta path, from a document-root declared
-entry by longest prefix, and that route is skipped too. The entry sits at
-logical `[]`, the payload root, and reaches the seam only because
-canonicalization strips a leading `value`. Honoring it would make a piece
-updatable or not according to whether its pattern carries a root `ifc`.
-Declaring on a single result field, which is how a pattern normally labels
-one, leaves the seam's ceiling empty; the piece is then un-updatable under
-strict, because the pattern updater, `setsrc`, and setup over an existing
-piece all stamp meta.
-
-Nothing is laundered. A path counts as meta only while no payload write
-landed on it too, so a transaction writing both leaves the path measured; the
-ancestor collapse runs over measured paths only, so an exempt meta path
-cannot shadow a value write beneath it; meta paths remain flow-label targets,
-so the join persists there and the egress, display, and observation gates
-read the unchanged label; and the seam shares the document, space, and
-replica set of the value surface beside it, so it reaches no further. The
-residual is the shared namespace: where a payload field carries a `MetaField`
-name, an exempt meta write can raise the stored derived label at their common
-logical path past what that field declares. That is over-taint, so reads stay
-protected, and giving the envelope seam its own path space is the fix. Shares
-the meta-seam predicate with the schema write-policy requirement (#6077).
+Nothing is laundered. The seam is the runtime's to read and write, and no
+pattern compiles against it. A member's read consumes no payload label just
+as its write stamps none, so no payload label is dropped on the way through
+it, and a payload field that carries a `MetaField` name is labeled and
+measured like any other. The seam shares the document, space, and replica
+set of the value surface beside it, so it reaches no further. The schema
+write-policy requirement (#6077) skips a member write for the same reason.
 
 A second narrowing follows the same rule over a document rather than a path,
 and covers two id classes.
@@ -416,8 +413,8 @@ the space running that module addresses it, and it outlives all of them —
 and on a second: route 2 leaves a `declared` entry per measured path, which
 §8.12.1 does not let back, on a document nothing collects.
 
-All three are outside the check at every rung, through the same
-predicate the meta seam uses, and the skip is scoped to a join the target's
+All three are outside the check at every rung, through one predicate
+(`isDeclarablePolicyStore`), and the skip is scoped to a join the target's
 own space produced: the join records the space each contributing document
 lived in, and a target whose join drew a clause from elsewhere is measured
 like any other document. The residency half of the ceiling therefore still
@@ -781,9 +778,10 @@ commitment-aware matching), stage 2 as labs#4657
 `labelMetadata` observation channel — the SC-6 revisit discharged)
 completed by template-population Stage B (labs#4660): the full per-field
 §4.6.4.2 profile persists as multi-`*` templates under `/cfc/labels/...`
-(`origin:"label-metadata"`, `observes:"labelMetadata"` — no payload read
-class consumes them), minted at the persist seam from each source-bearing
-derived-containment payload entry, resolved by `inspectConfLabel` at
+(`origin:"label-metadata"`, `observes:"labelMetadata"` — a reader decodes
+them apart from the payload entries, so no payload lookup sees one), minted
+at the persist seam from each source-bearing derived-containment payload
+entry, resolved by `inspectConfLabel` at
 concrete clause/alternative metadata paths with the interim rule staying
 the label source and the in-hand computation the fallback on template-less
 envelopes ([`cfc-template-population.md`](./cfc-template-population.md)
@@ -924,10 +922,10 @@ this file is the single tracking place:
 - Schema-sanitization / contamination scoping promotion from ch. 14 to
   normative (audit 3.12). Not re-verified.
 - ~~`/value` envelope-prefix wire-format decision (audit Wave 4 #28)~~ —
-  **verified: decided by the spec.** §4.6.4/§4.6.5 normatively require the
-  `/value` envelope prefix for persisted payload labels and value-relative
-  normalization before IFC matching. Remaining work is **implementation
-  conformance** (or documenting equivalence), not a decision.
+  **decided (owner, 2026-09-30): value-relative entries stay, and §4.6.4
+  changes to match (SC-55).** The runner conforms to §4.6.5: a document path
+  outside `value`, such as `["source"]`, names no payload path, and is never
+  matched against payload labels.
 
 ## Also noted by the sweep (not previously tracked)
 
@@ -1254,7 +1252,10 @@ not others.
 ## From the write-path self-read exclusion (2026-09-15)
 
 **SC-41 [normative] A write path's read of its own destination is a
-runtime-internal read — §18.6.2.** §18.6.2 derives two things from the
+runtime-internal read — §18.6.2.** `adopted`: §18.6.2, "Conditional
+exclusions", carries the class as the write-destination read, with its
+unobservability invariant, the runtime-private condition on a guard's control
+state, and the comment it requires at every marking site. §18.6.2 derives two things from the
 attempt's journal minus runtime-internal reads: the consumed set, and the
 conservative flow-path confidentiality. This entry proposes a fifth kind of
 runtime-internal read, and the runner subtracts it from the second alone —
@@ -1320,12 +1321,15 @@ implementation are in
 [`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md); the
 runtime marks the class with `writeDestinationRead` rather than by address, so
 §18.6.4's "excluded address patterns" obligation is discharged for this class
-by naming the marker. `open`.
+by naming the marker.
 
 ## From the wiring-probe classification (2026-09-16)
 
 **SC-42 [normative] A runtime wiring read is not an observation — §4.6.3 +
-§18.6.2.** `open`. §4.6.3's read-API mapping puts the link-carried label on a
+§18.6.2.** `adopted`: §18.6.2, "Conditional exclusions", carries the class as
+the wiring read, with the condition that the reference found is only written
+unchanged to another slot, and the comment it requires at every marking site.
+§4.6.3's read-API mapping puts the link-carried label on a
 "standalone reference-identity read", and the refinement beneath it defines
 standalone by the dereference trace: a probe covered at or above by a trace
 the same transaction recorded is resolution machinery, and every other probe
@@ -1371,3 +1375,455 @@ closing the per-child half for generic reference-structure containers "first
 requires the runtime to distinguish its own container-scaffolding reads from
 application reads (a machinery-read class beyond those of §18.6.2)", which is
 that marker, named as something the spec does not yet have.
+
+## From the input-witnessed `TransformedBy` (2026-09-23)
+
+Design of record: [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md).
+
+**SC-43 [reconcile] `TransformedBy`'s input witnesses as standalone summary
+atoms — §8.9.3, §8.7.1, §15.** `open`. Three passages give the atom three
+shapes: §15's registry row and §4.5.4 carry `inputs: Array<{ ref, witnesses?
+}>`, §8.7.1 carries parallel `inputs` and `inputIntegrity` arrays, and §8.9.3's
+code sketch carries the §15 form. None says how an exchange rule reads a
+per-input list, and the §4.4.5 pattern calculus has no quantifier to do it with:
+an array pattern matches elementwise at equal length. The runtime mints the
+conservative summary §8.9.3 already permits, as standalone atoms:
+`TransformedBy{identity}` beside one `TransformedBy{identity, inputWitness: W}`
+per atom `W` that held at every confidential input location, with no input
+references. Proposed edit: make the summary form a registered alternative to
+`inputs` in §15, with its meaning stated once (the transformer wrote the value,
+and every confidential input it consumed carried `W`), and give §8.7.1's
+parallel `inputs` and `inputIntegrity` arrays the §15 shape; state in §8.7.2
+that a rule releasing an endorsed transformer's output guards on the
+witness-bearing form, since the identity alone admits any caller's choice of
+input; and note in §8.9.3 that input references are a read-path channel when
+persisted, which is a reason to prefer the summary where no consumer
+dereferences them.
+
+## From the display-boundary module-policy build (2026-09-24)
+
+**SC-44 [normative] A module policy's subject space is a membership candidate
+— §4.9.3 + §18.4.5.** `open`. §4.9.3 discovers the spaces to point-query for
+`HasRole` facts "from the `Space(...)` atoms present in the label being
+evaluated", and §18.4.5 subscribes a gated cell to the ACL documents of exactly
+those spaces. A module policy's rules release on evidence about
+`THIS_POLICY.subject`, and §4.4.2's own example guards on
+`HasRole(reviewer, subject, reader)`. A label selecting that policy carries the
+subject inside the `Policy` reference, not as a `Space(...)` atom, so under the
+text as written no point query is ever addressed to it: the rule can fire for
+a viewer whose own or session space is the subject, and for no other reader.
+
+The runtime adds the plaintext `subject` of each exact module-policy reference
+the label selects to the candidate set, and the reconciler watches that
+space's ACL document as it watches a `Space(X)` atom's. The discipline is
+unchanged: one point query per `(principal, space)`, no member enumeration, and
+no inference from residency.
+
+Two things are left as they are. A subject in commitment form (§4.6.4.1) names
+no space and is not a candidate: a committed subject is never opened (§4.3.6);
+minted facts for other candidates still unify with it. Those are the facts the
+boundary mints for another reason — the viewer's own or session space, or a
+`Space` atom the same label names — so the commitment adds no candidate and no
+new fact. A space a module rule adds from
+any binding other than the subject is not a candidate either, and its `Space`
+alternative stays sealed; consulting spaces that first appear in the rewritten
+label would need a watch set that depends on evaluation, which §18.4.5's
+reactive model does not have.
+
+The same reactive obligation extends to manifests. A label whose manifest
+has not reached the local replica fails closed (§4.4.3), and nothing in
+§18.4.5 re-evaluates it when the manifest arrives. The runtime subscribes a
+gated cell to the manifest document at `policyDigest` in each space its label
+was derived from — the local digest-addressed store of §4.4.1, where the
+persisting transaction installed it — until one verifies. For a label view
+carried on a cell rather than stored on its document, those are the spaces the
+carried view was derived from: the holder's, per §4.4.1, such as the document
+holding a link the cell was resolved through, not the space of the value it
+reaches.
+
+Proposed edit: add the plaintext module-policy subject to §4.9.3's
+candidate-discovery sentence, with the commitment-form carve-out; and add
+subject-space ACL documents and unverified manifest documents to §18.4.5's
+reactive re-render paragraph. Implemented in
+`packages/runner/src/cfc/render-ceiling.ts`
+(`membershipSpacesInConfidentiality`) and
+`packages/html/src/worker/reconciler.ts` (`#watchCellMembership`).
+
+## From the stored write-requirement enforcement (#8024, 2026-09-24)
+
+**SC-45 [normative] A module delegation is a verifier step — §8.15.6.**
+`open`. §8.15.6 says an updated handler MUST NOT inherit its predecessor's
+write authority. The runtime lets a republished module write a field whose
+stored `writeAuthorizedBy` names its predecessor when a delegation from the
+successor to the predecessor is registered, and `piece setsrc` and
+system-origin releases (the source reconciler) register one. Once stored claims
+bind every writer, a successor writing through its own labeled schema needs
+that delegation too. Ruled by Berni on #8024: "Yes, trust setsrc and system
+updates do set up a delegation, that is intended. Spec-wise it's effectively a
+verifier step." Proposed edit: in §8.15.6, say that authority does not pass by
+inheritance, and that a verifier may attest a succession (the update path
+registering the successor as a delegate of the predecessor). The attested
+successor then satisfies claims naming the predecessor. Name who may attest
+(the trusted update paths) and that the attestation is per space.
+
+**SC-46 [normative] Claims beneath a link position belong to the linked
+document — §8.15 + §8.12.** `open`. A schema can describe, beneath a position
+that holds a link, the fields of the document linked there, with their writer
+claims (a home document's profile links carry the profile pattern's field
+claims). Nothing in §8.15 or §8.12 says whose claims those are. The runtime
+treats them as the linked document's: that document's own envelope enforces
+them. The link position's own claims (`writeAuthorizedBy`/`uiContract` at the
+position) govern pointing it at another link, setting it from absent, and
+clearing it. Replacing inline data with a link, or a link with inline data,
+answers to the claims beneath as stored. Link positions are judged from the
+stored and new values, per item for a list. Proposed edit: a §8.15 subsection
+stating these rules, and a note in §8.15.3 ("authority is a property of the
+schema, not the value") that which document a schema position describes
+depends on whether the value there is a link.
+
+**SC-47 [normative] Release — §8.15.12 (new) + §8.12.3.** `open`. §8.12.3's
+strictly additive label evolution has no carve-out for re-describing what a
+store's schema says about other documents. Proposed clause: in the
+runtime-authorized transaction that installs a pattern over its own piece's
+stores (setup, a pattern swap, a start repair), (a) claims the stored schema
+describes beneath a position that, as the document stood before the
+transaction, held only links, or held nothing under a position that itself
+carries a writer claim, belong to the linked documents and are re-described
+by the release; (b) a stamped claim may adopt a stored
+unstamped claim per SC-48. Every other writer is held to strict monotonicity.
+Note that both rules rest on swap authority (who may move a piece's pattern
+pointer), which §8.15 should name.
+
+**SC-48 [normative] Adopting an unstamped writer claim — §8.15.1.** `open`.
+§8.15.1 names a writer by artifact hash and symbol. Claims stored before the
+runtime stamped them carry only a file spelling, which differs across compile
+roots. An unstamped claim authorizes no writer. The runtime lets a stamped
+claim adopt one when both name the same export and the same file below a
+known pattern root, and only when the stamp is one the transaction can vouch
+for: a module of the program a release installs (SC-47), or the verified
+writer the stamp itself names (its module, source file and export). Proposed edit: state that adoption is a
+one-time authenticated migration of legacy claims, and that once stored claims
+are stamped the file-correspondence rules are retired.
+
+## From the row-set member build (2026-09-28)
+
+`sqliteQuery` implements §8.17.6 as
+[`sqlite-builtin/06-cfc.md`](./sqlite-builtin/06-cfc.md) describes ("Where a
+query's selection inputs are labeled"). Three points where the text and the
+runner differ, or where the text leaves a choice open:
+
+**SC-49 [normative] A secret in a member's address — §8.17.6 rule 4.**
+`proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: keyed derivation permitted, the slot carries `S` alone, the key-disclosure and address-equality residuals recorded under §18.6.4; the runner's salt conforms, no code change. Rule 4 derives a member's address from its content and payload
+label, and so puts the payload label on the reference identity at each slot,
+since a reader could otherwise confirm a guess at a member by recomputing
+its address. The runner keys each member's address on a per-space secret as
+well (a runtime secret the transaction layer mints, labeled so that no
+ceiling admits a value derived from it), which makes the address say nothing
+about the member to code that cannot read the member. The slot then carries
+`S` alone, and a read of one member through the result carries that
+member's payload label and not another's. Proposed edit: allow a keyed
+derivation whose key untrusted code cannot use, say that the reference
+identity at a slot then need not carry the payload label, and record the
+residual that equal addresses stay observable under `S`: two slots holding
+equal members, and a member kept across a change of the selection, share an
+address.
+
+**SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
+item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option A: the requirement stated over both routes, keyed derivation as the means for the constructed-reference route; no code change. The item requires that untrusted code obtain a member
+reference only through a result, and offers a namespace untrusted code cannot
+write to as the means. A namespace stops a member's address from being
+received by writing the same content. It does not stop a reference from being
+constructed out of an address the code learned, where the runtime's link
+representation lets code write one as data. With a secret in the address
+(SC-49), an address can no longer be computed from a guess, so what remains
+is an address learned through a result, which is a retained reference.
+Proposed edit: state the requirement over both routes, and allow a secret
+in the address as the means for the second.
+
+**SC-51 [clarify] The existence entry of a member with labels at two levels —
+§8.17.6 rule 4, last item.** `proposed` in [specs#47](https://github.com/commonfabric/specs/pull/47), option C: root label where present, else the join of field labels, the full join under an unkeyed address; the runner's root-label existence entries conform, no code change. The item says the existence entry
+carries the member's payload label. A member can carry a label at its root
+and further labels on its fields. The runner's existence observation of such
+a member consumes the root label. Proposed edit: say whether the payload
+label here is the root's or the join over the member's fields.
+
+## From random space identities (2026-09-29)
+
+**SC-52 [reconcile] A space's own DID is not a member of the space — §4.9.3,
+§18.4.5, `Cfc/Membership.lean`.** `open`. §4.9.3's `resolveCapability` returns
+implicit OWNER when `principal === space`, and the Lean model's `readerRoleB`
+carries the same `p = space` disjunct. The memory server no longer agrees:
+under [random space identities](./random-space-identities.md), a space's key
+signs its genesis commit and nothing else, and the server grants the space's
+own DID OWNER only while the space has no ACL document at sequence 0. Past
+genesis, the space DID holds what the ACL grants it, which for a space created
+by anyone other than its own key is nothing. A Home space's user keeps
+membership, because the Home space's genesis ACL names the user OWNER. The
+runtime already follows the server: `spaceReaderRole`, the render membership
+provider, the render ceiling's member spaces, and the custody seal's room
+readers consult the ACL alone.
+
+§18.4.5 names "the acting user's own identity space" beside the session
+workspace as a space a render resolves without a lookup. That exception
+depended on the implicit OWNER; the render ceiling's member spaces are now the
+session workspace alone. SC-44's "the viewer's own or session space" reads the
+same way.
+
+Proposed edit: in §4.9.3, drop `principal === space` from the implicit-OWNER
+line, keeping service principals, and say that a space identity is authorized
+to sign its genesis commit and no more. In §18.4.5, name only the session
+workspace, whose reader authority the session's admission already
+established. In `Cfc/Membership.lean`, drop the `p = space` disjunct from
+`readerRoleB` and its description. The soundness, completeness, and
+conjunctive cross-space theorems reason about `readerOf` generically and should
+not depend on the disjunct; building the model confirms it. Implemented in
+`packages/memory/v2/server.ts` (`#resolveCapability`),
+`packages/runner/src/cfc/space-membership.ts` (`spaceReaderRole`), and
+`packages/runner/src/cfc/custody-seal.ts` (`roomReaders`).
+
+## From authored-by without a gesture (2026-10-01)
+
+**SC-53 [normative] What a current-principal claim attests, and what admits
+one — the audit-3.5 principal-resolution chain (§6/§8.15), beside SC-38.**
+`open`. [The label-metadata classification](./cfc-label-metadata-confidentiality.md)
+§2 already reads an `authored-by` subject as attribution "minted under the
+acting principal's own authority", and the runtime holds that reading. A claim
+the `__ctCurrentPrincipal` placeholder resolves to (`authored-by`, or
+`represents-principal` without an `ownerPrincipal`) attests that a run acting
+for the principal wrote the value, through a writer the position declares, or
+initialized it in one of their handler runs. It does not attest that the
+principal asked for it. A position admits the claim when it declares its
+writer, as a lone `writeAuthorizedBy` or a `writePolicyAnyOf` whose every
+member names one; it need not declare a UI contract. A position that does
+declare one keeps requiring its gesture for a write, which is then the only
+case where the claim comes with a trusted gesture; an initialization waives
+it, as [protected initialization](./cfc-protected-initialization.md) states. A
+served run with no actor, which keeps the ambient service snapshot (SC-38), is
+refused a write whose persisted label would mint the claim on a position
+without an `ownerPrincipal`, so such a claim never names the service; a value
+it initializes on nobody's behalf mints no claim and is admitted. This entry
+leaves the `ownerPrincipal` arm as it is. What the claim never permits is
+unchanged: its subject is the run's acting principal, never a literal a
+pattern supplies, so no principal's runtime mints a claim naming another.
+Proposed edit: state the authority reading, the declared-writer
+precondition, and the actor-less refusal where the chain is written, and name
+a separate intent atom (the registered and unminted `UserSurfaceInput`) as
+what a reader would consult for a gesture. Implemented in
+`packages/runner/src/cfc/prepare.ts` (`currentPrincipalIntegrityReason`);
+described in [`current-principal.md`](../features/current-principal.md).
+
+## From the display ceiling's prompt-caveat family (2026-10-01)
+
+**SC-54 [normative] The default display ceiling admits the prompt-caveat
+family — §8.10.6, §10.1.** `open`. §8.10.6 admits caveat kinds from a
+deployment's allow-list that "SHOULD start from the influence-class caveat
+kinds" and keeps material-risk kinds "subject to their ordinary discharge
+evidence", so a value carrying `prompt-injection-risk-unscreened` could not
+be shown even to its own owner until a screener had run. Since the renderer
+began deciding text children on the labels their read consumed (#8264), that
+reading withholds every unscreened imported message body from its owner. The
+CFC spec owner ruled on 2026-10-01 that a prompt caveat says only that the
+content must not be trusted as instructions to a model, so it has nothing to
+do with a display, and that the ceiling should admit the whole family rather
+than a list of kinds. Proposed edit: §8.10.6 admits every prompt-caveat kind
+§10.1 lists (the screening-gradient tiers and `prompt-influence`) by family,
+keeps an enumerated, deployment-declared allow-list for other caveat kinds,
+and says admission is not discharge: the caveat stays on the value. That
+alone makes no other sink refuse it: labs' llm sinks are ungated today
+([llm-sink admission](../plans/cfc-llm-sink-admission.md)), so until this
+change the display ceiling was where the unscreened caveat changed an
+outcome. This entry is the new release judgment §8.10.6's tighten-only bullet
+requires for admitting a caveat kind.
+§10.1 gains a line saying a display boundary admits the family, which leaves
+its `InjectionSafe` requirement for discharge untouched. A channel that reads
+rendered output back into a model (a screenshot, an accessibility tree, the
+page's text) is a model sink and a new boundary context (§8.10.5.2), not a
+display. Implemented in `packages/runner/src/cfc/prompt-caveat-kinds.ts`
+(`PROMPT_CAVEAT_FAMILY_KINDS`), which `defaultRenderConfidentialityCeiling` in
+`packages/lib-shell/src/runtime.ts` admits: the family expands into the
+ceiling's enumerated `caveatKinds` from that one constant, so the wire carries
+kinds, not a family token. Labs admits the screening-gradient tiers and
+`prompt-influence` in both spellings, and not the unsuffixed
+`prompt-injection-risk` form §10.1 still lists as legacy, which labs retired
+(#5661); the spec edit should say whether §10.1 retires it too.
+
+What the change exposes, for the spec edit and as follow-up work:
+
+- **URL-loading render is network egress, not display.** An `<img src>`, a
+  markdown image (`cf-markdown` loads any http(s) image URL) or a link preview
+  that fetches its `url` makes a request when it renders. Model output that
+  read injected text and the owner's data carries both labels; once the
+  display admits the caveat, such output can put the owner's data in a URL a
+  render fetches. SC-56 gates those props. (An earlier draft of this entry
+  said they should take "the public-only ceiling the fetch sinks already
+  use"; that ceiling exists only under the opt-in max-enforcement posture, and
+  the default fetch sinks have none.)
+- **Rendered output read back into a model is a model sink.** cf-harness's
+  `browser` tool returns a page's snapshot and text into an agent's context
+  with no label check; a page in the shell can now show it unscreened text.
+- **A clause of alternatives fails closed.** The allow-list admits a single
+  caveat atom, so a clause holding a tier upgrade's alternatives (unscreened
+  or ingress-screened) is refused. Nothing stores that shape today.
+
+## From the value-field path fix (2026-09-30)
+
+A document keeps its payload under `value`, and its other top-level members,
+such as `cfc` and `source`, are envelope metadata. The runner persists a label
+map whose entry paths are relative to `value`: an entry at `["error", "code"]`
+labels what §4.6.4 spells `/value/error/code`, and an entry at the empty path
+labels the payload root. No entry can name an envelope member.
+
+**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `applied`.
+§4.6.4 requires persisted payload labels under an explicit `/value` prefix and
+allows an equivalent internal layout. The runner's map is such a layout, and it
+spares the common case, a payload label, from spelling `value` (owner decision
+2026-09-30: keep the layout, and change the spec to match). Proposed edit:
+state that a persisted entry's path is relative to `value`, so the empty path
+is the payload root, and drop the `/value` prefix requirement together with the
+migration note that reads a legacy `/` entry as `/value`. A label on an
+envelope member, the envelope root included, would be an entry with an
+optional `root: "document"`, whose path is then relative to the document; an
+entry without `root` labels the payload. A reader of today's label-map
+version reads an entry's `path` and `label` and ignores any other member, so
+it would take a `root` entry for a payload label. The first such entry
+therefore needs a new label-map version, which today's readers refuse. §4.6.5
+is unchanged: an envelope member's path is never matched as a payload path.
+
+The `root` entry is deferred (owner decision 2026-10-01). Until it exists, an
+envelope member carries no label: a write to one stamps nothing, and a read of
+one consumes nothing. The residual is that a runtime write of label-derived
+data into a member would arrive unlabeled. No pattern reaches the meta seam,
+and every runtime write there is a link, a pattern identity or definition, a
+schema, a source origin or reconciliation record, or a slug an operator
+chooses.
+
+`applied` — specs#39 (2026-10-03): §4.6.4 keys a payload label by its path
+relative to `value` and marks the label-metadata entries `root: "document"`,
+the only document-rooted entries it persists. Label lookup selects the root
+before matching a path, so an entry of the other root never takes part, and
+a runtime should decode the two kinds into distinct address forms before any
+lookup sees them. §4.6.5 and §8.10.1.1 keep envelope metadata out of payload
+matching.
+
+## From the render-time remote-load gate (2026-10-01)
+
+**SC-56 [normative] A render that loads a remote resource is network egress,
+decided under the remote-load policy — §8.10.6, §8.10.5.2.** `open`. Since
+SC-54 the default display ceiling admits the prompt-caveat family, so a view
+whose data carries a material-risk caveat renders for its owner. A prop that
+makes the browser load a URL when it is set is not display: setting it sends
+what the URL carries to the URL's host, with no click. That covers an `img`
+`src` or `srcset`, a `style` or `theme` that can name a URL, `innerHTML` and
+`srcdoc`, a `link` or `base` `href`, markdown or SVG content, a chat or a chat
+preview, a link preview's `url`, an avatar or profile, a nested render's `cell`
+or a picker's items, a sandboxed frame's `context`, and a map's viewport.
+Before SC-54 such a value was hidden at the display, so it never loaded
+anything.
+
+The reconciler now decides those props under the **remote-load policy**: the
+render policy with the material-risk caveat kinds taken out of its caveat
+allowance. For the default host ceiling that is the allowance as it stood
+before SC-54, which admitted only prompt influence. The reconciler derives the
+policy from the one it holds, so no host or wire field changes. Two checks
+apply:
+
+- **A prop's own read** is fitted under the remote-load policy. A literal
+  prop is fitted on the labels of the props it came from.
+- **The view.** A cell child or root whose data the remote-load policy
+  refuses renders with `remoteLoadsBlocked`. Under it, no prop that would load
+  is set anywhere in the subtree, whatever that prop's own label, because the
+  data chose it.
+  - The block is inherited; a render boundary inherits the whole parent
+    policy.
+  - A change in the block re-renders the subtree rather than reusing what the
+    old decision set.
+  - A style element's text is CSS, so it is decided under the remote-load
+    policy and blocked outright in a blocked view.
+
+Because a read's consumed labels already include every document it passed
+through (#8264), the first check refuses most of these loads on its own. The
+block keeps the subtree rule independent of that. It is what takes back a load
+when a view gains the caveat while a clean view it embeds does not change.
+
+A refused prop is not set, or is removed, and is reported as the
+`render-remote-load` denial. A style element's refused text reports as
+`render-confidentiality-ceiling`, since it goes through the display gate.
+
+`style` and `theme` are decided by value. A value counts as one that may load
+when it holds a `url`, an image function, `src(`, `@import`, a backslash, or
+a custom property definition. An object is decided entry by entry.
+
+Implemented in `packages/html/src/worker/reconciler.ts` (`REMOTE_LOAD_PROPS`,
+`#remoteLoadPolicyOf`). Tested in
+`packages/html/test/worker-reconciler-remote-loads.test.ts`.
+`packages/html/test/remote-load-props.test.ts` holds every ui component that
+shows a way to load to the table, or to a reason it loads nothing a value
+chooses.
+
+Proposed edit: §8.10.6 says the display ceiling governs what a display shows,
+not what a render loads. §8.10.5.2 names a render-time remote load as a
+network sink class whose default is the display ceiling without the
+material-risk kinds. The spec owner should say whether the default should
+instead be public-only. That would also stop an owner's own confidential image
+URLs from loading, which is email clients' default for remote images.
+
+What this costs, and what is not covered:
+
+- **Markdown, chat, a chat preview, a nested render and a picker are refused
+  whole under the caveat.** Caveated model output in a chat, or a caveated
+  nested piece, renders as nothing, so SC-54 helps plain text only. The fix is
+  a channel for the trusted renderer to tell a component its value may not
+  load: for example, a reconciler-owned prop that components honor by showing
+  images as links or alt text. cf-avatar's own `data:`-only rule is that
+  pattern.
+- **Data choosing among loads the author already wrote.** A caveated
+  `hidden`, `class` or attribute value can decide whether an author-chosen
+  lazy image or CSS background loads, or which of several fixed URLs clean
+  CSS names. The URL is the author's; which one loads is data's.
+- **A custom property value clean CSS reads as a URL.** A definition is
+  refused under the block. A value set some other way and read through
+  `image-set(var(--u))` is not decided here; no such CSS exists today.
+- **Fixed endpoints.** `/api/ai/img` sends a prompt to a fixed provider. A
+  caveated prompt reaching it through `src` is refused like any `src`.
+- **A click.** `<a href>`, forms and popups need a user action.
+- **A label change on a document a link only passes through.** A cell child
+  that follows a link subscribes to its target. A relabel of the linking
+  document is not observed until the target changes. This holds for the
+  display gate too, and predates SC-54.
+- **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
+  given. The gate keys on labels, not URLs, so a labelled value does not get
+  through; an unlabelled one is outside this entry.
+
+## From appending to another principal's private list (2026-10-01)
+
+**SC-57 [normative] A document created beneath a private parent takes the
+parent's readers — the `User(CurrentPrincipal)` creator binding, beside
+§8.12.4.** `open`, for the CFC spec owner's ruling. A `User` confidentiality
+clause whose subject is `CurrentPrincipal` binds, at commit, to a concrete
+reader: a store already holding labels keeps the readers it stores, and a new
+store takes the acting principal. An item a second principal appends to an
+owner-private list falls between the two. It is a new document, so it took
+the appender, while the transaction that appended it read the list and so
+carries the owner's reader in its taint. §8.12.4's `canWrite` then measured
+that taint against a ceiling naming the appender, and refused the append,
+whether the appender's own runtime or the serving loop ran the handler. The
+runner now binds a document created beneath a stored parent
+to the parent instead. When a transaction creates a document and links it
+into a document that existed before the transaction, the placeholder binds to
+the concrete `User` readers the parent's declared policy names at the position
+the link lands on, gathered across every such parent; a document created
+beneath such a document in the same transaction takes the same readers. Where
+the parents name no `User` reader there, the binding falls to the acting
+principal as before. The binding only raises: the new document's readers are
+ones the parent already promised that position to, a reader has to satisfy
+every clause the document holds, and the appender gains no standing as a
+reader. What it changes is the write ceiling, which now admits the parent's
+readers in a transaction's taint and nothing else, so data labeled for any
+other reader, the appender's own included, still misfits. Proposed edit: state
+the parent rule where the spec describes binding a reader-private declaration
+to its creator, define "beneath" as the link placement above, and say that the
+parent is read as stored before the transaction. Implemented in
+`packages/runner/src/cfc/prepare.ts` (`creatorBinding`, through
+`bindCurrentPrincipalToStoredConfidentiality` in
+`packages/runner/src/cfc/current-principal-confidentiality.ts`); described in
+[`current-principal.md`](../features/current-principal.md).

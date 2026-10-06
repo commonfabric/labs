@@ -24,11 +24,13 @@ target. In particular:
 - the memory server ACL policy gates session opens and commands when enabled;
   route-level `Origin` enforcement remains deferred
 - fresh-space writes require an ACL-only genesis by the space identity or a
-  configured service DID; storage performs named-space genesis in a temporary
-  space-authenticated session and then remounts as the active user
+  configured service DID; creating a space generates a random key and commits
+  its genesis in a session authenticated as that key, and a Home space's first
+  mount writes its genesis in a temporary session as the user; the space DID
+  holds OWNER only until genesis lands
 - populated spaces that never had an ACL are temporarily authenticated-public
-  READ/WRITE (never OWNER), except that the home identity claims its own
-  ACL-less space; malformed, ownerless, and retracted ACLs fail closed
+  READ/WRITE (never OWNER); malformed, ownerless, and retracted ACLs fail
+  closed
 - session resume still uses caller-provided `sessionId` values; principal
   binding and server-issued session ids remain deferred
 - one-shot `graph.query` now honors `branch` and `atSeq`
@@ -128,7 +130,7 @@ definition differs, reject the request and require the client to use
 `session.watch.set` to replace the full watch set.
 
 Watch additions stage changes to graph selectors, missed-target ownership,
-document caches, schema dependency counts, and operation cursors. Evaluation,
+document caches, schema reference scans, and operation cursors. Evaluation,
 operation snapshot attachment, and wire conversion finish before publication.
 Once the engine is acquired, the captured session must still be the registry's
 current session. Staging through publication then runs synchronously:
@@ -146,23 +148,26 @@ entries, operation watches, and remaining misses on every branch. The last
 miss owner leaving must retire an interest unless another source still owns
 it. Watch replacement recomputes complete provenance; normalizing an accepted
 list with duplicate IDs also recomputes it because an operation owner can
-depart. Schema dependency counts bound refresh revalidation by distinct schema
-hashes, while every dependency still verifies against the space's own stored
-closure, including when its referrer has not changed.
+depart. A refresh's schema-closure pass walks only the closures of the documents
+it delivers, and stops at schema documents the graph already established, so
+its cost follows the changed documents rather than every schema hash the session
+holds; `docs/specs/content-addressed-schemas.md`, under "Traversal and sync",
+states what that pass verifies and what it leaves to a fresh evaluation.
 
 ## 5. Transaction Contract
 
-The runner-facing transaction contract does not change.
-
-`IExtendedStorageTransaction.commit()` still has two phases:
-
-1. synchronous local apply
-2. asynchronous server resolution
+`IExtendedStorageTransaction.commit()` returns a receipt synchronously.
+Valid ordinary single-space writes apply locally before it returns;
+multi-space writes start each space in sequence. Callers select
+`receipt.verdict` for the attempt's fate or `receipt.settled` for coverage,
+rejection repair, callbacks, and inline post-commit effects. See
+[transaction commit](../../features/transaction-commit.md) for stage selection
+and promise assimilation.
 
 The storage-visible notification behavior must remain:
 
 - optimistic `"commit"` before the async round trip completes
-- `"revert"` synchronously before the promise resolves on conflict
+- `"revert"` synchronously before `receipt.settled` resolves on conflict
 - `"integrate"` for remote sync
 
 Path and document-boundary rules:

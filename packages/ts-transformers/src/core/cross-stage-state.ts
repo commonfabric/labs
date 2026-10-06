@@ -49,6 +49,21 @@ export interface NodeTypeLinks {
    * or a nested claim.
    */
   patternResultAnchor?: ts.Node;
+
+  /**
+   * For a type node printed from a type, that type. The node stands for the
+   * type and says nothing more, and neither does the `unknown` put in place of
+   * a type the checker will not print, so schema generation reads the type
+   * rather than the node.
+   */
+  printedFrom?: ts.Type;
+
+  /**
+   * For a node the printer built below the root of a print, that root. A node
+   * built from one of these holds a piece of a print, which schema generation,
+   * reading a print by its type, would read as a node.
+   */
+  printedWithin?: ts.TypeNode;
 }
 
 /**
@@ -138,6 +153,12 @@ export class CrossStageState {
    */
   readonly #reportedDiagnosticKeys = new Set<string>();
 
+  /** The declared value each print stands for (`recordDeclaredValue()`). */
+  readonly #declaredValues = new WeakMap<
+    ts.Node,
+    NonNullable<SchemaHint["narrowedFrom"]>
+  >();
+
   /**
    * First of the four marker-family WeakSets — with
    * `syntheticComputeCallbackRegistry`, `syntheticComputeOwnedNodeRegistry`,
@@ -225,11 +246,58 @@ export class CrossStageState {
   //
 
   recordSchemaHint(node: ts.Node, hint: SchemaHint): void {
-    this.schemaHints.set(node, hint);
+    this.#addSchemaHint(node, hint);
     const original = ts.getOriginalNode(node);
     if (original !== node) {
-      this.schemaHints.set(original, hint);
+      this.#addSchemaHint(original, hint);
     }
+  }
+
+  /**
+   * Records that `node` was built from part of the value `narrowedFrom`
+   * describes. A node built from part of a node that itself narrows a value
+   * narrows that value. Unlike `recordSchemaHint()`, it leaves `node`'s
+   * original alone: that node spells the whole value, which needs no hint to
+   * keep its labels.
+   */
+  recordNarrowedFrom(
+    node: ts.TypeNode,
+    narrowedFrom: NonNullable<SchemaHint["narrowedFrom"]>,
+  ): void {
+    const whole = narrowedFrom.typeNode;
+    this.#addSchemaHint(node, {
+      narrowedFrom: (whole && this.narrowedFrom(whole)) ?? narrowedFrom,
+    });
+  }
+
+  /**
+   * Records that `node` stands for the value `declared` spells. A print of the
+   * value's type spells none of what only a declaration does, such as a
+   * `typeof` binding in a label, so where `node` is such a print, or a later
+   * pass rebuilds it into one, a node built from part of the print narrows
+   * the declared value (`carryNarrowing()` in
+   * `transformers/type-shrinking.ts`). Schema generation reads `node`
+   * itself as it would without the record.
+   */
+  recordDeclaredValue(
+    node: ts.TypeNode,
+    declared: NonNullable<SchemaHint["narrowedFrom"]>,
+  ): void {
+    this.#declaredValues.set(node, declared);
+  }
+
+  /** The value `node` was recorded as standing for (`recordDeclaredValue()`). */
+  declaredValue(
+    node: ts.Node,
+  ): NonNullable<SchemaHint["narrowedFrom"]> | undefined {
+    return this.#declaredValues.get(node);
+  }
+
+  /** The value `node` was recorded as narrowing (`recordNarrowedFrom()`). */
+  narrowedFrom(
+    node: ts.Node,
+  ): NonNullable<SchemaHint["narrowedFrom"]> | undefined {
+    return this.schemaHints.get(node)?.narrowedFrom;
   }
 
   lookupSchemaHint(node: ts.Node): SchemaHint | undefined {
@@ -265,6 +333,62 @@ export class CrossStageState {
     // on the synthetic call SchemaInjection built, and that node reaches
     // SchemaGeneration as the same object.
     return this.nodeLinks.get(schemaCall)?.patternResultAnchor;
+  }
+
+  //
+  // printedFrom (nodeLinks-backed)
+  //
+
+  recordPrintedFrom(node: ts.TypeNode, type: ts.Type): void {
+    this.#linksFor(node).printedFrom = type;
+    // A node the printer reused from the source is authored syntax, read
+    // where it was written, so only what the printer built is marked.
+    const mark = (child: ts.Node): void => {
+      if ((child.flags & ts.NodeFlags.Synthesized) === 0) return;
+      this.#linksFor(child).printedWithin = node;
+      ts.forEachChild(child, mark);
+    };
+    ts.forEachChild(node, mark);
+  }
+
+  /**
+   * Returns the root of the print `node` was built below, or `undefined` for
+   * a node the printer did not build below one. Plain identity lookup with NO
+   * getOriginalNode fallback, as for `printedFrom()`.
+   */
+  printedWithin(node: ts.Node): ts.TypeNode | undefined {
+    return this.nodeLinks.get(node)?.printedWithin;
+  }
+
+  /**
+   * Returns a node the printer built below the root of a print that
+   * `typeNode` holds outside that root, of whatever kind: a type node, or a
+   * name or a literal a node was rebuilt around. Returns `undefined` when it
+   * holds none. A print is read as a whole, so what is below a root
+   * `typeNode` holds is not searched.
+   */
+  printPieceIn(typeNode: ts.TypeNode): ts.Node | undefined {
+    let piece: ts.Node | undefined;
+    const visit = (node: ts.Node): void => {
+      if (piece || this.printedFrom(node)) return;
+      if (this.printedWithin(node)) {
+        piece = node;
+        return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(typeNode);
+    return piece;
+  }
+
+  /**
+   * Returns the type `node` was printed from, or `undefined` for a node that
+   * is not a print. Plain identity lookup with NO getOriginalNode fallback: a
+   * node derived from a print says whatever its deriving changed, and is no
+   * longer that print.
+   */
+  printedFrom(node: ts.Node): ts.Type | undefined {
+    return this.nodeLinks.get(node)?.printedFrom;
   }
 
   //
@@ -316,5 +440,13 @@ export class CrossStageState {
     if (set.has(node)) return true;
     const original = ts.getOriginalNode(node);
     return original !== node && set.has(original);
+  }
+
+  //
+  // shared helper: a node's hints, each kind recorded apart from the others
+  //
+
+  #addSchemaHint(node: ts.Node, hint: SchemaHint): void {
+    this.schemaHints.set(node, { ...this.schemaHints.get(node), ...hint });
   }
 }

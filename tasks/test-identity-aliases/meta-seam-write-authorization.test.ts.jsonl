@@ -1,0 +1,1 @@
+{"date":"2026-09-28","from":{"k":"unit","s":"runner","n":"meta-seam-write-authorization > a running pattern > can still ask the runtime to run its own pattern on that piece"},"to":{"k":"unit","s":"runner","n":"meta-seam-write-authorization > a running pattern > cannot ask the runtime to run its own pattern on that piece"}}

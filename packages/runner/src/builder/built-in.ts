@@ -2,6 +2,8 @@ import { BuiltInLLMDialogState } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import type {
+  BuiltInAgentParams,
+  BuiltInAgentState,
   BuiltInCompileAndRunParams,
   BuiltInCompileAndRunState,
   BuiltInGenerateObjectParams,
@@ -138,6 +140,13 @@ export const generateText = createNodeFactory({
 }) as (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<BuiltInGenerateTextState>;
+
+export const agent = createNodeFactory({
+  type: "ref",
+  implementation: "agent",
+}) as <T = any>(
+  params: FactoryInput<BuiltInAgentParams>,
+) => Reactive<BuiltInAgentState<T>>;
 
 export const fetchBinary = createNodeFactory({
   type: "ref",

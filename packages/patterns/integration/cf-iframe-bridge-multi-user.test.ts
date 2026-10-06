@@ -8,10 +8,14 @@
  * adapter, scoped storage, runtime-client IPC, and SQLite bridge together.
  */
 
-import { env, type Page, waitForCondition } from "@commonfabric/integration";
+import { debugStr } from "@commonfabric/data-model";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { expect } from "@std/expect";
@@ -27,7 +31,7 @@ import {
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 type BridgeCommand = {
   id: string;
@@ -313,9 +317,9 @@ async function issueCommand(
   if (!result?.ok) {
     const context = await readContextHandleProbe(page);
     throw new Error(
-      `cf-iframe command ${JSON.stringify(command.id)} failed: ` +
-        `${result?.error ?? "unknown error"}\nContext probe: ` +
-        JSON.stringify(context, null, 2),
+      debugStr`cf-iframe command $quote${command.id} failed: ` +
+        `${result?.error ?? "unknown error"}\n` +
+        debugStr`Context probe: $quote,indent,long${context}`,
     );
   }
   return result;
@@ -335,7 +339,7 @@ async function resolveBridgeIdentity(
     ?.identity;
   if (!identity?.instanceId) {
     throw new Error(
-      `cf-iframe resolve ${JSON.stringify(id)} returned no instance identity`,
+      debugStr`cf-iframe resolve $quote${id} returned no instance identity`,
     );
   }
   return identity;
@@ -419,7 +423,7 @@ async function waitForBridgeRowsContaining(
   if (result?.error) {
     throw new Error(
       `cf-iframe reported an error while waiting for SQLite rows ` +
-        `${JSON.stringify(expected)}: ${result.error}`,
+        debugStr`$quote,long${expected}: ${result.error}`,
     );
   }
 }
@@ -449,11 +453,12 @@ describe("cf-iframe bridge with multiple users", () => {
       Identity.generate({ implementation: "noble" }),
     ]);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(aliceIdentity, {
+        grants: { [bobIdentity.did()]: "WRITE" },
+      }),
       apiUrl: new URL(API_URL),
       identity: aliceIdentity,
     });
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     await cc.ensureDefaultPattern();
 
     const sourcePath = join(
@@ -478,10 +483,7 @@ describe("cf-iframe bridge with multiple users", () => {
   });
 
   it("preserves `PerSpace`, `PerUser`, `PerSession`, and SQLite data at their declared boundaries", async () => {
-    const view = {
-      spaceDid: cc.getSpace() as `did:${string}:${string}`,
-      pieceId,
-    };
+    const view = { spaceDid: cc.getSpace(), pieceId };
     const identities = [aliceIdentity, aliceIdentity, bobIdentity];
     const pages = shells.map((shell) => shell.page());
 

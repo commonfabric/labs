@@ -1,4 +1,4 @@
-export { fabricAwareEqual, valueEqual } from "@/comparison";
+export { fabricAwareEqual, valueEqual, valueEqualByWalk } from "@/comparison";
 
 export {
   deepFreeze,
@@ -28,7 +28,10 @@ export {
   type CloneOptions,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
+  missingContainerIsArray,
+  type PathTrace,
   shallowMutableClone,
+  tracePath,
 } from "./value-clone.ts";
 
 // Not `@/value-debug`, which names late-bound forwarders: the package should
@@ -43,11 +46,6 @@ export {
   toStructuredDebugValue,
 } from "@/value-debug/index.ts";
 
-export {
-  getFrozenObjectHashCacheHits,
-  hashOf,
-  hashStringOf,
-  taggedHashStringOf,
-} from "./value-hash.ts";
+export * from "@/value-hash";
 
 export * from "@/types";

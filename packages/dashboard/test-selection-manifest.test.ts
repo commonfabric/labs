@@ -24,7 +24,7 @@ import { manifestPrefix } from "../../tasks/test-selection/store.ts";
 import type { TestSelectionSource } from "./test-selection-history.ts";
 import { makeTestFlakes } from "./tiles/test-flakes.ts";
 import { makeTestSelection } from "./tiles/test-selection.ts";
-import { TEST_SELECTION_PATH } from "./test-selection-page.ts";
+import { HEALTH_SECTION_ID, TEST_SELECTION_PATH } from "./test-selection-page.ts";
 import type { Ctx } from "./types.ts";
 
 const PREFIX = TEST_SELECTION_PREFIX.replace(/\/$/, "");
@@ -510,6 +510,46 @@ Deno.test("a lane past its budget outranks the tests no lane can hold", async ()
   }).collect(CTX);
   assertEquals(view.status, "bad");
   assertEquals(view.sub, `fullest lane 400s of ${LANE_BUDGET_FALLBACK_SECONDS}s`);
+});
+
+Deno.test("the selection tile goes red when the publisher found the cost model broken", async () => {
+  const heavy = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 400 });
+  const manifest = sampleManifest({
+    entries: [heavy],
+    lanes: [{
+      lane: 1,
+      projectedSeconds: 400,
+      batches: [{ suite: heavy.suite, identities: [JSON.stringify(heavy.test)] }],
+    }],
+    health: {
+      suites: { "pattern-unit": { fixed: 351, tooLong: 181, batches: 0 } },
+      lanes: { observed: 0, pastBound: 0, projectedInside: 0, overran: 0 },
+      alarms: ["pattern-unit: a lane pays 5m51s before it runs any of it"],
+    },
+  });
+  const view = await makeTestSelection({
+    source: reading(manifest),
+    now: () => Date.parse("2026-08-20T05:00:00.000Z"),
+  }).collect(CTX);
+  assertEquals(view.status, "bad");
+  // Ahead of the overrun, which a broken model is the likelier cause of.
+  assertEquals(view.sub, "cost model broken: 1 alarm");
+  assertEquals(view.href, `${TEST_SELECTION_PATH}#${HEALTH_SECTION_ID}`);
+});
+
+Deno.test("the selection tile stays green for a cost model that holds", async () => {
+  const view = await makeTestSelection({
+    source: reading(sampleManifest({
+      health: {
+        suites: {},
+        lanes: { observed: 0, pastBound: 0, projectedInside: 0, overran: 0 },
+        alarms: [],
+      },
+    })),
+    now: () => Date.parse("2026-08-20T05:00:00.000Z"),
+  }).collect(CTX);
+  assertEquals(view.status, "good");
+  assertEquals(view.href, TEST_SELECTION_PATH);
 });
 
 Deno.test("the selection tile serves the page both tiles link to", async () => {

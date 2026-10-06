@@ -75,6 +75,11 @@ export class FabricMap
     return new Map(this.#map);
   }
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #codec = Object.freeze(
     new (class FabricMapCodec extends BaseNonterminalCodec {
       /** Constructs an instance. */

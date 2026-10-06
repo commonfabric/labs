@@ -39,9 +39,9 @@ export default pattern(() => {
   // already is below: a verb lives on the topic's own interface, and the board
   // demands a projection that carries none of them. A caller reaches a topic by
   // its own address and calls it there, so that is where the rejection belongs.
-  // The number cell is held so the refused `recordName` below can be shown
-  // not to have written it; nothing published would show that while
-  // `SHOW_TOPIC_NUMBERS` is off.
+  // The number cell is held so the refused `recordName` below can be shown not
+  // to have written it, at the durable input rather than through the
+  // publication derived from it.
   const seedNumberStore = new Writable<string | undefined>(undefined);
   const seedTopic = Topic({
     title: "Seed",
@@ -218,9 +218,8 @@ export default pattern(() => {
     foreignComment.get().body === "elsewhere"
   );
 
-  // The retraction verbs' own refusal arms. Each is a path the Coverage Check
-  // named as unexercised, and each is a way a caller can be wrong that must
-  // produce a value rather than a silent no-op.
+  // The retraction verbs' own refusal arms. Each is a way a caller can be
+  // wrong that must produce a value rather than a silent no-op.
   const action_remove_comment_unsigned = action(() => {
     seedTopic.removeComment.send({
       comment: foreignComment,
@@ -431,11 +430,9 @@ export default pattern(() => {
 
   // Each refused `recordName` left the stored number as it was: the topic that
   // had none still stores none, and the one that had `7` still stores `7`
-  // rather than the `8` the call named. Read through the cells the topics were
-  // composed with, not through what they publish: `SHOW_TOPIC_NUMBERS` gates
-  // the publication, so a topic shows no number whatever it holds, and an
-  // assertion over `shortName` would pass with either guard removed. Drop
-  // either guard and one of these clauses reads the refused write back.
+  // rather than the `8` the call named. Read at the durable input each topic
+  // was composed with, which is where the refused write would have landed.
+  // Drop either guard and one of these clauses reads the refused write back.
   const assert_numbers_unwritten = assert(() =>
     seedNumberStore.get() === undefined &&
     numberedStore.get() === "7"

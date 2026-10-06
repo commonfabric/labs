@@ -4,8 +4,17 @@ import {
   entityRefToString,
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
-import { homeSchema } from "@commonfabric/home-schemas";
-import { createSession, Identity, type Session } from "@commonfabric/identity";
+import {
+  homeSchema,
+  siteTableCause,
+  siteTableSchema,
+} from "@commonfabric/home-schemas";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+  type Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
@@ -13,6 +22,7 @@ import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
   type Cell,
+  cellRuntime,
   Console as RuntimeConsole,
   createSpaceRootIfAbsent,
   EntityId,
@@ -51,9 +61,11 @@ import {
   runtimePresets,
   RuntimeProgram,
   type Schema,
+  sendEvent,
   setPatternRepository,
   setPatternSource,
   type SpaceCellContents,
+  SpaceNotFoundError,
 } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -62,7 +74,10 @@ import type {
   CfcReadOnExceed,
   CfcWriteFloorMode,
 } from "@commonfabric/runner/cfc";
-import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import {
+  entityKindOfIdString,
+  hashStringForEntityAddress,
+} from "@commonfabric/runner/entity-kind";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import {
   type NameSchema,
@@ -172,6 +187,9 @@ const readEnv: EnvReader = (key) =>
 
 export interface PiecesControllerOptions {
   deferSpaceCellSync?: boolean;
+
+  /** The legacy space name the space was opened by, if it was. */
+  spaceName?: string;
 }
 
 export interface CreatePieceOptions {
@@ -190,6 +208,8 @@ export class PiecesController<T = unknown> {
 
   #space: MemorySpace;
 
+  #spaceName: string | undefined;
+
   #spaceCell: Cell<SpaceCellContents>;
 
   #diagnosticConsole: RuntimeConsole;
@@ -207,9 +227,12 @@ export class PiecesController<T = unknown> {
     this.#session = session;
     this.#diagnosticConsole = new RuntimeConsole(runtime.harness);
     this.#space = this.#session.space;
+    this.#spaceName = options.spaceName;
 
-    // Use the space DID as the cause - it's derived from the space name
-    // and consistently available everywhere
+    // A Home space's cell is the runtime's Home space cell. Any other space's
+    // cell is keyed by the space's DID, which every client of the space
+    // holds: the random key's DID for a space made by `createSpace`, or the
+    // DID a legacy space's name derives.
     const isHomeSpace = this.#space === this.runtime.userIdentityDID;
     this.#spaceCell = isHomeSpace
       ? this.runtime.getHomeSpaceCell()
@@ -257,7 +280,10 @@ export class PiecesController<T = unknown> {
       apiUrl: URL | string;
       identity: Identity;
 
-      /** The space to open, as a `did:key:` DID or as a space name. */
+      /**
+       * The space to open, as a `did:key:` DID or as a legacy space name,
+       * which resolves to a DID without creating anything.
+       */
       space: string;
 
       /**
@@ -329,15 +355,13 @@ export class PiecesController<T = unknown> {
   ): Promise<PiecesController> {
     const api = new URL(apiUrl);
     setLLMUrl(api.toString());
-    const session = await createSession(
-      isDID(space)
-        ? { identity, spaceDid: space }
-        : { identity, spaceName: space },
-    );
+    const session = createSession({
+      identity,
+      spaceDid: isDID(space) ? space : await legacySpaceDid(space),
+    });
     const storageManager = StorageManager.open({
       as: session.as,
       memoryHost: api,
-      spaceIdentity: session.spaceIdentity,
     });
     // Shared first-party posture for client runtimes against a deployed API
     // (CT-1814); the CFC pin this site previously restated lives in the
@@ -385,6 +409,7 @@ export class PiecesController<T = unknown> {
       }
       const pieces = new PiecesController(session, runtime, {
         deferSpaceCellSync,
+        ...(isDID(space) ? {} : { spaceName: space }),
       });
       // Opening the space's session is what turns a permanent denial into an
       // error: the per-space status below is written while the session opens,
@@ -411,7 +436,7 @@ export class PiecesController<T = unknown> {
   }
 
   getSpaceName(): string | undefined {
-    return this.#session.spaceName;
+    return this.#spaceName;
   }
 
   async synced(): Promise<void> {
@@ -635,22 +660,18 @@ export class PiecesController<T = unknown> {
    * This is the discovery root, not a list of every stored piece root. Reads
    * the default pattern's pieceRegistry export.
    *
-   * A listing is a read, and a read does not need the root running. Every
-   * writer of this export — {@link add}, {@link remove}, the root's own
-   * remove handler, and patterns that reach it through `wish()` — persists
-   * what it writes, so the stored value is current at every quiescent
-   * moment, and a listing can be served from it.
+   * Stored writable registries and server-executed registries can be read
+   * without running the root locally. A locally computed registry needs its
+   * root active and its derivation demanded before its value is current.
+   * When computed IDs are disabled, local readers conservatively activate
+   * the root because an untagged export can also be derived.
    *
-   * The root is reconciled before the registry is read, so a listing heals a
-   * stale root without calling `runtime.start()`, the dominant phase of
-   * opening a space whose root reaches a large piece.
-   * Running is kept for the cases that cannot be served from what is stored:
-   * a root that has never exported a registry here, one whose passive open
-   * fails, and `add()`.
+   * Reconcile before reading so a stale root is healed. Starting is also the
+   * fallback when the root has no stored registry or its passive open fails.
    */
   async getPieceRegistry(): Promise<Cell<Cell<unknown>[]>> {
-    // Reconcile without starting so the registry is read from current stored
-    // exports without materializing the root's result graph.
+    // Reconcile without starting so stored exports can be inspected without
+    // materializing the root's result graph.
     let passiveError: unknown;
     let passiveRoot: Cell<NameSchema> | undefined;
     try {
@@ -666,18 +687,26 @@ export class PiecesController<T = unknown> {
       ]);
     }
     if (passiveRoot) {
-      const exported = this.#pieceRegistryExport(passiveRoot);
+      // Registry callers keep a live handle across edits. Canonical-address
+      // inspection must not pin it to the root lookup's read transaction.
+      const exported = this.#pieceRegistryExport(passiveRoot).withTx();
       await this.syncPieces(exported);
       // `pieceListSchema` carries `default: []`, so a root that never
       // exported a registry and a root whose registry is empty read the same
-      // way through the schema. The raw value is what separates them, and
-      // only the first needs the root run.
-      if (exported.getRaw() !== undefined) {
+      // way through the schema. Inspect the raw value before choosing whether
+      // the root needs to supply or refresh its export.
+      const needsLocalDerivation =
+        this.runtime.experimental.serverExecution !== true &&
+        (this.runtime.experimental.computedCellIds === false ||
+          entityKindOfIdString(
+              exported.resolveAsCell().getAsNormalizedFullLink().id,
+            ) === "computed");
+      if (exported.getRaw() !== undefined && !needsLocalDerivation) {
         return exported;
       }
     }
 
-    // The running path supplies a registry when no stored export is available.
+    // The running path supplies missing exports and refreshes local derivations.
     // If both opens fail, retain both causes so the passive failure is not
     // hidden by the fallback.
     let defaultPattern: Cell<NameSchema> | undefined;
@@ -705,17 +734,30 @@ export class PiecesController<T = unknown> {
     }
 
     const pieceRegistry = this.#pieceRegistryExport(defaultPattern);
-    await this.syncPieces(pieceRegistry);
-    return pieceRegistry;
+    const stop = pieceRegistry.sink(() => {});
+    try {
+      await this.syncPieces(pieceRegistry);
+      await this.synced();
+      return pieceRegistry;
+    } finally {
+      stop();
+    }
   }
 
   /** Return the piece registry, not every stored piece root. */
   async getRegisteredPieces() {
     const piecesCell = await this.getPieceRegistry();
     const pieces = await this.syncPieces(piecesCell);
-    return pieces.map((piece) =>
-      new PieceController(this, piece.asSchema(undefined))
-    );
+    return pieces.map((piece) => {
+      const target = piece.resolveAsCell();
+      const space = target.getAsNormalizedFullLink().space;
+      const controller = space === this.#space ? this : new PiecesController(
+        { as: this.#session.as, space },
+        this.runtime,
+        { deferSpaceCellSync: true },
+      );
+      return new PieceController(controller, target.asSchema(undefined));
+    });
   }
 
   async add(newPieces: Cell<unknown>[]): Promise<void> {
@@ -741,38 +783,64 @@ export class PiecesController<T = unknown> {
       );
     }
 
-    // Send each piece and wait for transaction commit.
-    // The onCommit callback fires both on success AND when retries are
-    // exhausted (scheduler.ts ~line 2089). We check tx.status() to
-    // distinguish the two — otherwise pieces are silently dropped.
-    // Retries are handled by the scheduler internally.
-    for (const piece of newPieces) {
-      await timePiecePhase(
-        "add.send",
-        () =>
-          new Promise<void>((resolve, reject) => {
-            addPieceHandler.send({ piece }, (tx) => {
-              const txStatus = tx.status();
-              if (txStatus.status === "error") {
-                console.error(
-                  "Piece registration failed: addPiece transaction error:",
-                  txStatus.error,
-                );
-                reject(
-                  new Error(
-                    "Piece registration failed: addPiece transaction aborted after retries",
-                  ),
-                );
-              } else {
-                resolve();
-              }
-            });
-          }),
-      );
-    }
+    const registry = this.#pieceRegistryExport(defaultPattern);
+    // A handler's commit updates composition. Keep the derived registry
+    // demanded until its readback and persistence complete as well.
+    const stop = this.runtime.experimental.computedCellIds === false ||
+        entityKindOfIdString(
+            registry.resolveAsCell().getAsNormalizedFullLink().id,
+          ) === "computed"
+      ? registry.sink(() => {})
+      : () => {};
+    try {
+      // Send each piece and wait for transaction commit.
+      // The onCommit callback fires both on success AND when retries are
+      // exhausted (scheduler.ts ~line 2089). We check tx.status() to
+      // distinguish the two — otherwise pieces are silently dropped.
+      // Retries are handled by the scheduler internally.
+      for (const piece of newPieces) {
+        await timePiecePhase(
+          "add.send",
+          () =>
+            new Promise<void>((resolve, reject) => {
+              sendEvent(addPieceHandler, { piece }, (tx) => {
+                const txStatus = tx.status();
+                if (txStatus.status === "error") {
+                  console.error(
+                    "Piece registration failed: addPiece transaction error:",
+                    txStatus.error,
+                  );
+                  reject(
+                    new Error(
+                      "Piece registration failed: addPiece transaction aborted after retries",
+                    ),
+                  );
+                } else {
+                  resolve();
+                }
+              });
+            }),
+        );
+      }
 
-    await timePiecePhase("add.runtime.idle", () => this.runtime.idle());
-    await timePiecePhase("add.synced", () => this.synced());
+      await timePiecePhase("add.runtime.idle", () => this.runtime.idle());
+      await timePiecePhase("add.synced", () => this.synced());
+      const registered = await this.syncPieces(registry);
+      await this.synced();
+      for (const piece of newPieces) {
+        if (
+          !registered.some((member) =>
+            member.resolveAsCell().equalLinks(piece.resolveAsCell())
+          )
+        ) {
+          throw new Error(
+            "The addPiece handler committed without registering the piece",
+          );
+        }
+      }
+    } finally {
+      stop();
+    }
   }
 
   /**
@@ -1291,11 +1359,12 @@ export class PiecesController<T = unknown> {
   /**
    * Remove a piece from this space's registry. Does not clean up the piece's
    * cells. Returns whether this call removed the piece — `false` means the
-   * piece was not registered, and nothing was written. When the removed piece
-   * is the space's default pattern, the link to it is cleared in the same
-   * commit, so the registry and the link cannot land in a split state. A
-   * removal that cannot commit throws instead, so `false` never stands in for
-   * a storage failure.
+   * piece was not registered, and nothing was written. A writable registry
+   * removes the default pattern and clears its link in one transaction.
+   * Computed or action-backed registries require a `removePiece` action for
+   * members and refuse removal of their default root; unlinking that root is a
+   * separate operation. A removal that cannot commit throws instead, so `false`
+   * never stands in for a storage failure.
    *
    * `scope` completes an id into a document address and defaults to the
    * space, as it does for {@link getPieceCell}. A `Cell` argument already
@@ -1317,6 +1386,52 @@ export class PiecesController<T = unknown> {
       : pieceOrId;
     const piecesCell = await this.getPieceRegistry();
     await this.syncPieces(piecesCell);
+
+    const registryAddress = piecesCell.resolveAsCell()
+      .getAsNormalizedFullLink();
+    const root = await this.getDefaultPattern(true);
+    const declaredRemove = root === undefined
+      ? undefined
+      : await root.asSchema({
+        type: "object",
+        properties: { removePiece: { type: "unknown" } },
+      }).key("removePiece").pull();
+    if (
+      entityKindOfIdString(registryAddress.id) === "computed" ||
+      isStream(declaredRemove)
+    ) {
+      if (!root || root.resolveAsCell().equals(piece.resolveAsCell())) {
+        throw new Error(
+          "A computed default-pattern registry requires its composition actions; unlinking the root is a separate operation",
+        );
+      }
+      if (!piecesCell.get().some((member) => member.equals(piece))) {
+        return false;
+      }
+      const remove = declaredRemove;
+      if (!isStream(remove)) {
+        throw new Error(
+          "The computed registry has no removePiece action; use the default pattern's composition actions",
+        );
+      }
+      await new Promise<void>((resolve, reject) =>
+        sendEvent(remove, { piece }, (tx) => {
+          const status = tx.status();
+          if (status.status === "error") {
+            reject(new Error(status.error.message));
+          } else resolve();
+        })
+      );
+      await this.runtime.idle();
+      await this.synced();
+      const remaining = await this.syncPieces(piecesCell);
+      if (remaining.some((member) => member.equals(piece))) {
+        throw new Error(
+          "The removePiece action committed without unregistering the piece",
+        );
+      }
+      return true;
+    }
 
     const { ok, error } = await this.runtime.editWithRetry((tx) => {
       const pieces = piecesCell.withTx(tx);
@@ -1819,7 +1934,7 @@ export class PiecesController<T = unknown> {
         if (targetArgumentLink === undefined) {
           throw new Error("Target piece has no argument cell");
         }
-        targetInputCell = resultCell.runtime.getCellFromLink(
+        targetInputCell = cellRuntime(resultCell).getCellFromLink(
           targetArgumentLink,
           undefined,
           tx,
@@ -1917,9 +2032,8 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Recreates the default pattern from scratch.
-   * Stops and unlinks the existing default pattern, then creates a new one.
-   * This is useful for resetting the space's default pattern state.
+   * Creates a fresh default pattern, replacing a non-Home space's root.
+   * An existing identity Home must be updated in place to retain account data.
    *
    * @param options.customProgram - A pre-compiled program to use instead of the default URL-based pattern
    * @returns The newly created default pattern piece
@@ -1935,20 +2049,32 @@ export class PiecesController<T = unknown> {
       );
     }
 
-    // Stop and unlink the existing default pattern first (before any operations that might fail)
-    // We need to stop it to prevent resource leaks or duplicate behavior from the old pattern
-    // Access the space cell directly to get the pattern reference without running it
-    const spaceCellContents = this.getSpaceCellContents();
-    await spaceCellContents.sync();
-    const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
-    if (defaultPatternRef) {
-      // Stop the existing pattern (no-op if not running)
-      this.runtime.runner.stop(defaultPatternRef);
-    }
-    await this.unlinkDefaultPattern();
-
     // Determine which pattern to use based on space type
     const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
+
+    // A Home space comes into being on its user's first open. Any other space
+    // is created on purpose, and one that was not is not conjured by opening,
+    // so this is settled before anything touches the space.
+    if (!isHomeSpace && !(await this.runtime.spaceExists(this.getSpace()))) {
+      throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
+    }
+
+    const spaceCellContents = this.getSpaceCellContents();
+    await spaceCellContents.sync();
+    const protectHome = (cell: Cell<SpaceCellContents>) => {
+      if (isHomeSpace && cell.key("defaultPattern").getRaw() !== undefined) {
+        throw new Error(
+          "Cannot replace an existing Home root. Update its source in place " +
+            "to preserve account data.",
+        );
+      }
+    };
+    protectHome(spaceCellContents);
+    if (!isHomeSpace) {
+      const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
+      if (defaultPatternRef) this.runtime.runner.stop(defaultPatternRef);
+      await this.unlinkDefaultPattern();
+    }
 
     let patternConfig: { name: string; source: string; cause: string };
     let pattern;
@@ -2000,6 +2126,8 @@ export class PiecesController<T = unknown> {
     let pieceCell: Cell<NameSchema>;
 
     const { error } = await this.runtime.editWithRetry((tx) => {
+      // First-open initializers may have installed Home during compilation.
+      protectHome(spaceCellContents.withTx(tx));
       // Create piece cell within this transaction
       pieceCell = this.runtime.getCell<NameSchema>(
         this.getSpace(),
@@ -2053,6 +2181,98 @@ export class PiecesController<T = unknown> {
   }
 
   /**
+   * Creates a space owned by this controller's identity, records it in the
+   * identity's Home space list under `label` and in its site table as served by
+   * this runtime's host, and returns its DID. This controller must be over the
+   * identity's Home space, where both records live.
+   *
+   * @throws If this controller is over any other space, or if the memory
+   *   server refuses the new space's genesis commit.
+   */
+  async createSpace(label?: string): Promise<MemorySpace> {
+    this.#assertHomeSpace("create a space");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    if (home.key("addSpace").getRaw() === undefined) {
+      throw new Error(
+        "This Home pattern has no space list to record a space in",
+      );
+    }
+    const space = await this.runtime.createSpace();
+    await home.key("addSpace").send({ did: space, name: label ?? "" });
+    await this.#recordServingHosts([space], "created");
+    return space;
+  }
+
+  /**
+   * Replaces each entry of the Home space list that names a space rather than
+   * identifying it with an entry keyed by the space's DID and called by the
+   * same name, and records each such space in the site table as served by this
+   * runtime's host. The DID is the one the name has always resolved to, so
+   * the entry opens the space it always opened. This controller must be over
+   * the identity's Home space.
+   */
+  async adoptLegacySpaces(): Promise<void> {
+    this.#assertHomeSpace("adopt legacy spaces");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    // A Home pattern that cannot adopt an entry keeps its legacy entries,
+    // which still open by name.
+    if (home.key("adoptSpace").getRaw() === undefined) return;
+    const rows = home.key("spaces").get();
+    const adopted: MemorySpace[] = [];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!isObjectOrArray(row) || isDID(row.did)) continue;
+      const name = row.name;
+      if (typeof name !== "string" || name.length === 0) continue;
+      const did = isDID(name) ? name : await legacySpaceDid(name);
+      await home.key("adoptSpace").send({ name, did });
+      adopted.push(did);
+    }
+    await this.#recordServingHosts(adopted, "adopted");
+  }
+
+  #assertHomeSpace(operation: string): void {
+    if (this.#space !== this.runtime.userIdentityDID) {
+      throw new Error(
+        `Only a controller over the identity's Home space can ${operation}`,
+      );
+    }
+  }
+
+  /**
+   * Appends a row to the Home site table for each of `spaces` the table does
+   * not already record as served by this runtime's host.
+   */
+  async #recordServingHosts(
+    spaces: readonly MemorySpace[],
+    source: string,
+  ): Promise<void> {
+    if (spaces.length === 0) return;
+    const host = new URL(this.runtime.apiUrl).origin;
+    const updatedAt = new Date().toISOString();
+    const result = await this.runtime.editWithRetry((tx) => {
+      const table = this.runtime.getCell(
+        this.#space,
+        siteTableCause(this.#space),
+        siteTableSchema,
+        tx,
+      );
+      const rows = table.get() ?? [];
+      const known = new Set(
+        rows.filter((row) => row.host === host).map((row) => row.did),
+      );
+      const added = spaces.filter((did) => !known.has(did));
+      if (added.length === 0) return;
+      table.set([
+        ...rows,
+        ...added.map((did) => ({ did, host, updatedAt, source })),
+      ]);
+    });
+    if (result.error) throw new Error(result.error.message);
+    await this.runtime.idle();
+    await this.synced();
+  }
+
+  /**
    * Ensures a default pattern exists for this space, creating it if necessary.
    * For home spaces, uses home.tsx; for other spaces, uses default-app.tsx.
    * This makes CLI-created spaces work the same as Shell-created spaces.
@@ -2075,6 +2295,12 @@ export class PiecesController<T = unknown> {
 
     // Determine which pattern to use based on space type
     const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
+
+    // A Home space comes into being on its user's first open. Any other space
+    // is created on purpose, and one that was not is not conjured by opening.
+    if (!isHomeSpace && !(await this.runtime.spaceExists(this.getSpace()))) {
+      throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
+    }
 
     let patternConfig: { name: string; source: string; cause: string };
 
@@ -2819,7 +3045,7 @@ function followCellToResult(
       // If document has result metadata, follow it to the owning result cell.
       const resultLink = getMetaLink(cell, "result");
       if (resultLink !== undefined) {
-        const resultCell = cell.runtime.getCellFromLink(resultLink);
+        const resultCell = cellRuntime(cell).getCellFromLink(resultLink);
         return followCellToResult(
           resultCell,
           diagnosticConsole,

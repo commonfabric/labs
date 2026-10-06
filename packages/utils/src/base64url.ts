@@ -53,6 +53,15 @@ export function toUnpaddedBase64urlFromText(text: string): string {
  * alphabet (RFC 4648 section 5).
  */
 export function fromBase64url(encoded: string): Uint8Array {
+  // TODO(danfuzz): Refuse whitespace, which `Uint8Array.fromBase64()` skips
+  // and the `fvj1:` format refuses in a base64url state. The case
+  // `bytes state holding whitespace` in
+  // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
+  //
+  // TODO(danfuzz): Refuse nonzero bits past the last whole byte, which
+  // `Uint8Array.fromBase64()` ignores and the `fvj1:` format refuses in a
+  // base64url state. The case `bytes state with nonzero trailing bits` in
+  // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
   return useBase64Polyfill
     ? fromBase64Polyfill(encoded)
     : Uint8Array.fromBase64(encoded, { alphabet: "base64url" });

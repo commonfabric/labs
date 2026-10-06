@@ -54,7 +54,7 @@ runs:
             args+=(--junit "$spec")
           fi
         done <<< "$SHIP_JUNIT"
-        deno run --allow-read --allow-write --allow-env \
+        deno run --allow-read --allow-write --allow-env --allow-run=git \
           tasks/test-records-gather.ts "${args[@]}"
 
     # The attempt is part of the artifact name: artifacts are scoped to

@@ -74,17 +74,10 @@ const columnIndex = (columns: readonly TableColumn[], label: string): number =>
 
 export const SortableTable = pattern<SortableTableInput, SortableTableOutput>(
   ({ columns, rows, emptyMessage }) => {
-    // Which column the rows are currently ordered by, and which way. This is a
-    // record of the ordering already applied to `rows` rather than an
-    // instruction to apply one, so the header caret cannot disagree with the
-    // order on screen.
+    // The ordering applied to the rows, used to reverse a repeated sort.
     const sortBy = new Writable("");
     const ascending = new Writable(true);
 
-    // Sorting reorders `rows` rather than deriving a sorted view of it. A
-    // derived order is not what the table renders from: the rendered list
-    // tracks the `rows` cell, so a reordering that only a computed knows about
-    // reaches the header caret and never reaches the rows underneath it.
     // Clicking the sorted column reverses it; any other column sorts by that
     // one, smallest-first.
     const sortByColumn = action(({ label }: { label: string }) => {
@@ -118,9 +111,6 @@ export const SortableTable = pattern<SortableTableInput, SortableTableOutput>(
         onClick={() => sortByColumn.send({ label: column.label })}
       >
         {column.label}
-        {computed(() =>
-          sortBy.get() === column.label ? (ascending.get() ? " ▲" : " ▼") : ""
-        )}
       </th>
     ));
 

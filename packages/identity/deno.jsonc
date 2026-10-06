@@ -1,7 +1,8 @@
 {
   "name": "@commonfabric/identity",
   "tasks": {
-    "test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts test/*.test.ts"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts test/*.test.ts"
   },
   "exports": {
     ".": "./src/index.ts",

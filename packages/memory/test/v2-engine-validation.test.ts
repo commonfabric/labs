@@ -9,8 +9,15 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { applyCommit, close, type Engine, open, read } from "../v2/engine.ts";
-import { encodeMemoryBoundary, ProtocolError } from "../v2.ts";
-import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  CODEMIRROR_CHANGESET_CODEC,
+  encodeMemoryBoundary,
+  ProtocolError,
+} from "../v2.ts";
+import {
+  FabricBytes,
+  FabricRegExp,
+} from "@commonfabric/data-model/fabric-primitives";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
@@ -126,7 +133,7 @@ Deno.test("a valid set still reads back after the validation batteries", async (
   });
 });
 
-Deno.test("rejects deleting or patching a content-addressed document", async () => {
+Deno.test("admits no operation but `set` against a content-addressed document", async () => {
   await withEngine((engine) => {
     const schema = { type: "string", title: "immutable" } as const;
     const id = `cid:${internSchemaAsTaggedHashString(schema)}`;
@@ -134,32 +141,47 @@ Deno.test("rejects deleting or patching a content-addressed document", async () 
       sessionId: "s:a",
       commit: commit(1, { operations: [setOp(id, schema)] }),
     });
-    assertThrows(
-      () =>
-        applyCommit(engine, {
-          sessionId: "s:a",
-          commit: commit(2, {
-            operations: [{ op: "delete", id } as never],
+    // Every operation the protocol carries beside `set`, so that an
+    // operation added to the union is refused here by default rather
+    // than admitted by an enumeration that forgot it. `sqlite` writes no
+    // entity and so names no id.
+    const refused = [
+      { op: "delete", id },
+      { op: "patch", id, patches: [] },
+      {
+        op: "apply-op",
+        id,
+        path: ["text"],
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        submissionId: "sub-1",
+        base: null,
+        payload: [],
+      },
+      {
+        op: "release-op-field",
+        id,
+        path: ["text"],
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        cursor: { epoch: 1, version: 1 },
+      },
+    ];
+    for (const [index, operation] of refused.entries()) {
+      assertThrows(
+        () =>
+          applyCommit(engine, {
+            sessionId: "s:a",
+            commit: commit(2 + index, { operations: [operation] as never }),
           }),
-        }),
-      ProtocolError,
-      "cannot delete content-addressed document",
-    );
-    assertThrows(
-      () =>
-        applyCommit(engine, {
-          sessionId: "s:a",
-          commit: commit(3, {
-            operations: [{ op: "patch", id, patches: [] } as never],
-          }),
-        }),
-      ProtocolError,
-      "cannot patch content-addressed document",
-    );
+        ProtocolError,
+        `cannot ${operation.op} content-addressed document`,
+      );
+    }
     // An idempotent re-set stays legal: it is how writers install closures.
     applyCommit(engine, {
       sessionId: "s:a",
-      commit: commit(4, { operations: [setOp(id, schema)] }),
+      commit: commit(2 + refused.length, {
+        operations: [setOp(id, schema)],
+      }),
     });
   });
 });
@@ -255,6 +277,27 @@ Deno.test("rejects a content-addressed document whose content hashes to neither 
         }),
       ProtocolError,
       "whose content does not hash to its id",
+    );
+  });
+});
+
+Deno.test("rejects a content-addressed set whose value is not a document", async () => {
+  await withEngine((engine) => {
+    // A `FabricRegExp` where the document belongs. Its `value` member is a JS
+    // `RegExp`, which hashes as the `FabricRegExp` itself does, so under this
+    // id the content check alone would pass it.
+    const pattern = new FabricRegExp(/a+/g);
+    const id = `cid:${taggedHashStringOf(pattern)}`;
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(1, {
+            operations: [{ op: "set", id, value: pattern }],
+          }),
+        }),
+      ProtocolError,
+      "to something other than a document",
     );
   });
 });

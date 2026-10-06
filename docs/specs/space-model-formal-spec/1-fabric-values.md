@@ -85,7 +85,7 @@ conversion layer (Section 8) and represented in `FabricValue` trees as
 > declarations in `api.ts` and `interface.ts`, the conversions in
 > `convertible-js.ts`, the clone helpers in `value-clone.ts`, and the
 > operations a value of any class is subject to -- `deep-freeze.ts`,
-> `value-hash.ts`, the debug renderers in `value-debug/`, the comparisons in
+> the hashing in `value-hash/`, the debug renderers in `value-debug/`, the comparisons in
 > `comparison/`, and the tag vocabulary in `types/`.
 > Of those, one is also an exported subpath: `api.ts` as
 > `@commonfabric/data-model/api`, which is how `@commonfabric/api` reaches it.
@@ -133,6 +133,8 @@ type FabricValue =
   // (b) Special primitives (FabricPrimitive subclasses — always frozen)
   | FabricEpochNsec
   | FabricEpochDay
+  | FabricDurationNsec
+  | FabricDurationDay
   | FabricHash
   | FabricBytes
   | FabricKeyPair
@@ -208,8 +210,10 @@ exposes none of them and a walk stops there (Section 8.6).
 >   via their registry key. **Unique** symbols (`Symbol(desc)`, where
 >   `Symbol.keyFor(s)` returns `undefined`) have no portable representation and
 >   are rejected. The TypeScript `symbol` type cannot express this distinction,
->   so it is enforced at runtime by the conversion, hashing, and encoding
->   boundaries (Sections 4.9, 6, and 5). Symbol-keyed *properties* on plain
+>   so it is enforced at runtime by membership, by the tag dispatch (which tags
+>   a unique symbol `null`, as it does a function), and by the conversion,
+>   hashing, and encoding boundaries (Sections 4.9, 6, and 5). Symbol-keyed
+>   *properties* on plain
 >   objects are a separate matter — see Section 1.5 (Plain Containers /
 >   Objects).
 > - `function` — Functions are opaque closures with no portable representation.
@@ -390,9 +394,9 @@ content-level identity (see Section 6.3), but it is a `FabricPrimitive`, not a
 `FabricInstance`.
 
 The **special primitive** types (`FabricEpochNsec`, `FabricEpochDay`,
-`FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`,
-`FabricUnavailable`) are **not** `FabricInstance`s — they are `FabricPrimitive`
-subclasses (Section 1.4.6).
+`FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
+`FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) are **not**
+`FabricInstance`s — they are `FabricPrimitive` subclasses (Section 1.4.6).
 `FabricPrimitive` is an arm of the `FabricValue` union, so all
 `FabricPrimitive` subclasses are implicitly members of `FabricValue`. They are always-frozen value types that
 bypass the `freeze` option in conversion functions. Each hosts its own codec for
@@ -441,7 +445,7 @@ to convertible JS form:
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/fabric-instances/FabricNativeWrapper.ts
+// file: packages/data-model/src/fabric-instances/FabricNativeWrapper.ts
 
 /**
  * Abstract base class for `FabricInstance` wrappers that bridge convertible JS
@@ -468,8 +472,10 @@ export abstract class FabricNativeWrapper<T extends object>
     return frozen ? this.toNativeFrozen() : this.toNativeThawed();
   }
 
-  /** @inheritDoc */
-  deepClone(_frozen: boolean): FabricInstance {
+  /**
+   * @inheritDoc Not yet implemented, so the inherited `deepClone()` throws.
+   */
+  protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
     throw new Error(
       `Cannot yet handle deep cloning of \`${this.constructor.name}\`.`,
     );
@@ -484,16 +490,18 @@ copying in the common case and centralizes the freeze-state logic for all
 wrapper types.
 
 Unlike the wrappers above, the special primitive types (`FabricEpochNsec`,
-`FabricEpochDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
-`FabricRegExp`, `FabricUnavailable`) are **`FabricPrimitive` subclasses** and
-do not extend `FabricInstance`. They are included in `FabricValue` via the
-`FabricPrimitive` arm of the union (Section 1.4.6). See Sections 1.4.5
-through 1.4.12.
+`FabricEpochDay`, `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`,
+`FabricBytes`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) are
+**`FabricPrimitive` subclasses** and do not extend `FabricInstance`. They are
+included in `FabricValue` via the `FabricPrimitive` arm of the union (Section
+1.4.6). See Sections 1.4.5 through 1.4.14.
 
 | Special Primitive Type | Extends | Wire Tag | Stored Value | Notes |
 |------------------------|---------|----------|--------------|-------|
 | `FabricEpochNsec` | `FabricPrimitive` | `EpochNsec@1` | `bigint` (signed nanoseconds from POSIX Epoch) | Primary temporal type. JS `Date` has only millisecond precision; conversion from `Date` multiplies by 10^6. When `Temporal` is available, `Temporal.Instant` maps naturally (it uses nanoseconds from epoch internally). |
 | `FabricEpochDay` | `FabricPrimitive` | `EpochDay@1` | `bigint` (signed days from POSIX Epoch) | Day-precision temporal type. Anticipates `Temporal.PlainDate`. Mostly nascent — class and spec entry are defined, but full integration (Temporal types, calendar concerns) is deferred. |
+| `FabricDurationNsec` | `FabricPrimitive` | `DurationNsec@1` | `bigint` (signed nanoseconds) | Span of time, the companion to `FabricEpochNsec`: the difference between two instants. When `Temporal` is available, `Temporal.Duration` covers the same ground, though it counts in calendar and clock fields rather than one count of nanoseconds. See Section 1.4.13. |
+| `FabricDurationDay` | `FabricPrimitive` | `DurationDay@1` | `bigint` (signed days) | Span of time, the companion to `FabricEpochDay`: the difference between two days. When `Temporal` is available, `Temporal.Duration` covers the same ground, though it counts in calendar and clock fields rather than one count of days. See Section 1.4.14. |
 | `FabricHash` | `FabricPrimitive` | `Hash@1` | `Uint8Array` (hash bytes, private) + `string` (algorithm tag) | Content identifier / hash. Stringifies as `<tag>:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5). The first algorithm tag is `fid1` ("fabric ID, v1"). Wire state is `{ tag, hash }` (see Section 1.4.9). |
 | `FabricBytes` | `FabricPrimitive` | `Bytes@1` | `Uint8Array` (private byte storage) | Immutable byte sequence. The instance owns its bytes outright: input is copied at construction time, unless the caller cedes it with `transfer`. Callers access bytes via `slice()`, `sliceBuffer()`, `copyInto()`, and `length`. |
 | `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | Either two `CryptoKey` handles, or an algorithm name and the two keys' bytes | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair` (see Section 1.4.11). |
@@ -510,16 +518,17 @@ codec's `encode()` includes them in its output, and `decode()` restores them on
 the decoded instance (Section 1.4.2).
 
 **`FabricMap`, `FabricSet`, `FabricRegExp`, `FabricEpochNsec`, `FabricEpochDay`,
-`FabricHash`, `FabricBytes`, `FabricKeyPair`** must NOT carry extra enumerable
-properties. Their stored value contains only the essential JS data (entries,
-items, epoch value, bytes respectively). Extra enumerable properties on the
-source JS object cause **rejection** — the conversion function throws. This
-follows the principle "Death before confusion!" (Mark Miller): it is better to
-fail loudly than to silently lose data. This is in the same spirit as the
-treatment of arrays, where extra non-index properties also cause rejection
-(Section 1.5) — though the array rule is stricter still, rejecting
-non-enumerable and symbol-keyed properties as well. Unlike `Error`, these JS
-types have no established convention for custom properties.
+`FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
+`FabricKeyPair`** must NOT carry extra enumerable properties. Their stored value
+contains only the essential JS data (entries, items, epoch value, bytes
+respectively). Extra enumerable properties on the source JS object cause
+**rejection** — the conversion function throws. This follows the principle
+"Death before confusion!" (Mark Miller): it is better to fail loudly than to
+silently lose data. This is in the same spirit as the treatment of arrays, where
+extra non-index properties also cause rejection (Section 1.5) — though the array
+rule is stricter still, rejecting non-enumerable and symbol-keyed properties as
+well. Unlike `Error`, these JS types have no established convention for custom
+properties.
 
 #### 1.4.2 `FabricError`
 
@@ -532,7 +541,7 @@ instance is frozen, when it can no longer go stale).
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/fabric-instances/FabricError.ts
+// file: packages/data-model/src/fabric-instances/FabricError.ts
 
 /**
  * Structured state for constructing a `FabricError`. Spec slots are
@@ -624,9 +633,11 @@ export class FabricError extends FabricNativeWrapper<Error> {
   // ([DEEP_FREEZE] / [IS_DEEP_FROZEN] freeze `this` and recurse into
   // `cause` + the extras-bag values; `[SHALLOW_UNFROZEN_CLONE]()` copies the
   // slots + bag; `wrappedValue` / `toNativeFrozen()` / `toNativeThawed()`
-  // build the JS `Error` projection on demand. `deepClone(frozen)`
-  // round-trips through the codec: `codec.decode(tag,
-  // codec.encode(this, env), env)`. Bodies omitted for brevity.)
+  // build the JS `Error` projection on demand. `[DEEP_CLONE_CORE](frozen)`
+  // round-trips through the codec, decoding mutable unless `frozen`:
+  // `codec.decode(tag, codec.encode(this, env), env, !frozen)`; the
+  // `deepClone()` template owns the final deep freeze. Bodies omitted for
+  // brevity.)
 
   static #codec = Object.freeze(
     new (class FabricErrorCodec extends BaseNonterminalCodec {
@@ -635,8 +646,9 @@ export class FabricError extends FabricNativeWrapper<Error> {
       }
 
       /**
-       * Emits `{ type, name, message, stack?, cause?, ...extras }`.
-       * `name` is emitted as `null` when it matches `type` (the common
+       * Emits `{ type, name, message, stack?, cause?, ...extras }`, as a
+       * frozen snapshot whose `cause` and extras values are held as they
+       * are. `name` is emitted as `null` when it matches `type` (the common
        * case) to avoid redundancy; `decode()` interprets `null` as "same
        * as `type`."
        */
@@ -655,7 +667,7 @@ export class FabricError extends FabricNativeWrapper<Error> {
         for (const [key, val] of value.extraEntries()) {
           state[key] = val;
         }
-        return state as FabricValue;
+        return Object.freeze(state);
       }
 
       /**
@@ -663,12 +675,13 @@ export class FabricError extends FabricNativeWrapper<Error> {
        * identity, falling back to `name` for backward compatibility with
        * data encoded before `type` was added; missing `message`
        * becomes `''`. Reserved and unsafe keys are excluded from the
-       * extras. Honors `env.shouldDeepFreeze` (Section 2.5).
+       * extras. Frozen unless `mutable` (Section 2.4).
        */
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const s = state as Record<string, FabricValue>;
         const type = (s.type as string) ?? (s.name as string) ?? 'Error';
@@ -691,7 +704,7 @@ export class FabricError extends FabricNativeWrapper<Error> {
           cause: s.cause,
           extras,
         });
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -722,7 +735,7 @@ the projection is rebuilt on each access; once frozen it is cached.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/fabric-instances/FabricMap.ts
+// file: packages/data-model/src/fabric-instances/FabricMap.ts
 // (Normative target -- the live codec is currently a throwing stub.)
 
 /**
@@ -746,20 +759,25 @@ export class FabricMap
         super(CODEC_TYPE_TAGS.Map, FabricMap);
       }
 
-      /** Entry pairs as an array of two-element arrays; insertion order
-       *  is preserved. */
+      /**
+       * Entry pairs as an array of two-element arrays, in insertion order,
+       * as a frozen snapshot whose keys and values are held as they are.
+       */
       encode(value: FabricMap, _env: LiveEnvironment): FabricValue {
-        return [...value.map.entries()] as FabricValue;
+        return Object.freeze(
+          [...value.map.entries()].map((entry) => Object.freeze(entry)),
+        );
       }
 
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const entries = state as [FabricValue, FabricValue][];
         const result = new FabricMap(new Map(entries));
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -781,7 +799,7 @@ export class FabricMap
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/fabric-instances/FabricSet.ts
+// file: packages/data-model/src/fabric-instances/FabricSet.ts
 // (Normative target -- the live codec is currently a throwing stub.)
 
 /**
@@ -800,19 +818,23 @@ export class FabricSet extends FabricNativeWrapper<Set<FabricValue>> {
         super(CODEC_TYPE_TAGS.Set, FabricSet);
       }
 
-      /** Elements as an array; iteration order is preserved. */
+      /**
+       * Elements as an array, in iteration order, as a frozen snapshot whose
+       * elements are held as they are.
+       */
       encode(value: FabricSet, _env: LiveEnvironment): FabricValue {
-        return [...value.set] as FabricValue;
+        return Object.freeze([...value.set]);
       }
 
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const elements = state as FabricValue[];
         const result = new FabricSet(new Set(elements));
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -838,7 +860,7 @@ members.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/fabric-primitives/FabricRegExp.ts
+// file: packages/data-model/src/fabric-primitives/FabricRegExp.ts
 
 import { FabricPrimitive } from './interface';
 
@@ -957,8 +979,9 @@ that form the `FabricPrimitive` arm of `FabricValue`.
 - `UnknownValue` and `ProblematicValue` are the `FabricInstance` subtypes
   that preserve a type tag alongside their state (Section 3.2).
 - `FabricPrimitive` is the base for types that behave like primitives but
-  need a class wrapper (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`,
-  `FabricBytes`, `FabricRegExp`, `FabricUnavailable`).
+  need a class wrapper (`FabricEpochNsec`, `FabricEpochDay`,
+  `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
+  `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`).
 
 ```typescript
 // Shown for illustration only.
@@ -1028,7 +1051,7 @@ out each class's codecs.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/fabric-primitives/FabricEpochNsec.ts
+// file: packages/data-model/src/fabric-primitives/FabricEpochNsec.ts
 
 /**
  * Temporal type representing nanoseconds from the POSIX Epoch
@@ -1062,7 +1085,7 @@ export class FabricEpochNsec extends FabricPrimitive {
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/fabric-primitives/FabricEpochDay.ts
+// file: packages/data-model/src/fabric-primitives/FabricEpochDay.ts
 
 /**
  * Temporal type representing a particular day, as a count of days from the
@@ -1093,7 +1116,7 @@ export class FabricEpochDay extends FabricPrimitive {
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/fabric-primitives/FabricHash.ts
+// file: packages/data-model/src/fabric-primitives/FabricHash.ts
 
 /**
  * A content-addressed identifier: a hash digest paired with an algorithm tag.
@@ -1230,7 +1253,7 @@ refuses a state that is not a record of two strings, and `decode()` produces a
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/fabric-primitives/FabricBytes.ts
+// file: packages/data-model/src/fabric-primitives/FabricBytes.ts
 
 /**
  * Immutable byte sequence in the fabric type system. Extends `FabricPrimitive`
@@ -1297,12 +1320,12 @@ export class FabricBytes extends FabricPrimitive {
 }
 ```
 
-Unlike the previous `FabricUint8Array` (which was a `FabricInstance` wrapping
-`Uint8Array` via `FabricNativeWrapper`), `FabricBytes` is a `FabricPrimitive`.
-It does not implement the `FabricInstance` members; like every
-`FabricPrimitive`, it hosts its own `[JSON_CODEC]` (tag `Bytes@1`), the same
-shape as `FabricEpochNsec` and `FabricEpochDay`. The hashing system uses the
-dedicated `TAG_BYTES` primitive tag (Section 6.3).
+`FabricBytes` is a `FabricPrimitive`, not a `FabricInstance` wrapping a
+`Uint8Array` via `FabricNativeWrapper`. It does not implement the
+`FabricInstance` members; like every `FabricPrimitive`, it hosts its own
+`[JSON_CODEC]` (tag `Bytes@1`), the same shape as `FabricEpochNsec` and
+`FabricEpochDay`. The hashing system uses the dedicated `TAG_BYTES` primitive
+tag (Section 6.3).
 
 #### 1.4.11 `FabricKeyPair`
 
@@ -1321,7 +1344,7 @@ field, a cell — has nothing to narrow.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/fabric-primitives/FabricKeyPair.ts
+// file: packages/data-model/src/fabric-primitives/FabricKeyPair.ts
 
 export class FabricKeyPair extends FabricPrimitive {
   readonly #algorithm: string;
@@ -1582,7 +1605,71 @@ computation reacts to one arriving as an input, what a renderer shows while a
 value is pending — is the runtime's contract, not the type's, and is
 specified where those consumers are.
 
-#### 1.4.13 `FabricLink`
+#### 1.4.13 `FabricDurationNsec`
+
+```typescript
+// Shown at module scope.
+// file: packages/data-model/src/fabric-primitives/FabricDurationNsec.ts
+
+/**
+ * Temporal type representing a span of time, as a count of nanoseconds.
+ * Extends `FabricPrimitive` (not a `FabricInstance`). The companion to
+ * `FabricEpochNsec`: the difference between two instants is one of these,
+ * and an instant plus one of these is another instant.
+ *
+ * A negative value is a negative span. When `Temporal` is available,
+ * `Temporal.Duration` covers the same ground, though it counts in calendar
+ * and clock fields rather than as one count of nanoseconds.
+ *
+ * The underlying value is a `bigint`, encoded as `EpochNsec@1`'s is.
+ */
+export class FabricDurationNsec extends FabricPrimitive {
+  readonly #value: bigint;
+
+  constructor(value: bigint) {
+    super();
+    this.#value = value;
+  }
+
+  get value(): bigint {
+    return this.#value;
+  }
+}
+```
+
+#### 1.4.14 `FabricDurationDay`
+
+```typescript
+// Shown at module scope.
+// file: packages/data-model/src/fabric-primitives/FabricDurationDay.ts
+
+/**
+ * Temporal type representing a span of time, as a count of days. Extends
+ * `FabricPrimitive` (not a `FabricInstance`). The companion to
+ * `FabricEpochDay`: the difference between two days is one of these, and a
+ * day plus one of these is another day.
+ *
+ * A negative value is a negative span. When `Temporal` is available,
+ * `Temporal.Duration` covers the same ground, though it counts in calendar
+ * and clock fields rather than as one count of days.
+ *
+ * The underlying value is a `bigint`, encoded as `EpochDay@1`'s is.
+ */
+export class FabricDurationDay extends FabricPrimitive {
+  readonly #value: bigint;
+
+  constructor(value: bigint) {
+    super();
+    this.#value = value;
+  }
+
+  get value(): bigint {
+    return this.#value;
+  }
+}
+```
+
+#### 1.4.15 `FabricLink`
 
 `FabricLink` is a fabric-native `FabricInstance` — like the wrapper classes of
 Sections 1.4.2–1.4.4, but not wrapping any convertible JS type — that represents
@@ -1593,11 +1680,13 @@ addressing fields, as its sole nested `FabricValue`.
 A link is a `FabricInstance` rather than a `FabricPrimitive` because its
 payload is an **outgoing reference**, not leaf data: the payload may itself
 carry nested `FabricValue`s (for example a schema filter), so a link is a
-small object graph rather than an immutable scalar. Like every instance, a
-`FabricLink` is mutable until frozen and immutable thereafter, and its protocol
-members (`[DEEP_FREEZE]`, `[IS_DEEP_FROZEN]`, `deepClone()`, and the inherited
-`shallowClone()`; Section 2.3) recurse through the payload as their one nested
-value.
+small object graph rather than an immutable scalar. The payload's own layer,
+which fields the link has, is the link's internal state: the link keeps a frozen
+shallow copy of the object it was constructed with (or that object itself, when
+already frozen), and has no operation that changes it. The values in those
+fields are held as supplied. `[DEEP_FREEZE]`, `[IS_DEEP_FROZEN]` and
+`deepClone()` (Section 2.3) recurse through the payload as the link's one nested
+value, and the inherited `shallowClone()` shares it.
 
 **The data-model does not constrain the payload's field set.** The value
 definition here is deliberately general: the data-model requires only that the
@@ -1609,9 +1698,10 @@ form. Keeping the field set unconstrained is what lets `FabricLink` be reused
 across consumers, each specializing the general link value in its own way.
 
 Like every fabric class, `FabricLink` hosts a static `[CODEC]` (Section 2.4)
-with wire tag `Link@1`. Its encoded state **is** the payload object: the codec's
-`encode()` returns the payload directly, and `decode()` rebuilds a `FabricLink`
-from it (or a `ProblematicValue`, Section 3.5, if the payload is malformed). The
+with wire tag `Link@1`. Its encoded state **is** the link's payload: the codec's
+`encode()` returns the frozen payload the link keeps, never the object a caller
+constructed it with, and `decode()` rebuilds a `FabricLink` from it (or a
+`ProblematicValue`, Section 3.5, if the payload is malformed). The
 JSON wire form is the `/Link@1`-tagged envelope `{ "/Link@1": <payload> }`; see
 Section 3 of `3-json-encoding.md` for the wire encoding, and the migration table
 in Section 4 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
@@ -1619,7 +1709,7 @@ in Section 4 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/fabric-instances/FabricLink.ts
+// file: packages/data-model/src/fabric-instances/FabricLink.ts
 
 /**
  * A link value: a `FabricInstance` wrapping a plain-object addressing
@@ -1627,9 +1717,13 @@ in Section 4 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
  * constrain the payload's fields; consumers define their own payload shape.
  */
 export class FabricLink extends BaseFabricInstance {
+  /**
+   * Keeps a frozen shallow copy of `payload`, or `payload` itself when it is
+   * already frozen. The payload's values are held as supplied.
+   */
   constructor(payload: FabricPlainObject);
 
-  /** The wrapped addressing payload. */
+  /** The wrapped addressing payload, frozen at its own layer. */
   get payload(): FabricPlainObject;
 
   /** The codec for instances of this class; wire tag `Link@1`. */
@@ -1637,7 +1731,7 @@ export class FabricLink extends BaseFabricInstance {
 }
 ```
 
-#### 1.4.14 `bigint` — Not Wrapped
+#### 1.4.16 `bigint` — Not Wrapped
 
 `bigint` is a JavaScript primitive (`typeof x === 'bigint'`), not an object. It
 rides through the `FabricValue` layer directly, like `undefined`. No
@@ -1645,7 +1739,7 @@ rides through the `FabricValue` layer directly, like `undefined`. No
 standalone codec (`BigIntCodec`, analogous to `UndefinedCodec` — there is no
 owned class to host a `[CODEC]`); see Section 4.5.
 
-#### 1.4.15 Design Notes
+#### 1.4.17 Design Notes
 
 > **Why wrapper classes instead of inline encoder branches?** Each wrapper
 > genuinely implements `FabricInstance` and hosts its own `[CODEC]`, so the
@@ -1662,12 +1756,14 @@ owned class to host a `[CODEC]`); see Section 4.5.
 > `convertibleJsFromFabricValue()` (Section 8) as a separate step.
 >
 > **File organization.** Each `FabricInstance` and `FabricPrimitive` class lives
-> in its own file: the `FabricInstance` subclasses (including the JS object
-> wrappers `FabricError`, `FabricMap`, `FabricSet` and the explicit-tag-value
-> family) under `packages/data-model/fabric-instances/`; the `FabricPrimitive`
-> subclasses (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-> `FabricRegExp`, `FabricUnavailable`) under
-> `packages/data-model/fabric-primitives/`.
+> in its own file: the `FabricInstance` subclasses `FabricError`, `FabricLink`,
+> `FabricMap`, `FabricSet` and `FabricNativeWrapper` under
+> `packages/data-model/src/fabric-instances/`, with `UnknownValue` and
+> `ProblematicValue` (Section 3) under `packages/data-model/src/codec-common/`;
+> the `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
+> `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
+> `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) under
+> `packages/data-model/src/fabric-primitives/`.
 
 ### 1.5 Plain Containers
 
@@ -1864,7 +1960,7 @@ to `Symbol()` is a description, for debugging; it is not a key anything can look
 the symbol up by.
 
 ```typescript
-// file: packages/data-model/codec-interface/interface.ts
+// file: packages/data-model/src/codec-interface/interface.ts
 
 /**
  * Well-known symbol for binding the getter
@@ -1885,7 +1981,7 @@ export const JSON_CODEC: unique symbol =
 ```
 
 ```typescript
-// file: packages/data-model/fabric-bases/BaseFabricInstance.ts
+// file: packages/data-model/src/fabric-bases/BaseFabricInstance.ts
 
 /**
  * Well-known symbol for deeply freezing a `FabricInstance` in place. The
@@ -1986,8 +2082,9 @@ export abstract class FabricInstance extends BaseFabricSpecialObject {
    * shared structure for any unfrozen data in the original. When `frozen ===
    * true`, produces a frozen instance with maximal structural sharing,
    * including returning `this` if it is already deep-frozen. When `frozen ===
-   * false`, produces a deeply-mutable instance with no visible shared reference
-   * structure with the original.
+   * false`, produces an instance which is mutable at every layer its class
+   * lets change, and which has no visible shared reference structure with the
+   * original.
    *
    * The concrete template-method implementation lives on `BaseFabricInstance`
    * (deferring to the `[DEEP_CLONE_CORE]` sibling, mirroring the
@@ -2148,7 +2245,7 @@ export abstract class BaseFabricInstance extends FabricInstance {
 
 Encoding participation is class-level, not instance-level: a class hosts a
 **codec** — an encoder-decoder object implementing
-`FabricCodec<PlusType, Encoded>` — as a static getter keyed by a well-known
+`FabricCodec<PlusType, Encoded, State>` — as a static getter keyed by a well-known
 symbol. The codec is the **single source of
 truth** for how instances of that class are encoded; nothing about encoding
 lives on the instances themselves.
@@ -2166,6 +2263,12 @@ it through. `FabricError` is the clearest nonterminal case — its state carries
 the walker can know what to do with them. `FabricBytes` is the clearest terminal
 one: JSON's codec produces a base64url string, where a format carrying bytes
 natively wants the bytes themselves.
+
+`State` narrows `Encoded` to one codec's own states: what it emits, what its
+`canDecode()` accepts, and what its `decode()` takes. Whether a state is a
+member of `Encoded` at all is settled by whatever produced it, a wire format's
+parser or the engine's own walk; `canDecode()` asks only whether a member has
+the `State` shape.
 
 Which kind a codec is cannot be read off its signature, because the domains
 overlap — an all-string record satisfies `FabricValue` and JSON's value type
@@ -2192,7 +2295,7 @@ into.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/codec-interface/interface.ts
+// file: packages/data-model/src/codec-interface/interface.ts
 
 /**
  * Interface for codecs (encoder-decoder objects). These are objects which
@@ -2208,8 +2311,19 @@ into.
  * has the same shape whatever those two are -- the same matching members,
  * the same pair of transformations -- and they are the only things that
  * vary.
+ *
+ * `State` is the codec's own state type, a subtype of `Encoded`: what
+ * `encode()` emits, what `canDecode()` narrows to, and the only thing
+ * `decode()` is handed. One declaration serving all three members is what
+ * says the three agree. A codec that works over the whole of `Encoded`
+ * leaves it at the default, and so does whatever holds codecs that agree on
+ * nothing narrower, as a registry does.
  */
-export interface FabricCodec<PlusType, Encoded> {
+export interface FabricCodec<
+  PlusType,
+  Encoded,
+  State extends Encoded = Encoded,
+> {
   /**
    * The unique _direct_ class of instances, if any, that is associated with
    * the format this instance encodes. The codec system uses this to make a
@@ -2228,8 +2342,13 @@ export interface FabricCodec<PlusType, Encoded> {
    */
   get recognizedTypeTag(): string | undefined;
 
-  /** Returns `true` if this handler can encode the state of the given
-   *  value. */
+  /**
+   * Returns `true` if this handler can encode the state of the given value.
+   *
+   * May take `value` as a valid `FabricValuePlus<PlusType>`; see
+   * `BaseCodecEngine.encode()` for the input contract that makes that safe
+   * to assume.
+   */
   canEncode(value: FabricValuePlus<PlusType>): boolean;
 
   /**
@@ -2237,6 +2356,14 @@ export interface FabricCodec<PlusType, Encoded> {
    * decode: the decode side's counterpart to `canEncode()`, answering the
    * same kind of question about whether a value is in the domain this codec
    * works over.
+   *
+   * `state` is a member of `Encoded` already. Whether it is one at all is
+   * settled by whatever produced it -- a wire format's parser, a realm
+   * crossing, the codec engine's own walk -- and is not asked again here.
+   * What is asked is narrower: whether that member has the shape of this
+   * codec's `State`. So a part of the state which `State` allows to be any
+   * member of `Encoded`, as an external reference such as a `FabricError`'s
+   * `cause` is, leaves this method nothing to check.
    *
    * What belongs here is what is cheap to ask and not already asked by the
    * decoding: the state's type, the presence and types of the parts a
@@ -2246,14 +2373,14 @@ export interface FabricCodec<PlusType, Encoded> {
    * here costs that work twice; `decode()` keeps such a question and is
    * where a state failing it is refused.
    *
-   * An implementation states this as a type predicate over its own state
-   * type, which is what lets its `decode()` declare that same type and read
-   * the state's parts without re-checking them.
+   * Stated as a type predicate over `State`, which is what makes the check
+   * pay: the narrowing carries across to `decode()`, which then reads the
+   * state's parts as the types this method established them to be.
    *
    * Called on every state before `decode()` sees it, so an implementation of
    * the latter may take the check as done.
    */
-  canDecode(state: Encoded): boolean;
+  canDecode(state: Encoded): state is State;
 
   /**
    * Returns the wire type tag to use when encoding the given value. Only
@@ -2278,15 +2405,35 @@ export interface FabricCodec<PlusType, Encoded> {
    *
    * Only ever called on a state for which `canDecode()` has returned `true`,
    * which is the decode side's counterpart to the way `canEncode()` precedes
-   * `encode()`. That is what lets an implementation declare the narrower
-   * state type it actually decodes and read its parts as such. `state` is the
-   * whole of `Encoded` here because this interface is what a registry holds,
-   * and the codecs in one agree on nothing narrower.
+   * `encode()`. That is what makes `state` a `State`, whose parts an
+   * implementation reads as such. Where a codec is held at a wider `State`
+   * than its own, as a registry holds every codec at `Encoded`, the types do
+   * not carry that ordering, and it rests on the caller.
+   *
+   * A `state` need not come from `encode()`, so a nonterminal codec's
+   * implementation which keeps a container from `state` as part of the value
+   * it builds may do so only when that container is frozen and stays frozen
+   * in that value. Anything else it keeps, it copies. A mutable value may
+   * keep frozen state this way, so long as nothing that makes it mutable
+   * depends on changing that state. A value from `state` which the codec's
+   * values hold as an external reference is not a container of theirs, and
+   * is kept as it is. What a terminal codec may keep from its state is its
+   * wire format's business, as a transferred `ArrayBuffer` taken over whole
+   * shows.
+   *
+   * `mutable` decides the frozenness of the value built, and of nothing
+   * else: when `false`, the default, the result is frozen, and when `true`,
+   * it is left mutable. Either way a decode freezes only what it builds
+   * itself, never a value it keeps from `state`; freezing what `state` holds
+   * belongs to whatever built it. A codec whose values are immutable
+   * whatever their construction, such as a `FabricPrimitive`'s, has nothing
+   * to decide and may leave `mutable` undeclared.
    */
   decode(
     typeTag: string,
-    state: Encoded,
+    state: State,
     env: LiveEnvironment,
+    mutable?: boolean,
   ): FabricValuePlus<PlusType>;
 
   /**
@@ -2295,10 +2442,30 @@ export interface FabricCodec<PlusType, Encoded> {
    * encodable by this instance. The result is expected to be a _shallow_
    * encoding. The codec system handles recursion as necessary.
    *
+   * Two things an implementation may take as given: that `value` is a valid
+   * `FabricValuePlus<PlusType>`, and that this instance's own `canEncode()`
+   * has returned `true` for it. Re-checking either is work spent on input
+   * that is correct by contract; see `BaseCodecEngine.encode()`.
+   *
    * `env` is what a codec reaches the running system through, the same one
    * `decode()` is handed.
+   *
+   * For a nonterminal codec, the result is a snapshot of `value`: it
+   * represents `value`'s internal state as frozen data, and its external
+   * references as themselves, with their frozenness left as it is. This
+   * holds whether or not `value` is itself frozen. A mutable value's internal
+   * state is copied into the result, never frozen in place, and a result may
+   * be cached so long as it is dropped when the value changes. A value whose
+   * state effectively is an external reference may return that reference as
+   * itself, frozen or not; so a caller must not freeze a result in place, or
+   * otherwise change it.
+   *
+   * A terminal codec's result is in its wire format's own domain, and what
+   * it may be is that format's business. It is best made as frozen as the
+   * format allows: a record is frozen, though an `ArrayBuffer` in it cannot
+   * be.
    */
-  encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): Encoded;
+  encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): State;
 }
 
 /**
@@ -2313,11 +2480,15 @@ export interface FabricCodec<PlusType, Encoded> {
  * `FabricValue`, which is the one kind a wire format's registry takes. At
  * any other `PlusType` the codec exposes an instance's contents, that type
  * included, to a walker that admits it, and has no wire form.
+ *
+ * `State` is as `FabricCodec` describes it, bounded by that same domain. It
+ * comes after `PlusType` so that it can default to the whole of the domain
+ * it bounds.
  */
-export type NonterminalCodec<PlusType = never> = FabricCodec<
-  PlusType,
-  FabricValuePlus<PlusType>
->;
+export type NonterminalCodec<
+  PlusType = never,
+  State extends FabricValuePlus<PlusType> = FabricValuePlus<PlusType>,
+> = FabricCodec<PlusType, FabricValuePlus<PlusType>, State>;
 
 /**
  * A codec whose essential state is **terminal**: it is already in the domain
@@ -2331,8 +2502,12 @@ export type NonterminalCodec<PlusType = never> = FabricCodec<
  *
  * The value side is at `never`: a wire format carries `FabricValue`s, and a
  * value holding anything beyond those has no wire form to terminate into.
+ *
+ * `State` is as `FabricCodec` describes it: this codec's own states, within
+ * the one format it serves.
  */
-export type TerminalCodec<Encoded> = FabricCodec<never, Encoded>;
+export type TerminalCodec<Encoded, State extends Encoded = Encoded> =
+  FabricCodec<never, Encoded, State>;
 
 /**
  * A codec usable for the wire format whose value type is `Encoded`: either
@@ -2421,14 +2596,15 @@ Three base classes round out the vocabulary:
   domains in the same stroke as the declaration, so the two cannot drift
   apart.
 
-`State` is the codec's own state type, a subtype of the format-wide `Encoded`:
-what `encode()` emits, what `canDecode()` narrows to as a type predicate, and
-the only thing `decode()` is handed. One declaration serving all three members
-is what says the three agree, and it is what lets a decoding read its state's
-parts as the types `canDecode()` established them to be. That narrower
-parameter is true rather than merely declared because the engine asks
-`canDecode()` of every state before dispatching one to a codec. A codec that
-works over the whole of `Encoded` leaves it at the default.
+`State`, which each of these passes through to `FabricCodec`, is the codec's
+own state type, a subtype of the format-wide `Encoded`: what `encode()` emits,
+what `canDecode()` narrows to as a type predicate, and the only thing
+`decode()` is handed. One declaration serving all three members is what says
+the three agree, and it is what lets a decoding read its state's parts as the
+types `canDecode()` established them to be. That narrower parameter is true
+rather than merely declared because the engine asks `canDecode()` of every
+state before dispatching one to a codec. A codec that works over the whole of
+`Encoded` leaves it at the default.
 
 `TerminalCodec<FabricValue>` and `NonterminalCodec` are the same type, so a
 subclass of `BaseTerminalCodec` declared at `FabricValue` would satisfy the
@@ -2455,6 +2631,14 @@ Key contracts:
   values have already been decoded. The codec engine owns recursion and
   tag-wrapping (Section 4.5), which keeps the format mechanics in one place
   rather than spread across every codec.
+- **`encode()` returns a snapshot; `decode()` freezes only what it builds.**
+  A nonterminal codec's encoded state represents internal state as frozen data
+  (copied, never frozen in place) and external references as themselves, so a
+  caller never freezes or changes one. A decode's `mutable` argument decides
+  the frozenness of the one value it builds, and a nonterminal codec keeps a
+  container from `state` only when that container is frozen and stays frozen,
+  or when its values hold it as an external reference. A terminal codec's state
+  belongs to its wire format, and is best made as frozen as the format allows.
 - **`canDecode()` runs before every decode.** The engine asks it of each state
   it is about to dispatch, so a state reaches `decode()` only once that codec
   has accepted it and is of the type that method declares. A refusal is a
@@ -2484,7 +2668,7 @@ Key contracts:
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/codec-interface/interface.ts
+// file: packages/data-model/src/codec-interface/interface.ts
 
 /**
  * The minimal interface that codec `encode()` and `decode()` implementations
@@ -2500,24 +2684,6 @@ export interface LiveEnvironment {
    * up existing instances during decoding.
    */
   getCell(ref: { id: string; path: string[]; space: string }): FabricInstance;
-
-  /**
-   * Output-contract directive: when `true`, every codec `decode()`
-   * implementation that consults this live environment must produce a deep-frozen
-   * result; when `false`, a mutable result is acceptable. Same contract as
-   * the `frozen` argument to `cloneIfNecessary()` (see
-   * `packages/data-model/value-clone.ts`): `shouldDeepFreeze === true`
-   * corresponds to `cloneIfNecessary(value, { frozen: true })`.
-   *
-   * Required (not optional): every live environment declares it. A shared
-   * `BaseLiveEnvironment`
-   * (`packages/data-model/src/codec-interface/BaseLiveEnvironment.ts`)
-   * centralizes the getter with a `true` default, mirroring
-   * `cloneIfNecessary()`'s default; environments opt out by overriding. An
-   * `NullLiveEnvironment` (same directory) covers environment-less
-   * decodes: its `getCell()` throws with a configurable message.
-   */
-  readonly shouldDeepFreeze: boolean;
 }
 ```
 
@@ -2526,7 +2692,7 @@ export interface LiveEnvironment {
 > one any client can satisfy. It has several already -- `memory` builds one,
 > as do tests in `data-model` and `runner` -- and more are expected. Future
 > fabric types may extend `LiveEnvironment` if they need capabilities beyond
-> `getCell` and `shouldDeepFreeze`.
+> `getCell`.
 
 ### 2.6 Brand Detection
 
@@ -2614,12 +2780,12 @@ class Temperature extends BaseFabricInstance {
         super('Temperature@1', Temperature);
       }
 
-      /** Extract essential state (shallow). */
+      /** Extract essential state (shallow), as a frozen snapshot. */
       encode(
         value: Temperature,
         _env: LiveEnvironment,
       ): TemperatureState {
-        return { value: value.value, unit: value.unit };
+        return Object.freeze({ value: value.value, unit: value.unit });
       }
 
       /** Accept only the state this codec writes. */
@@ -2633,8 +2799,10 @@ class Temperature extends BaseFabricInstance {
         _typeTag: string,
         state: TemperatureState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
-        return new Temperature(state.value, state.unit);
+        const result = new Temperature(state.value, state.unit);
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -2691,19 +2859,27 @@ separate step via `convertibleJsFromFabricValue()` (Section 8).
 
 ### 2.9 Decode Guarantees
 
-The system follows an **immutable-forward** design:
+The system follows an **immutable-forward** design. Unless an engine is
+constructed with `mutable` as `true`:
 
 - **Plain objects and arrays** are frozen (`Object.freeze()`) upon decoding.
   This applies to all decoding output paths, including `/quote` (Section 6 of
   `3-json-encoding.md`) — the freeze is a property of the decoding boundary, not
   of whether type-tag decoding occurred.
-- **`FabricInstance`s** should ideally be frozen as well — this is the north
-  star, though not yet a strict requirement.
+- **`FabricInstance`s**, and every other value a codec decodes, are
+  deep-frozen too: each codec's `decode()` freezes the one value it builds, and
+  the decoding walker deep-freezes the result (Section 4.5).
 - Decoding always produces regular plain objects, that being the only
   object shape a `FabricValue` has.
 
 This immutability guarantee enables safe sharing of decoded values and
 aligns with the reactive system's assumption that values don't mutate in place.
+
+An engine constructed with `mutable` as `true` is for a caller that means to
+change what it decodes. Its `decode()` leaves mutable every container it builds
+and every value a codec builds for it, a lenient `ProblematicValue` included,
+passing `mutable` to each codec's `decode()` (Section 2.4). A value frozen by
+nature, such as a `FabricPrimitive`, is frozen either way.
 
 > **Immutability of JS object wrappers.** Under the three-layer
 > architecture, decoding produces `FabricInstance` wrappers (`FabricMap`,
@@ -2823,7 +2999,7 @@ all.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/codec-common/UnknownValue.ts
+// file: packages/data-model/src/codec-common/UnknownValue.ts
 
 import { DEEP_FREEZE, type FabricValue, IS_DEEP_FROZEN } from '../interface';
 import {
@@ -2834,7 +3010,6 @@ import {
 import { BaseNonterminalCodec } from '../codec-interface/BaseNonterminalCodec';
 import { BaseFabricInstance } from './BaseFabricInstance';
 import { isCodecTypeTag } from './isCodecTypeTag';
-import { deepFreeze } from '../deep-freeze';
 
 /**
  * Container for an unrecognized type's data, used for round-tripping. When
@@ -2884,7 +3059,11 @@ export class UnknownValue extends BaseFabricInstance {
         return value.wireTypeTag;
       }
 
-      /** The preserved bare state -- NOT an envelope. */
+      /**
+       * The preserved bare state -- NOT an envelope. That state is an
+       * external reference rather than internal state, so it is returned as
+       * itself (see `encode()`'s snapshot contract, Section 2.4).
+       */
       encode(value: UnknownValue, _env: LiveEnvironment): FabricValue {
         return value.state;
       }
@@ -2892,10 +3071,13 @@ export class UnknownValue extends BaseFabricInstance {
       decode(
         typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
+        // The state is an external reference, as `encode()` treats it, so it
+        // is kept as it is.
         const result = new UnknownValue(typeTag, state);
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -2929,7 +3111,7 @@ example, a type whose codec `decode()` throws can be preserved as a
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/codec-common/ProblematicValue.ts
+// file: packages/data-model/src/codec-common/ProblematicValue.ts
 
 import { DEEP_FREEZE, type FabricValue, IS_DEEP_FROZEN } from '../interface';
 import {
@@ -2942,7 +3124,6 @@ import { BaseFabricInstance } from './BaseFabricInstance';
 import { CODEC_TYPE_TAGS } from '../codec-interface/codec-type-tags';
 import { toReportableState } from './toReportableState';
 import { toReportableTag } from './toReportableTag';
-import { deepFreeze } from '../deep-freeze';
 
 /**
  * Container for a value whose encoding or decoding failed.
@@ -3006,28 +3187,32 @@ export class ProblematicValue extends BaseFabricInstance {
         super(CODEC_TYPE_TAGS.Problematic, ProblematicValue);
       }
 
-      /** All three preserved facts; the tag is data here, not structure. */
+      /**
+       * All three preserved facts, as a frozen record; the tag is data here,
+       * not structure, and the preserved state is held as it is.
+       */
       encode(
         value: ProblematicValue,
         _env: LiveEnvironment,
       ): FabricValue {
-        return {
+        return Object.freeze({
           tag: value.wireTypeTag,
           state: value.state,
           error: value.error,
-        };
+        });
       }
 
       decode(
         _typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         // A state that is not this shape becomes a `ProblematicValue` of
         // this decode; omitted for brevity.
         const { tag, state: inner, error } = state as never;
         const result = new ProblematicValue(tag, inner, error);
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );
@@ -3080,15 +3265,16 @@ decoding. This type is internal to the JSON implementation — it is not part of
 the public boundary interface.
 
 ```typescript
-// file: packages/data-model/codec-json/interface.ts
+// file: packages/data-model/src/codec-json/interface.ts
 
 /**
  * JSON-compatible codec value. This is the intermediate tree
  * representation used during encode tree walking -- NOT the final
  * serialized form (which is `string`). Internal to the JSON implementation.
  *
- * Deep-frozen invariant on the decode side: every such tree that
- * enters decoding is deep-frozen, enforced at the one construction site that
+ * Frozenness invariant on the decode side: every such tree that enters
+ * decoding is deep-frozen for a frozen decode, and freshly built and shared
+ * with nothing for a mutable one, enforced at the one construction site that
  * feeds it, `parseWireText()`. This is what lets the tag-unwrap and `/quote`
  * arms hand back extracted sub-trees directly without further copying. The
  * encode-side trees are transient (`JSON.stringify`-ed and discarded)
@@ -3123,7 +3309,7 @@ are the same object.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/codec-common/BaseCodecEngine.ts
+// file: packages/data-model/src/codec-common/BaseCodecEngine.ts
 
 abstract class ExampleEngine {
   protected abstract newEncodeAct(env: LiveEnvironment): ExampleEncodeAct;
@@ -3216,7 +3402,7 @@ and a registry given one of each separately could be given a mismatched pair.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/codec-common/CodecRegistry.ts
+// file: packages/data-model/src/codec-common/CodecRegistry.ts
 
 /**
  * Sentinel returned by `CodecRegistry.codecFromValue()` for a
@@ -3355,6 +3541,8 @@ registrations. A caller needing classes of its own extends what this returns.
 | 〃 | `FabricHash` | `Hash@1` | 〃 |
 | 〃 | `FabricEpochNsec` | `EpochNsec@1` | 〃 |
 | 〃 | `FabricEpochDay` | `EpochDay@1` | 〃 |
+| 〃 | `FabricDurationNsec` | `DurationNsec@1` | 〃 |
+| 〃 | `FabricDurationDay` | `DurationDay@1` | 〃 |
 | 〃 | `FabricRegExp` | `RegExp@1` | 〃 |
 | `register(cls[CODEC])` | `FabricError` | `Error@1` | Via `fabric-instances` `codecClasses()`. |
 | 〃 | `FabricMap` | `Map@1` | 〃 (implementation currently stubbed; see Section 1.4.3). |
@@ -3423,10 +3611,11 @@ The decoding act's walk processes the `JsonCodecValue` tree:
    `ProblematicValue` leniently (Section 3.5), a raise strictly (see also
    Section 9 of `3-json-encoding.md`).
 4. **Codec dispatch** — `codecFromTag()` routes the tag to its registered
-   codec's `decode()`, and settles the codec's verdict against `lenient`:
-   leniently, a throw becomes a `ProblematicValue`; strictly, a
-   `ProblematicValue` the codec returned becomes a throw. Values returned from
-   this arm are guaranteed deep-frozen at the walker boundary (the contract
+   codec's `decode()`, passing the engine's `mutable`, and settles the codec's
+   verdict against `lenient`: leniently, a throw becomes a `ProblematicValue`;
+   strictly, a `ProblematicValue` the codec returned becomes a throw. Values
+   returned from this arm are deep-frozen at the walker boundary, or left as
+   the codec built them, mutable, when the engine is mutable (the contract
    holds for both the codec-produced value and the lenient-mode
    `ProblematicValue`), so callers need not each freeze. Every other arm
    guarantees the same, the unknown-tag arm (step 5) included, so a caller need
@@ -3479,7 +3668,6 @@ The boundaries where encoding occurs:
 |----------|----------|-----------|
 | **Persistence** | `memory` <-> database | read/write |
 | **Iframe sandbox** | `runner` <-> `iframe-sandbox` | `postMessage` |
-| **Background service** | `shell` <-> `background-piece-service` | worker messages |
 | **HTML reconciler** | `html` reconciler (runs in a web worker) | worker messages |
 | **Network sync** | `toolshed` <-> remote peers | WebSocket/HTTP |
 | **Cross-space** | space A <-> space B | if in separate processes |
@@ -3560,7 +3748,7 @@ The `memory` package wraps these at its encoding boundary
 ### 4.9 Fabric Value Conversion
 
 The JS-to-`FabricValue` boundary is managed by
-`packages/data-model/convertible-js.ts`. This module provides
+`packages/data-model/src/convertible-js.ts`. This module provides
 `fabricFromConvertibleJsValue()` / `convertibleJsFromFabricValue()` functions
 that bridge the left layer (JS wild west) and the middle layer (`FabricValue`)
 at the `Cell` read/write boundary.
@@ -3572,7 +3760,7 @@ The module also provides a shallow conversion function
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/convertible-js.ts
+// file: packages/data-model/src/convertible-js.ts
 
 /**
  * Convert a convertible JS value to fabric form (deep, recursive). Wraps
@@ -3610,15 +3798,15 @@ The implementation is split across several files for separation of concerns:
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Public surface, and the package's main entry point: re-exports the conversion functions (from `convertible-js.ts`), the type declarations (from `interface.ts`), the clone helpers (from `value-clone.ts`), the deep freeze (from `deep-freeze.ts`), the hash (from `value-hash.ts`), the debug renderers (from `value-debug/`), the tag vocabulary, narrowings, and validators (from `types/`), and the comparisons `valueEqual()` and `fabricAwareEqual()` (from `comparison/`) |
+| `index.ts` | Public surface, and the package's main entry point: re-exports the conversion functions (from `convertible-js.ts`), the type declarations (from `interface.ts`), the clone helpers (from `value-clone.ts`), the deep freeze (from `deep-freeze.ts`), the hash (from `value-hash/`), the debug renderers (from `value-debug/`), the tag vocabulary, narrowings, and validators (from `types/`), and the comparisons `valueEqual()`, `valueEqualByWalk()`, and `fabricAwareEqual()` (from `comparison/`) |
 | `api.ts` | The pattern-visible declarations: the `FabricValue` union and the types beside it, the three base classes and every concrete class as an `interface` plus a `declare const`, and the debug-rendering option types. It has no imports, so that the type module the sandbox is served can inline it; it is also the `./api` export subpath, which `@commonfabric/api` re-exports. |
 | `interface.ts` | The three abstract base classes as classes, the layer types, and the conversion-layer types (`FabricConvertibleJsObject`, `FabricConvertibleJsValue`); re-exports every type `api.ts` declares. Free of runtime imports, so that any module can import it. |
 | `api-agreement.ts` | Asserts that each of the three base classes and its `api.ts` declaration are mutually assignable. Nothing imports it; it exists to be type-checked, and everything in it erases at compile time. |
 | `convertible-js.ts` | Conversion: `fabricFromConvertibleJsValue`, `shallowFabricFromConvertibleJsValue`, `convertibleJsFromFabricValue`, `isValidFabricConvertibleJsValue` |
 | `fabric-bases/` | The abstract bases a concrete `FabricValue` extends, one per branch of the type hierarchy: `BaseFabricInstance.ts`, `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the implementer's half of the hierarchy; `interface.ts` is the client's, and reaching it does not reach these. |
 | `fabric-instances/` | Concrete `FabricInstance` subclasses, each in its own file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`, `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes and what derives from it, `codecClasses()` among them, and `index.ts` is the barrel. `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, and members of that set, but live in `codec-common/`, existing only as products of a decode fault. |
-| `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
-| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
+| `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricDurationNsec.ts`, `FabricDurationDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
+| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. It also offers internal steps of the package that a test of the public surface cannot reach dependably, each under a name ending `ForTestingOnly`: `float64BytesOfForTestingOnly()` is `value-hash/`'s number-to-bytes step, whose `NaN` arm a test of `hashOf()` can exercise only where the engine keeps a `NaN`'s payload, `getFrozenObjectHashCacheHitsForTestingOnly()` counts the hashes `value-hash/`'s deep-frozen-object cache serves, which the public surface cannot tell from hashes computed afresh, and `getContainersHashedForTestingOnly()` counts the arrays and plain objects `value-hash/` feeds a hasher, which is how a test tells a whole-value hash from a small one. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
 | `value-debug-internal.ts` | The debug renderers as the package's own modules reach them, and what the import-map key `@/value-debug` names: one forwarder per renderer, each calling the renderer of the same name which `value-debug/` installs as it loads. It imports nothing at run time, so any module may import it without a circular load-time dependency, the root class in `fabric-bases/` included. A forwarder throws until `value-debug/` has loaded. Every export-map entry which loads a module that renders loads `value-debug/` too, by way of the `fabric-bases/` barrel, so a program which imports the package has the renderers; `index.ts` re-exports them from `value-debug/` itself. |
 
 ---
@@ -3664,6 +3852,7 @@ four categories by high nibble:
 |:------------------|:-------|:--------|:--------------------------------|
 | `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
 | `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
 
 **Compound tags (`0x1N`)** — containers whose children are tagged values:
 
@@ -3691,6 +3880,8 @@ four categories by high nibble:
 | `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
 | `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
 | `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
+| `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
+| `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
 
 **Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
 payload of a primitive type with a digest, when doing so shortens the byte
@@ -3714,7 +3905,7 @@ regardless of nibble range.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/value-hash.ts
+// file: packages/data-model/src/value-hash/impl.ts
 
 /**
  * Compute a hash for a `FabricValue`. The hash is encoding-independent:
@@ -3743,12 +3934,11 @@ regardless of nibble range.
  * `true`, `false`; an LRU cache for primitives (`string`, `number`,
  * `bigint`); and a WeakMap for deep-frozen objects.
  *
- * JS `Date`, `RegExp`, and `Uint8Array` values are handled via
- * on-the-fly conversion to their fabric equivalents
- * (`shallowFabricFromConvertibleJsValue`), then hashed in their converted
- * form.
+ * A value outside the data model is refused, a JS `Date`, `RegExp`, or
+ * `Uint8Array` among them: a caller converts one to its fabric equivalent
+ * before hashing it.
  */
-export function hashOf(value: unknown): FabricHash {
+export function hashOf(value: FabricValue): FabricHash {
   // Type tag bytes — see Section 6.3 for the full table.
   // Tag categories: meta (0x0N), compound (0x1N), primitive (0x2N),
   // optimized (0xFN).
@@ -3778,6 +3968,12 @@ export function hashOf(value: unknown): FabricHash {
   // - `FabricEpochNsec`: hash(TAG_EPOCH_NSEC, leb128(byteLen), twosComplementBytes)
   //                        (same payload format as TAG_BIGINT but distinct tag)
   // - `FabricEpochDay`: hash(TAG_EPOCH_DAY, leb128(byteLen), twosComplementBytes)
+  //                        (same payload format as TAG_BIGINT but distinct tag)
+  // - `FabricDurationNsec`: hash(TAG_DURATION_NSEC, leb128(byteLen),
+  //                        twosComplementBytes)
+  //                        (same payload format as TAG_BIGINT but distinct tag)
+  // - `FabricDurationDay`: hash(TAG_DURATION_DAY, leb128(byteLen),
+  //                        twosComplementBytes)
   //                        (same payload format as TAG_BIGINT but distinct tag)
   // - `FabricHash`: hash(TAG_HASH, hashStr(algTag), leb128(hashByteLen), hashBytes)
   //                        (algorithm tag as a tagged string, then raw hash bytes)
@@ -3818,6 +4014,12 @@ export function hashOf(value: unknown): FabricHash {
   //                        where `codec` is `codecOf(v)` -- the class's
   //                        `[CODEC]` (Section 2.4), the same source of
   //                        truth the codec layer uses.
+  // - cycle:               an array, object, or `FabricInstance` that is
+  //                        already on the path from the root (by identity)
+  //                        is hashed as hash(TAG_CYCLE, leb128(distance)),
+  //                        where `distance` counts up the path from this
+  //                        position: 1 for the enclosing container. See
+  //                        the byte-level spec, Section 4.19.
   //
   // The JS object wrappers and temporal types are hashed as follows:
   //
@@ -3830,6 +4032,8 @@ export function hashOf(value: unknown): FabricHash {
   // - `FabricBytes` uses TAG_BYTES (dedicated primitive tag).
   // - `FabricEpochNsec` uses TAG_EPOCH_NSEC (dedicated primitive tag).
   // - `FabricEpochDay` uses TAG_EPOCH_DAY (dedicated primitive tag).
+  // - `FabricDurationNsec` uses TAG_DURATION_NSEC (dedicated primitive tag).
+  // - `FabricDurationDay` uses TAG_DURATION_DAY (dedicated primitive tag).
   // - `FabricHash` uses TAG_HASH (dedicated primitive tag).
   // - `FabricRegExp` uses TAG_REGEXP (dedicated primitive tag).
   // - `FabricKeyPair` uses TAG_KEY_PAIR (dedicated primitive tag), and only
@@ -3846,6 +4050,10 @@ export function hashOf(value: unknown): FabricHash {
   //                         where elements are hashed in insertion order
   // - `FabricEpochNsec`:  hash(TAG_EPOCH_NSEC, leb128(byteLen), twosComplementBytes)
   // - `FabricEpochDay`:   hash(TAG_EPOCH_DAY, leb128(byteLen), twosComplementBytes)
+  // - `FabricDurationNsec`: hash(TAG_DURATION_NSEC, leb128(byteLen),
+  //                               twosComplementBytes)
+  // - `FabricDurationDay`: hash(TAG_DURATION_DAY, leb128(byteLen),
+  //                               twosComplementBytes)
   // - `FabricHash`:  hash(TAG_HASH, hashStr(algTag), leb128(hashByteLen), hashBytes)
   // - `FabricBytes`:      hash(TAG_BYTES, leb128(byteLen), rawBytes)
   // - `FabricRegExp`:     hash(TAG_REGEXP, hashStr(source), hashStr(flags),
@@ -3870,9 +4078,12 @@ export function hashOf(value: unknown): FabricHash {
 }
 ```
 
-> **String encoding for hashing.** Strings are hashed as UTF-8 byte sequences,
-> prefixed by their byte length (unsigned LEB128). See the byte-level spec
-> (`2-hash-byte-format.md`, Section 4.4) for the precise encoding.
+> **String encoding for hashing.** Strings are hashed as WTF-8 byte sequences
+> (UTF-8, extended to encode lone surrogates as themselves). A string of up to
+> 64 such bytes is fed as those bytes, prefixed by their length (unsigned
+> LEB128); a longer one is fed as the SHA-256 digest of its bytes, with no
+> length prefix. See the byte-level spec (`2-hash-byte-format.md`, Section
+> 4.4) for the precise encoding.
 
 > **Map/Set ordering in hashing.** Hashing preserves insertion order for
 > `FabricMap` entries and `FabricSet` elements, matching the serialized form.
@@ -3905,18 +4116,22 @@ most current version of the data. Hashes are not used as entity addresses.
 ### 6.7 Value Equality
 
 `FabricValue`s are compared for logical (content) equality by
-`valueEqual(a: FabricValue, b: FabricValue): boolean`. This is the equality the
-reactive system's change-detection and no-op gates depend on, and the equality
-that `Map` / `Set` key behavior over `FabricValue`s is expected to follow.
+`valueEqual(a: FabricValue, b: FabricValue): boolean`. This is the equality
+the reactive system's change-detection and no-op gates depend on, and the
+equality that `Map` / `Set` key behavior over `FabricValue`s is expected to
+follow.
 
-**Governing principle.** Primitive arguments follow `Object.is()`. Hashable
-containers compare by their canonical content (Section 6.4), with the same
-result as comparing their content hashes. `Object.is()`, not `===`, preserves
-the numeric distinctions the hashing layer also carries:
+**Governing principle.** Value-equality follows `Object.is()` at the primitive
+level, and content-hash equality (Section 6.4) is defined to agree with it —
+equivalently, two `FabricValue`s are value-equal exactly when their content
+hashes are equal. `Object.is()`, not `===`, is the operator the contract
+names, and the two disagree in exactly the two cases the hashing layer already
+distinguishes:
 
-- **`-0` ≠ `+0`.** `Object.is(-0, +0)` is `false`, so `-0` and `+0` are distinct
-  `FabricValue`s and hash distinctly (Section 6.4; `2-hash-byte-format.md`
-  Section 4.3). (`===` would conflate them, treating `-0 === +0` as `true`.)
+- **`-0` ≠ `+0`.** `Object.is(-0, +0)` is `false`, so `-0` and `+0` are
+  distinct `FabricValue`s and hash distinctly (Section 6.4;
+  `2-hash-byte-format.md` Section 4.3). (`===` would conflate them, treating
+  `-0 === +0` as `true`.)
 - **All `NaN`s are value-equal.** `Object.is(NaN, NaN)` is `true`, so every
   `NaN` is value-equal to every other `NaN` — including bitwise-distinct
   payloads, which the hashing layer canonicalizes to a single quiet `NaN`
@@ -3924,34 +4139,40 @@ the numeric distinctions the hashing layer also carries:
   identically. (`===` would report `NaN !== NaN`.)
 
 Every other primitive falls through to ordinary same-value equality:
-`+Infinity`, `-Infinity`, and each finite number equals itself and nothing else,
-and likewise for `string`, `boolean`, `bigint`, interned `symbol`, `null`, and
-`undefined`.
+`+Infinity`, `-Infinity`, and each finite number equals itself and nothing
+else, and likewise for `string`, `boolean`, `bigint`, interned `symbol`,
+`null`, and `undefined`.
 
-**Objects, arrays, and instances.** Equality compares the contents of plain
-objects and arrays and the codec-defined type and state of instances. It
-distinguishes a sparse array hole from a stored `undefined`, an absent key from
-a present `undefined`, and instance state held outside enumerable properties.
+**Objects, arrays, and instances.** Non-primitive `FabricValue`s are compared
+by canonical content hash: `valueEqual(a, b)` holds exactly when
+`hashStringOf(a) === hashStringOf(b)` (Section 6.4). Because the content hash
+reflects logical content and carries the primitive-leaf distinctions above, a
+`-0`, `NaN`, or any other value nested arbitrarily deep inside a plain object,
+array, `FabricMap`, `FabricSet`, or other `FabricInstance` inherits the same
+equality. Deciding object equality by content hash (rather than by a naive
+property walk) is also what lets structurally distinct values be told apart —
+a sparse array hole vs. a stored `undefined`, a present `undefined` vs. an
+absent key (Section 6.4), and two distinct `FabricInstance`s of the same class
+that carry no enumerable own-properties.
+
 Instance identity and concrete wrapper class do not replace the codec's
 definition of content: an `UnknownValue` preserving an instance's type tag and
-state compares equally to that instance.
+state hashes, and so compares, equally to that instance.
 
-Available immutable hashes can settle a comparison without reading contents.
-Otherwise, an iterative comparison visits each distinct object pair once and
-skips identical descendants. Sharing is not itself content: one shared child can
-equal multiple independent copies. Cycles compare the contents reached through
-corresponding edges; a mismatch reachable after a back edge still makes the
-values unequal. Equality therefore supports cyclic values even when the hash
-encoding does not.
+**Sharing and cycles.** Equality follows the hash encoding's treatment of both
+(`2-hash-byte-format.md` Section 4.19). Sharing is not content: one shared
+child equals multiple independent copies of it. Where a cycle closes is:
+`a = {x: a}` and `b = {x: {x: b}}` are unequal, although no finite sequence of
+reads tells them apart.
 
-**UTF-8 representation.** Container equality preserves the hash encoding's
-replacement of lone UTF-16 surrogates with U+FFFD in strings, symbol registry
-keys, property names, and codec tags. Object keys retain the canonical sort
-order before replacement, including multiple keys that encode identically. For
-example, `{s: "\ud800"}` and `{s: "\ufffd"}` have equal content hashes and
-compare equally. The primitive arguments `"\ud800"` and `"\ufffd"` remain
-distinct under `Object.is()`. Freezing or caching a container's hash does not
-change its equality result.
+**String representation.** Equality and the hash encoding both treat a string
+as its exact sequence of UTF-16 code units, lone surrogates included. The hash
+encodes strings as WTF-8 (`2-hash-byte-format.md` Section 4.4), under which
+distinct strings have distinct bytes, so equality compares strings with
+`Object.is()` wherever they appear: as values at any depth, as symbol registry
+keys, and as property names. For example, `"\ud800"` and `"\ufffd"` are
+unequal and hash distinctly, as are `{s: "\ud800"}` and `{s: "\ufffd"}`.
+Freezing or caching a container's hash does not change its equality result.
 
 ---
 
@@ -4138,7 +4359,7 @@ There are two directions:
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/convertible-js.ts
+// file: packages/data-model/src/convertible-js.ts
 
 /**
  * Convert a value to `FabricValue` without recursing into nested values.
@@ -4193,7 +4414,7 @@ export function fabricFromConvertibleJsValue(
 |------------|--------|
 | `null`, `boolean`, `number`, `string`, `undefined`, `bigint` | Returned as-is (primitives are `FabricValue` directly). All numbers pass through unchanged, including `-0`, `NaN`, and `±Infinity`. See Section 1.3 callout for layer-by-layer details. |
 | `symbol` | Registry-interned symbols (`Symbol.keyFor(s)` returns a string) returned as-is; unique symbols (`Symbol(desc)`) throw with the message ``"Not representable as a `FabricValue`: unique (uninterned) symbol"``. See Section 1.3 callout for layer-by-layer details. |
-| `FabricPrimitive` (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) | Returned as-is. Always-frozen: the `freeze` option has no effect on these types (see Section 1.4.6). |
+| `FabricPrimitive` (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) | Returned as-is. Always-frozen: the `freeze` option has no effect on these types (see Section 1.4.6). |
 | `FabricInstance` (including wrapper classes) | Returned as-is (already `FabricValue`). |
 | `Error` | Wrapped into `FabricError`. Before wrapping, `cause` and custom enumerable properties are recursively converted to `FabricValue` (deep variant) or left as-is (shallow variant). Extra enumerable properties are preserved (see Section 1.4.1). This ensures that by the time the `FabricError` codec's `encode()` runs, all nested values are already valid `FabricValue`. |
 | `Map` | Wrapped into `FabricMap`. Keys and values are recursively converted (deep variant only). Extra enumerable properties on the `Map` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
@@ -4221,9 +4442,11 @@ export function fabricFromConvertibleJsValue(
 > and whatever the value's prototype names: an `Error` re-pointed at
 > `Object.prototype` is still `"JsError"`.
 > Then the `typeof` question, ahead of every object question: a primitive,
-> and `null`, is tagged by its `typeof` name, and a function comes back
-> `null`, whatever its prototype names, since a function is never asked an
-> object question.
+> and `null`, is tagged by its `typeof` name; a function comes back `null`,
+> whatever its prototype names, since a function is never asked an object
+> question; and a symbol is tagged `"symbol"` only when it is
+> registry-interned, a unique symbol coming back `null` for the reason
+> Section 1.3 gives.
 > An array is tagged next, by `Array.isArray()`, so a subclass instance, a
 > severed-prototype array, and a cross-realm array all reach array handling and
 > are handled by the array rule of Section 1.5, rather than being rejected as
@@ -4234,24 +4457,28 @@ export function fabricFromConvertibleJsValue(
 > lets the object rule of Section 1.5 reject the value by name rather than as
 > some unrecognized class. Then a `FabricPrimitive`, by the tag its instance
 > reports, one of `FABRIC_PRIMITIVE_VALUE_TAGS`, and a `FabricInstance`, by
-> class. What remains is a JS class instance, decided last by its class, read
-> from its prototype, by a `switch` on constructor identity; a
+> class. What remains is a JS class instance, decided last by its class, by a
+> `switch` on the identity of its prototype; a
 > recognized one is a value the conversion has yet to import, the heavier
 > path, so the lookup's cost sits on it alone. That `switch` names only the
 > classes no earlier question decides: an object merely built on a plain
 > object, or on the prototype of `Array` or of an `Error` class, is none of
 > those by the test that decides it, and comes back `null`, unrecognized
-> rather than misidentified. Constructor identity is a per-realm question, so
+> rather than misidentified. Prototype identity is a per-realm question, so
 > a `Map`, `Set`, `Date`, `Uint8Array`, or `RegExp` from another realm comes
 > back `null` the same way, where an array or an error from another realm is
-> decided by the earlier test that holds across realms. A
+> decided by the earlier test that holds across realms. The realm's global
+> constructor bindings do not enter into it: SES lockdown replaces the global
+> `Date` and `RegExp` with constructors of its own that keep the original
+> prototypes, so an instance made before lockdown, after it, or inside a
+> compartment is recognized alike. A
 > `FabricPrimitive` subclass that reports no tag of its own is tagged as its
 > parent, which is a defect in that subclass rather than one the dispatch
 > guards against.
 
 > **Implementation: centralized shallow-clone utility.** The conversion
 > functions use a centralized `cloneIfNecessary()` utility (in
-> `packages/data-model/value-clone.ts`) to handle frozenness adjustment for
+> `packages/data-model/src/value-clone.ts`) to handle frozenness adjustment for
 > values that are already valid `FabricValue` but whose freeze state does not
 > match the requested `freeze` argument. This function dispatches on the same
 > tag to clone primitives (no-op), arrays (shallow copy preserving sparse
@@ -4282,7 +4509,7 @@ constructed by the conversion function, so freezing them is not a mutation of
 caller state.)
 
 **`deepFreeze` at schema merge/combine sites.** The `deepFreeze()` utility (in
-`packages/data-model/deep-freeze.ts`) recursively freezes an object tree in
+`packages/data-model/src/deep-freeze.ts`) recursively freezes an object tree in
 place; see Section 8.6 for its full protocol, dispatch shape, and the
 boundary-crossing egress contracts. At sites where schema objects are merged or
 combined (e.g., schema `merge()` and `combine()` functions), pass-through paths
@@ -4296,8 +4523,9 @@ rather than relying on the input being "safe to freeze."
 **Always-frozen types bypass the `freeze` option.** JS primitives (`null`,
 `boolean`, `number`, `string`, `undefined`, `bigint`) are inherently immutable
 and pass through unchanged regardless of the `freeze` setting. `FabricPrimitive`
-instances (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-`FabricKeyPair`, `FabricRegExp`) are treated the same way — they are always
+instances (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`,
+`FabricDurationDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+`FabricRegExp`) are treated the same way — they are always
 returned as-is, never copied or modified by the freeze/thaw logic. Their state
 is immutable by construction (readonly fields, no mutation methods), so
 `Object.freeze()` is unnecessary and thawing is meaningless. See Section 1.4.6.
@@ -4306,9 +4534,9 @@ If the input is already frozen (or deep-frozen for the deep variant), the same
 object is returned — no defensive copying. This avoids unnecessary allocation
 in the common case where values are already immutable.
 
-The freeze check starts with a naive recursive `Object.isFrozen()` walk. This
-is sufficient for correctness; optimization (e.g., a `WeakSet<object>` of known
-deep-frozen objects) can be added later if profiling shows a need.
+The deep freeze check is `isValidDeepFrozenFabricValue()` (Section 8.6), which
+remembers each root it proves deep-frozen, so checking the same tree again is
+O(1).
 
 #### Optional `freeze` Parameter
 
@@ -4336,7 +4564,7 @@ returned value is always a valid `FabricValue` regardless of its frozen state.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/convertible-js.ts
+// file: packages/data-model/src/convertible-js.ts
 
 /**
  * Type predicate: returns `true` if `fabricFromConvertibleJsValue()` would
@@ -4398,7 +4626,7 @@ symbols.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/convertible-js.ts
+// file: packages/data-model/src/convertible-js.ts
 
 /**
  * Deep unwrap: recursively walk a `FabricValue` tree, unwrapping any
@@ -4414,11 +4642,11 @@ symbols.
  * - `FabricSet`        -> `FrozenSet` / `Set`
  *
  * `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
- * `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) pass through
- * unchanged — they are always-frozen (Section 1.4.6). (`FabricRegExp` exposes
- * its convertible JS form via `value`, and `FabricKeyPair` via `cryptoKeyPair`,
- * each returning it on request; neither is unwrapped to that form by this
- * function.)
+ * `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
+ * `FabricKeyPair`, `FabricRegExp`) pass through unchanged — they are
+ * always-frozen (Section 1.4.6). (`FabricRegExp` exposes its convertible JS
+ * form via `value`, and `FabricKeyPair` via `cryptoKeyPair`, each returning it
+ * on request; neither is unwrapped to that form by this function.)
  *
  * **The `frozen` argument is always honored.** The freeze state of every
  * value in the output matches the `frozen` argument. When `frozen` is
@@ -4441,6 +4669,8 @@ export function convertibleJsFromFabricValue(
 | `FabricSet` | `FrozenSet` (original if already `FrozenSet`; new wrapper otherwise) | `Set` (original if already plain `Set`; mutable copy otherwise) |
 | `FabricEpochNsec` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
 | `FabricEpochDay` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
+| `FabricDurationNsec` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
+| `FabricDurationDay` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
 | `FabricHash` | Passed through unchanged (always-frozen; Section 1.4.6) | Passed through unchanged (same) |
 | `FabricBytes` | Passed through unchanged (always-frozen; Section 1.4.6) | Passed through unchanged (same) |
 | `FabricKeyPair` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
@@ -4499,8 +4729,9 @@ recursion, an Error's `cause` could still contain `FabricInstance` wrappers
 > `FrozenSet` is an implementation decision.
 
 > **Why `FabricPrimitive` subclasses pass through unchanged.**
-> `FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-> `FabricKeyPair`, and `FabricRegExp` are all `FabricPrimitive` subclasses —
+> `FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`,
+> `FabricDurationDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, and
+> `FabricRegExp` are all `FabricPrimitive` subclasses —
 > always frozen at construction time with no mutable state. Most have no JS
 > equivalent to unwrap to (unlike `FabricError` → `Error` or `FabricMap` →
 > `Map`). Where one does exist it is reached through a member —
@@ -4529,10 +4760,11 @@ the output always matches the `frozen` argument**: when `frozen` is `true` (the
 default), the output tree is fully frozen — arrays and plain objects are frozen
 via `Object.freeze()`, a mutable `Map` becomes a `FrozenMap`, a mutable `Set`
 becomes a `FrozenSet`, every `FabricPrimitive` (`FabricEpochNsec`,
-`FabricEpochDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`)
-passes through unchanged, and `Error`s are frozen. When `frozen` is `false`, the
-output tree is fully mutable. The data content is preserved; the mutability
-matches the `frozen` argument.
+`FabricEpochDay`, `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`,
+`FabricBytes`, `FabricKeyPair`, `FabricRegExp`) passes through unchanged, and
+`Error`s are frozen. When `frozen` is `false`, the output tree is fully
+mutable. The data content is preserved; the mutability matches the `frozen`
+argument.
 
 Similarly, for any `FabricValue` `sv`:
 
@@ -4544,10 +4776,13 @@ produces a `FabricValue` that is structurally equivalent to `sv`.
 
 ### 8.6 Deep-Freeze Protocol and Egress Contracts
 
-`FabricValue` trees produced by decoding at boundary-crossings are
-deep-frozen by default. This is enforced via a small protocol on
-`BaseFabricInstance` together with a generic top-level utility that dispatches
-across the four kinds of values that can appear in a `FabricValue` tree.
+Every `FabricValue` tree an engine's `decode()` returns at a boundary crossing
+is deep-frozen, unless the engine was constructed with `mutable` as `true`
+(Section 2.9). This is enforced via a small protocol on `BaseFabricInstance`
+together with a generic top-level utility that dispatches across the four kinds
+of values that can appear in a `FabricValue` tree. A codec's own `decode()`
+builds a mutable value only when passed `mutable` as `true` (Section 2.4), which
+the decode walker does exactly when its engine is mutable.
 
 #### Instance protocol members
 
@@ -4587,16 +4822,18 @@ its shared cycle-detection state through implementations transparently.
 
 #### `deepFreeze()` and the 4-arm dispatch
 
-The generic top-level utility (`packages/data-model/deep-freeze.ts`) recursively
-freezes a `FabricValue` in place. It dispatches on four arms in order:
+The generic top-level utility (`packages/data-model/src/deep-freeze.ts`)
+recursively freezes a `FabricValue` in place. It dispatches on four arms in
+order:
 
 1. **Necessarily- or already-known-deep-frozen value** — primitives (`null` and
    `typeof !== "object"`) and objects already recorded in the internal
    deep-frozen cache. Short-circuits unchanged.
 
 2. **`FabricPrimitive` instance** — `FabricPrimitive` subclasses
-   (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-   `FabricKeyPair`, `FabricRegExp`; Section 1.4.6) self-freeze at
+   (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`,
+   `FabricDurationDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+   `FabricRegExp`; Section 1.4.6) self-freeze at
    construction and expose no `FabricValue` for a walk to descend into.
    Short-circuits unchanged. (A `FabricKeyPair` holding material does hold
    two `FabricBytes`, but privately, and each froze itself in its own
@@ -4637,7 +4874,8 @@ Visited objects are tracked in a per-call `Set` for cycle safety.
 #### Egress-freezing call sites
 
 The deep-freeze contract is enforced at the points where decoded values cross
-from internal codec machinery to callers:
+from internal codec machinery to callers. Those on a decode's path freeze
+nothing for a mutable engine:
 
 - **Every value the decode walker returns is deep-frozen at the boundary**,
   whichever arm produced it. The arms reach that by two routes. A leaf arm
@@ -4651,22 +4889,23 @@ from internal codec machinery to callers:
   step 4.
 
 - **`ProblematicStateError.asProblematicValue()`.** The rendering of a thrown
-  refusal as a returned value is deep-frozen where it is built, rather than at
-  each call site, so a caller reaching it outside the walker gets the same
-  guarantee.
+  refusal as a returned value is deep-frozen where it is built, unless asked
+  for a mutable one, rather than at each call site, so a caller reaching it
+  outside the walker gets the same guarantee.
 
 - **`JsonCodecValue` parse boundary.** The `parseWireText()` helper (invoked by
-  `decode()`) deep-freezes the parsed tree before handing it to the decode
-  walker. This is what makes the decode-side `JsonCodecValue` invariant
-  load-bearing: tag-unwrap and the `/quote` arm can hand back extracted
-  sub-trees directly without further copying because the input tree is already
-  deep-frozen.
+  the JSON decoding act's `encodedFromSerializedForm()`) deep-freezes the parsed
+  tree before handing it to the decode walker. This is what makes the
+  decode-side `JsonCodecValue` invariant load-bearing: tag-unwrap and the
+  `/quote` arm can hand back extracted sub-trees directly without further
+  copying because the input tree is already deep-frozen. For a mutable engine
+  the parse is left unfrozen, which the same shortcut relies on the other way:
+  the tree is freshly built, and shared with nothing.
 
-- **Codec `decode()` implementations honoring `shouldDeepFreeze`.** When a
-  decode call's `LiveEnvironment.shouldDeepFreeze` is `true` (Section 2.5; the
-  safe default), each codec `decode()` implementation produces a deep-frozen
-  result (typically via the instance's own `[DEEP_FREEZE]`, recursing through
-  `deepFreeze()`).
+- **Codec `decode()` implementations freezing what they build.** Unless a
+  decode call passes `mutable` as `true` (Section 2.4), each codec `decode()`
+  implementation freezes the value it builds, and only that; the deep freeze
+  of the whole is the decode walker's, above.
 
 - **`deepFreeze()` at schema merge/combine sites.** See Section 8.2.
 

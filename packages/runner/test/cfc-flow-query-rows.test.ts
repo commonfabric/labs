@@ -1,12 +1,12 @@
 /**
  * What a pattern's computation picks up from the rows of a real query result.
  *
- * A `sqliteQuery` result is a container holding one link per row, and the
- * column labels a db declares ride onto the row documents rather than onto the
- * container: every entry the container carries is `origin: "link"` with a
- * `LinkReference` atom and no confidentiality of its own. So what a reader
- * derives turns on whether it opened a row. The cases distinguish field reads,
- * including iteration, from reading the row count alone.
+ * A `sqliteQuery` result is a container holding one link per row. The column
+ * labels a db declares ride onto the row documents, and the container
+ * declares their join on its membership and on the reference at each slot: a
+ * row document's id is derived from the row's content, so which rows a result
+ * holds is a fact about them (CFC spec §8.17.6). The cases cover field reads,
+ * including iteration, and reading the row count alone.
  *
  * The db is declared and seeded through the same path a connector store
  * reaches a pattern by: per-column `ifc` on the table contract, rows written
@@ -105,7 +105,7 @@ describe("CFC flow labels: the rows of a query result", () => {
   ): Promise<void> => {
     const tx = runtime!.edit();
     tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   };
 
@@ -145,7 +145,7 @@ describe("CFC flow labels: the rows of a query result", () => {
     const resultCell = runtime!.getCell(space, cause, p.resultSchema, tx);
     const result = runtime!.run(tx, p, {}, resultCell);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     await waitForCellValue<QueryState>(
       runtime!,
       // deno-lint-ignore no-explicit-any -- the query's state, as the builtin writes it
@@ -164,7 +164,7 @@ describe("CFC flow labels: the rows of a query result", () => {
     const out = runtime!.getCell(space, `${cause}-probe`, undefined, ptx);
     out.set({ copied: summary } as FabricValue);
     ptx.prepareCfc();
-    expect((await ptx.commit()).ok).toBeDefined();
+    expect((await ptx.commit().settled).ok).toBeDefined();
     return {
       confidentiality: confidentialityOf(out.getAsNormalizedFullLink().id),
       summary,
@@ -250,10 +250,10 @@ describe("CFC flow labels: the rows of a query result", () => {
     expect(confidentiality).toContainEqual(ROW_CLASS);
   });
 
-  it("carries no class into a value read off the row count alone", async () => {
-    // Arm B. The container's own entries carry no confidentiality, so a
-    // computation that never opens a row has nothing to pick up — and how
-    // many rows there are is not a fact about any one of them.
+  it("carries the rows' class into a value read off the row count alone", async () => {
+    // Arm B. A computation that never opens a row reads the container's
+    // length, and the length is an observation of its membership, which
+    // carries the join of the rows' labels.
     startRuntime();
 
     const { confidentiality, summary } = await summaryConfidentiality(
@@ -262,6 +262,6 @@ describe("CFC flow labels: the rows of a query result", () => {
     );
 
     expect(summary).toEqual({ count: 2 });
-    expect(confidentiality).not.toContainEqual(ROW_CLASS);
+    expect(confidentiality).toContainEqual(ROW_CLASS);
   });
 });

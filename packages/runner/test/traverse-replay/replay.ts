@@ -73,7 +73,7 @@ export type ReplayOracle = {
 };
 
 /** 96 bits of a structural hash: ample for regression detection. */
-const truncatedHash = (value: unknown): string =>
+const truncatedHash = (value: FabricValue): string =>
   hashStringOf(value).slice(0, 16);
 
 /**

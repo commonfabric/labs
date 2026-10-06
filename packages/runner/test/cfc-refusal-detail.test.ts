@@ -40,6 +40,7 @@ import {
 } from "./cfc-seed-envelope.ts";
 import {
   type CfcAddress,
+  type CfcConfClause,
   type CfcRefusalDetail,
   type ConsumedAtomSource,
   describeRefusalInputs,
@@ -71,7 +72,7 @@ const addressOf = (id: string, path: readonly string[]): CfcAddress =>
   ({ space, id, scope: "space", path }) as CfcAddress;
 
 const sourceOf = (
-  atom: unknown,
+  atom: CfcConfClause,
   id: string,
   readPath: readonly string[],
   labelPath: readonly string[],
@@ -108,7 +109,7 @@ const seedSecret = async (
       },
     }),
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return id;
 };
 
@@ -137,7 +138,7 @@ const seedRootLabeledDoc = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return id;
 };
 
@@ -362,7 +363,7 @@ describe("refusal-detail", () => {
         resultCell,
       );
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       // The request (if any) fires from a post-commit effect and writes back
       // through its own transactions. `idle()` deliberately does not span that
@@ -388,7 +389,7 @@ describe("refusal-detail", () => {
         resultCell,
       ) as Cell<unknown>;
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await result.pull();
       await runtime.settled();
@@ -490,7 +491,7 @@ describe("refusal-detail", () => {
               .set({ copied: secret });
           }
           tx.prepareCfc();
-          const result = await tx.commit();
+          const result = await tx.commit().settled;
           const stats = runtime.getCfcStats();
           if (mode === "enforce-strict") {
             expect(result.error?.name).toBe("CfcCommitRefusalError");
@@ -557,7 +558,7 @@ describe("refusal-detail", () => {
         derived.set({ copied: `${secret}!` });
         const derivedId = derived.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
 
         expect(result.error?.name).toBe("CfcCommitRefusalError");
         const detail = refusalsOf(result.error).find((entry) =>

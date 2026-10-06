@@ -13,7 +13,7 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
 import {
   type CfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -79,7 +79,7 @@ export async function readRecordList(items: number): Promise<unknown> {
       })),
     );
 
-    await tx.commit();
+    await tx.commit().settled;
   }
 
   const tx = runtime.edit();
@@ -87,7 +87,7 @@ export async function readRecordList(items: number): Promise<unknown> {
 
   // The read is what the transaction was for, so it is settled here rather
   // than left open behind the value, which converts the same either way.
-  await tx.commit();
+  await tx.commit().settled;
 
   return value;
 }
@@ -101,7 +101,9 @@ export function cellCarryingLabelView(
   id: string,
   view: CfcLabelView,
 ): Cell<unknown> {
-  const link = runtime.getCell(space, id).getAsLink();
-  setLinkCfcLabelView(link, view);
+  const link = withLinkCfcLabelView(
+    runtime.getCell(space, id).getAsLink(),
+    view,
+  );
   return runtime.getCellFromLink(link);
 }

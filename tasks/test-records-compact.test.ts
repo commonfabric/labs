@@ -271,7 +271,17 @@ describe("test-records-compact", () => {
 
     it("rejects anything else", () => {
       expect(parseRollupManifest("not json", DAY)).toBeUndefined();
+      // Valid JSON that is not a record of fields. A manifest is read out
+      // of a stored object, so what arrives under its name is whatever
+      // was created there.
+      expect(parseRollupManifest("7", DAY)).toBeUndefined();
+      expect(parseRollupManifest("null", DAY)).toBeUndefined();
       expect(parseRollupManifest(good, "2026/08/12")).toBeUndefined();
+      // A shard entry that is not a name at all.
+      expect(parseRollupManifest(
+        JSON.stringify({ schema: 1, day: DAY, shards: [7] }),
+        DAY,
+      )).toBeUndefined();
       expect(parseRollupManifest(
         JSON.stringify({ schema: 2, day: DAY, shards: [] }),
         DAY,
@@ -303,6 +313,10 @@ describe("test-records-compact", () => {
       const partition = (fields: Record<string, unknown>) =>
         parseRollupPartition(JSON.stringify(fields), DAY);
       expect(parseRollupPartition("not json", DAY)).toBeUndefined();
+      // Valid JSON that is not a record of fields, the way a manifest
+      // that is not one is refused.
+      expect(parseRollupPartition("7", DAY)).toBeUndefined();
+      expect(parseRollupPartition("null", DAY)).toBeUndefined();
       expect(partition({ schema: 2, day: DAY, count: 1 })).toBeUndefined();
       expect(partition({ schema: 1, day: "2026/08/12", count: 1 }))
         .toBeUndefined();
@@ -338,6 +352,22 @@ describe("test-records-compact", () => {
           bucket: "cf-ci-metadata",
           day: DAY,
           fetch: storeFetch(storeOf(DAY, [])),
+        }),
+      ).toBeUndefined();
+    });
+
+    it("gives nothing for a manifest that is there and will not read", async () => {
+      // Read the same way a day that was never compacted reads, so the
+      // reader goes to the raw area rather than to shard names taken from
+      // a body nobody validated. Nothing can replace the object, since the
+      // store's writers hold create alone.
+      const store = storeOf(DAY, []);
+      store.objects[rollupManifestName(DAY)] = "{ not a manifest";
+      expect(
+        await rollupShards({
+          bucket: "cf-ci-metadata",
+          day: DAY,
+          fetch: storeFetch(store),
         }),
       ).toBeUndefined();
     });

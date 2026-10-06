@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
+import type { JSONSchemaObj } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
@@ -23,11 +24,13 @@ import {
   schemaRootKind,
   selectSourceSchema,
 } from "../lib/cell-selection.ts";
+import { externalizeSchema } from "../../runner/src/link-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("cf-piece-get-transform");
 const space = signer.did();
@@ -651,7 +654,7 @@ describe("cf cell get transforms", () => {
       { id: 2, title: "Second", status: "closed" },
       { id: 3, title: "Third", status: "open" },
     ]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const result = await deriveSelectedValue(runtime, space, source, {
       filter: parseSelectionFilter('.status == "open"'),
@@ -695,7 +698,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ title: "visible", note: "hidden" });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -747,7 +750,7 @@ describe("cf cell get transforms", () => {
       status: "open",
       details: unavailableDetails as never,
     }]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const sourceRead = runtime.getCell(
       space,
@@ -841,7 +844,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     container.set({ items: list as never });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, container.key("items"), {
@@ -900,7 +903,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     direct.set({ title: "T1", createdBy: author as never });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -948,7 +951,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     container.set({ topic: target as never });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, container.key("topic"), {
@@ -972,7 +975,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ title: "Visible", hidden: "not returned" });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     let outputCell: Cell<unknown> | undefined;
     expect(
@@ -1037,7 +1040,7 @@ describe("cf cell get transforms", () => {
       first,
       second,
     ]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1074,7 +1077,7 @@ describe("cf cell get transforms", () => {
       author: { name: "Ada", privateEmail: "ada@example.com" },
       ignored: "hidden",
     }]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const result = await deriveSelectedValue(runtime, space, source, {
       projection: await parseSelectionProjection(
@@ -1102,7 +1105,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ id: 1, title: "Visible", subtitle: null });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1176,7 +1179,7 @@ describe("cf cell get transforms", () => {
       topic: { title: "First", body: "not returned" },
       notes: [{ title: "Note", body: "not returned" }],
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1233,7 +1236,7 @@ describe("cf cell get transforms", () => {
     source.set({
       comments: [{ body: "Hello", privateNote: "not returned" }],
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const projection = {
       type: "object",
@@ -1276,7 +1279,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set([{ name: "a", secret: "hidden" }, null]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(await deriveSelectedValue(runtime, space, source, {})).toEqual([
       { name: "a", secret: "hidden" },
@@ -1345,7 +1348,7 @@ describe("cf cell get transforms", () => {
         replies: [{ body: "Nested", privateNote: "also hidden" }],
       }],
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1396,7 +1399,7 @@ describe("cf cell get transforms", () => {
           { profile: null },
         ],
       });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       expect(
         await deriveSelectedValue(runtime, space, source, {
@@ -1431,7 +1434,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set([{ name: "Ada", secret: "hidden" }, null]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1463,7 +1466,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set([{ name: "Ada", secret: "hidden" }]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1512,7 +1515,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ comments: comments as never });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1558,7 +1561,7 @@ describe("cf cell get transforms", () => {
     source.set({
       comments: [{ body: "Visible", privateNote: "hidden" }],
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1581,7 +1584,7 @@ describe("cf cell get transforms", () => {
     source.set({
       comments: [{ body: "Visible", privateNote: "hidden" }],
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1643,7 +1646,7 @@ describe("cf cell get transforms", () => {
       source.set({
         entry: { body: "Visible", privateNote: "hidden" },
       });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       expect(
         await deriveSelectedValue(runtime, space, source, {
@@ -1721,7 +1724,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     composedObject.set({ id: 2 });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, schemaLess, {
@@ -1792,7 +1795,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ hidden: "not returned" });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1819,7 +1822,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     objectSource.set({ id: 1 });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     await expect(deriveSelectedValue(runtime, space, arraySource, {
       projection: await parseSelectionProjection('{"type":"object"}'),
@@ -1851,7 +1854,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set([{ title: "First", body: "not returned" }]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1899,7 +1902,7 @@ describe("cf cell get transforms", () => {
         body: body.getAsLink(),
       })),
     } as never);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const provider = storageManager.open(space);
     const originalSync = provider.sync.bind(provider);
@@ -1942,7 +1945,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ title: "First", body: "not returned" });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     // A root naming `items` is an array projection, so it meets the same
     // root-shape refusal a stated `{"type":"array"}` does. The refusal is what
@@ -1973,7 +1976,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set([{ id: 1 }, { id: 2 }]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, source, {
@@ -1991,7 +1994,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ id: 1 });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     await expect(deriveSelectedValue(runtime, space, source, {
       filter: parseSelectionFilter(".id == 1"),
@@ -2006,7 +2009,7 @@ describe("cf cell get transforms", () => {
       { type: "array", items: { type: "object" } },
       tx,
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(
       await deriveSelectedValue(runtime, space, unsetSource, {
@@ -2031,7 +2034,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     objectSource.set({ id: 1 } as never);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     await expect(deriveSelectedValue(runtime, space, nullSource, {
       filter: parseSelectionFilter("true"),
@@ -2076,7 +2079,7 @@ describe("cf cell get transforms", () => {
       { type: "array", items: { type: "object" } },
       tx,
     );
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     // All three spellings agree, which is the property: an unmarked
     // projection, a concise marker, and the JSON-schema marker each answer
@@ -2115,7 +2118,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set([{ score: true }]);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     await expect(deriveSelectedValue(runtime, space, source, {
       filter: parseSelectionFilter(".score > 1"),
@@ -2134,13 +2137,15 @@ describe("cf cell get transforms", () => {
       setup,
     );
     source.set({ id: 1 });
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const originalEdit = runtime.edit.bind(runtime);
     (runtime as any).edit = () => {
       const tx = originalEdit();
       (tx as any).commit = () =>
-        Promise.resolve({ error: "forced commit failure" });
+        createTransactionCommitReceipt(
+          Promise.resolve({ error: new Error("forced commit failure") }),
+        );
       return tx;
     };
     try {
@@ -2163,7 +2168,7 @@ describe("cf cell get transforms", () => {
       tx,
     );
     source.set({ id: 1 });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     // Count caller-provided setup and refuse runtime-owned setup so neither
     // path can silently introduce a second setup transaction.
@@ -2195,7 +2200,7 @@ describe("cf cell get transforms", () => {
         tx,
       );
       source.set({ id: 1 });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       using injected = failure === "sync"
         ? stub(
@@ -2245,7 +2250,7 @@ describe("cf cell get transforms", () => {
       { id: 1, label: "first", ignored: "not selected" },
       { id: 2, label: "second", ignored: "not selected" },
     ]);
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const originalSynced = storageManager.synced.bind(storageManager);
     let storageWideSyncs = 0;
@@ -2298,7 +2303,7 @@ describe("cf cell get transforms", () => {
       toString: "own",
       alpha: "a",
     });
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     // Open (`additionalProperties: true`) and declaring `label` before `id`:
     // the declaration orders the keys it names, and what the projection
@@ -2337,7 +2342,7 @@ describe("cf cell get transforms", () => {
       { id: 1, label: "first", extra: "kept" },
       { id: 2, label: "second", extra: "kept" },
     ]);
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     // The open × array combination: `projectValue` decomposes the array
     // projection to its item schema, and each element renders its declared
@@ -2366,7 +2371,7 @@ describe("cf cell get transforms", () => {
       setup,
     );
     source.set({ label: "held" });
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     const nodeProperties: Record<string, JSONSchema> = {
       label: { type: "string" },
@@ -2400,7 +2405,7 @@ describe("cf cell get transforms", () => {
       setup,
     );
     source.set({ label: "only" });
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
 
     // `toString` is selected but absent from the value; `in` would have
     // found `Object.prototype.toString` and emitted the native function.
@@ -2412,7 +2417,7 @@ describe("cf cell get transforms", () => {
   });
 
   describe("the labels a selection carries", () => {
-    // The two assertions here read a derived label component back out of
+    // The cases here read a derived label component back out of
     // storage through `derivedConfidentiality`. Persisting flow labels
     // writes that component. It reaches a probe document that declares no
     // ceiling of its own at the enforcement rungs where the writer-fit rule
@@ -2464,7 +2469,7 @@ describe("cf cell get transforms", () => {
       );
       source.set([elementA, elementB]);
       setup.prepareCfc();
-      expect((await setup.commit()).ok).toBeDefined();
+      expect((await setup.commit().settled).ok).toBeDefined();
       const sourceRead = measuring.getCell(
         space,
         "labeled-filter-source",
@@ -2489,7 +2494,7 @@ describe("cf cell get transforms", () => {
       );
       probe.set({ count: kept.length });
       probeTx.prepareCfc();
-      expect((await probeTx.commit()).ok).toBeDefined();
+      expect((await probeTx.commit().settled).ok).toBeDefined();
 
       const labels = derivedConfidentiality(
         probe.getAsNormalizedFullLink().id,
@@ -2520,7 +2525,7 @@ describe("cf cell get transforms", () => {
       );
       source.set([{ id: 7, ignored: "not returned" }]);
       setup.prepareCfc();
-      expect((await setup.commit()).ok).toBeDefined();
+      expect((await setup.commit().settled).ok).toBeDefined();
 
       let outputCell: Cell<unknown> | undefined;
       const result = await deriveSelectedValue(measuring, space, source, {
@@ -2542,11 +2547,75 @@ describe("cf cell get transforms", () => {
       );
       probe.set({ projectedId });
       probeTx.prepareCfc();
-      expect((await probeTx.commit()).ok).toBeDefined();
+      expect((await probeTx.commit().settled).ok).toBeDefined();
 
       expect(derivedConfidentiality(
         probe.getAsNormalizedFullLink().id,
       )).toContain("source-secret");
+    });
+
+    it("derives a projected field's label where the source also states who may write the field", async () => {
+      // The value is stored through a schema stating the label alone, so
+      // nothing here has to be the writer the claim names. The claim reaches
+      // the selection through the schema its source cell is read by.
+      const sourceSchema = (ifc: Record<string, unknown>): JSONSchema => ({
+        type: "object",
+        properties: {
+          id: { type: "number", ifc },
+          ignored: { type: "string" },
+        },
+      });
+      const setup = measuring.edit();
+      measuring.getCell(
+        space,
+        "write-claimed-label-projection-source",
+        sourceSchema({ confidentiality: ["source-secret"] }),
+        setup,
+      ).set({ id: 7, ignored: "not returned" });
+      setup.prepareCfc();
+      expect((await setup.commit().settled).ok).toBeDefined();
+      const source = measuring.getCell(
+        space,
+        "write-claimed-label-projection-source",
+        sourceSchema({
+          confidentiality: ["source-secret"],
+          integrity: ["source-endorsed"],
+          writeAuthorizedBy: ["a-builtin-the-selection-is-not"],
+        }),
+      );
+
+      let outputCell: Cell<unknown> | undefined;
+      const result = await deriveSelectedValue(measuring, space, source, {
+        projection: await parseSelectionProjection("id"),
+      }, {
+        onOutputCell: (cell) => outputCell = cell,
+      });
+      expect(result).toEqual({ id: 7 });
+
+      const probeTx = measuring.edit();
+      const projectedId = outputCell!.key("id").withTx(probeTx).get();
+      const probe = measuring.getCell(
+        space,
+        "write-claimed-projection-label-probe",
+        undefined,
+        probeTx,
+      );
+      probe.set({ projectedId });
+      probeTx.prepareCfc();
+      expect((await probeTx.commit().settled).ok).toBeDefined();
+
+      expect(derivedConfidentiality(
+        probe.getAsNormalizedFullLink().id,
+      )).toContain("source-secret");
+      // The copy states the label its reader is held to and none of the
+      // integrity the source's writer vouched for.
+      const copied = storedLabels(
+        outputCell!.resolveAsCell().getAsNormalizedFullLink(),
+      );
+      expect(copied.flatMap((label) => label.confidentiality ?? []))
+        .toContain("source-secret");
+      expect(copied.flatMap((label) => label.integrity ?? []))
+        .not.toContain("source-endorsed");
     });
   });
 
@@ -2579,7 +2648,7 @@ describe("cf cell get transforms", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
   }
 
   describe("$link projection marker", () => {
@@ -2623,7 +2692,7 @@ describe("cf cell get transforms", () => {
         topic: notes[0].getAsLink(),
         label: "Field notes",
       } as never);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       return {
         board: runtime.getCell(space, `${cause}-board`, boardSchema),
         notes,
@@ -2892,7 +2961,7 @@ describe("cf cell get transforms", () => {
         topic: note.key("content").getAsLink(),
         label: "Field notes",
       } as never);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       expect(
         await deriveSelectedValue(
@@ -3047,7 +3116,7 @@ describe("cf cell get transforms", () => {
         topic: notes[0].getAsLink(),
         label: "Field notes",
       } as never);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       return {
         board: runtime.getCell(space, `${cause}-board`, boardSchema),
         holder,
@@ -3101,7 +3170,7 @@ describe("cf cell get transforms", () => {
         topic: { title: "a", body: "inline" },
         label: "L",
       });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const read = runtime.getCell(space, "link-marker-inline", boardSchema);
       expect(
@@ -3141,7 +3210,7 @@ describe("cf cell get transforms", () => {
         tx,
       );
       board.set({ topic: { title: "a", body: "b" }, label: "L" } as never);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       expect(
         await deriveSelectedValue(
@@ -3410,7 +3479,7 @@ describe("cf cell get transforms", () => {
         source.set({
           comments: [{ body: "Visible", privateNote: "hidden" }],
         });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         // Writing an object into an array gives it a document of its own, and
         // the slot stores a link to it. That link is the deepest one the walk
@@ -3499,7 +3568,7 @@ describe("cf cell get transforms", () => {
           tx,
         );
         source.set({ "user@home": "here", "a@": "there" });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         expect(
           await deriveSelectedValue(
@@ -3567,7 +3636,7 @@ describe("cf cell get transforms", () => {
         { id: 1, title: "First", status: "open" },
         { id: 2, title: "Second", status: "closed" },
       ]);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       expect(
         await deriveSelectedValue(runtime, space, source, {
@@ -3611,7 +3680,7 @@ describe("cf cell get transforms", () => {
         tx,
       );
       objectSource.set({ id: 1 } as never);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       await expect(deriveSelectedValue(runtime, space, objectSource, {
         projection: parseSelectProjection("id"),
@@ -3650,7 +3719,7 @@ describe("cf cell get transforms", () => {
       const tx = host.edit();
       const source = host.getCell(space, cause, itemsSchema, tx);
       source.set(value);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       return source as Cell<unknown>;
     }
 
@@ -3698,7 +3767,7 @@ describe("cf cell get transforms", () => {
         { id: 1, title: "First" },
         { id: 2, title: "Second" },
       ]);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The reused cell answers what the source says now. A repeat that
       // replayed the first read's stored answer would still report one row.
@@ -3758,7 +3827,7 @@ describe("cf cell get transforms", () => {
         tx,
       );
       source.set([{ id: 1, title: "First" }] as never);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const selection = { projection: await parseSelectionProjection("id") };
 
       expect(await deriveSelectedValue(runtime, space, source, selection))
@@ -3766,7 +3835,7 @@ describe("cf cell get transforms", () => {
 
       const flip = runtime.edit();
       source.withTx(flip).set({ id: 9, title: "Ninth" } as never);
-      expect((await flip.commit()).ok).toBeDefined();
+      expect((await flip.commit().settled).ok).toBeDefined();
 
       expect(await deriveSelectedValue(runtime, space, source, selection))
         .toEqual({ id: 9 });
@@ -3801,6 +3870,84 @@ describe("cf cell get transforms", () => {
       }
     });
   });
+
+  describe("a source whose schema states a writer claim by reference", () => {
+    // A stored schema can hold any position as a reference to a
+    // content-addressed document, and the claim a selection must not state
+    // on its own cells is then inside that document.
+
+    const label = { confidentiality: ["source-secret"] };
+    const claimed: JSONSchema = {
+      type: "string",
+      ifc: { ...label, writeAuthorizedBy: ["a-builtin-the-selection-is-not"] },
+    };
+
+    /**
+     * Reads `field` from a stored `{ name, other }` through `schema`. The
+     * value is stored through a schema stating the label alone, so nothing
+     * here has to be the writer the claim names.
+     */
+    async function selectThrough(
+      cause: string,
+      schema: JSONSchema,
+      field: string,
+    ): Promise<unknown> {
+      const setup = runtime.edit();
+      runtime.getCell(space, cause, {
+        type: "object",
+        properties: {
+          name: { type: "string", ifc: label },
+          other: { type: "string" },
+        },
+      }, setup).set({ name: "Ada", other: "not returned" });
+      setup.prepareCfc();
+      expect((await setup.commit().settled).ok).toBeDefined();
+      return await deriveSelectedValue(
+        runtime,
+        space,
+        runtime.getCell(space, cause, schema),
+        { projection: parseSelectProjection(field) },
+      );
+    }
+
+    it("returns a field whose own schema is a reference", async () => {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          name: externalizeSchema(claimed as JSONSchemaObj),
+          other: { type: "string" },
+        },
+      };
+      expect(await selectThrough("claim-by-reference-field", schema, "name"))
+        .toEqual({ name: "Ada" });
+    });
+
+    it("returns a field of a source whose whole schema is a reference", async () => {
+      const schema = externalizeSchema({
+        type: "object",
+        properties: { name: claimed, other: { type: "string" } },
+      });
+      expect(await selectThrough("claim-by-reference-root", schema, "name"))
+        .toEqual({ name: "Ada" });
+    });
+  });
+
+  /** The label of every entry in the label map stored for `document`. */
+  function storedLabels(
+    document: { id: string; scope: string },
+  ): Array<{ confidentiality?: unknown[]; integrity?: unknown[] }> {
+    type StoredEntry = {
+      label: { confidentiality?: unknown[]; integrity?: unknown[] };
+    };
+    const replica = storageManager.open(space).replica as unknown as {
+      getDocument(
+        id: string,
+        scope: string,
+      ): { cfc?: { labelMap?: { entries: StoredEntry[] } } } | undefined;
+    };
+    return replica.getDocument(document.id, document.scope)?.cfc?.labelMap
+      ?.entries.map((entry) => entry.label) ?? [];
+  }
 
   function derivedConfidentiality(id: string): string[] {
     type StoredEntry = {

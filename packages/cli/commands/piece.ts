@@ -29,6 +29,7 @@ import {
   renderCellReference,
 } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/utils/encoding";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {
@@ -84,6 +85,7 @@ import type {
 import {
   applyPieceInput,
   checkPiecePattern,
+  createSpace,
   describePiece,
   type EntryConfig,
   executePieceCallable,
@@ -379,7 +381,7 @@ function fieldSectionLines(
   fields: PieceFieldDescription[],
 ): string[] {
   if (fields.length === 0) return [];
-  const width = Math.max(...fields.map((field) => field.name.length));
+  const width = maxOf(fields.map((field) => field.name.length));
   const lines: string[] = ["", label];
   for (const field of fields) {
     lines.push(`  ${field.name.padEnd(width)}  ${field.type}`);
@@ -448,8 +450,12 @@ export function pieceDescribeLines(
       lines.push(`  ${line}`);
     }
   }
-  lines.push(...fieldSectionLines("STATE", description.state ?? []));
-  lines.push(...fieldSectionLines("INPUTS", description.inputs ?? []));
+  for (const line of fieldSectionLines("STATE", description.state ?? [])) {
+    lines.push(line);
+  }
+  for (const line of fieldSectionLines("INPUTS", description.inputs ?? [])) {
+    lines.push(line);
+  }
   lines.push("", "VERBS");
   if (shown.length === 0) {
     lines.push(
@@ -458,9 +464,9 @@ export function pieceDescribeLines(
         : "  <no callable verbs>",
     );
   } else {
-    lines.push(...describedVerbLines(shown));
+    for (const line of describedVerbLines(shown)) lines.push(line);
   }
-  lines.push(...notes.map((note) => `(${note})`));
+  for (const note of notes) lines.push(`(${note})`);
   return lines;
 }
 
@@ -622,6 +628,7 @@ Source Origin: ${pieceData.patternRef?.source.origin ?? "<unknown>"}
 export function renderPieceSummaries(
   pieces: Array<{
     id: string;
+    reference: string;
     name?: string;
     patternRef?: PiecePatternRef;
     error?: string;
@@ -632,6 +639,7 @@ export function renderPieceSummaries(
     render(
       pieces.map((piece) => ({
         id: piece.id,
+        reference: piece.reference,
         name: piece.name ?? null,
         patternRef: piece.patternRef ?? null,
       })),
@@ -641,11 +649,12 @@ export function renderPieceSummaries(
   }
 
   const rows = [
-    ["ID", "NAME", "PATTERN"],
+    ["ID", "NAME", "PATTERN", "REFERENCE"],
     ...pieces.map((piece) => [
       piece.id,
       piece.error ? `<error: ${piece.error}>` : (piece.name ?? "<unnamed>"),
       piece.error ? "" : formatPatternRef(piece.patternRef),
+      piece.reference,
     ]),
   ];
   if (rows.length > 1) render(Table.from(rows).toString());
@@ -1521,13 +1530,18 @@ TIPS:
  * and the space. `piece` declares them as globals its subcommands inherit;
  * `cf cell get`, `cf cell set` and `cf piece call` have no parent globals, so each carries
  * them as its own.
+ *
+ * A command that acts on no existing space passes `space: false`, and carries
+ * neither the space nor the combined URL that can name one, so that neither
+ * is accepted and then ignored.
  */
 export function targetOptions(
   // deno-lint-ignore no-explicit-any
   cmd: Command<any>,
-  opts: { global: boolean },
+  opts: { global: boolean; space?: boolean },
   // deno-lint-ignore no-explicit-any
 ): Command<any> {
+  const space = opts.space ?? true;
   const option = (flags: string, description: string) =>
     opts.global
       ? cmd.globalOption(flags, description)
@@ -1537,13 +1551,20 @@ export function targetOptions(
       ? cmd.globalEnv(name, description, { prefix: "CF_" })
       : cmd.env(name, description, { prefix: "CF_" });
   option("-q,--quiet", "Suppress hints and next-step suggestions");
-  option("-u,--url <url:string>", "URL representing a host, space, and piece.");
+  if (space) {
+    option(
+      "-u,--url <url:string>",
+      "URL representing a host, space, and piece.",
+    );
+  }
   env("CF_API_URL=<url:string>", "URL of the fabric server instance.");
   option("-a,--api-url <url:string>", "URL of the fabric server instance.");
   env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.");
   option("-i,--identity <path:string>", "Path to an identity keyfile.");
-  env("CF_SPACE=<space:string>", "The space name or DID.");
-  option("-s,--space <space:string>", "The space name or DID");
+  if (space) {
+    env("CF_SPACE=<space:string>", "The space name or DID.");
+    option("-s,--space <space:string>", "The space name or DID");
+  }
   return cmd;
 }
 
@@ -2044,6 +2065,7 @@ function refuseJsonOutput(spelling: string, options: { json?: boolean }): void {
 interface SpaceCommandCLIOptions extends PieceCLIOptions {
   quiet?: boolean;
   reset?: boolean;
+  label?: string;
 }
 
 /**
@@ -2079,7 +2101,7 @@ export function buildRecreateRootCommand(
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
-      "Recreate the root pattern for the explicitly targeted space.",
+      "Recreate the root pattern for the explicitly targeted space. Existing identity Home roots require an in-place source update.",
     )
     .usage(spaceUsage)
     .example(
@@ -2096,8 +2118,8 @@ export function buildRecreateRootCommand(
 }
 
 /**
- * `set-home`, which deploys a custom home-space pattern or resets the
- * identity's home space to the system default.
+ * `set-home`, which initializes an absent identity Home with custom or
+ * system source. Existing Home roots require an in-place source update.
  *
  * `spelling` and `replacedBy` carry the meanings they have in
  * {@link buildRecreateRootCommand}.
@@ -2147,7 +2169,7 @@ export function buildSetHomeCommand(
 
     if (options.reset) {
       await resetHomePattern(baseConfig);
-      render("Reset home pattern to system default.");
+      render("Initialized home with the system default pattern.");
     } else {
       await setHomePattern(baseConfig, localPatternEntry(main!, options));
       render("Deployed custom home pattern.");
@@ -2159,26 +2181,29 @@ export function buildSetHomeCommand(
     // writing is the notice arguing with itself.
     hint(cliText(`NEXT STEPS:
   → Open home in browser: ${baseConfig.apiUrl}
-  → Reset to default:     cf ${replacedBy ?? spelling} --reset ...`));
+  → Update this root:     cf piece setsrc --cell <home-root> ...`));
   };
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
-      "Deploy a custom home-space pattern or reset the identity's home space to system default.",
+      "Initialize an absent identity Home with custom or system source. Update an existing Home in place with piece setsrc.",
     )
     .example(
       cliText(
         `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} ./my-home.tsx`,
       ),
-      `Deploy a custom pattern to the identity's home space.`,
+      `Initialize the identity's Home with a custom pattern.`,
     )
     .example(
       cliText(
         `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} --reset`,
       ),
-      `Reset the identity's home space to the system default pattern.`,
+      `Initialize an absent Home with the system default pattern.`,
     )
-    .option("--reset", "Reset to the system default home pattern")
+    .option(
+      "--reset",
+      "Initialize an absent Home with the system default pattern",
+    )
     .option(
       "--main-export <export:string>",
       'Named export from entry for pattern definition. Defaults to "default".',
@@ -2205,6 +2230,42 @@ export function buildSetHomeCommand(
   return notice.helpPage(
     targetOptions(command.action(notice.action(act)), { global: false }),
   );
+}
+
+/**
+ * `space create`, which creates a space owned by the identity and records it
+ * in the identity's Home space list.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildCreateSpaceCommand(spelling: string): Command<any> {
+  const act = async (options: SpaceCommandCLIOptions) => {
+    refuseJsonOutput(spelling, options);
+    setQuietMode(!!options.quiet);
+    const baseConfig = parseSetHomeOptions(options);
+    const space = await createSpace(baseConfig, options.label);
+    render(space);
+    hint(cliText(`NEXT STEPS:
+  → Open space in browser: ${baseConfig.apiUrl}/${space}
+  → Create a piece in it:  cf piece new --space ${space} ...`));
+  };
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      "Create a new space owned by the identity, with a new random DID, and " +
+        "add it to the identity's Home space list. Opening a name or a DID " +
+        "never creates a space; this is how one comes into being.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} --label "Team lunch"`,
+      ),
+      'Create a space listed as "Team lunch" and print its DID.',
+    )
+    .option(
+      "--label <label:string>",
+      "What the space is called in the Home space list.",
+    );
+  return targetOptions(command.action(act), { global: false, space: false });
 }
 
 /**
@@ -2394,6 +2455,14 @@ export const piece = targetOptions(
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
   .arguments("<main:string>")
+  .option(
+    "--request-key <key:string>",
+    "Reuse a creation request after an uncertain result without creating another piece.",
+  )
+  .option(
+    "--input-file <path:string>",
+    "Initialize the piece with a JSON object from this file before starting or registering it.",
+  )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
     "--main-export <export:string>",
@@ -2614,6 +2683,12 @@ command refuses, since the served update takes no origin.`,
     `Make "${EX_PIECE}" follow the deployment's profile pattern.`,
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
+  .option(
+    "--dangerously-allow-incompatible-schema",
+    "Accept the reviewed incompatibility, including a current pattern " +
+      "that cannot be loaded. Stored-input validation and " +
+      "source-transition protections still apply.",
+  )
   .arguments("<origin:string>")
   .action(async (options, origin) => {
     setQuietMode(!!options.quiet);
@@ -4880,6 +4955,15 @@ export async function newPieceFromCommand(
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const spaceConfig = parseSpaceOptions(options);
+  const input = options.inputFile === undefined
+    ? undefined
+    : JSON.parse(await Deno.readTextFile(options.inputFile));
+  if (
+    options.inputFile !== undefined &&
+    (input === null || typeof input !== "object" || Array.isArray(input))
+  ) {
+    throw new Error("`--input-file` must contain a JSON object.");
+  }
   const pieceId = await (deps.newPiece ?? newPiece)(
     spaceConfig,
     localPatternEntry(main, options),
@@ -4887,6 +4971,10 @@ export async function newPieceFromCommand(
       start: options.start,
       slug: options.slug,
       force: !!options.force,
+      ...(input === undefined ? {} : { input }),
+      ...(options.requestKey === undefined
+        ? {}
+        : { requestKey: options.requestKey }),
     },
   );
   render(pieceId);
@@ -5088,16 +5176,32 @@ export async function followPieceSourceAction(
   const result = await (deps.followPieceSource ?? followPieceSource)(
     config,
     trimmed,
+    {
+      dangerouslyAllowIncompatibleSchema:
+        options.dangerouslyAllowIncompatibleSchema,
+    },
   );
   if (result.status === "incompatible") {
     (deps.printError ?? console.error)(
       `The source ${trimmed} serves now cannot replace what ${config.piece} ` +
         `runs: ${result.message}`,
     );
+    if (!options.dangerouslyAllowIncompatibleSchema) {
+      (deps.printError ?? console.error)(
+        "Review the incompatibility before retrying with " +
+          "--dangerously-allow-incompatible-schema. Existing links may no " +
+          "longer fit the new pattern.",
+      );
+    }
     (deps.setExitCode ?? ((code: number) => {
       Deno.exitCode = code;
     }))(1);
     return;
+  }
+  if (result.acceptedIncompatibility !== undefined) {
+    (deps.render ?? render)(
+      `Accepted incompatibility: ${result.acceptedIncompatibility}`,
+    );
   }
   (deps.render ?? render)(`${config.piece} now follows ${trimmed}`);
   if (result.executionWarning !== undefined) {

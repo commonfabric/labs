@@ -251,6 +251,13 @@ describe("runtimePresets conformance", () => {
     const spaceHostMap = { "did:key:zSpace": "https://host.example" };
     const readCeiling = ["did:key:zOwner", { anyOf: ["a", "b"] }];
     const onPatternInstantiated = () => {};
+    const trustConfig = {
+      delegations: [{
+        delegator: "*",
+        verifier: "did:web:review.example",
+        concepts: ["https://commonfabric.org/cfc/concepts/example"],
+      }],
+    };
 
     it("productionServer", () => {
       const patternApiUrl = new URL("https://public.example/api");
@@ -331,6 +338,7 @@ describe("runtimePresets conformance", () => {
         cfcFlowLabels: "observe",
         cfcReadMaxConfidentiality: readCeiling,
         cfcReadOnExceed: "skip",
+        cfcTrustConfig: trustConfig,
         trustSnapshotProvider,
         telemetry,
         consoleHandler,
@@ -345,6 +353,7 @@ describe("runtimePresets conformance", () => {
         cfcFlowLabels: "observe",
         cfcReadMaxConfidentiality: readCeiling,
         cfcReadOnExceed: "skip",
+        cfcTrustConfig: trustConfig,
         trustSnapshotProvider,
         telemetry,
         consoleHandler,
@@ -393,10 +402,12 @@ describe("runtimePresets conformance", () => {
       const env: Record<string, string> = {
         EXPERIMENTAL_MODERN_CELL_REP: "true",
         EXPERIMENTAL_SERVER_EXECUTION: "true",
+        EXPERIMENTAL_AGENT_BUILTIN: "false",
       };
       expect(experimentalOptionsFromEnv((name) => env[name])).toEqual({
         modernCellRep: true,
         serverExecution: true,
+        agentBuiltin: false,
       });
       expect(experimentalOptionsFromEnv(() => undefined)).toEqual({});
     });
@@ -427,6 +438,7 @@ describe("runtimePresets conformance", () => {
           modernCellRep: true,
           serverExecution: false,
           readerSchemaPrecedence: false,
+          agentBuiltin: false,
         });
       });
 
@@ -438,7 +450,10 @@ describe("runtimePresets conformance", () => {
         } finally {
           warn.restore();
         }
-        expect(parsed).toEqual({ readerSchemaPrecedence: false });
+        expect(parsed).toEqual({
+          readerSchemaPrecedence: false,
+          agentBuiltin: false,
+        });
         expect(warn.calls.length).toBe(1);
         expect(warn.calls[0].args[0]).toContain('modernCellRep=`"yes"`');
       });
@@ -456,6 +471,17 @@ describe("runtimePresets conformance", () => {
         ).toBe(true);
       });
 
+      it("adopts legacy false for an absent agentBuiltin declaration", () => {
+        expect(parseServerExperimentalOptions({}).agentBuiltin).toBe(false);
+        expect(parseServerExperimentalOptions(undefined).agentBuiltin).toBe(
+          false,
+        );
+        expect(
+          parseServerExperimentalOptions({ agentBuiltin: true })
+            .agentBuiltin,
+        ).toBe(true);
+      });
+
       it("adopts nothing for a published null and legacy false for an absent field", () => {
         // toolshed publishes `experimental: null` until a Runtime exists —
         // a NEW server saying "nothing yet", which adopts nothing — while a
@@ -463,8 +489,10 @@ describe("runtimePresets conformance", () => {
         // flag and takes the legacy arm. Malformed declarations adopt
         // nothing.
         expect(parseServerExperimentalOptions(null)).toEqual({});
+        expect(parseServerExperimentalOptions([])).toEqual({});
         expect(parseServerExperimentalOptions(undefined)).toEqual({
           readerSchemaPrecedence: false,
+          agentBuiltin: false,
         });
         expect(parseServerExperimentalOptions("modernCellRep")).toEqual({});
       });
@@ -481,6 +509,7 @@ describe("runtimePresets conformance", () => {
         expect(result).toEqual({
           modernCellRep: true,
           readerSchemaPrecedence: false,
+          agentBuiltin: false,
         });
         expect(warnings.length).toBe(0);
       });
@@ -489,7 +518,10 @@ describe("runtimePresets conformance", () => {
         const { warnings, result } = captureWarnings(() =>
           parseServerExperimentalOptions({ modernCellRep: "true" })
         );
-        expect(result).toEqual({ readerSchemaPrecedence: false });
+        expect(result).toEqual({
+          readerSchemaPrecedence: false,
+          agentBuiltin: false,
+        });
         expect(warnings.length).toBe(1);
         expect(String(warnings[0][0])).toContain("modernCellRep");
       });
@@ -565,6 +597,7 @@ describe("runtimePresets conformance", () => {
           modernCellRep: false,
           serverExecution: true,
           readerSchemaPrecedence: false,
+          agentBuiltin: false,
         });
       });
 
@@ -606,10 +639,22 @@ describe("runtimePresets conformance", () => {
         ).toEqual({});
       });
 
+      it("falls back to the environment when successful JSON is not a meta object", async () => {
+        for (const body of [null, [], "not metadata", 42, true]) {
+          expect(
+            await experimentalOptionsForDeployedClient({
+              apiUrl: new URL("https://deployment.example"),
+              env: (name) =>
+                name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
+              fetch: () => Promise.resolve(metaResponse(body)),
+            }),
+          ).toEqual({ modernCellRep: true });
+        }
+      });
+
       it("falls back to the environment for a server that publishes no posture", async () => {
-        // An older server, whose meta document predates the field. It also
-        // predates readerSchemaPrecedence, so that one flag adopts as the
-        // legacy strict `false` rather than staying unset.
+        // An older server's meta document predates both flags, so each
+        // adopts its legacy `false` rather than staying unset.
         expect(
           await experimentalOptionsForDeployedClient({
             apiUrl: new URL("https://deployment.example"),
@@ -617,7 +662,7 @@ describe("runtimePresets conformance", () => {
             fetch: () =>
               Promise.resolve(metaResponse({ did: "did:key:z", gitSha: null })),
           }),
-        ).toEqual({ readerSchemaPrecedence: false });
+        ).toEqual({ readerSchemaPrecedence: false, agentBuiltin: false });
       });
 
       it("hands the request the caller's cancellation signal", async () => {
@@ -650,6 +695,23 @@ describe("runtimePresets conformance", () => {
           signal: controller.signal,
           fetch: () => Promise.reject(new Error("must not be reached")),
         })).rejects.toThrow("shutting down");
+      });
+
+      it("refuses cancellation that arrives with a successfully decoded response", async () => {
+        for (const body of [{ experimental: {} }, null]) {
+          const controller = new AbortController();
+          const response = new Response();
+          response.json = () => {
+            controller.abort(new Error("decoded startup cancelled"));
+            return Promise.resolve(body);
+          };
+          await expect(experimentalOptionsForDeployedClient({
+            apiUrl: new URL("https://deployment.example"),
+            env: () => undefined,
+            signal: controller.signal,
+            fetch: () => Promise.resolve(response),
+          })).rejects.toThrow("decoded startup cancelled");
+        }
       });
 
       it("throws the abort reason when the body read is cancelled", async () => {
@@ -732,6 +794,7 @@ describe("runtimePresets conformance", () => {
         expect(await result).toEqual({
           serverExecution: true,
           readerSchemaPrecedence: false,
+          agentBuiltin: false,
         });
         expect(warnings.length).toBe(1);
         expect(String(warnings[0][0])).toContain(ADOPT_SERVER_FLAGS_ENV);
@@ -875,7 +938,7 @@ describe("runtimePresets conformance", () => {
       expect(postureOutputs.remoteClient.cfcWriteFloor).toBe("enforce");
     });
 
-    it("ceilings every network-fetch sink public-only and no llm sink", () => {
+    it("ceilings every network-fetch sink and the agent sink public-only, and no llm sink", () => {
       expect(MAX_ENFORCEMENT_SINK_CEILINGS).toEqual({
         fetchBinary: [],
         fetchText: [],
@@ -883,6 +946,7 @@ describe("runtimePresets conformance", () => {
         fetchJsonUnchecked: [],
         fetchProgram: [],
         streamData: [],
+        agent: [],
       });
     });
 

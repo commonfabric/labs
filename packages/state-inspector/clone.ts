@@ -37,11 +37,13 @@ import {
 } from "@commonfabric/memory/v2/storage-path";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { createHasher } from "@commonfabric/content-hash";
+import { isDID } from "@commonfabric/identity/did";
 import { openSpace } from "./db.ts";
 import {
   contentFingerprint,
   diffFingerprints,
   entityAddressKey,
+  FINGERPRINT_SCHEME,
   type FingerprintReport,
   type ScopedEntity,
 } from "./fingerprint.ts";
@@ -63,10 +65,8 @@ const BASELINE = "baseline-entities.json";
 const MARKER = ".cf-clone";
 const PRISTINE_DIR = "pristine";
 
-export interface CloneManifest {
-  /** Schema version of this file, so a future reader can refuse politely. */
-  version: 1;
-
+/** What every manifest version records about a clone. */
+interface CloneManifestFields {
   /** Space DID — the clone keeps it (see the design doc's identity section). */
   space: string;
 
@@ -100,24 +100,44 @@ export interface CloneManifest {
     entities: number;
     maxSeq: number;
   };
+}
 
-  /**
-   * Content fingerprint at clone time, generated cells excluded.
-   *
-   * `unhashable` and `ambiguous` record what the baseline fingerprint could NOT
-   * speak for. Both are absent from the roll-up by construction, so a verdict
-   * computed from the hash alone rests on however much evidence happened to
-   * exist — and without recording the number here, nobody could tell whether
-   * that was all of it. Optional: clones taken before these were recorded
-   * report them as unknown rather than as zero.
-   */
-  fingerprint: {
-    hash: string;
-    entities: number;
-    excludedGenerated: number;
-    unhashable?: number;
-    ambiguous?: number;
+/**
+ * A clone's manifest, as written by {@link createClone} and read by
+ * {@link readManifest}.
+ *
+ * Version 2 records `fingerprint.scheme`, and a version-2 manifest without one
+ * is refused as damaged rather than read as a version-1 clone. A tool that
+ * understands only 1 refuses a version-2 clone before touching it, which is
+ * what keeps an older checkout from resetting or verifying a clone whose
+ * baseline it would fingerprint differently, or with defects since fixed.
+ */
+export type CloneManifest =
+  | CloneManifestFields & { version: 1; fingerprint: ManifestFingerprint }
+  | CloneManifestFields & {
+    version: 2;
+    fingerprint: ManifestFingerprint & {
+      /** The {@link FINGERPRINT_SCHEME} the baseline was computed under. */
+      scheme: number;
+    };
   };
+
+/**
+ * Content fingerprint at clone time, generated cells excluded.
+ *
+ * `unhashable` and `ambiguous` record what the baseline fingerprint could NOT
+ * speak for. Both are absent from the roll-up by construction, so a verdict
+ * computed from the hash alone rests on however much evidence happened to
+ * exist — and without recording the number here, nobody could tell whether
+ * that was all of it. Optional: clones taken before these were recorded
+ * report them as unknown rather than as zero.
+ */
+interface ManifestFingerprint {
+  hash: string;
+  entities: number;
+  excludedGenerated: number;
+  unhashable?: number;
+  ambiguous?: number;
 }
 
 export interface CreateCloneOptions {
@@ -229,7 +249,7 @@ export async function createClone(
   }
 
   const manifest: CloneManifest = {
-    version: 1,
+    version: 2,
     space: options.space,
     source: options.source,
     createdAt: now().toISOString(),
@@ -242,6 +262,7 @@ export async function createClone(
       excludedGenerated: fingerprint.excludedGenerated,
       unhashable: fingerprint.unhashable.length,
       ambiguous: fingerprint.ambiguous.length,
+      scheme: FINGERPRINT_SCHEME,
     },
   };
 
@@ -268,15 +289,44 @@ export async function createClone(
   return manifest;
 }
 
+/** What {@link resetClone} restored, and what it cleared away. */
+export interface ResetResult {
+  manifest: CloneManifest;
+
+  /**
+   * DIDs of the other spaces whose stores the reset removed from beside the
+   * working copy.
+   *
+   * The engine directory holds the cloned space alone when a clone is taken, so
+   * any other store in it was created by the attempt being discarded: a link
+   * into another space makes the server create a store for that space on
+   * demand, and the pass then writes into it. Left in place, the next pass
+   * starts from the last one's state there while `verify` — which reads only
+   * the cloned space — reports the clone pristine.
+   */
+  removedStores: string[];
+
+  /**
+   * File names of the cell-derived databases the reset removed.
+   *
+   * The memory server keeps these beside a file store (`#cellDbPath` in
+   * `packages/memory/v2/server.ts`), for the cloned space as much as for any
+   * other. A snapshot is the space's store alone, so a clone starts with none,
+   * and any present at reset time were written by the attempt.
+   */
+  removedCellDatabases: string[];
+}
+
 /**
- * Restore the working copy from the pristine snapshot.
+ * Restore the working copy from the pristine snapshot, and remove every other
+ * database the attempt created beside it (see {@link ResetResult}).
  *
  * Deletes the `-wal`/`-shm` companions the engine creates on open. Leaving them
  * behind would let a checkpoint replay part of the discarded attempt over the
  * fresh copy — a reset that silently isn't one.
  *
- * REFUSES while a server still has the working copy open, because unlinking a
- * file does not disturb a process that already holds it: the server keeps
+ * REFUSES while a server still has any of those databases open, because unlinking
+ * a file does not disturb a process that already holds it: the server keeps
  * reading and writing the unlinked inode while every new reader — including the
  * `verify` this function's caller runs next — sees the restored one. Pass two of
  * a rehearsal would then run against pass one's state while `cf space verify`
@@ -293,23 +343,76 @@ export async function createClone(
  * restored copy on close). Stopping the server is what makes a reset correct;
  * this makes forgetting to loud rather than silent.
  */
-export async function resetClone(dir: string): Promise<CloneManifest> {
+export async function resetClone(dir: string): Promise<ResetResult> {
   const manifest = await readManifest(dir);
+  // A reset is judged by the verify that follows it, so a clone this tool
+  // cannot verify is refused before anything is restored.
+  assertComparableScheme(dir, manifest);
   const paths = clonePaths(await canonicalPath(dir), manifest.space);
+  // Every database is probed before any is removed, so a refusal leaves the
+  // clone exactly as it was rather than half cleared. The working copy goes
+  // first: it is the store a forgotten server is most likely to hold, and the
+  // one a reset exists for.
   await assertNotInUse(paths.workingPath);
-  // The companions are absent on a clone no engine has opened yet — the normal
-  // case at the start of a rehearsal — so their absence is not an error, while
-  // any OTHER failure must surface rather than leave a half-reset clone.
-  for (const suffix of ["", "-wal", "-shm"]) {
-    const path = `${paths.workingPath}${suffix}`;
-    if (await pathExists(path)) await Deno.remove(path);
+  const { stores, cellDatabases } = await attemptDatabases(paths.workingPath);
+  for (const database of [...stores, ...cellDatabases]) {
+    await assertNotInUse(database);
   }
+  const databases = [paths.workingPath, ...stores, ...cellDatabases];
+  // The companions are absent on a database no engine has opened yet — the
+  // normal case at the start of a rehearsal — so their absence is not an error,
+  // while any OTHER failure must surface rather than leave a half-reset clone.
+  for (const database of databases) {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const path = `${database}${suffix}`;
+      if (await pathExists(path)) await Deno.remove(path);
+    }
+  }
+  await Deno.mkdir(Path.dirname(paths.workingPath), { recursive: true });
   await Deno.copyFile(paths.pristinePath, paths.workingPath);
-  return manifest;
+  return {
+    manifest,
+    removedStores: stores.map((path) => Path.basename(path, ".sqlite")),
+    removedCellDatabases: cellDatabases.map((path) => Path.basename(path)),
+  };
 }
 
 /**
- * Refuse if any process still holds the working copy open, as of now.
+ * The databases beside `workingPath` that a server created during an attempt,
+ * each kind sorted: other spaces' stores, and cell-derived databases.
+ *
+ * Both are recognized by the names the memory server gives them — a space's
+ * store is `<did>.sqlite`, a cell-derived database `cell-<tag>.sqlite` — so
+ * anything else in the directory was put there by someone other than a server,
+ * and is left alone. What counts as a DID is `isDID`'s to say, the same test
+ * that admits a space in the first place, so no store a server could have
+ * created is missed for failing a narrower one.
+ */
+async function attemptDatabases(
+  workingPath: string,
+): Promise<{ stores: string[]; cellDatabases: string[] }> {
+  const dir = Path.dirname(workingPath);
+  const own = Path.basename(workingPath);
+  const stores: string[] = [];
+  const cellDatabases: string[] = [];
+  // A clone whose engine directory was deleted outright has nothing beside the
+  // working copy, and the restore recreates the directory.
+  if (!(await pathExists(dir))) return { stores, cellDatabases };
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.isFile || entry.name === own) continue;
+    if (!entry.name.endsWith(".sqlite")) continue;
+    const stem = entry.name.slice(0, -".sqlite".length);
+    if (isDID(stem)) {
+      stores.push(`${dir}/${entry.name}`);
+    } else if (stem.startsWith("cell-")) {
+      cellDatabases.push(`${dir}/${entry.name}`);
+    }
+  }
+  return { stores: stores.sort(), cellDatabases: cellDatabases.sort() };
+}
+
+/**
+ * Refuse if any process still holds the store at `storePath` open, as of now.
  *
  * "As of now" is the honest scope — see the tripwire note on {@link resetClone}
  * for why nothing stronger is available from outside the server.
@@ -326,17 +429,17 @@ export async function resetClone(dir: string): Promise<CloneManifest> {
  *
  * Locking is the only signal the binding exposes — its errors carry a message
  * and nothing else — so the two outcomes are separated by message. Anything
- * that is not a lock conflict means the working copy could not be opened as a
+ * that is not a lock conflict means the store could not be opened as a
  * database at all, and that is precisely when a reset is the remedy rather than
  * the risk, so it proceeds.
  */
-async function assertNotInUse(workingPath: string): Promise<void> {
+async function assertNotInUse(storePath: string): Promise<void> {
   // Nothing to hold open, and `Database` would otherwise create an empty file
-  // just to probe it. The copy below restores it either way.
-  if (!(await pathExists(workingPath))) return;
+  // just to probe it.
+  if (!(await pathExists(storePath))) return;
   let db: Database;
   try {
-    db = new Database(workingPath, { create: false });
+    db = new Database(storePath, { create: false });
   } catch {
     return; // unopenable — reset is the fix, not the hazard
   }
@@ -348,7 +451,7 @@ async function assertNotInUse(workingPath: string): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if (!/database (is|table is) locked/i.test(message)) return;
     throw new Error(
-      `refusing to reset ${workingPath}: another process still has it open ` +
+      `refusing to reset ${storePath}: another process still has it open ` +
         `(${message}). Unlinking it would not reach that process — it would ` +
         `keep serving the discarded attempt while verify reported the clone ` +
         `pristine. Stop the server first (scripts/stop-local-dev.sh ` +
@@ -463,6 +566,14 @@ export interface VerifyResult {
   uncertainty: {
     unhashable: { manifest: number | null; working: number };
     ambiguous: { manifest: number | null; working: number };
+
+    /**
+     * The fingerprint scheme the baseline was computed under, and this tool's.
+     * A verify under a different recorded scheme is refused, so the two differ
+     * only when the manifest's is null: a clone taken before the scheme was
+     * recorded, whose baseline may have been fingerprinted another way.
+     */
+    scheme: { manifest: number | null; working: number };
   };
 }
 
@@ -487,6 +598,7 @@ export interface VerifyResult {
  */
 export async function verifyClone(dir: string): Promise<VerifyResult> {
   const manifest = await readManifest(dir);
+  assertComparableScheme(dir, manifest);
   const paths = clonePaths(await canonicalPath(dir), manifest.space);
 
   const baselineIntact = await hashFile(paths.pristinePath) ===
@@ -621,6 +733,10 @@ export async function verifyClone(dir: string): Promise<VerifyResult> {
         manifest: manifest.fingerprint.ambiguous ?? null,
         working: fingerprint.ambiguous.length,
       },
+      scheme: {
+        manifest: manifest.version === 2 ? manifest.fingerprint.scheme : null,
+        working: FINGERPRINT_SCHEME,
+      },
     },
   };
 }
@@ -637,13 +753,44 @@ export async function readManifest(dir: string): Promise<CloneManifest> {
     }
     throw error;
   }
-  const parsed = JSON.parse(text) as CloneManifest;
-  if (parsed.version !== 1) {
+  const parsed = JSON.parse(text) as {
+    version?: unknown;
+    fingerprint?: { scheme?: unknown };
+  };
+  if (parsed.version !== 1 && parsed.version !== 2) {
     throw new Error(
-      `${path} has manifest version ${parsed.version}; this tool understands 1.`,
+      `${path} has manifest version ${parsed.version}; this tool understands ` +
+        `1 and 2.`,
     );
   }
-  return parsed;
+  // Version 2 is the version that records the scheme, so one without it is a
+  // damaged manifest. Reading it as a version-1 clone would let a verify
+  // proceed under a scheme nobody can name, which is what the record is for.
+  if (parsed.version === 2 && typeof parsed.fingerprint?.scheme !== "number") {
+    throw new Error(
+      `${path} has manifest version 2 but records no fingerprint scheme, so ` +
+        `the manifest is damaged; clone the snapshot again.`,
+    );
+  }
+  return parsed as CloneManifest;
+}
+
+/**
+ * Refuse a clone whose baseline was fingerprinted under a scheme other than
+ * this tool's, before anything is read or restored. A version-1 clone, which
+ * never recorded its scheme, passes, and its verify reports the scheme as
+ * unknown.
+ */
+function assertComparableScheme(dir: string, manifest: CloneManifest): void {
+  if (manifest.version === 1) return;
+  const scheme = manifest.fingerprint.scheme;
+  if (scheme === FINGERPRINT_SCHEME) return;
+  throw new Error(
+    `${dir}'s baseline was fingerprinted under scheme ${scheme}, and this ` +
+      `tool fingerprints under scheme ${FINGERPRINT_SCHEME}, so the two cannot ` +
+      `be compared. Use a checkout whose \`cf\` fingerprints under scheme ` +
+      `${scheme}, or clone the snapshot again with this one.`,
+  );
 }
 
 function storeCounts(

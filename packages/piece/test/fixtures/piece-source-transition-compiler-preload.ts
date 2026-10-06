@@ -7,6 +7,7 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import { sourceDocKey } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
@@ -30,10 +31,9 @@ const runtime = new Runtime({
 let outcome: { baseline?: string; history?: string[]; error?: string };
 try {
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: storageManager.as as Identity,
-      spaceName:
-        `piece-source-transition-compiler-preload-${crypto.randomUUID()}`,
+      spaceDid: await runtime.createSpace(),
     }),
     runtime,
   );
@@ -77,7 +77,7 @@ try {
     imports: [],
   });
   runtime.prepareTxForCommit(seedTx);
-  const seedCommit = await seedTx.commit();
+  const seedCommit = await seedTx.commit().settled;
   if (seedCommit.error !== undefined) throw seedCommit.error;
 
   const expected = getPieceSourceSnapshot(piece);
@@ -110,7 +110,7 @@ try {
     rawMetaWriteAuthorization,
   );
   runtime.prepareTxForCommit(transitionTx);
-  const transitionCommit = await transitionTx.commit();
+  const transitionCommit = await transitionTx.commit().settled;
   if (transitionCommit.error !== undefined) throw transitionCommit.error;
 
   outcome = {
@@ -126,5 +126,8 @@ try {
 }
 await runtime.dispose();
 await storageManager.close();
-worker.postMessage(outcome);
+worker.postMessage({
+  ...outcome,
+  lifetimeLock: await holdWorkerLifetimeLock(),
+});
 worker.close();

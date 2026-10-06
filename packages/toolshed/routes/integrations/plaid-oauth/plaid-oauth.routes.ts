@@ -15,9 +15,6 @@ export const createLinkToken = createRoute({
           schema: z
             .object({
               authCellId: z.string().describe("The authentication cell ID"),
-              integrationPieceId: z
-                .string()
-                .describe("The piece ID of the integration piece"),
               products: z
                 .array(z.string())
                 .optional()
@@ -36,7 +33,6 @@ export const createLinkToken = createRoute({
             .openapi({
               example: {
                 authCellId: "auth-cell-123",
-                integrationPieceId: "integration-piece-123",
                 products: ["accounts", "transactions"],
                 countryCodes: ["US"],
               },
@@ -82,9 +78,6 @@ export const exchangeToken = createRoute({
             .object({
               publicToken: z.string().describe("The Plaid public token"),
               authCellId: z.string().describe("The authentication cell ID"),
-              integrationPieceId: z
-                .string()
-                .describe("The piece ID of the integration piece"),
               metadata: z
                 .object({
                   institution: z.object({
@@ -108,7 +101,6 @@ export const exchangeToken = createRoute({
               example: {
                 publicToken: "public-sandbox-xxx",
                 authCellId: "auth-cell-123",
-                integrationPieceId: "integration-piece-123",
                 metadata: {
                   institution: {
                     institutionId: "ins_109508",
@@ -319,59 +311,8 @@ export const removeItem = createRoute({
   },
 });
 
-export const backgroundIntegration = createRoute({
-  path: "/api/integrations/plaid-oauth/bg",
-  method: "post",
-  tags,
-  request: {
-    body: {
-      content: {
-        "application/json": {
-          schema: z
-            .object({
-              pieceId: z.string().describe("The piece ID"),
-              space: z.string().describe("The space DID"),
-              integration: z.string().describe("The integration name"),
-            })
-            .openapi({
-              example: {
-                pieceId: "fid1:abc...",
-                space: "did:",
-                integration: "plaid",
-              },
-            }),
-        },
-      },
-    },
-  },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({
-            success: z.boolean(),
-            message: z.string(),
-          }),
-        },
-      },
-      description: "Background integration response",
-    },
-    [HttpStatusCodes.BAD_REQUEST]: {
-      content: {
-        "application/json": {
-          schema: z.object({
-            error: z.string(),
-          }),
-        },
-      },
-      description: "Invalid request parameters",
-    },
-  },
-});
-
 export type CreateLinkTokenRoute = typeof createLinkToken;
 export type ExchangeTokenRoute = typeof exchangeToken;
 export type RefreshAccountsRoute = typeof refreshAccounts;
 export type SyncTransactionsRoute = typeof syncTransactions;
 export type RemoveItemRoute = typeof removeItem;
-export type BackgroundIntegrationRoute = typeof backgroundIntegration;

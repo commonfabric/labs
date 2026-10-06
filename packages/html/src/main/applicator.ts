@@ -46,6 +46,31 @@ function isTextNode(node: unknown): node is Node {
 }
 
 /**
+ * Returns the first object that holds `key` directly, searching `target` and
+ * then each object on its prototype chain in turn. Returns `null` if no object
+ * in the chain holds `key`.
+ */
+function definerOf(target: object | null, key: string): object | null {
+  if (target === null || Object.hasOwn(target, key)) return target;
+  return definerOf(Object.getPrototypeOf(target), key);
+}
+
+/**
+ * Returns a new element in `document` with the tag, the attributes, and the
+ * parsed child markup of `element`. It has none of the state that script or
+ * user input gave `element` or its descendants, such as a text field's typed
+ * text or a list's chosen option.
+ */
+function fromMarkup(element: Element, document: Document): Element {
+  const parsed = document.createElement(element.localName);
+  for (const { name, value } of element.attributes) {
+    parsed.setAttribute(name, value);
+  }
+  parsed.innerHTML = element.innerHTML;
+  return parsed;
+}
+
+/**
  * Options for creating a DOM applicator.
  */
 export interface DomApplicatorOptions {
@@ -94,6 +119,14 @@ export class DomApplicator {
   #pendingChildInserts: PendingChildInsert[] = [];
 
   #rootNodeId: number | null = null;
+
+  /**
+   * Document holding the copies of elements that `#unsetProp()` writes to,
+   * created on first use. No window displays it. An element in it loads no
+   * resources, runs no scripts, and never becomes an instance of a custom
+   * element class.
+   */
+  #probeDocument?: Document;
 
   constructor(options: DomApplicatorOptions) {
     this.#document = options.document ?? globalThis.document;
@@ -330,13 +363,67 @@ export class DomApplicator {
       this.#removeEvent(nodeId, key.slice(2).toLowerCase());
     } else if (key.startsWith("$") && key.length > 1) {
       (node as any)[key.slice(1)] = undefined;
-    } else if (key.startsWith("data-")) {
+    } else if (key.startsWith("data-") || key.startsWith("aria-")) {
       node.removeAttribute(key);
     } else if (key === "style") {
       node.removeAttribute("style");
     } else {
-      (node as any)[key] = undefined;
+      this.#unsetProp(node, key);
     }
+  }
+
+  /**
+   * Helper for `#removeProp()`, which returns `node` to the state it would be
+   * in if `key` had never been set on it.
+   *
+   * For a property that `node` inherits from the browser's own element
+   * classes, this writes the current value to a copy of `node` and records
+   * what that write changes on the copy:
+   *
+   * - When it sets attributes, as `.title` does, this removes those attributes
+   *   from `node`.
+   * - When it replaces the copy's children, as `.textContent` does, `node`
+   *   takes the value that a new, empty element of the same kind has.
+   * - When it changes neither, as with `.value` on a text input, `node` takes
+   *   the value that an element parsed from the markup of `node` has.
+   *
+   * For any other property, such as one a custom element class defines, this
+   * sets the property to `undefined`.
+   */
+  #unsetProp(node: HTMLElement, key: string): void {
+    const probe = this.#builtInProbe(node, key);
+    if (probe === null) {
+      Reflect.set(node, key, undefined);
+      return;
+    }
+    const observer = new MutationObserver(() => {});
+    observer.observe(probe, { attributes: true, childList: true });
+    Reflect.set(probe, key, Reflect.get(node, key));
+    const records = observer.takeRecords();
+    observer.disconnect();
+    const written = records.flatMap((record) => record.attributeName ?? []);
+    if (records.length === 0) {
+      const parsed = fromMarkup(node, probe.ownerDocument);
+      Reflect.set(node, key, Reflect.get(parsed, key));
+    } else if (written.length === 0) {
+      const empty = probe.ownerDocument.createElement(node.localName);
+      Reflect.set(node, key, Reflect.get(empty, key));
+    }
+    for (const name of written) node.removeAttribute(name);
+  }
+
+  /**
+   * Helper for `#unsetProp()`, which returns a copy of `node` in
+   * `#probeDocument` when `node` inherits `key` from the browser's own element
+   * classes. Returns `null` when `node` holds `key` directly, when a custom
+   * element class defines `key`, and when `node` has no property named `key`.
+   */
+  #builtInProbe(node: HTMLElement, key: string): HTMLElement | null {
+    const definer = definerOf(node, key);
+    if (definer === null || definer === node) return null;
+    this.#probeDocument ??= this.#document.implementation.createHTMLDocument();
+    const probe = this.#probeDocument.importNode(node, false);
+    return definerOf(probe, key) === definer ? probe : null;
   }
 
   #setEvent(nodeId: number, eventType: string, handlerId: number): void {
@@ -349,7 +436,7 @@ export class DomApplicator {
 
     // Create new listener
     const listener: EventListener = (event: Event) => {
-      const serialized = serializeEvent(event);
+      const serialized = serializeEvent(event, node);
       const message: DomEventMessage = {
         type: "dom-event",
         handlerId,

@@ -96,7 +96,7 @@ general piece origin model is described in `../piece-source-lifecycle.md`.
 | `ProgramResolver` seam (`main()` / `resolveSource(specifier)`, async) | `packages/js-compiler/program.ts`, `typescript/resolver.ts` | The hook where fabric imports plug in; it discovers only the reachable closure and cannot enumerate unreachable authored files |
 | Authored-import policy | `packages/runner/src/sandbox/runtime-module-policy.ts` | Single dispatch point for `cf:` specifiers |
 | Per-module Merkle identity (source + deps; external deps fold the full specifier string into the leaf: `runtime:${specifier}@${fingerprint}`) | `computeModuleHashes` in `packages/runner/src/harness/module-identity.ts` | Makes pinned specifiers content-derived with **no hashing changes** (§ Snapshot semantics); the primitive includes type edges, but production engine paths currently remove authored `.d.ts` files before identity and persistence |
-| Piece → pattern pointer: `meta("patternIdentity")` = `{ identity, symbol }` (entry-module identity), the sole pointer post-`#4156` (a separate `meta("pattern")` survives only as a builtin parent-backlink) | write `applySetupState`, read `getPatternIdentityRef` in `packages/runner/src/runner.ts` | The terminal pointer hop for an entry import and the route to the retained manifest for a future subpath import |
+| Piece → pattern pointer: `meta("patternIdentity")` = `{ identity, symbol }` (entry-module identity), the sole pointer post-`#4156` | write `applySetupState`, read `getPatternIdentityRef` in `packages/runner/src/runner.ts` | The terminal pointer hop for an entry import and the route to the retained manifest for a future subpath import |
 | Pattern source-of-truth: the `pattern:<identity>` source-doc closure (there is no longer a meta cell; the retired one's `program` was pure duplication of these docs) | `packages/runner/src/compilation-cache/cell-cache.ts` | Recovered via `getPatternSourceProgramByIdentity` / `loadVerifiedSourceClosure` |
 | Compile cache: source docs at cell key **`pattern:<identity>`**, compiled docs at `compileCache:<rtVersion>/<identity>`, each linking its `code` to a `cid:` code document hashed over the string | `packages/runner/src/compilation-cache/cell-cache.ts` (`sourceDocKey`/`compiledDocKey`, `codeLink`) | **The URI a pattern is saved under by hash.** Content-addressed per-module source + compiled storage; imports resolve from and dedupe into it, and identical module text is one code document per space |
 | Slug cells: generic **redirect link to any cell** (`setSlugLink` is target-agnostic; only `resolvePieceAddress` layers a "must be a piece" check) | `packages/piece/src/slugs.ts` | Slugs can name pieces *or* patterns today, mechanically |
@@ -326,13 +326,13 @@ ref     = slug                ; no ":" — isSlugAddress convention
 space   = space-name | space-did ; parser shape; resolution currently requires a DID
 host    = domain[":"port]     ; a toolshed
 pin     = "@" hash            ; selected module identity
-hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash.ts):
+hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash/):
                               ; [A-Za-z0-9_-], case-SENSITIVE, no padding —
                               ; e.g. Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c
 ```
 
 (Hashes are **not** hex: `hashStringOf` emits unprefixed base64url
-(`packages/data-model/src/value-hash.ts`), and entity URIs carry the
+(`packages/data-model/src/value-hash/impl.ts`), and entity URIs carry the
 `fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces. The
 base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
 segment-splitting stay unambiguous.)
@@ -786,11 +786,18 @@ provenance-relevant flow flagged under § Security.
 A runtime is no longer bound to one memory host. `spaceHostMap` seeds known
 routes when storage is constructed. `registerSpaceHost` can register the first
 later hint even when an unseeded space already opened provisionally through the
-default host. These routes contain only an HTTP or HTTPS origin. The home-space
-site table hydrates durable hints into a new runtime. A foreign-host connection
-is an ordinary authenticated memory session. These mechanisms remain interim.
-This design depends only on the property that a space's cells are readable
-wherever the space lives, not on the current map or site-table shape.
+default host. `registerSpaceHostDetailed` applies the same rules and returns the
+reason for a refusal: `known-different-host`, with the host a seed or an
+accepted hint already fixed; `default-route-in-use`, when the space issued a
+stateful operation through the default host: that route stays fixed for the
+session, and the refusal says nothing against the offered host;
+`no-remote-resolution`, from storage that resolves no per-space host; and
+`unspecified`, from storage that gives a verdict alone. A host that is not valid
+throws from both methods. These routes contain only an HTTP or HTTPS origin. The
+home-space site table hydrates durable hints into a new runtime. A foreign-host
+connection is an ordinary authenticated memory session. These mechanisms remain
+interim. This design depends only on the property that a space's cells are
+readable wherever the space lives, not on the current map or site-table shape.
 
 Once a route is in effect, a `cf://host/space/ref` reference resolves exactly
 like a local one. Slug chase, piece metadata, and `pattern:<identity>` source

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run=git
 
 /**
  * The credential-free shipping step every CI test job ends with: gather the
@@ -30,6 +30,11 @@ import {
   serializeRecordLine,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import {
+  commitMoment,
+  parseSeed,
+  SHUFFLE_SEED_VARIABLE,
+} from "@commonfabric/test-support/shuffle";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** One JUnit ingestion request from the command line. */
@@ -50,6 +55,9 @@ export interface JobFacts {
   os: string;
   arch: string;
   denoVersion: string;
+
+  /** The seed the job's test runners shuffled their order by. */
+  shuffleSeed: number;
 }
 
 /** Parses one `kind=...,scope=...[,prefix=...],glob=...` specification. */
@@ -154,7 +162,7 @@ export async function collectRecords(
     for (const warning of spooled.warnings) {
       console.warn(`test records: ${warning}`);
     }
-    records.push(...spooled.records);
+    for (const record of spooled.records) records.push(record);
   }
   for (const spec of options.junit) {
     let matched = 0;
@@ -172,7 +180,9 @@ export async function collectRecords(
             fileByName,
           };
           if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
-          records.push(...ingestJUnit(xml, ingestOptions));
+          for (const record of ingestJUnit(xml, ingestOptions)) {
+            records.push(record);
+          }
         } catch (error) {
           console.warn(
             `test records: ingesting ${entry.path} failed: ${error}`,
@@ -230,6 +240,12 @@ export async function gather(options: GatherOptions): Promise<void> {
     os: Deno.build.os,
     arch: Deno.build.arch,
     denoVersion: Deno.version.deno,
+    // The same answer the job's runners reached: its override where the
+    // job set one, and otherwise the day of the commit it checked out.
+    shuffleSeed: parseSeed(
+      readEnv(SHUFFLE_SEED_VARIABLE, env),
+      commitMoment() ?? new Date(),
+    ),
   };
   if (options.shard !== undefined) facts.shard = options.shard;
   const commit = readEnv("GITHUB_SHA", env);

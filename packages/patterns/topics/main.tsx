@@ -39,6 +39,7 @@ import Topic, {
   type TopicCrossrefRow,
   type TopicMentionable,
   type TopicMentionSource,
+  TOPICS_SCREEN_STYLE,
   TOPICS_THEME,
   type TopicSummary,
   whenLabel,
@@ -93,16 +94,14 @@ export interface TopicDemand extends TopicSummary {
   mentions: unknown[] | Default<[]>;
 
   /** The board's number for the topic, as the topic PUBLISHES it: out of the
-   * number the topic stores, and only while `SHOW_TOPIC_NUMBERS` in
-   * `./topic.tsx` is on. Where a topic publishes one, the card renders it as a
-   * badge and the mention index copies it into the topic's universe row, so
-   * `#42` matches without expanding a topic; where none is published, the card
-   * shows no badge and the row carries the empty string.
+   * number the topic stores. Where a topic publishes one, the card renders it
+   * as a badge and the mention index copies it into the topic's universe row,
+   * so `#42` matches without expanding a topic; where none is published, the
+   * card shows no badge and the row carries the empty string.
    *
-   * The shown number, not the stored one, and the difference is what
-   * `backfillNames` loses while the switch is off: this reads absent for every
-   * topic then, whatever each one holds. `BackfillNamesResult` says what that
-   * costs the step and what an operator reads instead.
+   * This is also the signal `backfillNames` reads to tell a topic that stores
+   * its number from one that does not, which is what lets that step report a
+   * run as finished.
    *
    * OPTIONAL rather than defaulted, which is a fact about the compatibility
    * proof: a defaulted property moves the demand's defaults below an array
@@ -170,10 +169,8 @@ export interface AddTopicResult {
   topic: TopicIndexRow;
 
   /** The number the create allocated, as it was written to the namespace and
-   * passed into the topic. This is the one to read, for two reasons: the row
-   * IS the created topic, so reading a property off it waits for that piece to
-   * materialize, and the topic publishes no `shortName` at all while
-   * `SHOW_TOPIC_NUMBERS` is off. */
+   * passed into the topic. This is the one to read: the row IS the created
+   * topic, so reading its `shortName` waits for that piece to materialize. */
   name: string;
 }
 
@@ -187,38 +184,19 @@ export interface BackfillNamesEvent {
  * What `backfillNames` returns: three lists of numbers in filing order, which
  * together cover every listed topic the run could number.
  *
- * The split follows where each write lands. The namespace is the board's own
- * document, so `assigned` is what this run wrote. A topic's stored number is
- * the topic's own document, which only the topic can write, so the run can
- * report which topics it found already carrying theirs and which it asked —
- * and cannot report the outcome of an asking it just made.
+ * The split follows where each write lands, and three lists is what that
+ * takes. The namespace is the board's own document, so `assigned` is what this
+ * run wrote there. A topic's stored number is the topic's own document, which
+ * only the topic can write, so the run reports which topics it found already
+ * carrying theirs and which it asked — and cannot report the outcome of an
+ * asking it just made. Those last two are a settled fact and an unconfirmed
+ * request, and no one list says both: merge them and a run can no longer say
+ * it is finished, merge either into `assigned` and a write to the topic's
+ * document is reported as a write to the board's.
  *
- * WHILE `SHOW_TOPIC_NUMBERS` IN `./topic.tsx` IS OFF IT CANNOT REPORT THE
- * FIRST OF THOSE EITHER. A topic's published `shortName` is the only signal
- * this step can read, and that switch gates it, so every topic reads as
- * storing no number whatever it holds: `named` comes back empty, `pending`
- * comes back holding every listed topic, and each run asks every topic again.
- * Repeating the step is safe but not idle: a topic that already stores the
- * number declines it and writes nothing further, a topic whose number never
- * landed stores it now — which is what the repeat is for — and the asking is
- * itself a write either way. What the step loses is the ability to say it is
- * finished. Turning the switch on restores the report by itself.
- *
- * What an operator reads instead, until then:
- *
- * - `assigned` still settles the namespace half exactly. Empty means every
- *   listed topic is numbered in `names`, which is what `top/<n>` resolves
- *   through and what `namesTable` lists.
- * - One topic's stored number comes from its own durable input,
- *   `cf cell get --cell <topic> shortName --input`, which no switch gates.
- * - Calling `recordName` on a topic directly reports that topic: `wrote: true`
- *   the first time, `wrote: false` once the number is stored. The board route
- *   cannot report per topic, because a verb's result reaches its caller and
- *   the board sends rather than calls.
- *
- * `skills/topics/references/namespace-backfill.md` is the operator procedure.
- * It says the same, and says per topic what a re-run writes and what one
- * costs on a board the size of the deployed one.
+ * `../collection-naming/README.md` carries the library side: the two backfills,
+ * and the `recordName` contract a member has to provide for `recordNames` to
+ * reach it.
  */
 export interface BackfillNamesResult {
   /** The numbers this run wrote into the namespace; empty when every listed
@@ -541,8 +519,7 @@ export interface TopicsOutput {
    * autocompletes over — what `addTopic` wires into each child. One derived
    * document of copies, each holding its topic as an unread reference and
    * carrying what that topic publishes as its name: the number where a topic
-   * publishes one, and the empty string where it publishes none, which is
-   * every topic while `SHOW_TOPIC_NUMBERS` in `./topic.tsx` is off. Copying
+   * publishes one, and the empty string where it publishes none. Copying
    * rather than listing the topics themselves is what bounds the read: a
    * reader of the universe expands no topic, and a `#42` query finds a member
    * — wherever a name is published to find one by — without expanding one; see
@@ -769,7 +746,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     [NAME]: `Topics (${topicCount})`,
     [UI]: (
       <cf-theme theme={TOPICS_THEME}>
-        <cf-screen>
+        <cf-screen style={TOPICS_SCREEN_STYLE}>
           <cf-vstack slot="header" gap="2" padding="4">
             <cf-hstack justify="between" align="center">
               <cf-vstack gap="0">

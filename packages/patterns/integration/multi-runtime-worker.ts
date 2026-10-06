@@ -11,6 +11,18 @@
  * what the protocol module is for.
  */
 
+import { cfcAtom } from "@commonfabric/api/cfc";
+import {
+  agentQueueIndexCell,
+  AgentRunRecordSchema,
+} from "@commonfabric/runner/agent-run";
+import { patternCoverageCollector } from "@commonfabric/integration/pattern-coverage";
+import {
+  debugVDOMSchema,
+  rendererVDOMSchema,
+} from "@commonfabric/runner/schemas";
+import type { MultiRuntimeCfcOptions } from "./multi-runtime-harness.ts";
+
 import {
   type FabricValue,
   isValidFabricValue,
@@ -21,20 +33,28 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
-import type { Cell } from "@commonfabric/runner";
+import type { Cell, MemorySpace } from "@commonfabric/runner";
 import {
+  cellRuntime,
   convertCellsToLinks,
+  isCell,
   markUiInputBlindWriteTx,
+  parseLink,
   type RuntimeTelemetry,
   type RuntimeTelemetryEvent,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
 } from "@commonfabric/runner";
 import {
+  cfcLabelViewForCell,
   type CfcWriteFloorMode,
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
 import { Identity } from "@commonfabric/identity";
+import {
+  commitSnapshotShare,
+  prepareSnapshotShare,
+} from "@commonfabric/runner/cfc/share-snapshot";
 import {
   initializePiecesController,
   type PieceController,
@@ -42,6 +62,7 @@ import {
 } from "./pieces-controller.ts";
 import {
   type CommitRejection,
+  type PieceAddress,
   type RuntimeDiagnosticsSnapshot,
   type TrustedUiDescriptor,
   type WorkerRequest,
@@ -50,11 +71,23 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { authenticatedOwnerFromLabel } from "../../ui/src/v2/components/cf-owner-view/owner-predicate.ts";
 
 let cc: PiecesController | undefined;
 let piece: PieceController | undefined;
 let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
+let boundedReads = false;
+let watchPaths: readonly (readonly (string | number)[])[] = [[]];
+
+/**
+ * The result cells of the pieces other than the attached one that a command
+ * has addressed, keyed by {@link addressKey}. A piece enters on the first
+ * command to reach it, once it has opened, so one that could not be opened is
+ * opened afresh by the next command naming it.
+ */
+const addressedResults = new Map<string, Cell<any>>();
 
 /**
  * Every commit this runtime had refused since the last `clearRejections`,
@@ -109,6 +142,46 @@ function result(): Cell<any> {
   return resultSchema !== undefined ? raw.asSchema(resultSchema as never) : raw;
 }
 
+/** The key {@link addressedResults} holds the piece at `address` under. */
+function addressKey(address: PieceAddress): string {
+  return `${address.space} ${address.id}`;
+}
+
+/**
+ * The result cell of the piece at `address`, or of the attached piece when
+ * `address` is absent, read through its pattern's result schema either way.
+ * Opening a piece other than the attached one starts it in this runtime, as
+ * the attached piece was started, and syncs it from the space it lives in.
+ * Throws the server's refusal when this runtime's identity may not read that
+ * space, on the first command to address the piece and on every later one.
+ */
+async function resultAt(address: unknown): Promise<Cell<any>> {
+  if (address === undefined) return result();
+  const { id, space } = address as PieceAddress;
+  const key = addressKey({ id, space });
+  const { runtime } = controller();
+  // A denied space reads as one holding no data, or as whatever this runtime
+  // held of it before the denial, so the refusal is asked for rather than
+  // waited on.
+  const refusal = () =>
+    runtime.storageManager.authorizationError?.(space as MemorySpace);
+  let opened = addressedResults.get(key);
+  if (!opened) {
+    try {
+      opened = await controller().getPieceCell(
+        runtime.getCellFromEntityId(space as MemorySpace, id),
+        true,
+      );
+    } catch (error) {
+      throw refusal() ?? error;
+    }
+    addressedResults.set(key, opened);
+  }
+  const refused = refusal();
+  if (refused) throw refused;
+  return opened;
+}
+
 async function idle(): Promise<void> {
   await controller().runtime.idle();
   await controller().synced();
@@ -119,19 +192,31 @@ async function attachPiece(next: PieceController): Promise<void> {
   resultSchema = (await next.getPattern() as { resultSchema?: unknown })
     .resultSchema;
   resultSinkCancel?.();
-  // Keep the result graph subscribed so server pushes reach this runtime.
-  resultSinkCancel = result().sink(() => {});
+  // Keep only the paths the test observes active. A real UI does not read
+  // private sibling outputs merely because they belong to the same piece.
+  const cancels = watchPaths.map((path) => {
+    let cell = result();
+    for (const segment of path) cell = cell.key(segment);
+    return cell.sink(() => {});
+  });
+  resultSinkCancel = () => {
+    for (const cancel of cancels) cancel();
+  };
 }
 
-// Test-only network shaping: wrap this realm's WebSocket so every frame (both
-// directions) is delayed by a fixed amount. Installed BEFORE the runtime opens
-// its storage session, so the whole client stack sees the added latency —
-// the in-process equivalent of the browser-harness WS shim used to reproduce
-// multiplayer contention (starvation / wedge) without a network.
-function installWsDelay(delayMs: number): void {
-  if (delayMs <= 0) return;
+/**
+ * Test-only network shaping: wraps this realm's WebSocket so that every
+ * inbound frame is handed to `inbound` as a thunk that delivers it, and every
+ * outbound frame to `outbound` as a thunk that sends it. Installed BEFORE the
+ * runtime opens its storage session, the shim reaches the whole client stack.
+ * A second install wraps the first.
+ */
+function installWsShim(
+  inbound: (deliver: () => void) => void,
+  outbound: (send: () => void) => void,
+): void {
   const Native = globalThis.WebSocket;
-  const Delayed = function (
+  const Shimmed = function (
     this: WebSocket,
     url: string | URL,
     protocols?: string | string[],
@@ -179,25 +264,63 @@ function installWsDelay(delayMs: number): void {
           fn.call(ws, ev);
         }
       };
-      setTimeout(deliver, delayMs);
+      inbound(deliver);
     });
     const nativeSend = ws.send.bind(ws);
     ws.send = (data: Parameters<WebSocket["send"]>[0]) => {
-      setTimeout(() => {
+      outbound(() => {
         try {
           nativeSend(data);
         } catch {
           // Socket closed while the frame was in flight; same as a network drop.
         }
-      }, delayMs);
+      });
     };
     return ws;
   } as unknown as typeof WebSocket;
-  Delayed.prototype = Native.prototype;
+  Shimmed.prototype = Native.prototype;
   for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] as const) {
-    (Delayed as unknown as Record<string, unknown>)[k] = Native[k];
+    (Shimmed as unknown as Record<string, unknown>)[k] = Native[k];
   }
-  globalThis.WebSocket = Delayed;
+  globalThis.WebSocket = Shimmed;
+}
+
+/**
+ * Delays every storage WebSocket frame, both directions, by `delayMs`: the
+ * in-process equivalent of the browser-harness WS shim used to reproduce
+ * multiplayer contention (starvation / wedge) without a network.
+ */
+function installWsDelay(delayMs: number): void {
+  if (delayMs <= 0) return;
+  installWsShim(
+    (deliver) => setTimeout(deliver, delayMs),
+    (send) => setTimeout(send, delayMs),
+  );
+}
+
+/** Whether `installInboundHold` has run in this realm. */
+let inboundHoldInstalled = false;
+
+/**
+ * Inbound frames held since a `send` with `thenHoldInbound`, in arrival
+ * order, or absent while inbound frames are delivered as they arrive.
+ */
+let heldInbound: (() => void)[] | undefined;
+
+/**
+ * Makes the storage WebSocket's inbound frames holdable: while a hold is in
+ * effect, frames queue in arrival order, and `releaseInbound` delivers them.
+ * Outbound frames are never held.
+ */
+function installInboundHold(): void {
+  inboundHoldInstalled = true;
+  installWsShim(
+    (deliver) => {
+      if (heldInbound !== undefined) heldInbound.push(deliver);
+      else deliver();
+    },
+    (send) => send(),
+  );
 }
 
 // When the harness process runs under Deno's native OpenTelemetry
@@ -237,6 +360,62 @@ async function maybeAttachOtelBridge(identity: Identity): Promise<void> {
   runtime.scheduler.setEventPreflightTelemetryEnabled(true);
 }
 
+/** Finds a rendered native component without inspecting unrelated props. */
+async function elementProps(
+  value: unknown,
+  tag: string,
+): Promise<Cell<unknown> | Record<string, unknown> | undefined> {
+  if (isCell(value)) {
+    await value.pull();
+    return elementProps(value.get(), tag);
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = await elementProps(child, tag);
+      if (found) return found;
+    }
+  }
+  if (value === null || typeof value !== "object") return undefined;
+  const node = value as Record<string, unknown>;
+  if ("$UI" in node) return elementProps(node.$UI, tag);
+  const name = isCell(node.name) ? node.name.get() : node.name;
+  if (name === tag) {
+    return isCell(node.props)
+      ? node.props
+      : node.props as Record<string, unknown>;
+  }
+  return elementProps(node.children, tag);
+}
+
+/** Resolves the cell a native component receives through a renderer binding. */
+function componentBinding(
+  props: Cell<unknown> | Record<string, unknown> | undefined,
+  name: string,
+): unknown {
+  if (!isCell(props)) return props?.[name];
+  const prop = props.key(name).asSchema(true);
+  if (name.startsWith("on")) return prop.resolveAsCell();
+  const raw = props.getRawUntyped({ frozen: false }) as Record<string, unknown>;
+  const link = parseLink(raw[name], props.getAsNormalizedFullLink());
+  return link?.id && link.space
+    ? cellRuntime(props).getCellFromLink(link)
+    : prop.resolveAsCell();
+}
+
+/** The trusted host gesture used after the test confirms the exact preview. */
+function shareClick() {
+  const event = {
+    type: "click",
+    provenance: {
+      origin: "dom",
+      trusted: true,
+      ui: { pattern: "ShareSnapshot" },
+    },
+  };
+  markRendererTrustedEvent(event);
+  return event;
+}
+
 const handlers: Record<
   string,
   (args: Record<string, unknown>) => Promise<FabricValue>
@@ -244,22 +423,31 @@ const handlers: Record<
   async init(
     {
       identity: keyPair,
-      spaceName,
+      spaceDid,
       apiUrl,
       diagnostics,
       recordRejections,
       wsDelayMs,
+      inboundHold,
       cfcWriteFloor,
+      cfc,
+      watchPaths: requestedWatchPaths,
     },
   ) {
     const identity = await Identity.fromKeyPair(
       keyPair as FabricKeyPair,
     );
     if (typeof wsDelayMs === "number") installWsDelay(wsDelayMs);
+    if (inboundHold === true) installInboundHold();
+    boundedReads =
+      (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
+        undefined;
+    if (Array.isArray(requestedWatchPaths)) watchPaths = requestedWatchPaths;
     cc = await initializePiecesController({
       apiUrl: new URL(apiUrl as string),
       identity,
-      space: spaceName as string,
+      space: spaceDid as string,
+      ...(cfc as MultiRuntimeCfcOptions | undefined),
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
@@ -305,7 +493,29 @@ const handlers: Record<
     return {};
   },
 
-  async send({ handler, event, trustedUi, idle: doIdle }) {
+  async send(
+    { handler, event, trustedUi, idle: doIdle, thenHoldInbound, piece },
+  ) {
+    // Refused before the event goes out, rather than after it has committed.
+    // A send waits on the store confirming the event's commit, which a
+    // runtime holding its inbound frames never hears.
+    if (heldInbound !== undefined) {
+      throw new Error(
+        "cannot send while inbound frames are held; `releaseInbound` first",
+      );
+    }
+    if (thenHoldInbound === true && !inboundHoldInstalled) {
+      throw new Error(
+        "inbound frames are not holdable in this session; create it with " +
+          "`inboundHold: true`",
+      );
+    }
+    if (thenHoldInbound === true && doIdle === false) {
+      throw new Error(
+        "`thenHoldInbound` holds after the event has run, which `idle: false` " +
+          "does not wait for",
+      );
+    }
     const trusted = trustedUi as TrustedUiDescriptor | undefined;
     let eventValue: unknown = event ?? {};
     if (trusted) {
@@ -327,7 +537,7 @@ const handlers: Record<
       };
       markRendererTrustedEvent(eventValue);
     }
-    const target = result();
+    const target = await resultAt(piece);
     const { error } = await controller().runtime.editWithRetry(
       (tx) => {
         target.key(handler as never).withTx(tx).send(eventValue as never);
@@ -341,27 +551,34 @@ const handlers: Record<
     // optimistic pipeline (the multiplayer-contention shape) instead of
     // serializing one settled commit per event.
     if (doIdle !== false) await idle();
+    // Held from the turn the event's run here settles: every consequence the
+    // server has yet to send back, the event's own among them, stays out of
+    // this runtime until `releaseInbound`. The event cannot run here with
+    // inbound frames held, since its run waits on the store confirming its
+    // commit, so the hold can only start after it.
+    if (thenHoldInbound === true) heldInbound = [];
     return {};
   },
 
-  // Faithful mirror of RuntimeProcessor.handleCellSet — the path a UI binding
-  // takes for a plain `set`: ONE fresh edit tx, a single un-retried commit,
-  // marked as a blind leaf write. The blind-vs-CAS choice is by METHOD, not value
-  // shape: a `set` is ALWAYS blind (last-write-wins); read-modify-write goes
-  // through `push` (below), which keeps compare-and-set. We await the commit so
-  // the test can observe the outcome (a conflict surfaces as a Result error).
-  // Pass `idle: false` to leave this runtime un-settled, so its local replica
-  // stays stale (own-write-race repro).
-  async set({ path, value, idle: doIdle }) {
+  // One attempt of the write a UI binding's `set` makes, which the runtime
+  // makes through `Runtime.commitUiCellWrite()` with `blind: true`: ONE fresh
+  // edit tx, marked as a blind leaf write, committed once. Unlike that method,
+  // this does not retry a retryable rejection, keeps no supersede lane, and
+  // sets no renderer-input mark, so that a test sees the outcome of the single
+  // commit (a conflict surfaces as a Result error). A `set` is ALWAYS blind
+  // (last-write-wins), whatever the value's shape. Pass `idle: false` to leave
+  // this runtime un-settled, so its local replica stays stale
+  // (own-write-race repro).
+  async set({ path, value, idle: doIdle, piece }) {
     const runtime = controller().runtime;
+    let cell = await resultAt(piece);
     const tx = runtime.edit();
-    let cell = result();
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never) as Cell<any>;
     }
     markUiInputBlindWriteTx(tx);
-    // Mirror handleCellSet: thread the cell's PARENT address as the structural
-    // existence/shape precondition for the blind write.
+    // As `commitUiCellWrite()` does, thread the cell's PARENT address as the
+    // structural existence/shape precondition for the blind write.
     const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
     setBlindStructuralTarget(tx, {
       id: link.id,
@@ -372,7 +589,7 @@ const handlers: Record<
     cell.withTx(tx).set(value as never);
     unmarkUiInputBlindWriteTx(tx);
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit() as {
+    const res = await tx.commit().settled as {
       error?: { name?: string; message?: string };
     };
     if (doIdle !== false) await idle();
@@ -384,15 +601,18 @@ const handlers: Record<
     };
   },
 
-  // Faithful mirror of RuntimeProcessor.handleCellPush / CellHandle.push: a
-  // read-modify-write append, NOT blind — the set's diff read of the current
-  // array is kept as a commit precondition (compare-and-set), so a concurrent
-  // push aborts rather than being clobbered by a blind overwrite. Reads the
-  // current value from the local replica (no pull), mirroring CellHandle.push
-  // reading its cache.
-  async push({ path, value, idle: doIdle }) {
+  // A read-modify-write append, NOT blind: it `set`s the whole new array, and
+  // that set's diff read of the current array is kept as a commit
+  // precondition (compare-and-set), so a concurrent push aborts rather than
+  // being clobbered by a blind overwrite. Reads the current value from the
+  // local replica (no pull). This is not the path a UI's `CellHandle.push()`
+  // takes: that sends only the appended members, and the runtime appends them
+  // through `Cell.push()`'s mergeable operation.
+  // TODO(danfuzz): Append through `Cell.push()` as the runtime does, once the
+  // tests that pin this compare-and-set are reworked to that path.
+  async push({ path, value, idle: doIdle, piece }) {
     const runtime = controller().runtime;
-    let cell = result();
+    let cell = await resultAt(piece);
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never) as Cell<any>;
     }
@@ -401,7 +621,7 @@ const handlers: Record<
     const tx = runtime.edit();
     cell.withTx(tx).set([...current, value] as never);
     runtime.prepareTxForCommit(tx);
-    const res = await tx.commit() as {
+    const res = await tx.commit().settled as {
       error?: { name?: string; message?: string };
     };
     if (doIdle !== false) await idle();
@@ -411,6 +631,200 @@ const handlers: Record<
         ? { name: res.error.name, message: res.error.message }
         : undefined,
     };
+  },
+
+  /** Supplies the reader's test home queue without changing profile selections. */
+  async seedAgentQueue() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const home = runtime.getHomeSpaceCell(tx);
+    const defaultPattern = runtime.getCell(
+      home.space,
+      "multi-runtime-profile-home",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("agentQueue").set({ entries: [] });
+    home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
+      .key("defaultPattern").set(defaultPattern);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    await idle();
+    return true;
+  },
+
+  /** Reads queued requests in this authenticated reader's own test home. */
+  async agentQueue() {
+    const runtime = controller().runtime;
+    const home = runtime.getHomeSpaceCell();
+    const queue = agentQueueIndexCell(runtime, home.space);
+    await queue.pull();
+    const entries = await Promise.all(
+      (queue.get()?.entries ?? []).map(async (entry) => {
+        const run = entry.run.asSchema(AgentRunRecordSchema);
+        await run.pull();
+        const record = run.get();
+        return {
+          state: record.state,
+          inputs: Object.fromEntries(
+            Object.entries(record.inputs).map(([name, cell]) => {
+              const link = cell.resolveAsCell().getAsNormalizedFullLink();
+              return [name, {
+                id: link.id,
+                space: link.space,
+                path: link.path,
+                scope: link.scope,
+              }];
+            }),
+          ),
+        };
+      }),
+    );
+    return { principal: home.space, entries };
+  },
+
+  /** Publishes the owner's explicitly reviewed test shelf to this invitation. */
+  async publishLibrary({ value }) {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const source = runtime.getCell(currentPiece().getCell().space, {
+      testLibrary: crypto.randomUUID(),
+    }, {
+      ifc: { confidentiality: [cfcAtom.user(runtime.userIdentityDID)] },
+    }, tx);
+    source.set(value);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    const prepared = prepareSnapshotShare(source.withTx(undefined), {
+      space: result().key("originator"),
+    });
+    const shared = await commitSnapshotShare(prepared.consent, shareClick());
+    const published = await runtime.commitUiCellWrite(
+      result().key("library", "value"),
+      shared.getAsLink(),
+      { blind: true },
+    );
+    if (published.error) throw published.error;
+    await idle();
+    return { value: prepared.value, audience: prepared.audience };
+  },
+
+  /** Sends through the first rendered matching element's event binding. */
+  async sendRenderedEvent({ tag, event }) {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    const props = await elementProps(view, tag as string);
+    const target = isCell(props)
+      ? props.key(event as string).resolveAsCell()
+      : props?.[event as string];
+    if (!isCell(target)) throw new Error("Rendered event binding is absent");
+    target.send({});
+    await idle();
+    return true;
+  },
+
+  /** Mirrors a reviewed, renderer-trusted snapshot confirmation in this host. */
+  async shareSnapshot() {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    await view.pull();
+    const props = await elementProps(view, "cf-share-snapshot");
+    const source = componentBinding(props, "$source");
+    const audience = componentBinding(props, "$recipient");
+    const recommended = componentBinding(props, "$recommended");
+    const received = componentBinding(props, "$received");
+    const eventBinding = componentBinding(props, "oncf-shared");
+    const onShared = isCell(eventBinding)
+      ? eventBinding.resolveAsCell()
+      : eventBinding;
+    if (
+      !isCell(source) || !isCell(audience) || !isCell(recommended) ||
+      !isCell(received) ||
+      !isCell(onShared)
+    ) {
+      throw new Error(
+        `The native sharing surface requires held source, recipient, append targets, and completion bindings: ${
+          JSON.stringify({
+            found: props !== undefined,
+            source: isCell(source),
+            audience: isCell(audience),
+            recommended: isCell(recommended),
+            received: isCell(received),
+            completion: isCell(onShared),
+          })
+        }`,
+      );
+    }
+    const prepared = prepareSnapshotShare(source, { user: audience }, {
+      recommended,
+      received,
+    });
+    const event = shareClick();
+    const shared = await commitSnapshotShare(prepared.consent, event);
+    onShared.send({});
+    await idle();
+    return {
+      value: prepared.value,
+      audience: prepared.audience,
+      link: shared.getAsNormalizedFullLink(),
+    };
+  },
+
+  /** Tries the removed authored acceptance path with an unreviewed draft. */
+  async spoofShareSnapshot() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("sharedSelection").withTx(tx).set({
+      value: result().key("selected"),
+    });
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit().settled;
+    if (written.error) throw written.error;
+    await idle();
+    const sent = await runtime.editWithRetry((eventTx) => {
+      result().key("acceptShared").withTx(eventTx).send({});
+    });
+    if (sent.error) throw sent.error;
+    await idle();
+    return true;
+  },
+
+  /** Tries a raw inbox append using an unreleased private draft book. */
+  async spoofRawInbox() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("received").withTx(tx).push(
+      result().key("selected").key("books", 0),
+    );
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit().settled;
+    if (written.error) throw written.error;
+    await idle();
+    return true;
+  },
+
+  /** Mirrors the native owner's attested presentation check in this worker. */
+  async syncOwnerView() {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    await view.pull();
+    const props = await elementProps(view, "cf-owner-view");
+    const originator = componentBinding(props, "$originator");
+    const ownerResult = componentBinding(props, "$result");
+    if (!isCell(originator) || !isCell(ownerResult)) {
+      throw new Error(
+        "The native owner view needs held origin and result bindings",
+      );
+    }
+    const isOwner = authenticatedOwnerFromLabel(
+      cfcLabelViewForCell(originator),
+      controller().runtime.userIdentityDID,
+    );
+    const { error } = await controller().runtime.commitUiCellWrite(
+      ownerResult,
+      isOwner,
+      { blind: true },
+    );
+    if (error) throw error;
+    await idle();
+    return isOwner;
   },
 
   /**
@@ -429,13 +843,15 @@ const handlers: Record<
    * it came from, and that annotation is machinery rather than content: the
    * container's own entries are what the reader asked for.
    */
-  async read({ path }) {
-    const target = result();
-    await target.pull();
+  async read({ path, piece }) {
+    const target = await resultAt(piece);
+    if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never);
     }
+    if (boundedReads) cell.get();
+    if (boundedReads) await cell.pull();
     return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
   },
 
@@ -445,14 +861,69 @@ const handlers: Record<
    * for state the declared schema does not carry, e.g. a query result's
    * `requestHash`. Nested links in the raw value stay sigils.
    */
-  async readRaw({ path }) {
-    const target = result();
-    await target.pull();
+  async readRaw({ path, piece }) {
+    const target = await resultAt(piece);
+    if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never);
     }
+    if (boundedReads) cell.get();
+    if (boundedReads) await cell.pull();
     return cell.resolveAsCell().getRaw();
+  },
+
+  /** Selects the held profile as this test reader's home profile. */
+  async selectProfile({ path }) {
+    let profile = result();
+    for (const segment of path as (string | number)[]) {
+      profile = profile.key(segment);
+    }
+    profile = profile.resolveAsCell();
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const home = runtime.getHomeSpaceCell(tx);
+    const defaultPattern = runtime.getCell(
+      home.space,
+      "multi-runtime-profile-home",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("profiles").set([profile]);
+    defaultPattern.key("defaultProfile").set({ profile });
+    home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
+      .key("defaultPattern").set(defaultPattern);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    await idle();
+    return {};
+  },
+
+  /** Reads visible VNode children, following the reader's reactive cell views. */
+  async viewText({ path }) {
+    let cell = result();
+    for (const segment of (path ?? ["$UI"]) as (string | number)[]) {
+      cell = cell.key(segment);
+    }
+    cell = cell.asSchema(debugVDOMSchema);
+    await cell.pull();
+    const text = async (value: unknown): Promise<string> => {
+      if (isCell(value)) {
+        await value.pull();
+        return text(value.get());
+      }
+      if (Array.isArray(value)) {
+        return (await Promise.all(value.map(text))).join(" ");
+      }
+      if (value !== null && typeof value === "object") {
+        if ("$UI" in value) return text(value.$UI);
+        if ("children" in value) return text(value.children);
+      }
+      return typeof value === "string" || typeof value === "number"
+        ? String(value)
+        : "";
+    };
+    return text(cell.get());
   },
 
   /**
@@ -485,13 +956,14 @@ const handlers: Record<
    * the piece result by `path`, resolving links along the way. Lets tests
    * assert the storage addressing (e.g. scope) of pattern state.
    */
-  async link({ path }) {
-    const target = result();
-    await target.pull();
+  async link({ path, piece }) {
+    const target = await resultAt(piece);
+    if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never);
     }
+    if (boundedReads) await cell.sync();
     const resolved = cell.resolveAsCell();
     const link = resolved.getAsNormalizedFullLink();
     return {
@@ -519,7 +991,7 @@ const handlers: Record<
       ok?: { value?: FabricValue };
       error?: { message?: string };
     };
-    await tx.commit();
+    await tx.commit().settled;
     return {
       ok: res.error === undefined,
       value: res.ok?.value,
@@ -527,7 +999,35 @@ const handlers: Record<
     };
   },
 
+  /** Reads an explicit held address with the same stored-label gate as any Cell. */
+  async readAddress({ link }) {
+    const cell = controller().runtime.getCellFromLink(link as never);
+    await cell.sync();
+    return convertCellsToLinks(
+      cell.asSchema({ ifc: { confidentiality: [] } }).get(),
+    );
+  },
+
   async idle() {
+    await idle();
+    return {};
+  },
+
+  // How many events this runtime fired whose consequence has yet to arrive
+  // back here, or `null` where there is no speculation overlay to track them
+  // (the OFF arm). The handler table's contract is asynchronous.
+  // deno-lint-ignore require-await
+  async outstandingEventCount() {
+    return controller().runtime.speculationOverlay?.pendingIntentCount ?? null;
+  },
+
+  // Deliver the frames held since a `send` with `thenHoldInbound`, in arrival
+  // order, and deliver frames as they arrive from here on.
+  async releaseInbound() {
+    const held = heldInbound;
+    if (held === undefined) throw new Error("inbound frames are not held");
+    heldInbound = undefined;
+    for (const deliver of held) deliver();
     await idle();
     return {};
   },
@@ -642,10 +1142,17 @@ const handlers: Record<
     return counts;
   },
 
+  patternCoverage() {
+    return Promise.resolve(
+      patternCoverageCollector()?.toData() as unknown as FabricValue,
+    );
+  },
+
   async dispose() {
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;
+    addressedResults.clear();
     if (cc) {
       await cc.dispose();
       cc = undefined;
@@ -662,7 +1169,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     respond({
       id,
       error: error instanceof Error
-        ? `${error.message}\n${error.stack ?? ""}`
+        ? `${cmd}: ${error.message}\n${
+          (globalThis as { getStackString?: (error: Error) => string })
+            .getStackString?.(error) ?? error.stack ?? ""
+        }`
         : String(error),
     });
 
@@ -695,3 +1205,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     fail,
   );
 };
+
+(self as unknown as Worker).postMessage(
+  {
+    ready: true,
+    lifetimeLock: await holdWorkerLifetimeLock(),
+  } satisfies WorkerResponse,
+);

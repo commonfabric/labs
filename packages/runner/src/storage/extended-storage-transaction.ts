@@ -17,19 +17,21 @@ import {
   SCHEMA_META_MEMBER,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { aclDocId } from "@commonfabric/memory/acl";
-import type {
-  CommitPrecondition,
-  SqliteOperation,
+import {
+  type CommitPrecondition,
+  type SqliteOperation,
+  toDocumentPath,
 } from "@commonfabric/memory/v2";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
-  type AttemptedWrite,
+  canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   CFC_ENFORCEMENT_MODES,
   CFC_ENFORCING_STRICTNESS,
@@ -43,6 +45,7 @@ import {
   cfcDereferenceTracesEqual,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
+  type CfcExternalContentObservation,
   type CfcFlowLabelsMode,
   type CfcGrantWriteInput,
   type CfcLabelMetadataObservation,
@@ -50,6 +53,8 @@ import {
   cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
+  type CfcRecordAddress,
+  cfcRecordPath,
   CfcRefusalDetail,
   type CfcTriggerReadGating,
   type CfcTrustConfig,
@@ -69,14 +74,12 @@ import {
   DEFAULT_CFC_WRITE_FLOOR_MODE,
   externalIngestStamp,
   flowLabelWorkExists,
-  flowReadExcluded,
   gatedSinkRequestExists,
   type ImplementationIdentity,
   isCfcEnforcementMode,
   type OrderedWriteAttempt,
   type PolicySnapshot,
   type PostCommitSideEffect,
-  prepareBoundaryCommit,
   prepareCfcGrantWrite,
   preparedDigestFor,
   type PreparedDigestInput,
@@ -86,6 +89,7 @@ import {
   type TrustSnapshot,
   type WritePolicyInput,
 } from "../cfc/mod.ts";
+import { prepareBoundaryCommitSteps } from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
 import {
   runtimeOwnedStoreKey,
@@ -114,11 +118,20 @@ import {
   RESERVED_SIBLINGS,
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
+import {
+  isRuntimeSecretId,
+  readRuntimeSecret,
+  RUNTIME_SECRET_SCHEMA,
+  RUNTIME_SECRET_WRITER,
+  runtimeSecretLink,
+} from "../runtime-secret.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
+import { CooperativeYield } from "../scheduler/cooperative-yield.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import { lookupSchemaDocument } from "../schema-registry.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import type { URI } from "../sigil-types.ts";
+import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import {
   type CommitError,
   createReadOnlyTransactionError,
@@ -141,6 +154,7 @@ import {
   type StorageTransactionStatus,
   toThrowable,
   type TransactionCommitOptions,
+  type TransactionCommitReceipt,
   type TransactionReactivityLog,
   type TransactionSealDestination,
   type TransactionWriteDetail,
@@ -174,6 +188,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "./transaction-inspection.ts";
 
 /**
@@ -246,7 +261,19 @@ const reservedSiblingCarriedForward = (
   typeof carried !== "function" &&
   valueEqual(carried as FabricValue, stored as FabricValue);
 
-type CfcInstrumentationHooks = {
+/**
+ * What a transaction reports its CFC work through, and the runtime services it
+ * asks for. A hook that acts on a transaction is handed it, so one object can
+ * serve every transaction a runtime opens.
+ */
+export type CfcInstrumentationHooks = {
+  /** The runtime's ceiling check, applied before a payload leaves a read. */
+  checkReadCeiling?(
+    tx: IExtendedStorageTransaction,
+    address: IMemorySpaceAddress,
+    options?: IReadOptions,
+  ): void;
+
   onRelevantTx?(): void;
 
   /** Stage C tuning T1: one flow-label probe was evaluated (`computed`) or
@@ -318,7 +345,7 @@ type CfcInstrumentationHooks = {
 
 // Read-only view of the transaction's CFC state, returned by getCfcState().
 // `Readonly<CfcTxState>` is compile-time only, so handing out the live state
-// object would let handler code reaching the tx via `cell.tx` flip
+// object would let code holding the transaction flip
 // `triggerReadGating` past its setter pin, clear `relevant`, forge
 // `prepare.status`, or truncate `triggerReads`/`writePolicyInputs` — every
 // enforcement decision reads this state (cubic/codex review on #4517).
@@ -425,6 +452,26 @@ export const readOnlyCfcView = <T>(value: T): T => {
   return view as T;
 };
 
+// The transaction's trust state — who is acting, and which implementation is
+// writing — is what the CFC gates decide on, so no method sets it, and code
+// holding a transaction cannot change whose writes it carries. The classes
+// below hand these module-private functions their private fields, and the
+// exported `setCfcTrustSnapshot` and `setCfcImplementationIdentity` are the
+// only way in: a module the sandbox does not let pattern code import, and a
+// brand check no object pattern code builds or reshapes can pass.
+let assignCfcTrustSnapshot: (
+  tx: object,
+  snapshot: TrustSnapshot | undefined,
+) => boolean;
+let assignCfcImplementationIdentity: (
+  tx: object,
+  identity: ImplementationIdentity | undefined,
+) => boolean;
+let unwrapTransaction: (
+  tx: object,
+) => IExtendedStorageTransaction | undefined;
+let isExtendedStorageTransaction: (value: object) => boolean;
+
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #commitCallbacks = new Set<
     (
@@ -438,7 +485,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * Verdict callbacks, which fire when the commit's fate is sealed — the accept
    * verdict or the rejection receipt — _before_ the coverage and read-repair
-   * waits the commit promise (and commit callbacks) additionally sit out.
+   * waits `commit().settled` (and commit callbacks) additionally sit out.
    */
   #verdictCallbacks = new Set<
     (
@@ -472,7 +519,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * The verdict-time effect run of the current `commit()`: verdict callbacks
    * plus the CFC outbox flush. What `settled()`-style barriers wait on in place
-   * of the commit promise, whose resolution additionally waits for view
+   * of commit settlement, which additionally waits for view
    * coverage.
    */
   #postCommitEffects?: Promise<void>;
@@ -487,6 +534,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   readonly #verdict = Promise.withResolvers<Result<Unit, CommitError>>();
 
+  #storageReceipt?: TransactionCommitReceipt;
+
   #commitPreconditions = new Map<MemorySpace, CommitPrecondition[]>();
   #createOnlyMarks = new Map<MemorySpace, Set<string>>();
   #outboxIdempotencyKeys = new Set<string>();
@@ -496,9 +545,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * The CFC state. ECMAScript-private (`#`), like `#privilegedSystemWriteDepth`
    * below: the CFC state is the enforcement substrate (dials, pins, relevance,
-   * trigger reads, policy inputs, prepare status), and handler code reaching
-   * the tx via `(cell.tx as any)` must not be able to grab the raw object and
-   * mutate it. Reads go through `getCfcState()`, which returns a read-only view
+   * trigger reads, policy inputs, prepare status), and code holding the
+   * transaction must not be able to grab the raw object and mutate it. Reads go through `getCfcState()`, which returns a read-only view
    * (see `readOnlyCfcView`).
    */
   #cfcState: CfcTxState = {
@@ -515,10 +563,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
+    assertedValueRoots: [],
     triggerReads: [],
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
+    attributedInitialization: false,
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -526,6 +576,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     consultedGrants: [],
     consultedPolicyManifests: [],
     labelMetadataObservations: [],
+    externalContentObservations: [],
     refusalDetails: [],
   };
 
@@ -540,8 +591,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * Highest enforcing strictness ever set on this tx; the mode cannot drop
    * below it. This pin and the ones below are ECMAScript-private for the same
-   * reason as `#cfcState`: a TS-`private` pin could be cleared via
-   * `(cell.tx as any)` and the dial then legally weakened through its setter.
+   * reason as `#cfcState`: a TS-`private` pin could be cleared through a cast
+   * and the dial then legally weakened through its setter.
    */
   #cfcEnforcementFloor = 0;
 
@@ -563,8 +614,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Write-once pin for the deployment policy snapshot. Distinct from the slot's
    * value being defined: the `Runtime` configures _many_ tx with _no_ policies
    * (`undefined`), and that no-policies state must be just as write-once as a
-   * configured one — otherwise handler code reaching the concrete tx via
-   * `(cell.tx as any)` could install an attacker-supplied snapshot after the
+   * configured one — otherwise code holding the transaction could install
+   * an attacker-supplied snapshot after the
    * `Runtime`'s `undefined` call left the slot open. Set on the _first_ call
    * (always the `Runtime`'s, in `edit()`), regardless of value.
    */
@@ -574,9 +625,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Write-once pin for the deployment trust config. Distinct from the slot's
    * value being defined: the `Runtime` configures many tx with _no_ trust
    * config (`undefined`), and that state (no config; every concept guard fails
-   * closed) must be just as write-once as a configured one. Otherwise handler
-   * code reaching the concrete tx via `(cell.tx as any)` could install an
-   * arbitrary config before the concept guards read it. Set on the _first_ call
+   * closed) must be just as write-once as a configured one. Otherwise code
+   * holding the transaction could install an arbitrary config before the
+   * concept guards read it. Set on the _first_ call
    * (always the `Runtime`'s, in `edit()`), regardless of value.
    */
   #cfcTrustConfigPinned = false;
@@ -587,9 +638,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Depth of the runtime's privileged system-write scope. The runtime's own
    * label/schema persistence (`prepareBoundaryCommit()`) runs inside it; any
    * write to a protected system path outside it is recorded as unprivileged
-   * (S18). ECMAScript-private (`#`) so handler code reaching `cell.tx` cannot
-   * enter the scope via `(cell.tx as any)` — `as any` cannot touch a `#private`
-   * member.
+   * (S18). ECMAScript-private (`#`) so code holding the transaction cannot
+   * enter the scope — a cast cannot touch a `#private` member.
    */
   #privilegedSystemWriteDepth = 0;
 
@@ -624,12 +674,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #runtimeOwnedStores: RuntimeOwnedStores | undefined;
 
   /**
-   * Per-transaction cache of `Cell.get()` results, keyed by stable cell view.
+   * Per-transaction cache of `Cell.get()` results, keyed by stable cell view
+   * and ambient read metadata. A hit never crosses read classifications.
    * Replaced wholesale on any write (see `#invalidateReadResultCache()`), so a
    * hit is only ever served when nothing has been written since the cached
-   * read. This is a `Map` rather than a `WeakMap`, but the transaction owns it
-   * and writes drop it wholesale, bounding retention to reads-without-writes in
-   * one tx.
+   * read. This is a `Map` rather than a `WeakMap`, but the transaction owns it,
+   * and writes and settling drop it wholesale, bounding retention to
+   * reads-without-writes in one open tx.
    */
   #readResultCache = new Map<string, Map<string, { value: unknown }>>();
 
@@ -645,6 +696,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * `getSnapshotMemo()` picks between them. Dropped on any write alongside
    * the read cache above, unless a reader holds the instant it describes, in
    * which case `#retireSnapshotMemos()` files it under that reader's epoch.
+   * Dropped as well when the transaction settles.
    */
   #snapshotMemo = new Map<string, unknown>();
 
@@ -671,8 +723,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * the same shape as `#cfcPolicySnapshotPinned`: the `Runtime` configures
    * every tx exactly once in `edit()` (usually with `undefined` — every client,
    * and the server-execution OFF arm always), and that state must be just as
-   * write-once as an installed destination, or handler code reaching the
-   * concrete tx via `(cell.tx as any)` could hijack the commit path.
+   * write-once as an installed destination, or code holding the transaction
+   * could hijack the commit path.
    */
   #sealDestination: TransactionSealDestination | undefined;
 
@@ -711,8 +763,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * The prepared-digest input and epoch-bound computation, which tests and
-   * benchmarks drive directly to check binding and cache reuse, and the
-   * privileged write a fixture installs stored runtime state with.
+   * benchmarks drive directly to check binding and cache reuse, the
+   * privileged write a fixture installs stored runtime state with, and the
+   * instrumentation hooks the transaction was opened with.
    *
    * `privilegedSystemWrite()` runs one write inside the privileged
    * persistence scope, so it lands a document's reserved siblings the way
@@ -730,8 +783,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       value: FabricValue,
       options?: IWriteOptions,
     ): void;
+    readonly cfcInstrumentation: CfcInstrumentationHooks;
   } {
     return {
+      cfcInstrumentation: this.#cfcInstrumentation,
       buildPreparedDigestInput: () => this.#buildPreparedDigestInput(),
       preparedDigest: () => this.#preparedDigest(),
       privilegedSystemWrite: (address, value, options) =>
@@ -764,10 +819,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
-   * One-shot configuration of the seal destination, called by the Runtime
-   * in edit() for every transaction it creates — with `undefined` on every
-   * client and in the OFF arm, and with the wave accumulator's destination
-   * on a serving runtime under EXPERIMENTAL_SERVER_EXECUTION.
+   * Pins the destination once at transaction creation: a serving-wave
+   * accumulator, a client speculation overlay, or direct storage when absent.
    */
   configureSealDestination(
     destination: TransactionSealDestination | undefined,
@@ -901,8 +954,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // The floor below is a comparison of ranks, and `cfcEnforcementStrictness`
     // ranks the members of `CFC_ENFORCEMENT_MODES` and nothing else. A name it
     // cannot rank is refused here, so the comparison always has two ranks to
-    // compare. The surface is public and cell.tx is reachable, so the argument
-    // arrives from code the type checker may never have seen.
+    // compare. The surface is public, so the argument may arrive from code the
+    // type checker has never seen.
     if (!isCfcEnforcementMode(mode)) {
       throw new Error(
         `CFC enforcement mode ${String(mode)} is not one of ` +
@@ -911,8 +964,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     // Enforcement may be raised but never weakened below the highest enforcing
     // level set on this transaction (audit S3). The control surface is on the
-    // public transaction interface and cell.tx is reachable, so this prevents
-    // code holding a Cell from disabling enforcement mid-transaction to commit a
+    // public transaction interface, so this prevents code holding the
+    // transaction from disabling enforcement mid-transaction to commit a
     // policy violation. `disabled`/`observe` impose no floor (neither enforces),
     // so they may still be juggled before any enforcing mode is set.
     if (cfcEnforcementStrictness(mode) < this.#cfcEnforcementFloor) {
@@ -1113,18 +1166,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.invalidateCfc("trigger-reads-after-prepare");
     }
     for (const read of reads) {
-      // Runtime-surface exclusion keys on the RAW notification path; this
-      // is the only point where it still exists (storage below holds the
-      // canonical form, where a user `value.source` is indistinguishable
-      // from the raw `["source"]` surface).
-      if (flowReadExcluded(read.id, read.path)) {
+      if (read.id.startsWith("cid:")) {
+        continue;
+      }
+      // A notification names a document-rooted address. A change to one of
+      // the document's own members, such as `source`, changed no payload, so
+      // no payload path is a trigger read for it (spec §4.6.5).
+      const path = canonicalizeDocumentPath(toDocumentPath(read.path));
+      if (path === undefined) {
         continue;
       }
       this.#cfcState.triggerReads.push(deepFreeze({
         space: read.space,
         id: read.id,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeLogicalPath(read.path) as string[],
+        path,
       }));
     }
   }
@@ -1150,8 +1206,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Write-once, off the public tx interface, deep-frozen on store. The pin (not
    * the slot value) is what enforces write-once: the _first_ call — always the
    * `Runtime`'s, even when it configures no policies (`undefined`) — pins the
-   * slot, so a later `(cell.tx as any).setCfcPolicySnapshot(attackerSnapshot)`
-   * is ignored. (`buildCfcPolicySnapshot()` already froze a configured
+   * slot, so a later `setCfcPolicySnapshot(attackerSnapshot)` is ignored. (`buildCfcPolicySnapshot()` already froze a configured
    * snapshot; this `deepFreeze()` is the cheap short-circuiting backstop for
    * any other caller.)
    */
@@ -1168,8 +1223,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Sets the deployment trust config for concept-guard satisfaction. The pin
    * (not the slot value) enforces write-once: the _first_ call — always the
    * `Runtime`'s, even when it configures no trust (`undefined`) — pins the
-   * slot, so a later `(cell.tx as any).setCfcTrustConfig(attackerConfig)` is
-   * ignored and the state where there is no config and concept guards fail
+   * slot, so a later `setCfcTrustConfig(attackerConfig)` is ignored and the state where there is no config and concept guards fail
    * closed holds.
    */
   setCfcTrustConfig(config: CfcTrustConfig | undefined): void {
@@ -1222,13 +1276,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * Runs `fn` with writes to protected system paths (a document's `["cfc"]`
-   * label-map) permitted. The runtime's own label/schema persistence in
-   * `prepareBoundaryCommit()` is the only legitimate such writer;
-   * `prepareCfc()` wraps that call in this scope via `this`. ECMAScript-private
-   * (`#`) and absent from `IExtendedStorageTransaction`, so handler code
-   * reaching `cell.tx` cannot enter the scope —
-   * `(cell.tx as any).#runPrivilegedSystemWrite` is a `TypeError`, not a bypass
-   * (audit S18). A fixture that needs stored `["cfc"]` metadata reaches one
+   * label-map) permitted. Boundary preparation runs each synchronous step
+   * inside this scope and leaves it before a cooperative yield. The method is
+   * ECMAScript-private (`#`) and absent from `IExtendedStorageTransaction`.
+   * Code holding the transaction cannot enter the scope — calling
+   * `#runPrivilegedSystemWrite` from outside the class is a `TypeError`, not a
+   * bypass (audit S18). A fixture that needs stored `["cfc"]` metadata reaches one
    * write inside this scope through `accessForTestingOnly`, which names what
    * it is for.
    */
@@ -1268,6 +1321,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         `cfcPolicyManifest: ${address.id} is immutable reserved policy state`,
       );
     }
+    if (isRuntimeSecretId(address.id)) {
+      throw new Error(
+        `${address.id} is a runtime secret: ensureRuntimeSecret() mints it, ` +
+          `and nothing else writes it.`,
+      );
+    }
     // The raw meta seam. A meta field is a document-root sibling of `value`:
     // `patternIdentity` and `pattern` name the program a piece runs,
     // `argument`, `result` and `internal` name the cells it is wired to,
@@ -1297,11 +1356,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // journal says so. The flow join keys on that: a recursive read
       // consumes every label-map entry at or below the path it names, and a
       // `nonRecursive` one consumes only the entry at that path. So this read
-      // consumes the document's root entry and nothing else. A read of a meta
-      // member instead consumes the user data an entry of the same name
-      // covers, because canonicalization strips a leading `value` and a
-      // document with a user field named `slug` labels it at the same logical
-      // path the raw `["slug"]` member reads.
+      // consumes the document's root entry and nothing else.
       //
       // `allowMutableTransactionRead` takes the stored value as it stands
       // rather than an isolated copy of it. A guard that tests each meta key
@@ -1449,14 +1504,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // `ignoreReadForCommit` keeps them out of the conflict set, so a blind
     // root write stays blind rather than becoming a read-modify-write that
     // loses the race against any advance of the document it replaces. They
-    // name a member rather than the document root, which the meta seam's guard
-    // cannot do: the logical path a raw meta member reads is the one a user
-    // field of the same name is labeled at, so reading `["slug"]` would
-    // consume `value.slug`. A reserved sibling's raw path is excluded from the
-    // flow join by name, so reading it consumes nothing whatever a user field
-    // called `cfc` holds. `internalVerifierRead` says what the read is: the
-    // runtime resolving a label, the same mark `readStoredCfcMetadata()`
-    // carries.
+    // name a member rather than the document root, and a read of one of the
+    // document's own members observes no payload, so it consumes nothing
+    // whatever a user field called `cfc` holds. `internalVerifierRead` says
+    // what the read is: the runtime resolving a label, the same mark
+    // `readStoredCfcMetadata()` carries.
     const envelope = isObjectOrArray(value)
       ? value as { readonly [key in ReservedSibling]?: FabricValue }
       : undefined;
@@ -1650,6 +1702,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // boundary would hand a materialized read's value to a current one, or the
     // reverse.
     if (this.#readEpoch !== undefined) return undefined;
+    // Cell traversals, like link-resolution memos, must stay within their
+    // ambient read classification; a scheduler probe cannot authorize a get.
+    variant = `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
     const cached = this.#readResultCache.get(key)?.get(variant);
     if (cached === undefined) {
       this.#readResultCacheMisses++;
@@ -1665,6 +1722,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value: unknown,
   ): void {
     if (this.#readEpoch !== undefined) return;
+    variant = `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
     let byVariant = this.#readResultCache.get(key);
     if (byVariant === undefined) {
       byVariant = new Map();
@@ -1672,6 +1732,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     byVariant.set(variant, { value });
     this.#readResultCacheSets++;
+  }
+
+  resetCurrentReadMemoization(): void {
+    this.#invalidateReadResultCache();
   }
 
   getSnapshotMemo(): Map<string, unknown> | undefined {
@@ -1841,27 +1905,71 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   recordCfcStructureContainer(address: CfcAddress): void {
+    // A container decides where preparation stamps membership, so recording
+    // one retires the digest memo and aborts a preparation it interrupts.
+    this.#noteCfcActivity();
     this.#cfcState.structureContainers.push(deepFreeze(address));
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("structure-container-added");
     }
   }
 
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void {
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
+  ): void {
+    // A root widens where a flow stamp lands, so a record without the
+    // runtime's mark is dropped: a root named by other code holding this
+    // transaction could re-stamp values it never wrote.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    // A root decides where preparation stamps the writer's flow label, so
+    // recording one retires the digest memo and aborts a preparation it
+    // interrupts.
     this.#noteCfcActivity();
-    this.#cfcState.trustSnapshot = deepFreeze(snapshot);
+    this.#cfcState.assertedValueRoots.push(deepFreeze({
+      address,
+      identity: this.#cfcState.implementationIdentity,
+      ...(reference !== undefined ? { reference } : {}),
+    }));
     if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc("trust-snapshot-changed");
+      this.invalidateCfc("asserted-value-root-added");
     }
   }
 
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
+  static {
+    isExtendedStorageTransaction = (value) => #cfcState in value;
+    assignCfcTrustSnapshot = (tx, snapshot) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#noteCfcActivity();
+      tx.#cfcState.trustSnapshot = deepFreeze(snapshot);
+      if (tx.#cfcState.prepare.status === "prepared") {
+        tx.invalidateCfc("trust-snapshot-changed");
+      }
+      return true;
+    };
+    assignCfcImplementationIdentity = (tx, identity) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#noteCfcActivity();
+      tx.#cfcState.implementationIdentity = deepFreeze(identity);
+      if (tx.#cfcState.prepare.status === "prepared") {
+        tx.invalidateCfc("implementation-identity-changed");
+      }
+      return true;
+    };
+  }
+
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
   ): void {
+    // The mark is what lets an initialization claim the acting principal, so
+    // a call without the runtime's authorization changes nothing.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    if (this.#cfcState.attributedInitialization) return;
     this.#noteCfcActivity();
-    this.#cfcState.implementationIdentity = deepFreeze(identity);
+    this.#cfcState.attributedInitialization = true;
     if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc("implementation-identity-changed");
+      this.invalidateCfc("attributed-initialization-marked");
     }
   }
 
@@ -1998,9 +2106,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): boolean {
     // Answers about the whole runtime's enrollment, not this transaction's, so
     // it takes the runtime's mark like the recorders do. Every store id here
-    // is derivable from a piece's cause, so an ungated answer would tell
-    // pattern-authored code — which reaches `cell.tx` — whether a given piece
-    // is running in this runtime.
+    // is derivable from a piece's cause, so an ungated answer would tell any
+    // code holding the transaction whether a given piece is running in this
+    // runtime.
     if (!runtimeWritePolicyAuthorized(authorization)) return false;
     const key = runtimeOwnedStoreKey(space, id);
     return this.#markedOwnedStores.has(key) ||
@@ -2101,6 +2209,19 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.markCfcRelevant("label-metadata-observation");
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("label-metadata-observation-added");
+    }
+  }
+
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    this.#noteCfcActivity();
+    this.#cfcState.externalContentObservations.push(deepFreeze(observation));
+    this.markCfcRelevant("external-content-observation");
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("external-content-observation-added");
     }
   }
 
@@ -2254,10 +2375,6 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return this.#postCommitEffects ?? Promise.resolve();
   }
 
-  commitVerdict(): Promise<Result<Unit, CommitError>> {
-    return this.#verdict.promise;
-  }
-
   #preparedDigest(): string {
     if (this.#preparedDigestMemo?.epoch === this.#cfcActivityEpoch) {
       this.#cfcInstrumentation.onPreparedDigest?.("memo");
@@ -2308,38 +2425,38 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
     const consumedReads: ConsumedRead[] = [];
     for (const { read, raw } of pendingReads) {
-      // Strip the raw stamp before the spread; re-attach its rank (or leave
-      // the field absent when the backend never stamped one — an explicit
-      // undefined would hash differently from absence).
-      const { journalIndex: _raw, ...bare } = read;
+      // Strip the raw stamp and path before the spread; re-attach the rank
+      // (or leave the field absent when the backend never stamped one — an
+      // explicit undefined would hash differently from absence), and the
+      // record's one path.
+      const { journalIndex: _raw, path, ...bare } = read;
       consumedReads.push(deepFreeze({
         ...bare,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeLogicalPath(read.path),
+        ...cfcRecordPath(path),
         ...(raw !== undefined ? { journalIndex: rankByRaw.get(raw)! } : {}),
       }));
     }
 
     const log = this.getReactivityLog();
-    const attemptedWrites: AttemptedWrite[] = (log.attemptedWrites ?? []).map(
-      (address) =>
+    const attemptedWrites: CfcRecordAddress[] = (log.attemptedWrites ?? [])
+      .map(({ path, ...address }) =>
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
-          path: canonicalizeLogicalPath(address.path),
-        }),
-    );
+          // The reactivity log records the journal's document-rooted paths.
+          ...cfcRecordPath(toDocumentPath(path)),
+        })
+      );
 
-    const writes: AttemptedWrite[] = [];
-    const seenWriteSpaces = new Set<MemorySpace>(
-      (log.writes ?? []).map((write) => write.space),
-    );
-    for (const space of seenWriteSpaces) {
+    const writes: CfcRecordAddress[] = [];
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
+        const { path, ...address } = write.address;
         writes.push(deepFreeze({
-          ...write.address,
-          scope: normalizeCellScope(write.address.scope),
-          path: canonicalizeLogicalPath(write.address.path),
+          ...address,
+          scope: normalizeCellScope(address.scope),
+          ...cfcRecordPath(path),
         }));
       }
     }
@@ -2366,6 +2483,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       dereferenceTraces: [...this.#cfcState.dereferenceTraces],
       triggerReads: [...this.#cfcState.triggerReads],
       writePolicyInputs: [...this.#cfcState.writePolicyInputs],
+      ...(this.#cfcState.assertedValueRoots.length > 0
+        ? { assertedValueRoots: [...this.#cfcState.assertedValueRoots] }
+        : {}),
+      ...(this.#cfcState.structureContainers.length > 0
+        ? { structureContainers: [...this.#cfcState.structureContainers] }
+        : {}),
       implementationIdentity: this.#cfcState.implementationIdentity,
       trustSnapshot: this.#cfcState.trustSnapshot,
       ...(this.#cfcState.moduleDelegations.size > 0
@@ -2433,6 +2556,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           ],
         }
         : {}),
+      ...(this.#cfcState.externalContentObservations.length > 0
+        ? {
+          externalContentObservations: [
+            ...this.#cfcState.externalContentObservations,
+          ],
+        }
+        : {}),
     };
   }
 
@@ -2479,13 +2609,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #materializeReferencedSchemaDocuments(): void {
     if (!getContentAddressedSchemasConfig()) return;
-    const log = this.getReactivityLog();
-    const spaces = new Set(
-      [...(log.writes ?? []), ...(log.attemptedWrites ?? [])].map((write) =>
-        write.space
-      ),
-    );
-    for (const space of spaces) {
+    for (const space of getTransactionWrittenSpaces(this)) {
       for (const detail of this.getWriteDetails(space)) {
         this.#stageSchemaDocsForValue(space, detail.address, detail.value);
       }
@@ -2646,6 +2770,47 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return id;
   }
 
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    if (!runtimeWritePolicyAuthorized(authorization)) {
+      throw new Error(
+        "ensureRuntimeSecret() requires the runtime's authorization",
+      );
+    }
+    this.#assertWritable("ensureRuntimeSecret()");
+    if (readRuntimeSecret(this, space, name) !== undefined) return;
+    const link = runtimeSecretLink(space, name);
+    this.#runPrivilegedSystemWrite(() => {
+      this.writeValueOrThrow(
+        link,
+        toUnpaddedBase64url(crypto.getRandomValues(new Uint8Array(32))),
+      );
+    });
+    // The label arrives the way a schema-declared one does on any write, so
+    // the secret carries it from the commit that creates it.
+    this.markCfcRelevant(`runtime-secret:${link.id}`);
+    // Recorded under the writer's builtin identity, which the schema's
+    // writer claim names, so the claim stored with the secret is what later
+    // readers trust it by.
+    const identity = this.#cfcState.implementationIdentity;
+    assignCfcImplementationIdentity(this, {
+      kind: "builtin",
+      builtinId: RUNTIME_SECRET_WRITER,
+    });
+    try {
+      this.recordCfcWritePolicyInput({
+        kind: "schema",
+        target: { space, id: link.id, scope: link.scope, path: [] },
+        schema: RUNTIME_SECRET_SCHEMA,
+      });
+    } finally {
+      assignCfcImplementationIdentity(this, identity);
+    }
+  }
+
   /**
    * Settle whether this transaction is CFC-relevant, and run `prepareCfc()`
    * when it is.
@@ -2666,11 +2831,52 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * it; a transaction that admits no writes has nothing to stamp anyway.
    */
   prepareForCommit(): void {
-    if (this.tx.status().status !== "ready") {
+    if (this.#needsCfcPreparation()) this.prepareCfc();
+  }
+
+  /** Prepares between cooperative yields, aborting canceled or changed work. */
+  async prepareForCommitCooperatively(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+      if (this.tx.status().status === "ready" && !this.isReadOnly()) {
+        this.abort(signal.reason);
+      }
       return;
     }
+    if (!this.#needsCfcPreparation()) return;
+    const started = performance.now();
+    const steps = this.#prepareCfc();
+    const yielder = new CooperativeYield();
+    try {
+      while (this.tx.status().status === "ready" && !signal.aborted) {
+        if (steps.next().done) return;
+        const epoch = this.#cfcActivityEpoch;
+        const turn = yielder.maybeYield();
+        if (turn !== undefined) {
+          await turn;
+          if (this.#cfcActivityEpoch !== epoch) {
+            if (this.tx.status().status === "ready") {
+              this.abort("transaction activity changed during CFC preparation");
+            }
+            return;
+          }
+        }
+      }
+      if (signal.aborted && this.tx.status().status === "ready") {
+        this.abort(signal.reason);
+      }
+    } finally {
+      steps.return("");
+      logger.time(started, "prepareCfc");
+    }
+  }
+
+  /** Settles relevance before choosing how to drive the boundary checks. */
+  #needsCfcPreparation(): boolean {
+    if (this.tx.status().status !== "ready") {
+      return false;
+    }
     if (this.isReadOnly()) {
-      return;
+      return false;
     }
     if (this.#cfcState.enforcementMode === "disabled") {
       // A vouched ingest still needs its provenance mark minted even where
@@ -2682,13 +2888,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // (which would desync ingest txs from the runtime's real mode). The
       // stamp already marked the tx relevant; nothing else here applies when
       // disabled.
-      if (
-        externalIngestStamp(this) !== undefined &&
-        this.#cfcState.prepare.status === "unprepared"
-      ) {
-        this.prepareCfc();
-      }
-      return;
+      return externalIngestStamp(this) !== undefined &&
+        this.#cfcState.prepare.status === "unprepared";
     }
     // Flow-label relevance is computed, not caller-marked: a tx that
     // observed or wrote a labeled doc derives labels even when nothing
@@ -2728,26 +2929,25 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     ) {
       this.markCfcRelevant("sink-request-ceiling");
     }
-    if (
-      this.#cfcState.relevant &&
-      this.#cfcState.prepare.status === "unprepared"
-    ) {
-      this.prepareCfc();
-    }
+    return this.#cfcState.relevant &&
+      this.#cfcState.prepare.status === "unprepared";
   }
 
   /** Evaluates CFC gates and records the complete preparation interval. */
   prepareCfc(): string {
     const started = performance.now();
     try {
-      return this.#prepareCfc();
+      const steps = this.#prepareCfc();
+      let step = steps.next();
+      while (!step.done) step = steps.next();
+      return step.value;
     } finally {
       logger.time(started, "prepareCfc");
     }
   }
 
   /** Evaluates gates and seals preparation inputs for this transaction. */
-  #prepareCfc(): string {
+  *#prepareCfc(): Generator<void, string> {
     // Verification always runs. There is deliberately no caller-supplied input
     // override: the commit-time digest recheck only confirms the prepared input
     // matches real activity, so accepting an external input here would let a
@@ -2773,21 +2973,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // refusal below rather than escaping (the totality this catch exists
       // for).
       this.#materializeReferencedSchemaDocuments();
-      reasons = this.#runPrivilegedSystemWrite(() =>
-        prepareBoundaryCommit(
-          this,
-          // Stage-0 precision counters: threaded through only when the hook is
-          // installed, so the gate skips all measurement (and the summary
-          // allocation) otherwise. The non-null assertion restates the
-          // presence check above — the hooks object is fixed at construction.
-          this.#cfcInstrumentation.onPrefixProvenance === undefined
-            ? undefined
-            : {
-              onPrefixProvenance: (summary) =>
-                this.#cfcInstrumentation.onPrefixProvenance!(summary),
-            },
-        )
+      const steps = prepareBoundaryCommitSteps(
+        this,
+        // Stage-0 precision counters: threaded through only when the hook is
+        // installed, so the gate skips all measurement (and the summary
+        // allocation) otherwise. The non-null assertion restates the
+        // presence check above — the hooks object is fixed at construction.
+        this.#cfcInstrumentation.onPrefixProvenance === undefined
+          ? undefined
+          : {
+            onPrefixProvenance: (summary) =>
+              this.#cfcInstrumentation.onPrefixProvenance!(summary),
+          },
       );
+      // Privilege covers each synchronous step only. Other work admitted by
+      // a cooperative yield must go through the ordinary write checks.
+      let step = this.#runPrivilegedSystemWrite(() => steps.next());
+      while (!step.done) {
+        yield;
+        step = this.#runPrivilegedSystemWrite(() => steps.next());
+      }
+      reasons = step.value;
     } catch (error) {
       // An UNMODELED crash inside commit-prep (e.g. schema-merge's
       // divergent-ifc assert reached through a stored envelope — the served-
@@ -2866,7 +3072,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       };
       // Diagnostics are read by people and by matchers; the verdict tag is
       // a classification channel and does not belong in either.
-      this.#cfcState.diagnostics.push(...reasons.map(plainReason));
+      for (const reason of reasons) {
+        this.#cfcState.diagnostics.push(plainReason(reason));
+      }
       return "";
     }
     const digest = this.#preparedDigest();
@@ -3068,6 +3276,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
     this.#prepareRead(address);
+    this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
   }
 
@@ -3099,6 +3308,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
     this.#prepareRead(address);
+    this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);
     if (
       readResult.error &&
@@ -3274,8 +3484,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // still open and still writable, so a caller that swallows the error and
       // commits anyway lands the prefix. Callers must treat a throw from
       // `writeValuesOrThrow` as poisoning the transaction (abort it, or let the
-      // throw propagate past the commit, which is what every caller does
-      // today). See `writeValuesOrThrow` partial-batch coverage in
+      // throw propagate past the commit). See `writeValuesOrThrow`
+      // partial-batch coverage in
       // `packages/runner/test/memory-v2-acl-mutation.test.ts`.
       // The value reaches the chokepoint's meta-seam and reserved-sibling
       // arms, both of which read the envelope of a document-root write. A
@@ -3367,6 +3577,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#preparedDigestMemo = undefined;
     this.#cfcState.dereferenceTraces = [];
     this.#cfcState.structureContainers = [];
+    this.#cfcState.assertedValueRoots = [];
     const result = this.tx.abort(reason);
     // An abort is a terminal outcome, and it discards the staged writes the
     // same way a rejected commit does. Settle callbacks compensate for writes
@@ -3402,6 +3613,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // callback's closure, and through those closures the cells and registries
     // of the action that committed it.
     this.#commitCallbacks.clear();
+    // A settled transaction admits no reads, so its read memos serve nothing
+    // further, and holding them would retain every value its reads returned.
+    this.#readResultCache = new Map();
+    this.#snapshotMemo = new Map();
+    this.#scopedSnapshotMemos = new Map();
   }
 
   #runVerdictCallbacks(result: Result<Unit, CommitError>): void {
@@ -3427,7 +3643,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #clearPostCommitOutbox(handedOff = false): void {
     if (!handedOff) {
-      this.#abandonableEffects.push(...this.#cfcState.outbox);
+      for (const effect of this.#cfcState.outbox) {
+        this.#abandonableEffects.push(effect);
+      }
     }
     this.#cfcState.outbox = [];
     this.#outboxIdempotencyKeys.clear();
@@ -3449,7 +3667,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return result;
   }
 
-  async commit(
+  /** Starts this commit attempt and exposes its verdict and settlement. */
+  commit(options?: TransactionCommitOptions): TransactionCommitReceipt {
+    const ready = this.status().status === "ready";
+    const settled = this.#commit(options);
+    return createTransactionCommitReceipt(
+      settled,
+      ready ? this.#verdict.promise : undefined,
+      ready ? this.#storageReceipt : undefined,
+    );
+  }
+
+  async #commit(
     options?: TransactionCommitOptions,
   ): Promise<Result<Unit, CommitError>> {
     if (this.#statusOverride?.status === "error") {
@@ -3605,20 +3834,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }
     }
 
-    // The destination switch (serving-loop.md §3d): with a seal destination
-    // installed — a serving runtime under EXPERIMENTAL_SERVER_EXECUTION —
-    // this action tx SEALS into the wave accumulator instead of committing
-    // to the store. Everything above (the per-action-run CFC gates, §3c)
-    // and below (commit callbacks, post-commit side effects) fires for both
-    // destinations: sealing fires everything commit fires today. Sealed
-    // means accepted into the wave, not durable: a later withdrawal
-    // (superseded, requeued, lease lost) surfaces on the wave's verdict
-    // channel, AFTER the callbacks and side effects here observed "ok" —
-    // the serving loop (stage F) and the effect channel (stage G) must
-    // consume dispositions from the wave outcome, never from this result.
-    const promise = this.#sealDestination !== undefined
-      ? this.#sealDestination.seal(this)
-      : this.tx.commit(options);
+    // Direct store forwarding preserves its early verdict and later coverage.
+    // A genuine wave or speculative seal supplies acceptance of the
+    // contribution; its later durable disposition belongs to the wave.
+    let receipt: TransactionCommitReceipt;
+    if (this.#sealDestination !== undefined) {
+      const sealed = this.#sealDestination.seal(this, options);
+      receipt = "settled" in sealed
+        ? sealed
+        : createTransactionCommitReceipt(sealed);
+    } else {
+      receipt = this.tx.commit(options);
+    }
+    this.#storageReceipt = receipt;
+    const promise = receipt.settled;
 
     // Two callback layers with two timelines (CT-1950):
     //
@@ -3627,22 +3856,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     //   They guard on durability alone (start the LLM request, register
     //   background work), so holding them out for the fan-out or the
     //   read-repair round trip would cost a window for nothing.
-    // - COMMIT callbacks run when the commit promise settles: after
+    // - COMMIT callbacks run when `receipt.settled` resolves: after
     //   coverage on accept, after the read-repair gate on rejection.
     //   Their consumers act on the post-commit view — a compensation or
     //   retry that runs before the repair frame would read the very state
     //   the rejection just invalidated.
     //
-    // Both promises always resolve, even when the commit fails (the result
-    // then carries the error); an exception is an internal error handled
-    // below. The verdict is raced with the promise, not taken alone: in
-    // the real flow the verdict settles first, but a wrapped commit whose
-    // inner commit() was replaced or bypassed (test stubs) never resolves
-    // the inner verdict, and the effect run — and with it this commit()'s
-    // own completion — must not hang on it.
-    const verdict = this.tx.commitVerdict !== undefined
-      ? Promise.race([this.tx.commitVerdict(), promise])
-      : promise;
+    // Ordinary failures resolve with an error result; an exception rejects
+    // the stage. The storage receipt supplies a settlement backstop when a
+    // backend cannot report a separate verdict.
+    const verdict = receipt.verdict;
     const effects = verdict.then(
       async (result) => {
         this.#runVerdictCallbacks(result);
@@ -3714,19 +3937,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       },
     );
 
-    // resolveAt "verdict" returns at fate-sealing on BOTH paths: the
-    // verdict race resolves at the accept verdict or the rejection
-    // receipt, ahead of the coverage / read-repair waits the settlement
-    // promise sits out — and ahead of the effect run, which a slow outbox
-    // effect must not stretch (it stays tracked via
-    // postCommitEffectsSettled()). Commit callbacks and the
-    // pending-commit barrier stay on the settlement promise either way.
-    // Otherwise commit() spans the full settlement plus the effect layer:
-    // callers that await the commit observe the outbox flushed, exactly
-    // as when the flush ran inline here.
-    if (options?.resolveAt === "verdict") {
-      return await verdict;
-    }
+    // The receipt's settlement stage includes the inline effect layer.
+    // Observing its verdict never waits for these effects.
     const result = await promise;
     await effects;
 
@@ -3909,6 +4121,14 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.stageContentAddressedDocument(space, value);
   }
 
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
+  }
+
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {
     this.#wrapped.setCfcPolicyEvaluationMode(mode);
   }
@@ -4004,6 +4224,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.resetNarrowestReadScope(scope);
   }
 
+  resetCurrentReadMemoization(): void {
+    this.#wrapped.resetCurrentReadMemoization();
+  }
+
   recordCfcDereferenceTrace(trace: CfcDereferenceTrace): void {
     this.#wrapped.recordCfcDereferenceTrace(trace);
   }
@@ -4012,22 +4236,34 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.recordCfcStructureContainer(address);
   }
 
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
+  ): void {
+    this.#wrapped.recordCfcAssertedValueRoot(address, authorization, reference);
+  }
+
   prepareForCommit(): void {
     this.#wrapped.prepareForCommit();
+  }
+
+  prepareForCommitCooperatively(signal: AbortSignal): Promise<void> {
+    return this.#wrapped.prepareForCommitCooperatively(signal);
   }
 
   prepareCfc(): string {
     return this.#wrapped.prepareCfc();
   }
 
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void {
-    this.#wrapped.setCfcTrustSnapshot(snapshot);
+  static {
+    unwrapTransaction = (tx) => #wrapped in tx ? tx.#wrapped : undefined;
   }
 
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
   ): void {
-    this.#wrapped.setCfcImplementationIdentity(identity);
+    this.#wrapped.markCfcAttributedInitialization(authorization);
   }
 
   recordCfcWritePolicyInput(
@@ -4107,6 +4343,16 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     observation: CfcLabelMetadataObservation,
   ): void {
     this.#wrapped.recordCfcLabelMetadataObservation(observation);
+  }
+
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.recordCfcExternalContentObservation(
+      observation,
+      authorization,
+    );
   }
 
   recordCfcRefusalDetail(detail: CfcRefusalDetail): void {
@@ -4345,7 +4591,7 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   commit(
     options?: TransactionCommitOptions,
-  ): Promise<Result<Unit, CommitError>> {
+  ): TransactionCommitReceipt {
     return this.#wrapped.commit(options);
   }
 
@@ -4451,4 +4697,79 @@ function schemaMetaCarrierOf(
     return { [SCHEMA_META_MEMBER]: value };
   }
   return undefined;
+}
+
+/**
+ * Runs `assign` on the transaction `tx` is, or wraps, and throws when neither
+ * is one this module built.
+ */
+const assignTrustState = (
+  tx: IExtendedStorageTransaction,
+  assign: (tx: object) => boolean,
+  what: string,
+): void => {
+  let current: IExtendedStorageTransaction | undefined = tx;
+  while (current !== undefined) {
+    if (assign(current)) return;
+    current = unwrapTransaction(current);
+  }
+  throw new Error(
+    `${what} requires a transaction the runtime created`,
+  );
+};
+
+/**
+ * Returns whether `value` is a transaction the runtime created: an
+ * `ExtendedStorageTransaction`, or a `TransactionWrapper` around such a
+ * transaction. The check is a private brand, which no object pattern code
+ * builds or reshapes carries, and it holds all the way down a chain of
+ * wrappers, since a wrapper can be built around anything.
+ */
+export function isStorageTransaction(
+  value: unknown,
+): value is IExtendedStorageTransaction {
+  return typeof value === "object" && value !== null &&
+    (isExtendedStorageTransaction(value) ||
+      isStorageTransaction(unwrapTransaction(value)));
+}
+
+/**
+ * Sets (or clears) the CFC trust snapshot for `tx`: the acting principal the
+ * CFC gates take this transaction's trust from.
+ *
+ * The runtime sets it when it creates a transaction. Only host code calls
+ * this: the sandbox does not let pattern code import it, and the transaction
+ * has no method that does the same.
+ */
+export function setCfcTrustSnapshot(
+  tx: IExtendedStorageTransaction,
+  snapshot: TrustSnapshot | undefined,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignCfcTrustSnapshot(target, snapshot),
+    "setCfcTrustSnapshot()",
+  );
+}
+
+/**
+ * Sets (or clears) the implementation identity that authors `tx`'s writes
+ * from here on. Each write-policy input captures the identity current when it
+ * is recorded, and `writeAuthorizedBy`, the runtime-minted integrity gate and
+ * the grant writer all trust it.
+ *
+ * The runner sets it for the handlers and builtins it runs, and host code sets
+ * it for the writes it makes as a trusted builtin. The sandbox does not let
+ * pattern code import this, and the transaction has no method that does the
+ * same.
+ */
+export function setCfcImplementationIdentity(
+  tx: IExtendedStorageTransaction,
+  identity: ImplementationIdentity | undefined,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignCfcImplementationIdentity(target, identity),
+    "setCfcImplementationIdentity()",
+  );
 }

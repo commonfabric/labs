@@ -117,7 +117,7 @@ describe("projection-key-classification", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, schema, tx);
     cell.set(value as never);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return runtime.getCell(space, cause, schema);
   }
 

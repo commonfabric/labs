@@ -1,8 +1,8 @@
 // `cf space` — the commands that act on a space.
 //
 // The noun is what the verb acts on, rather than what it ranges over.
-// `recreate-root` and `set-home` rebuild a space's root and home patterns
-// against a running server; `clone`, `verify`, `reset` and `fingerprint` work
+// `create` makes a new space on a running server; `recreate-root` and
+// `set-home` rebuild a space's root and home patterns against one; `clone`, `verify`, `reset` and `fingerprint` work
 // on the same space as a store on disk. Both are the space, reached at
 // different moments in its life, which is what puts them under one noun.
 //
@@ -34,15 +34,19 @@ import {
   contentFingerprint,
   createClone,
   openSpace,
-  readManifest,
   resetClone,
   resolveSpace,
   verifyClone,
   type VerifyResult,
 } from "@commonfabric/state-inspector";
 
+import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
-import { buildRecreateRootCommand, buildSetHomeCommand } from "./piece.ts";
+import {
+  buildCreateSpaceCommand,
+  buildRecreateRootCommand,
+  buildSetHomeCommand,
+} from "./piece.ts";
 
 function out(json: boolean, data: unknown, render: () => void): void {
   if (json) console.log(JSON.stringify(data, null, 2));
@@ -208,6 +212,18 @@ function uncertaintyNote(
  * weaker claim than zero and must not render as zero.
  */
 function verifyUncertaintyNote(u: VerifyResult["uncertainty"]): string {
+  // A clone that recorded no scheme may have had its baseline fingerprinted
+  // another way, which would move the hash with no change to the content.
+  const scheme = u.scheme.manifest === null
+    ? `⚠ this clone predates fingerprint-scheme recording, so whether its ` +
+      `BASELINE was fingerprinted the way this tool fingerprints is unknown; ` +
+      `re-clone for a verdict that can say\n`
+    : "";
+  return exclusionNote(u) + scheme;
+}
+
+/** The unhashable and ambiguous half of {@link verifyUncertaintyNote}. */
+function exclusionNote(u: VerifyResult["uncertainty"]): string {
   const working = uncertaintyNote(
     u.unhashable.working,
     u.ambiguous.working,
@@ -231,8 +247,8 @@ function verifyUncertaintyNote(u: VerifyResult["uncertainty"]): string {
 export const space = new Command()
   .name("space")
   .description(
-    "Commands that act on a space: its root and home patterns, and rehearsal " +
-      "clones of its store.",
+    "Commands that act on a space: its root and home patterns, access " +
+      "invitations, and rehearsal clones of its store.",
   )
   .default("help")
   .error((error, command) => {
@@ -247,8 +263,8 @@ export const space = new Command()
   // `--from`/`--to` are required in substance but NOT declared `required`:
   // cliffy appends required options to the usage line, which would break the
   // repo invariant that a command's usage ends with its positional arguments
-  // (see main-command.test.ts). Validating here also gives a more actionable
-  // message than cliffy's generic one.
+  // (see main-command.serial.test.ts). Validating here also gives a more
+  // actionable message than cliffy's generic one.
   .option(
     "--from <source:string>",
     "Snapshot to clone: a .sqlite path, or an https URL to download.",
@@ -399,18 +415,31 @@ export const space = new Command()
     "Restore the working copy from the pristine snapshot, discarding the attempt.",
   )
   .action(async (options, dir) => {
-    const before = await readManifest(dir);
-    await resetClone(dir);
+    const { manifest: before, removedStores, removedCellDatabases } =
+      await resetClone(dir);
     const after = await verifyClone(dir);
-    out(!!options.json, { manifest: before, verify: after }, () => {
-      console.log(
-        `reset ${before.space} to its baseline (${before.createdAt})\n` +
-          `  commits back to ${after.counts.working.commits}\n` +
-          `  content  ${
-            after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
-          }`,
-      );
-    });
+    out(
+      !!options.json,
+      { manifest: before, removedStores, removedCellDatabases, verify: after },
+      () => {
+        console.log(
+          `reset ${before.space} to its baseline (${before.createdAt})\n` +
+            `  commits back to ${after.counts.working.commits}\n` +
+            `  content  ${
+              after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
+            }` +
+            (removedStores.length === 0
+              ? ""
+              : `\n  removed  ${removedStores.length} store(s) the attempt created for other spaces:\n` +
+                removedStores.map((space) => `           ${space}`).join(
+                  "\n",
+                )) +
+            (removedCellDatabases.length === 0
+              ? ""
+              : `\n  removed  ${removedCellDatabases.length} cell database(s) the attempt created`),
+        );
+      },
+    );
     if (!after.ok) Deno.exit(1);
   })
   /* space fingerprint */
@@ -465,10 +494,13 @@ export const space = new Command()
       db.close();
     }
   })
+  /* space create */
+  .command("create", buildCreateSpaceCommand("space create"))
   /* space recreate-root */
   .command(
     "recreate-root",
     buildRecreateRootCommand("space recreate-root"),
   )
   /* space set-home */
-  .command("set-home", buildSetHomeCommand("space set-home"));
+  .command("set-home", buildSetHomeCommand("space set-home"))
+  .command("invite", buildSpaceInviteCommand());

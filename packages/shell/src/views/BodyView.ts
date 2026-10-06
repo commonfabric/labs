@@ -1,4 +1,4 @@
-import { Task } from "@lit/task";
+import { Task, TaskStatus } from "@lit/task";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
@@ -9,8 +9,15 @@ import "../components/OmniLayout.ts";
 
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import type { JSONSchema } from "@commonfabric/runner/shared";
-import { CellHandle, PieceHandle, VNode } from "@commonfabric/runtime-client";
+import {
+  CellHandle,
+  CellReadRefusedError,
+  PieceHandle,
+  RuntimeErrorCode,
+  VNode,
+} from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
+import { navigate } from "@commonfabric/navigation";
 import { openPieceMenu } from "@commonfabric/ui";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -144,6 +151,16 @@ export class XBodyView extends BaseView {
   @property({ attribute: false })
   accessor activePattern: PieceHandle | undefined = undefined;
 
+  /** Pointer keys selecting a view inside the active result document. */
+  @property({ attribute: false })
+  accessor piecePath: string[] = [];
+
+  private get activeCell(): CellHandle | undefined {
+    let cell: CellHandle | undefined = this.activePattern?.cell();
+    for (const key of this.piecePath) cell = cell?.key(key as never);
+    return cell;
+  }
+
   @property()
   accessor showShellPieceListView = false;
 
@@ -156,24 +173,29 @@ export class XBodyView extends BaseView {
   @property({ attribute: false })
   accessor runtimeError: LoadError | undefined = undefined;
 
+  /** The legacy name the view addressed its space by, if it named one. */
+  @property({ attribute: false })
+  accessor spaceName: string | undefined = undefined;
+
   @property({ type: Boolean })
   accessor embedded = false;
 
   #subPages = new Task(this, {
-    task: async ([activePattern, embedded]) => {
+    task: async ([_activePattern, embedded, _path]) => {
       if (embedded) {
         return {
           sidebarUI: undefined,
         };
       }
       const sidebarUI = await getSidebarCell(
-        activePattern?.cell() as CellHandle<SubPages> | undefined,
+        this.activeCell as CellHandle<SubPages> | undefined,
       );
       return {
         sidebarUI,
       };
     },
-    args: () => [this.activePattern, this.embedded],
+    args:
+      () => [this.activePattern, this.embedded, JSON.stringify(this.piecePath)],
   });
 
   /**
@@ -197,8 +219,58 @@ export class XBodyView extends BaseView {
     });
   };
 
+  #createSpace = new Task(this, {
+    autoRun: false,
+    task: async ([label]: [string | undefined]) => {
+      if (!this.rt) return;
+      const did = await this.rt.createSpace(label);
+      navigate({ spaceDid: did });
+    },
+  });
+
+  /**
+   * What stands where a space would be when no space answers to the address:
+   * a statement saying so, and the one operation that would make one, which
+   * creates a space with a new random DID labeled with the name typed.
+   * Opening the address never creates anything.
+   */
+  #renderSpaceNotFound() {
+    const name = this.spaceName;
+    return html`
+      <div slot="main" class="load-error">
+        <cf-alert status="info">
+          <h2 slot="title">
+            ${name === undefined
+              ? "No space answers to this address"
+              : `No space answers to the name "${name}"`}
+          </h2>
+          <span slot="description">
+            Nobody has created a space here. You can create a new space instead;
+            it gets its own address, and is added to your list of spaces.
+          </span>
+          <cf-button
+            ?disabled="${this.#createSpace.status === TaskStatus.PENDING}"
+            @click="${() => this.#createSpace.run([name])}"
+          >
+            ${name === undefined
+              ? "Create a new space"
+              : `Create a new space called "${name}"`}
+          </cf-button>
+          ${this.#createSpace.status === TaskStatus.ERROR
+            ? html`
+              <code>${loadErrorMessage(this.#createSpace.error)}</code>
+            `
+            : null}
+        </cf-alert>
+      </div>
+    `;
+  }
+
   override render() {
-    const mainContent = this.loadError
+    const mainContent = this.loadError?.kind === "space" &&
+        isSpaceNotFound(this.loadError.error)
+      ? this.#renderSpaceNotFound()
+      : this.loadError
       ? html`
         <div
           slot="main"
@@ -226,7 +298,7 @@ export class XBodyView extends BaseView {
       : this.activePattern
       ? html`
         <cf-piece slot="main" .pieceId="${this.activePattern.id()}">
-          <cf-render .cell="${this.activePattern.cell()}"></cf-render>
+          <cf-render .cell="${this.activeCell}"></cf-render>
         </cf-piece>
       `
       : null;
@@ -268,6 +340,12 @@ export class XBodyView extends BaseView {
   }
 }
 
+/** Whether a load failed because no space answers to the address. */
+function isSpaceNotFound(error: unknown): boolean {
+  return isObjectOrArray(error) && "code" in error &&
+    error.code === RuntimeErrorCode.SpaceNotFound;
+}
+
 /** Return the useful detail carried by an unknown thrown value. */
 function loadErrorMessage(error: unknown): string {
   try {
@@ -290,20 +368,32 @@ function loadErrorMessage(error: unknown): string {
 
 globalThis.customElements.define("x-body-view", XBodyView);
 
+/**
+ * The handle a sidebar is rendered from, when the piece `cell` holds shows
+ * one: its `sidebarUI`, read as a render tree. The piece is read for that
+ * field alone, so the read is decided on what it reads, not on what else
+ * the piece holds. `undefined` when it shows none, or when the display
+ * ceiling keeps the sidebar from the shell.
+ */
 async function getSidebarCell(
   cell: CellHandle<SubPages> | undefined,
 ): Promise<CellHandle<VNode> | undefined> {
   if (!cell) return undefined;
   const typedCell = cell.asSchema<SubPages>(SubPagesSchema);
-  let value = typedCell.get();
-  if (!value) {
-    await typedCell.sync();
-    value = typedCell.get();
+  try {
+    let value = typedCell.get();
     if (!value) {
-      return;
+      await typedCell.sync();
+      value = typedCell.get();
+      if (!value) {
+        return;
+      }
     }
-  }
-  if (value.sidebarUI) {
-    return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    if (value.sidebarUI) {
+      return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    }
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
   }
 }

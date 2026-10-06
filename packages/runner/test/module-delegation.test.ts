@@ -32,6 +32,7 @@ import {
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
 } from "../src/runner.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 await ensureCompilerStack();
 
@@ -86,7 +87,7 @@ const seedLabeledSource = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 /** The persisted label-map entries on `id`, for pinning that a join landed. */
@@ -687,7 +688,7 @@ describe("module identity delegation", () => {
     const sourceTx = runtime.edit();
     writeSourceDocs(runtime, space, [successor], successor.identity, sourceTx);
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     // A later ordinary write can mutate the Merkle-excluded metadata but must
     // not inherit the compiler-only attestation from the original cache write.
@@ -708,7 +709,7 @@ describe("module identity delegation", () => {
       delegatedModuleIdentities: [oldIdentity],
     });
     runtime.prepareTxForCommit(forgeTx);
-    expect((await forgeTx.commit()).error).toBeUndefined();
+    expect((await forgeTx.commit().settled).error).toBeUndefined();
 
     const protectedCell = runtime.getCell<{ value: string }>(
       space,
@@ -716,7 +717,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -738,7 +739,7 @@ describe("module identity delegation", () => {
       .toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -765,7 +766,7 @@ describe("module identity delegation", () => {
       new Map([[successor.identity, new Set([oldIdentity])]]),
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const protectedCell = runtime.getCell<{ value: string }>(
       space,
@@ -773,7 +774,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -784,7 +785,7 @@ describe("module identity delegation", () => {
     expect(seed.error).toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -805,7 +806,7 @@ describe("module identity delegation", () => {
     expect(closure?.get(successor.identity)).toBeDefined();
 
     const allowed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -819,7 +820,7 @@ describe("module identity delegation", () => {
     // Resolver-dependent source-file spelling is diagnostic once the
     // successor's authenticated delegation has established module authority.
     const differentFileAllowed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/resolver-prefix/writer.ts",
@@ -833,7 +834,7 @@ describe("module identity delegation", () => {
     // Delegation grants only module authority; it must not relax which binding
     // inside that module may write the protected field.
     const wrongPathDenied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -845,6 +846,104 @@ describe("module identity delegation", () => {
       "writeAuthorizedBy failed",
     );
     expect(protectedCell.get()).toEqual({ value: "different-file" });
+  });
+
+  it("refuses a successor writing through its own labeled schema until its delegation loads", async () => {
+    // The successor's schema restates the binding, which its own identity
+    // stamps, or restates only a label. Either way the field answers to the
+    // binding the document stores, stamped by the predecessor, so only the
+    // successor's loaded delegation lets it write.
+
+    const oldIdentity = computeModuleHashes(moduleProgram("old")).get(
+      "/writer.ts",
+    )!;
+    const successor = moduleFor(moduleProgram("new"));
+    const sourceTx = runtime.edit();
+    writeSourceDocs(
+      runtime,
+      space,
+      [successor],
+      successor.identity,
+      sourceTx,
+      new Map([[successor.identity, new Set([oldIdentity])]]),
+    );
+    runtime.prepareTxForCommit(sourceTx);
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
+
+    const id = "module-delegation-labeled-successor";
+    const seed = await runtime.editWithRetry((tx) => {
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: oldIdentity,
+        sourceFile: "/writer.ts",
+        bindingPath: ["setValue"],
+      });
+      runtime.getCell(space, id, protectedSchema, tx).set({ value: "seed" });
+    });
+    expect(seed.error).toBeUndefined();
+
+    const label = { confidentiality: ["successor-label"] };
+    const restatesBinding = {
+      type: "object",
+      properties: {
+        value: {
+          type: "string",
+          ifc: {
+            ...label,
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { file: "/writer.ts", path: ["setValue"] },
+            },
+          },
+        },
+      },
+      required: ["value"],
+    } as unknown as JSONSchema;
+    const labelOnly = {
+      type: "object",
+      properties: { value: { type: "string", ifc: label } },
+      required: ["value"],
+    } as unknown as JSONSchema;
+    const successorWrite = (schema: JSONSchema, value: string) =>
+      runtime.editWithRetry((tx) => {
+        setCfcImplementationIdentity(tx, {
+          kind: "verified",
+          moduleIdentity: successor.identity,
+          sourceFile: "/writer.ts",
+          bindingPath: ["setValue"],
+        });
+        runtime.getCell(space, id, schema, tx).set({ value });
+      }, 0);
+
+    for (const schema of [restatesBinding, labelOnly]) {
+      const denied = await successorWrite(schema, "before-load");
+      expect(denied.error?.message).toContain("writeAuthorizedBy failed");
+    }
+    expect(runtime.getCell(space, id, protectedSchema).get()).toEqual({
+      value: "seed",
+    });
+
+    const loadTx = runtime.edit();
+    const closure = await loadVerifiedSourceClosure(
+      runtime,
+      space,
+      successor.identity,
+      loadTx,
+    );
+    loadTx.abort?.("module-delegation source load complete");
+    expect(closure?.get(successor.identity)).toBeDefined();
+
+    for (
+      const [schema, value] of [[restatesBinding, "restated"], [
+        labelOnly,
+        "label-only",
+      ]] as const
+    ) {
+      const allowed = await successorWrite(schema, value);
+      expect(allowed.error).toBeUndefined();
+      expect(runtime.getCell(space, id, protectedSchema).get()).toEqual({
+        value,
+      });
+    }
   });
 
   it("does not import module authority from another space", async () => {
@@ -867,7 +966,7 @@ describe("module identity delegation", () => {
       new Map([[successor.identity, new Set([oldIdentity])]]),
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const loadTx = runtime.edit();
     const closure = await loadVerifiedSourceClosure(
@@ -895,7 +994,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -906,7 +1005,7 @@ describe("module identity delegation", () => {
     expect(seed.error).toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -960,7 +1059,7 @@ describe("module identity delegation", () => {
         new Map([[successor.identity, new Set([oldIdentity])]]),
       );
       runtime.prepareTxForCommit(sourceTx);
-      expect((await sourceTx.commit()).error).toBeUndefined();
+      expect((await sourceTx.commit().settled).error).toBeUndefined();
     };
 
     it("returns `undefined` for a keyless identity, only itself as predecessor, or every predecessor already granted", () => {
@@ -1175,7 +1274,7 @@ describe("module identity delegation", () => {
         revisionId: "broken",
         timestamp: 42,
       }], rawMetaWriteAuthorization);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       expect(await observer.start(observed)).toBe(true);
 
@@ -1292,7 +1391,7 @@ describe("module identity delegation", () => {
             version,
           );
           tx.prepareCfc();
-          const result = await tx.commit();
+          const result = await tx.commit().settled;
           expect(result.error?.message).toBeUndefined();
           // The commit is the assertion, and on its own it passes whether or
           // not the transaction ever carried a clause — so pin both halves.

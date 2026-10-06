@@ -1,8 +1,11 @@
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type {
   CfcConfClause,
   CfcLabelView,
   IFCLabel,
 } from "@commonfabric/runner/cfc";
+import { isOrClause, normalizeClause } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { HarnessCfcInvocationInputLabelPath } from "./cfc-invocation-context.ts";
 import type { ToolOutputId } from "./tool-result.ts";
@@ -152,10 +155,12 @@ export const appendHarnessCfcModelContextObservations = (
   if (newObservations.length === 0) {
     return context;
   }
-  const label = mergeConfidentialityOnlyLabels([
-    context?.label,
-    ...newObservations.map((observation) => observation.label),
-  ]);
+  const label = withoutConfidentialityPromptSlotInfluence(
+    mergeConfidentialityOnlyLabels([
+      context?.label,
+      ...newObservations.map((observation) => observation.label),
+    ]),
+  );
   if (label === undefined) {
     return context;
   }
@@ -166,6 +171,44 @@ export const appendHarnessCfcModelContextObservations = (
     label,
     observations: [...existingObservations, ...newObservations],
   };
+};
+
+const isPromptSlotInfluenceAtom = (atom: unknown): boolean =>
+  isObjectNotArray(atom) &&
+  (atom as { type?: unknown }).type === CFC_ATOM_TYPE.PromptSlotInfluence;
+
+/**
+ * `clause` without any `PromptSlotInfluence` atom, or `undefined` when nothing
+ * else was in it. Dropping an alternative of an OR-clause leaves the clause
+ * admitting fewer readers, never more.
+ */
+const withoutPromptSlotInfluenceClause = (
+  clause: CfcConfClause,
+): CfcConfClause | undefined => {
+  if (!isOrClause(clause)) {
+    return isPromptSlotInfluenceAtom(clause) ? undefined : clause;
+  }
+  const anyOf = clause.anyOf.filter((atom) => !isPromptSlotInfluenceAtom(atom));
+  return anyOf.length === 0 ? undefined : normalizeClause({ anyOf });
+};
+
+/**
+ * Removes `PromptSlotInfluence` atoms from a confidentiality label, bare or
+ * inside an OR-clause. The atom is integrity (CFC spec §15.4), so one in a
+ * confidentiality position marks nothing secret. Retained run state can still
+ * hold one there, and left in place it would taint every input the model
+ * context is stamped on.
+ */
+const withoutConfidentialityPromptSlotInfluence = (
+  label: IFCLabel | undefined,
+): IFCLabel | undefined => {
+  // TODO(seefeldb): Remove once no run whose saved model context holds the
+  // atom as confidentiality can still be resumed.
+  const confidentiality = (label?.confidentiality ?? []).flatMap((clause) => {
+    const kept = withoutPromptSlotInfluenceClause(clause);
+    return kept === undefined ? [] : [kept];
+  });
+  return confidentiality.length === 0 ? undefined : { confidentiality };
 };
 
 export const createHarnessCfcModelContextInputLabels = (options: {
@@ -179,7 +222,9 @@ export const createHarnessCfcModelContextInputLabels = (options: {
   ) {
     return undefined;
   }
-  const label = confidentialityOnlyIfcLabel(options.modelContext.label);
+  const label = withoutConfidentialityPromptSlotInfluence(
+    confidentialityOnlyIfcLabel(options.modelContext.label),
+  );
   if (label === undefined) {
     return undefined;
   }

@@ -51,25 +51,37 @@ export * from "@commonfabric/data-model/api";
 /**
  * A value that can appear in an in-memory fabric execution graph.
  *
- * Unlike a {@link FabricValue}, a `FabricExecValue` may contain functions and
- * therefore is not necessarily durable or serializable: it is
- * `FabricValuePlus` at {@link FabricExecFunction}, so a function may sit at
- * the top or inside any container.
+ * Unlike a {@link FabricValue}, a `FabricExecValue` may contain builder
+ * artifacts, patterns, and modules, and therefore is not necessarily durable
+ * or serializable: it is `FabricValuePlus` at {@link FabricExecPlusType}, so
+ * any of those may sit at the top or inside any container.
  */
-export type FabricExecValue = FabricValuePlus<FabricExecFunction>;
-
-/** A callable leaf in a {@link FabricExecValue} graph. */
-export type FabricExecFunction = (...args: any[]) => any;
-
-/** Read-only array of fabric execution values. */
-export type FabricExecArray = FabricArrayPlus<FabricExecFunction>;
+export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
 
 /**
- * Read-only plain object whose string-keyed values are execution values.
- * `Pattern` and `Module` extend it, and the schema generator recognizes that
- * base by this name.
+ * What a {@link FabricExecValue} admits beyond a {@link FabricValue}: a
+ * callable builder artifact, a {@link Pattern}, or a {@link Module}.
+ *
+ * A pattern and a module are each an arm of their own. Each declares the
+ * members it has; neither is a record that any string key may be added to.
  */
-export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
+export type FabricExecPlusType = FabricExecFunction | Pattern | Module;
+
+/**
+ * A callable leaf in a {@link FabricExecValue} graph: a builder artifact, which
+ * says what it is through {@link toEncodableForm}.
+ *
+ * No other function belongs in a graph. A module's implementation is a
+ * function, but it is a declared member of that {@link Module}, not a value in
+ * the graph.
+ */
+export type FabricExecFunction = ((...args: any[]) => any) & toEncodableForm;
+
+/** Read-only array of fabric execution values. */
+export type FabricExecArray = FabricArrayPlus<FabricExecPlusType>;
+
+/** Read-only plain object whose string-keyed values are execution values. */
+export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecPlusType>;
 
 //
 // Runtime Constants
@@ -317,11 +329,11 @@ export interface IReadable<T> {
 /**
  * Writable cells can update their value.
  *
- * **Frozenness contract:** Values passed into `set()`, `update()`, and `push()`
- * flow through a write-boundary normalization step that shallowly freezes any
- * plain unfrozen Object/Array levels it visits. Inputs that are already
- * deep-frozen valid `FabricValue` trees are accepted identity-preservingly with
- * no further cloning.
+ * **Frozenness contract:** Values passed into `set()`, `update()`, `push()`,
+ * and `pushAll()` flow through a write-boundary normalization step that
+ * shallowly freezes any plain unfrozen Object/Array levels it visits. Inputs
+ * that are already deep-frozen valid `FabricValue` trees are accepted
+ * identity-preservingly with no further cloning.
  */
 export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
@@ -343,17 +355,33 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Append one or more values to an array cell. See the
    * {@link IWritable} interface docs for the frozenness contract on the
-   * inputs.
+   * inputs. To append a list, pass it to {@link IWritable.pushAll} rather
+   * than spreading it here: every spread element is a separate argument, and a
+   * long enough list overflows the stack.
    */
   push(
     this: IsThisArray,
-    ...value: T extends (infer U)[] ? (U | AnyCellWrapping<U>)[] : never
+    ...value: T extends readonly (infer U)[] ? (U | AnyCellWrapping<U>)[]
+      : never
+  ): void;
+
+  /**
+   * Append every value in `values` to an array cell, in order, as one
+   * mergeable append, exactly as `push(...values)` would, but for a list of
+   * any length. See the {@link IWritable} interface docs for the frozenness
+   * contract on the inputs.
+   */
+  pushAll(
+    this: IsThisArray,
+    values: T extends readonly (infer U)[] ? readonly (U | AnyCellWrapping<U>)[]
+      : never,
   ): void;
 
   /**
    * Add one or more values to an array cell as a set: each value is appended
    * only if no existing element equals it. Mergeable — concurrent adds of
    * distinct elements merge and a repeated add is a no-op against durable state.
+   * A value read back through `get()` is refused; pass the element's cell.
    */
   addUnique(
     this: IsThisArray,
@@ -374,7 +402,8 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Remove every element equal to `ref` by stored value (a cell matches by its
    * link). Mergeable — resolved against durable state, so concurrent removes of
-   * distinct entries merge instead of clobbering via a whole-array rewrite.
+   * distinct entries merge instead of clobbering via a whole-array rewrite. A
+   * value read back through `get()` is refused; pass the element's cell.
    */
   removeByValue(
     this: IsThisArray,
@@ -389,9 +418,9 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
 
 /**
  * How the pattern transformer classifies a mergeable write: an
- * `array-identity-writer` takes element arguments whose identity is tracked
- * (`push` / `addUnique` / `removeByValue`); a `scalar-writer` does not
- * (`increment`).
+ * `array-identity-writer` takes elements whose identity is tracked, as
+ * arguments (`push` / `addUnique` / `removeByValue`) or as one list argument
+ * (`pushAll`); a `scalar-writer` does not (`increment`).
  */
 export type MergeableOpMethodKind = "scalar-writer" | "array-identity-writer";
 
@@ -416,9 +445,12 @@ export interface MergeableOpMethod {
  * transformer's method classification both derive from it, so adding a mergeable
  * op is one entry here plus its behavior descriptor — the transformer picks up
  * the new method with no edit, and a consistency test cross-checks the wire tags.
+ * Two methods may record the same wire op, as `push` and `pushAll` both record
+ * `append`.
  */
 export const MERGEABLE_OP_METHODS: readonly MergeableOpMethod[] = [
   { method: "push", wireOp: "append", kind: "array-identity-writer" },
+  { method: "pushAll", wireOp: "append", kind: "array-identity-writer" },
   { method: "addUnique", wireOp: "add-unique", kind: "array-identity-writer" },
   {
     method: "removeByValue",
@@ -1611,12 +1643,12 @@ export type AnyCellWrapping<T> =
 // TODO(seefeld): Subset of internal type, just enough to make it
 // differentiated. But this isn't part of the public API, so we need to find a
 // different way to handle this.
-export interface Pattern extends FabricExecPlainObject {
+export interface Pattern {
   argumentSchema: JSONSchema;
   resultSchema: JSONSchema;
   defaultScope?: CellScope;
 }
-export interface Module extends FabricExecPlainObject {
+export interface Module {
   type: "ref" | "javascript" | "pattern" | "raw" | "isolated" | "passthrough";
   defaultScope?: CellScope;
 }
@@ -1693,6 +1725,23 @@ export type NodeFactory<T, R> =
     asScope(scope: CellScope): NodeFactory<T, R>;
   };
 
+/**
+ * Access a space created by `PatternFactory.inSpace()` grants beyond its
+ * owner, by principal DID, or `"*"` for anyone. The grants
+ * apply when the space is created, and the first call to name a space in a
+ * run is the one that creates it; a space that already exists keeps its own
+ * access-control document.
+ */
+export type InSpaceGrants = Readonly<
+  { [principal in DID | "*"]?: "READ" | "WRITE" }
+>;
+
+/** Options for `PatternFactory.inSpace()`. */
+export interface InSpaceOptions {
+  /** Access the created space grants beyond its owner. */
+  grants?: InSpaceGrants;
+}
+
 export type PatternFactory<T, R> =
   & ((inputs: FactoryInput<T>) => Reactive<R>)
   & Pattern
@@ -1700,7 +1749,10 @@ export type PatternFactory<T, R> =
   & toEncodableForm
   & {
     asScope(scope: CellScope): PatternFactory<T, R>;
-    inSpace(space?: string | AnyCell<unknown>): PatternFactory<T, R>;
+    inSpace(
+      space?: string | AnyCell<unknown>,
+      options?: InSpaceOptions,
+    ): PatternFactory<T, R>;
   };
 
 export type ModuleFactory<T, R> =
@@ -1875,6 +1927,15 @@ export type JSONSchemaObj = {
           readonly moduleIdentity?: string;
         };
       };
+    // The lowered form of `WritePolicyAnyOf`: alternative complete writer
+    // policies, any one of which admits a write whole. A position declaring
+    // it declares no `writeAuthorizedBy` or `uiContract` of its own.
+    readonly writePolicyAnyOf?: readonly {
+      readonly writeAuthorizedBy: NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
+      >;
+      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
+    }[];
     readonly exactCopyOf?: readonly string[];
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON
@@ -2295,6 +2356,59 @@ export interface BuiltInGenerateTextState {
 
   /** Web sources from native search grounding, when `search`/`google_search` was requested. */
   groundingSources?: readonly BuiltInLLMGroundingSource[];
+}
+
+/**
+ * The request an `agent()` node submits: a task, the cells it may read, and
+ * the schema its answer takes. A runner the requester registered executes it
+ * as the requester; the builtin's cell follows the run's record.
+ */
+export interface BuiltInAgentParams {
+  /**
+   * What the run is for, as context rather than a command. Labeled data
+   * interpolated into this text becomes a value the request carries and the
+   * sink gate measures; pass the cell through `inputs` instead.
+   */
+  task: string;
+
+  /**
+   * The cells the run may read, by the names the model sees them under. Each
+   * reaches the request as a link, never as its value, so an entry has to be
+   * a cell.
+   */
+  inputs: Record<string, AnyCell<any> | AnyBrandedCell<any> | OpaqueCell<any>>;
+
+  /** The schema the run's structured result is validated against. */
+  resultSchema: JSONSchema;
+
+  /**
+   * Confidentiality clauses bounding what the run may observe. Absent, the
+   * run observes what the requester may see; declared, it can only tighten.
+   */
+  maxConfidentiality?: readonly JSONValue[];
+
+  /**
+   * Names of the tools the run may use, from the set the deployment
+   * publishes. A name the requester's registered runner does not offer fails
+   * the request before it is staged.
+   */
+  tools?: readonly string[];
+}
+
+/**
+ * What an `agent()` node holds. `result` is a link to the document the run's
+ * harness wrote; `run` is a link to the run's record, which a pattern reads
+ * for progress, outcome, and usage; `host` is the origin of the toolshed
+ * serving the record's space, carried beside `run` because a link resolves a
+ * space and not the host that serves it.
+ */
+export interface BuiltInAgentState<T> {
+  pending: boolean;
+  result?: T;
+  error?: string;
+  requestHash?: string;
+  run?: Record<string, any>;
+  host?: string;
 }
 
 export interface BuiltInCompileAndRunParams<T> {
@@ -2767,6 +2881,10 @@ export type GenerateTextFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<BuiltInGenerateTextState>;
 
+export type AgentFunction = <T = any>(
+  params: FactoryInput<BuiltInAgentParams>,
+) => Reactive<BuiltInAgentState<T>>;
+
 export type FetchOptions = {
   body?: JSONValue;
   headers?: Record<string, string>;
@@ -2861,23 +2979,37 @@ export type FetchJsonUncheckedFunction = (
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
  * pages, and being told no is an answer rather than a failure. `hosts` names
  * the hosts whose page URLs address cells; a page URL from anywhere else is a
- * link to a web page.
+ * link to a web page. `spaceHost` supplies the toolshed origin for a URL that
+ * explicitly names a space, so a cross-toolshed cell resolves there.
  */
-export type CellFromUrlFunction = (
-  params: FactoryInput<{
-    url: string;
-    hosts?: string[];
-  }>,
-) => Reactive<{
-  pending: boolean;
+export type CellFromUrlFunction = {
+  /** Resolves a writable handle; storage authorization still governs writes. */
+  <T = unknown>(
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+      writable: true;
+    }>,
+  ): Reactive<{ pending: boolean; cell?: Writable<T> }>;
 
-  /**
-   * The cell the URL named, once resolved, and absent when it named none. Its
-   * value is unconstrained: a URL addresses any cell, and resolution neither
-   * requires a piece nor supplies one's `[NAME]`.
-   */
-  cell?: ReadonlyCell<unknown>;
-}>;
+  (
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+    }>,
+  ): Reactive<{
+    pending: boolean;
+
+    /**
+     * The cell the URL named, once resolved, and absent when it named none. Its
+     * value is unconstrained: a URL addresses any cell, and resolution neither
+     * requires a piece nor supplies one's `[NAME]`.
+     */
+    cell?: ReadonlyCell<unknown>;
+  }>;
+};
 
 export type FetchProgramFunction = (
   params: FactoryInput<{ url: string }>,
@@ -3000,11 +3132,11 @@ export interface ISqliteQueryable {
       readClearance?: boolean;
 
       /** Scope of the result cell. A `session`-scoped result is one each
-       *  session reads alone, which a runtime-wide read ceiling
-       *  (`cfcReadMaxConfidentiality`) requires; absent, the result takes the
-       *  narrowest of the db's scope, the pattern's output scope, and — when
-       *  `readClearance` is set — `user`, since a cleared result is one
-       *  reader's view. */
+       *  session reads alone and filters under its runtime read ceiling. Shared
+       *  results retain their labels for cell-read enforcement. Absent, the
+       *  result takes the narrowest of the db's scope, the pattern's output
+       *  scope, and — when `readClearance` is set — `user`, since a cleared
+       *  result is one reader's view. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -3094,9 +3226,9 @@ export type SqliteQueryFunction = {
   >;
 
   /** Bind the query's result cell to a scope: a `session`-scoped result is
-   *  one each session reads alone, which a runtime-wide read ceiling
-   *  (`cfcReadMaxConfidentiality`) requires. The `scope` option of
-   *  `db.query` is the same binding. */
+   *  one each session reads alone and filters under its runtime read ceiling.
+   *  Shared results retain their labels for cell-read enforcement. The `scope`
+   *  option of `db.query` is the same binding. */
   asScope(scope: CellScope): SqliteQueryFunction;
 };
 
@@ -3201,6 +3333,117 @@ export type WishTag = `/${string}` | `#${string}`;
  * that decides whether a string is a DID, live in `@commonfabric/identity/did`.
  */
 export type DID = `did:${string}`;
+
+/**
+ * Returns whether `value` is a DID in the syntax of the W3C DID Core
+ * specification, at most 256 characters long: `did:`, a lowercase method name,
+ * a colon, and a method-specific identifier of letters, digits, `.`, `-`, `_`,
+ * percent-escapes and inner `:` separators. Whitespace, other punctuation, a
+ * capitalized prefix and a trailing `:` all fail it.
+ *
+ * Ask it of a DID read from data before showing that DID to a person or
+ * treating it as the principal a record names, so that no other spelling of
+ * a DID passes for it. It checks syntax alone: a DID that passes names no one
+ * in particular, and says nothing about who wrote it.
+ *
+ * The runtime decides DID syntax with this same predicate. It reads nothing but
+ * its argument, so it can be called anywhere: in a handler, a `computed()` or a
+ * `lift()`, and in a pattern body, where a call on a reactive value is lifted
+ * like a call to any other function.
+ */
+export declare function isWellFormedDID(value: unknown): value is DID;
+
+/**
+ * Returns the principal the running handler acts for: the authenticated actor
+ * of the event it handles, or `undefined` for an event no principal sent.
+ * Nothing in the event's payload can choose the value.
+ *
+ * The value is _authority_, not _intent_: a handler that another pattern
+ * invokes sees the user that pattern runs as, so it does not show that the
+ * person asked for the action. A trusted gesture is what shows that. A value
+ * labeled `AuthoredByCurrentUser` is authority too.
+ *
+ * Available only in a handler for now, and throws anywhere else. A pattern body
+ * builds one graph for every viewer, and reading the viewer in a `computed()`
+ * or a `lift()` needs every runtime to scope the value to that user, and a
+ * label saying who may see the viewer's DID.
+ */
+export declare function currentPrincipal(): DID | undefined;
+
+/**
+ * A kind of principal claim a label can carry: `represents-principal` names
+ * whom a value stands for, as a profile's label does, and `authored-by` names
+ * who wrote it, as `AuthoredByCurrentUser` records.
+ */
+export type PrincipalClaimKind = "authored-by" | "represents-principal";
+
+/**
+ * Returns the one principal that the label on `target`'s value attests with a
+ * claim of `kind`: the DID a profile represents, or the author of a record.
+ * The claim is read at the value's root and on its top-level fields, and only
+ * in the form the runtime writes when it resolves `RepresentsCurrentUser`,
+ * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
+ * for anyone but the principal it runs for.
+ *
+ * `undefined` means the label names no verified single principal of that kind:
+ * none, more than one, or a claim in some other form. It also means that
+ * `target` is `undefined`, which is what a value that cannot be read yet reads
+ * as. It is never a guess, and a caller refuses whatever needs a principal. A
+ * label that cannot be read throws instead.
+ *
+ * It reads the label, and no contents of the value beyond the link pointers
+ * needed to reach it. In a reactive computation
+ * (`computed()`, `lift()`) the result updates when the label changes. It can
+ * also be called in a handler, on a cell an event names. Calling it in a
+ * pattern body throws: wrap it in `computed()` instead.
+ *
+ * What a principal claim names is public to anyone who holds the value, so the
+ * result carries no label of its own. Compare it with `currentPrincipal()`, or
+ * check it with `isWellFormedDID()`; writing it into a label as a claim's
+ * subject is refused, like any other literal DID a pattern writes there,
+ * unless the schema declares it as the `ownerPrincipal` and it is the
+ * principal the write acts for.
+ */
+export declare function principalOf(
+  target: AnyCell<unknown> | undefined,
+  kind: PrincipalClaimKind,
+): DID | undefined;
+
+/**
+ * Returns every principal that the label on `target`'s value attests with a
+ * claim of `kind`, where `principalOf()` returns only a single one: so a
+ * caller can tell a label that attests no principal from one that attests
+ * several, and refuse the second while admitting the first.
+ *
+ * `[]` means the label attests none. A non-empty array lists the DIDs it
+ * attests, in the order they first appear. `undefined` means a claim there is
+ * in some other form, from which no principal can be read, or that `target` is
+ * `undefined`. The claims are read where, and as, `principalOf()` reads them,
+ * it can be called where `principalOf()` can, and it throws where that does.
+ */
+export declare function principalsOf(
+  target: AnyCell<unknown> | undefined,
+  kind: PrincipalClaimKind,
+): DID[] | undefined;
+
+/**
+ * Returns the event key of the event the running handler handles: a string
+ * naming that one event, as its actor sent it to its stream. Every run of the
+ * same event returns the same key, including a retry and the serving runtime's
+ * run of a client's event, so a handler can use it as an idempotence key or as
+ * the id of what the event creates. A new gesture, a new stream or another
+ * actor gets a new key, and nothing in the event's payload can choose it.
+ *
+ * The key is distinct per durable event id, actor and stream. A stream that
+ * has handled an event can admit the same id again, which gets the same key
+ * from the same actor, so a record addressed by the key may already exist.
+ *
+ * The key is unlabeled and carries no trust: it says that one event is one
+ * event, not who sent it or that a person asked for it.
+ *
+ * Available only in a handler, and throws anywhere else.
+ */
+export declare function eventKey(): string;
 
 export type WishParams = {
   query: WishTag | string;
@@ -3537,6 +3780,34 @@ export type ToIndentedDebugStringFunction = (
   value: unknown,
   options?: DebugValueOptions,
 ) => string;
+/**
+ * Composes a diagnostic message. A substitution is converted the way a
+ * template literal converts one, except that the conversion never throws, and
+ * except where a _directive_ comes right before it: a dollar sign and one or
+ * more comma-separated words, as in `$quote,long${value}`. The directive is
+ * removed from the text, and the value after it gets a debug rendering, cut to
+ * the size its size word names and quoted where it holds `quote`.
+ *
+ * - With no `indent`, the rendering is that of `toCompactDebugString()`, cut
+ *   to 50 characters, or with `long` to 500, or with `xlong` to 5000; `short`
+ *   names the default. With `quote` it is a Markdown code span.
+ * - With `indent`, the rendering is that of `toIndentedDebugString()`, cut to
+ *   5 lines, or with `long` to 50, or with `xlong` to 500. With `quote` it is
+ *   a Markdown fenced block on lines of its own.
+ *
+ * Either way the quoting survives a backtick in the value, which a
+ * hand-written pair of backticks does not. A backslash before the dollar sign,
+ * as in `\$quote${value}`, makes the text literal and the substitution an
+ * ordinary one. A directive holding any other word stays in the message as
+ * text, where the misspelling can be seen, and its value gets the default
+ * rendering.
+ *
+ * As with the renderers it calls, how a value renders is not a contract.
+ */
+export type DebugStrFunction = (
+  strings: TemplateStringsArray,
+  ...values: readonly unknown[]
+) => string;
 
 /**
  * Compare two cells or values for equality after resolving, i.e. after
@@ -3565,13 +3836,28 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
+ *
+ * The shared space is born with an access list. The first participant's user
+ * is its OWNER, and every other user holds the level its participants declare
+ * with `{ pattern, access }`, or `"WRITE"` when none declares one; `"none"`
+ * leaves the user out of the list. It is what `spaceAccess()` reads. The
+ * storage server does not enforce it: a participant reads and writes the space
+ * whatever its level.
+ *
+ * The run fails before any participant starts when a participant of the first
+ * participant's user declares a level other than `"OWNER"`, or when two
+ * participants of one user declare different levels.
  */
 export interface MultiUserTestDescriptor {
   setup?: (...args: never[]) => unknown;
   participants: Record<
     string,
     | ((...args: never[]) => unknown)
-    | { pattern: (...args: never[]) => unknown; user?: string }
+    | {
+      pattern: (...args: never[]) => unknown;
+      user?: string;
+      access?: SpaceAccessLevel;
+    }
   >;
 }
 
@@ -3596,6 +3882,7 @@ export declare const llm: LLMFunction;
 export declare const llmDialog: LLMDialogFunction;
 export declare const generateObject: GenerateObjectFunction;
 export declare const generateText: GenerateTextFunction;
+export declare const agent: AgentFunction;
 export declare const cellFromUrl: CellFromUrlFunction;
 export declare const fetchBinary: FetchBinaryFunction;
 export declare const fetchText: FetchTextFunction;
@@ -3637,6 +3924,7 @@ export function getPatternEnvironment(): PatternEnvironment {
 }
 export declare const toCompactDebugString: ToCompactDebugStringFunction;
 export declare const toIndentedDebugString: ToIndentedDebugStringFunction;
+export declare const debugStr: DebugStrFunction;
 
 export interface UiActionProps {
   readonly as?: string;
@@ -3672,6 +3960,99 @@ export type GetEntityIdFunction = (
 ) => { "/": string } | FabricHash | undefined;
 
 export declare const getEntityId: GetEntityIdFunction;
+
+/**
+ * A principal's access to a space: one of the capabilities a space's access
+ * list grants, or `"none"` when it grants that principal nothing.
+ */
+export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
+
+/**
+ * Returns the current principal's own access to the space `target`'s value
+ * lives in, as the space's access list states it: the principal's entry in
+ * the list, else the list's `"*"` entry. `target` is required, so a call about
+ * the pattern's own space passes a cell that lives there.
+ *
+ * `"none"` means the principal holds nothing there. `undefined` means the
+ * answer is not known yet: the access list has not arrived, the space has no
+ * access list, there is no principal, or `target` is `undefined`, which is what
+ * a value that cannot be read yet reads as. It is never a guess.
+ *
+ * In a reactive computation (`computed()`, `lift()`) the principal is whoever
+ * is viewing, and the result is theirs alone, so two users never see each
+ * other's answer; it updates when the access list changes. In a handler it is
+ * the event's actor. Calling it in a pattern body throws, since a pattern
+ * body builds one graph for every viewer: wrap it in `computed()` instead.
+ *
+ * It names no principal, and tells a member only what a member can already
+ * read, since any member can read the whole access list.
+ */
+export type SpaceAccessFunction = (
+  target: AnyCell<unknown> | undefined,
+) => SpaceAccessLevel | undefined;
+
+export declare const spaceAccess: SpaceAccessFunction;
+
+/** The level `grantSpaceAccess()` sets an access-list entry to. */
+export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
+
+/**
+ * Sets `principal`'s entry in the access list of the space `target`'s value
+ * lives in to exactly `level`, raising or lowering it. Granting a level the
+ * principal already holds changes nothing, so a handler run again for the same
+ * event converges.
+ *
+ * A grant exposes to `principal` everything the space already holds, not only
+ * what is written after it, since adding a member changes no value's label.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture: a person's action on a rendered UI.
+ * `principal` must be a DID other than the actor's own, the space's own, and
+ * `"*"`. The space may not be the actor's own Home space. Lowering the space's
+ * last concrete `OWNER` is refused. A runtime
+ * cannot know the deployment's service DIDs, or the identities its serving
+ * runtimes act through, so it does not refuse one of those as `principal`.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function grantSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+  level: SpaceGrantLevel,
+): void;
+
+/**
+ * Removes `principal`'s entry from the access list of the space `target`'s
+ * value lives in. Revoking an entry that is not there changes nothing, so a
+ * handler run again for the same event converges. A principal the list's
+ * `"*"` entry covers keeps what that entry grants.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Revoking the space's last concrete `OWNER` is
+ * refused.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function revokeSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+): void;
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

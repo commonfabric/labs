@@ -11,6 +11,7 @@
 
 import { Command, ValidationError } from "@cliffy/command";
 import { Table } from "@cliffy/table";
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   annotate,
   buildCrossSpaceLinkIndex,
@@ -72,6 +73,7 @@ import {
   valueAsIdentity,
 } from "@commonfabric/state-inspector";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { maxOf } from "@commonfabric/utils/math";
 import { loadIdentity } from "../lib/identity.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 
@@ -260,7 +262,7 @@ function formatSelectedPath(segments: string[], exact: boolean): string {
 }
 
 function summarizeChangeValue(
-  value: unknown,
+  value: FabricValue,
   isUndefined?: true,
   valueKind?: string,
 ): string {
@@ -985,7 +987,7 @@ export const inspect = new Command()
           console.log("no timed commits in window");
         } else {
           const width = String(
-            Math.max(...report.buckets.map((b) => b.commits)),
+            maxOf(report.buckets.map((b) => b.commits)),
           ).length;
           for (const b of report.buckets) {
             const peak = b.startEpoch === report.peak.startEpoch

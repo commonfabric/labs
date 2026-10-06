@@ -100,7 +100,7 @@ describe("patternSource meta accessors", () => {
       rawMetaWriteAuthorization,
     );
     setPatternSource(seededCell, seed, origin);
-    await seed.commit();
+    await seed.commit().settled;
 
     const cell = runtime.getCell(signer.did(), id);
     const expected = getPieceSourceSnapshot(cell);
@@ -125,7 +125,7 @@ describe("patternSource meta accessors", () => {
         expected: expected!,
       },
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(getPatternSource(cell)).toBeUndefined();
     expect(getPieceSourceSnapshot(cell)).toEqual({
@@ -167,7 +167,7 @@ describe("patternSource meta accessors", () => {
       rawMetaWriteAuthorization,
     );
     setPatternSource(seededCell, seed, "https://example.test/first.tsx");
-    await seed.commit();
+    await seed.commit().settled;
 
     const cell = runtime.getCell(signer.did(), id);
     const stale = getPieceSourceSnapshot(cell)!;
@@ -177,7 +177,7 @@ describe("patternSource meta accessors", () => {
       concurrent,
       "https://example.test/concurrent.tsx",
     );
-    await concurrent.commit();
+    await concurrent.commit().settled;
 
     const transition = runtime.edit();
     expect(() =>
@@ -220,7 +220,7 @@ describe("patternSource meta accessors", () => {
       revisionId: "broken",
       timestamp: 42,
     }], rawMetaWriteAuthorization);
-    await seed.commit();
+    await seed.commit().settled;
 
     const cell = runtime.getCell(signer.did(), id);
     expect(() => getPieceSourceRevisions(cell)).toThrow(
@@ -277,7 +277,7 @@ describe("patternSource meta accessors", () => {
         history as never,
         rawMetaWriteAuthorization,
       );
-      await seed.commit();
+      await seed.commit().settled;
 
       expect(() => getPieceSourceRevisions(cell)).toThrow(
         "piece source history is invalid",
@@ -307,7 +307,7 @@ describe("patternSource meta accessors", () => {
       ).getAsLink(),
       operation: "create",
     }], rawMetaWriteAuthorization);
-    await seed.commit();
+    await seed.commit().settled;
 
     expect(() => getPieceSourceRevisions(runtime.getCell(signer.did(), id)))
       .toThrow("piece source history is invalid");
@@ -330,7 +330,7 @@ describe("patternSource meta accessors", () => {
       pattern,
       rawMetaWriteAuthorization,
     );
-    await seed.commit();
+    await seed.commit().settled;
     const expected = getPieceSourceSnapshot(piece)!;
     const baseline = await preparePieceSourceTransitionBaseline(
       runtime,
@@ -345,7 +345,7 @@ describe("patternSource meta accessors", () => {
       undefined,
       corrupt,
     ).set({ corrupt: true });
-    await corrupt.commit();
+    await corrupt.commit().settled;
 
     const transition = runtime.edit();
     expect(() =>
@@ -378,7 +378,7 @@ describe("patternSource meta accessors", () => {
       missing,
       rawMetaWriteAuthorization,
     );
-    await seed.commit();
+    await seed.commit().settled;
 
     const cell = runtime.getCell(signer.did(), id);
     const expected = getPieceSourceSnapshot(cell)!;
@@ -422,7 +422,7 @@ describe("patternSource meta accessors", () => {
       replacement,
       rawMetaWriteAuthorization,
     );
-    await transition.commit();
+    await transition.commit().settled;
 
     expect(
       getPieceSourceRevisions(cell).map((revision) => ({
@@ -445,7 +445,7 @@ describe("patternSource meta accessors", () => {
       rawMetaWriteAuthorization,
     );
     setPatternSource(cell, seed, "https://example.test/first.tsx");
-    await seed.commit();
+    await seed.commit().settled;
     const stale = getPieceSourceSnapshot(cell)!;
 
     const concurrent = runtime.edit();
@@ -454,7 +454,7 @@ describe("patternSource meta accessors", () => {
       concurrent,
       "https://example.test/concurrent.tsx",
     );
-    await concurrent.commit();
+    await concurrent.commit().settled;
 
     await expect(
       preparePieceSourceTransitionBaseline(runtime, cell, stale),
@@ -483,7 +483,7 @@ describe("patternSource meta accessors", () => {
       {},
       cell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     const stale = getPieceSourceSnapshot(
       cell,
@@ -502,7 +502,7 @@ describe("patternSource meta accessors", () => {
       {},
       cell,
     );
-    await tx2.commit();
+    await tx2.commit().settled;
     await rerun.pull();
     const moved = runtime.runner.sessionPatternPointerFor(cell);
     expect(moved).toBeDefined();

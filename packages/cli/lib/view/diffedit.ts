@@ -11,11 +11,16 @@
  * recomputed from the edited text.
  */
 
+import { spliceAll } from "@commonfabric/utils/arrays";
+import { maxOf } from "@commonfabric/utils/math";
+
 import type { Document, Line, Span, ViewMode } from "./model.ts";
 import { cpLen } from "./ansi.ts";
 import {
   buildDiffDocument,
   type DiffEdit,
+  type DiffFileLanguages,
+  diffLanguages,
   type DiffWorkspace,
   type WorkspaceCache,
 } from "./diffdoc.ts";
@@ -40,7 +45,8 @@ import {
   sameCommit,
 } from "./commitmsg.ts";
 import type { Highlighter, Language } from "./languages/language.ts";
-import { languageForFile } from "./languages/language.ts";
+import { canRenderDiffLines } from "./languages/language.ts";
+import { plainTextLanguage } from "./languages/plain-text/language.ts";
 import type { LineEndingProvenance } from "./editbuffer.ts";
 import type {
   EditableSource,
@@ -56,7 +62,6 @@ export function diffSource(
   edit: DiffEdit,
   cache?: WorkspaceCache,
   git?: GitRunner,
-  hasRenderedView = false,
 ): EditableSource {
   const files = [...edit.fileText.keys()];
   const expectedFiles = new Map(edit.fileText);
@@ -66,12 +71,15 @@ export function diffSource(
   const shownHead = git?.headSha() ?? null;
   const shownRef = git?.headRef?.() ?? null;
   let expectedHead = shownHead;
-  const renderedView = hasRenderedView
-    ? {
-      render: (source: Document) =>
-        reparse(ws, source.text, cache, completeFiles, "rendered"),
-    }
-    : {};
+  const renderedView =
+    edit.languages.some(({ oldLanguage, newLanguage }) =>
+        canRenderDiffLines(oldLanguage) || canRenderDiffLines(newLanguage)
+      )
+      ? {
+        render: (source: Document) =>
+          reparse(ws, edit, source.text, cache, completeFiles, "rendered"),
+      }
+      : {};
   const resolvedCommits = new Map<string, string | null>();
   const matchesShownHead = (sha: string): boolean => {
     if (!shownHead) return false;
@@ -118,7 +126,7 @@ export function diffSource(
   const diffCountContexts = (text: string) => {
     if (text !== countContextText) {
       countContextText = text;
-      countContexts = buildDiffCountContexts(edit, text);
+      countContexts = buildDiffCountContexts(ws, edit, text);
     }
     return countContexts;
   };
@@ -137,7 +145,7 @@ export function diffSource(
       editable: false,
       reason:
         "This diff doesn't match any file on disk, so there is nothing to edit.",
-      parse: (text) => reparse(ws, text, cache),
+      parse: (text) => reparse(ws, edit, text, cache),
       ...renderedView,
       save: () => "Nothing to save — this diff matches no file on disk.",
     };
@@ -256,7 +264,7 @@ export function diffSource(
     logicalEnd: (lines, row) =>
       diffLogicalEnd(classify(lines).model, lines, row),
     parse: (text, lineEndings) =>
-      reparse(ws, text, cache, completeFiles, "source", lineEndings),
+      reparse(ws, edit, text, cache, completeFiles, "source", lineEndings),
     ...renderedView,
     // Live highlighting recolors the lines an edit changes and reuses the seed
     // (buildDiffDocument's colors, including the file/hunk headers and the
@@ -268,6 +276,7 @@ export function diffSource(
         text,
         seed,
         edit.oldFileLines,
+        (text, model) => editedLanguages(edit.languages, text, model, ws),
         completeFiles,
         lineEndings,
       ),
@@ -491,27 +500,27 @@ export function diffSource(
 }
 
 function buildDiffCountContexts(
+  ws: DiffWorkspace,
   edit: DiffEdit,
   text: string,
 ): readonly DiffCountFileContext[] {
   const model = parseDiff(text);
   if (!model) return [];
   const raw = text.split("\n");
+  const decided = editedLanguages(edit.languages, text, model, ws);
   return model.files.map((file, fileIndex) => {
+    const languages = decided[fileIndex];
     const oldLines = edit.oldFileLines[fileIndex] ?? undefined;
     const newText = oldLines
       ? reconstructNewSide(file, oldLines, raw, model.lines)
       : undefined;
     const newLines = newText === undefined
       ? undefined
-      : languageForFile(file.newPath ?? file.oldPath).highlightLines(
+      : languages.newLanguage.highlightLines(
         newText,
         file.newPath ?? file.oldPath,
       );
-    return {
-      oldLines,
-      newLines,
-    };
+    return { languages, oldLines, newLines };
   });
 }
 
@@ -550,11 +559,7 @@ function reconstructNewSide(
       if (oldNoNewline || newNoNewline) trailingNewline = !newNoNewline;
       else if (oldLineCount === 0 && hunk.newCount > 0) trailingNewline = true;
     }
-    lines.splice(
-      start,
-      hunk.oldCount,
-      ...replacement,
-    );
+    spliceAll(lines, start, hunk.oldCount, replacement);
   }
   if (trailingNewline && lines.at(-1) !== "") lines.push("");
   if (!trailingNewline && lines.length > 1 && lines.at(-1) === "") lines.pop();
@@ -665,10 +670,11 @@ function baselineWithCurrentHunks(original: string, current: string): string {
   for (let index = beforeHunks.length - 1; index >= 0; index--) {
     const beforeHunk = beforeHunks[index].hunk;
     const afterHunk = afterHunks[index].hunk;
-    baselineLines.splice(
+    spliceAll(
+      baselineLines,
       beforeHunk.headerLine,
       beforeHunk.endLine - beforeHunk.headerLine + 1,
-      ...currentLines.slice(afterHunk.headerLine, afterHunk.endLine + 1),
+      currentLines.slice(afterHunk.headerLine, afterHunk.endLine + 1),
     );
   }
   return baselineLines.join("\n");
@@ -1314,15 +1320,22 @@ function applyExpansion(
  * changes (found by a common prefix/suffix of the line arrays) and keeps `seed`
  * — the colors {@link buildDiffDocument} produced for the unedited text — for
  * every line the edit leaves alone. Edited removed lines use the complete old
- * file's spans. Other edited body lines use a marker-aware single-line parse.
- * A language can ask to re-highlight complete files when its colors depend on
- * preceding lines. The headers stay in the unchanged prefix or suffix. When no
- * seed is given, the highlighter renders every line itself.
+ * file's spans. Other edited body lines use a marker-aware single-line parse
+ * in the language of their file's side, which `languagesFor` decides for each
+ * version of the diff, or which the diff's own paths and content decide
+ * without it. A language can ask to
+ * re-highlight complete files when its colors depend on preceding lines. The
+ * headers stay in the unchanged prefix or suffix. When no seed is given, the
+ * highlighter renders every line itself.
  */
 export function createDiffHighlighter(
   initialText: string,
   seed?: readonly Line[],
   oldFileLines?: readonly (readonly Line[] | null)[],
+  languagesFor: (
+    text: string,
+    model: DiffModel,
+  ) => readonly DiffFileLanguages[] = diffLanguages,
   completeFiles?: DiffHighlightFiles,
   initialLineEndings?: readonly (LineEndingProvenance | undefined)[],
 ): Highlighter {
@@ -1330,11 +1343,14 @@ export function createDiffHighlighter(
   const completeHighlighters = new Map<string, Highlighter>();
   const initialRaw = initialText.split("\n");
   const initialModel = seed ? null : parseDiff(initialText);
+  const languagesOf = (text: string, model: DiffModel | null) =>
+    model ? languagesFor(text, model) : [];
+  const initialLanguages = languagesOf(initialText, initialModel);
   let lines: Line[] = (seed ??
     initialRaw.map((line, index) =>
       diffLineRender(
         line,
-        diffFileNameAt(initialRaw, index, initialModel),
+        diffSideAt(initialModel, index, initialLanguages),
         oldLineSpansAt(initialModel, index, oldFileLines),
       )
     )).slice();
@@ -1346,6 +1362,7 @@ export function createDiffHighlighter(
       0,
       initialRaw.length,
       oldFileLines,
+      initialLanguages,
       completeFiles,
       completeHighlighters,
       undefined,
@@ -1382,10 +1399,11 @@ export function createDiffHighlighter(
         s,
       );
       const model = parseDiff(next);
+      const nextLanguages = languagesOf(next, model);
       const recolored = newRaw.slice(p, newRaw.length - s).map((l, i) =>
         diffLineRender(
           l,
-          diffFileNameAt(newRaw, p + i, model),
+          diffSideAt(model, p + i, nextLanguages),
           oldLineSpansAt(model, p + i, oldFileLines),
         )
       );
@@ -1400,6 +1418,7 @@ export function createDiffHighlighter(
         p,
         newRaw.length - s,
         oldFileLines,
+        nextLanguages,
         completeFiles,
         completeHighlighters,
         localEdit,
@@ -1424,7 +1443,13 @@ interface TouchedHunk {
 interface CompleteHunk {
   readonly hunk: DiffHunk;
   readonly info: MutableHunk;
+  readonly side: DiffSide;
+}
+
+/** One side of a diff file: its name, and the language it is read in. */
+interface DiffSide {
   readonly fileName: string | undefined;
+  readonly language: Language;
 }
 
 interface LocalDiffLineEdit {
@@ -1504,7 +1529,8 @@ function rehighlightTouchedHunks(
   lines: Line[],
   changedStart: number,
   changedEnd: number,
-  oldFileLines?: readonly (readonly Line[] | null)[],
+  oldFileLines: readonly (readonly Line[] | null)[] | undefined,
+  languages: readonly DiffFileLanguages[],
   completeFiles?: DiffHighlightFiles,
   completeHighlighters?: Map<string, Highlighter>,
   localEdit?: LocalDiffLineEdit,
@@ -1514,23 +1540,19 @@ function rehighlightTouchedHunks(
   const changedLast = Math.max(changedStart, changedEnd - 1);
   const statefulFiles: {
     fileIndex: number;
-    oldFileName: string | undefined;
-    newFileName: string | undefined;
-    oldLanguage: Language;
-    newLanguage: Language;
+    oldSide: DiffSide;
+    newSide: DiffSide;
     touched: TouchedHunk[];
   }[] = [];
   let hunkIndex = 0;
   for (const [fileIndex, file] of model.files.entries()) {
-    const oldFileName = file.oldPath ?? file.newPath;
-    const newFileName = file.newPath ?? file.oldPath;
-    const oldLanguage = languageForFile(oldFileName);
-    const newLanguage = languageForFile(newFileName);
+    const oldSide = diffFileSide(file, "old", languages[fileIndex]);
+    const newSide = diffFileSide(file, "new", languages[fileIndex]);
     const touched: TouchedHunk[] = [];
     for (const hunk of file.hunks) {
       if (
-        (oldLanguage.highlightFullFileOnDiffEdit ||
-          newLanguage.highlightFullFileOnDiffEdit) &&
+        (oldSide.language.highlightFullFileOnDiffEdit ||
+          newSide.language.highlightFullFileOnDiffEdit) &&
         changedLast >= hunk.headerLine && changedStart <= hunk.endLine
       ) {
         touched.push({ hunk, info: completeFiles?.hunks[hunkIndex] });
@@ -1538,14 +1560,7 @@ function rehighlightTouchedHunks(
       hunkIndex++;
     }
     if (touched.length > 0) {
-      statefulFiles.push({
-        fileIndex,
-        oldFileName,
-        newFileName,
-        oldLanguage,
-        newLanguage,
-        touched,
-      });
+      statefulFiles.push({ fileIndex, oldSide, newSide, touched });
     }
   }
   if (statefulFiles.length === 0) return;
@@ -1553,16 +1568,8 @@ function rehighlightTouchedHunks(
   let fullNewFiles: Map<string, string> | undefined;
   let completeHunksByPath: Map<string, CompleteHunk[]> | undefined;
   const appliedNewPaths = new Set<string>();
-  for (const stateful of statefulFiles) {
-    const {
-      fileIndex,
-      oldFileName,
-      newFileName,
-      oldLanguage,
-      newLanguage,
-      touched,
-    } = stateful;
-    if (oldLanguage.highlightFullFileOnDiffEdit) {
+  for (const { fileIndex, oldSide, newSide, touched } of statefulFiles) {
+    if (oldSide.language.highlightFullFileOnDiffEdit) {
       const completeOld = oldFileLines?.[fileIndex];
       for (const { hunk } of touched) {
         if (completeOld) {
@@ -1573,36 +1580,28 @@ function rehighlightTouchedHunks(
             hunk,
             "old",
             completeOld,
-            oldFileName,
+            oldSide,
           );
           continue;
         }
-        rehighlightHunkSide(
-          rawLines,
-          model,
-          lines,
-          hunk,
-          "old",
-          oldLanguage,
-          oldFileName,
-        );
+        rehighlightHunkSide(rawLines, model, lines, hunk, "old", oldSide);
       }
     }
 
-    if (newLanguage.highlightFullFileOnDiffEdit) {
+    if (newSide.language.highlightFullFileOnDiffEdit) {
       const locallyHighlighted = localEdit !== undefined &&
         touched.some(({ hunk }) =>
           localEdit.newDiffLine > hunk.headerLine &&
           localEdit.newDiffLine <= hunk.endLine
         ) &&
-        newLanguage.highlightDiffLineEditLocally?.(
+        newSide.language.highlightDiffLineEditLocally?.(
           localEdit.before,
           localEdit.after,
         );
       if (locallyHighlighted && localEdit) {
         lines[localEdit.newDiffLine] = diffLineRender(
           rawLines[localEdit.newDiffLine],
-          newFileName,
+          newSide,
           locallyHighlighted.spans,
         );
         continue;
@@ -1622,39 +1621,39 @@ function rehighlightTouchedHunks(
         )).get(path)
         : undefined;
       if (completeText !== undefined && path && completeFiles) {
-        if (appliedNewPaths.has(path)) continue;
-        appliedNewPaths.add(path);
-        let completeHighlighter = completeHighlighters?.get(path);
+        // Sections of `git log -p` output can read one file in different
+        // languages, so each language highlights the complete file apart.
+        const key = `${newSide.language.id}\0${path}`;
+        if (appliedNewPaths.has(key)) continue;
+        appliedNewPaths.add(key);
+        let completeHighlighter = completeHighlighters?.get(key);
         let completeNew: readonly Line[];
         if (!completeHighlighter) {
-          completeHighlighter = newLanguage.createHighlighter(
+          completeHighlighter = newSide.language.createHighlighter(
             completeText,
-            newFileName,
+            newSide.fileName,
           );
-          completeHighlighters?.set(path, completeHighlighter);
+          completeHighlighters?.set(key, completeHighlighter);
           completeNew = completeHighlighter.lines;
         } else {
           completeNew = completeHighlighter.update(completeText);
         }
-        completeHunksByPath ??= indexCompleteHunks(model, completeFiles);
+        completeHunksByPath ??= indexCompleteHunks(
+          model,
+          completeFiles,
+          languages,
+        );
         applyCompleteNewFile(
           rawLines,
           model,
           lines,
           completeNew,
           completeHunksByPath.get(path) ?? [],
+          newSide.language,
         );
       } else {
         for (const { hunk } of touched) {
-          rehighlightHunkSide(
-            rawLines,
-            model,
-            lines,
-            hunk,
-            "new",
-            newLanguage,
-            newFileName,
-          );
+          rehighlightHunkSide(rawLines, model, lines, hunk, "new", newSide);
         }
       }
     }
@@ -1664,45 +1663,53 @@ function rehighlightTouchedHunks(
 function indexCompleteHunks(
   model: DiffModel,
   completeFiles: DiffHighlightFiles,
+  languages: readonly DiffFileLanguages[],
 ): Map<string, CompleteHunk[]> {
   const byPath = new Map<string, CompleteHunk[]>();
   let index = 0;
-  for (const file of model.files) {
-    const fileName = file.newPath ?? file.oldPath;
+  for (const [fileIndex, file] of model.files.entries()) {
+    const side = diffFileSide(file, "new", languages[fileIndex]);
     for (const hunk of file.hunks) {
       const info = completeFiles.hunks[index++];
       if (!info?.absPath || !isWritable(info)) continue;
       const entries = byPath.get(info.absPath) ?? [];
-      entries.push({ hunk, info, fileName });
+      entries.push({ hunk, info, side });
       byPath.set(info.absPath, entries);
     }
   }
   return byPath;
 }
 
+/**
+ * Recolor the new side of each hunk read in `language` from the complete new
+ * file, which is `complete` once every hunk's edits are applied.
+ */
 function applyCompleteNewFile(
   rawLines: string[],
   model: DiffModel,
   lines: Line[],
   complete: readonly Line[],
   entries: readonly CompleteHunk[],
+  language: Language,
 ): void {
   const ordered = [...entries].sort((a, b) =>
     spliceStart(a.info) - spliceStart(b.info)
   );
   let delta = 0;
-  for (const { hunk, info, fileName } of ordered) {
+  for (const { hunk, info, side } of ordered) {
     const start = spliceStart(info);
-    applyCompleteHunkSide(
-      rawLines,
-      model,
-      lines,
-      hunk,
-      "new",
-      complete,
-      fileName,
-      start + delta - spliceStart(hunk),
-    );
+    if (side.language === language) {
+      applyCompleteHunkSide(
+        rawLines,
+        model,
+        lines,
+        hunk,
+        "new",
+        complete,
+        side,
+        start + delta - spliceStart(hunk),
+      );
+    }
     delta += hunk.newCount - info.newCount;
   }
 }
@@ -1714,7 +1721,7 @@ function applyCompleteHunkSide(
   hunk: DiffHunk,
   side: "old" | "new",
   complete: readonly Line[],
-  fileName: string | undefined,
+  fileSide: DiffSide,
   lineOffset = 0,
 ): void {
   for (let line = hunk.headerLine + 1; line <= hunk.endLine; line++) {
@@ -1726,7 +1733,7 @@ function applyCompleteHunkSide(
     if (!included || sourceLine === undefined) continue;
     lines[line] = diffLineRender(
       rawLines[line],
-      fileName,
+      fileSide,
       complete[sourceLine + lineOffset]?.spans,
     );
   }
@@ -1738,8 +1745,7 @@ function rehighlightHunkSide(
   lines: Line[],
   hunk: DiffHunk,
   side: "old" | "new",
-  language: Language,
-  fileName: string | undefined,
+  fileSide: DiffSide,
 ): void {
   const fragment: { diffLine: number; code: string }[] = [];
   for (let line = hunk.headerLine + 1; line <= hunk.endLine; line++) {
@@ -1751,16 +1757,16 @@ function rehighlightHunkSide(
       fragment.push({ diffLine: line, code: rawLines[line].slice(1) });
     }
   }
-  const highlighted = language.highlightLines(
+  const highlighted = fileSide.language.highlightLines(
     fragment.map((entry) => entry.code).join("\n"),
-    fileName,
+    fileSide.fileName,
   );
   for (let index = 0; index < fragment.length; index++) {
     const { diffLine } = fragment[index];
     if (side === "old" && model.lines[diffLine]?.kind === "ctx") continue;
     lines[diffLine] = diffLineRender(
       rawLines[diffLine],
-      fileName,
+      fileSide,
       highlighted[index]?.spans,
     );
   }
@@ -1849,13 +1855,13 @@ function diffLogicalEnd(
 
 /**
  * Render one edited diff line: the marker keeps its diff color and row tint and
- * the code after it is highlighted, shifted one column right. Mirrors how the
- * diff document builder paints a line, so a live edit re-colors correctly
- * without rebuilding the whole diff.
+ * the code after it is highlighted in its file side's language, shifted one
+ * column right. Mirrors how the diff document builder paints a line, so a live
+ * edit re-colors correctly without rebuilding the whole diff.
  */
 function diffLineRender(
   lineText: string,
-  fileName?: string,
+  fileSide: DiffSide,
   oldSpans?: readonly Span[],
 ): Line {
   if (lineText.length === 0) return { text: "", spans: [] };
@@ -1881,7 +1887,7 @@ function diffLineRender(
     (oldText === code || `${oldText}\r` === code);
   const content = useOld
     ? oldSpans
-    : languageForFile(fileName).highlightLines(code, fileName)[0]?.spans;
+    : fileSide.language.highlightLines(code, fileSide.fileName)[0]?.spans;
   for (const s of content ?? []) {
     spans.push({ ...s, col: s.col + 1 });
   }
@@ -1906,50 +1912,48 @@ function oldLineSpansAt(
   if (!model || entry?.kind !== "del" || entry.oldLine === undefined) {
     return undefined;
   }
-  const fileIndex = model.files.findIndex((file) =>
+  return oldFileLines?.[diffFileIndexAt(model, line)]?.[entry.oldLine]?.spans;
+}
+
+/** The index of the diff file containing `line`, or -1 outside every file. */
+function diffFileIndexAt(model: DiffModel, line: number): number {
+  return model.files.findIndex((file) =>
     line >= file.headerLine && line <= file.endLine
   );
-  if (fileIndex < 0) return undefined;
-  return oldFileLines?.[fileIndex]?.[entry.oldLine]?.spans;
 }
 
-/** The old- or new-side file containing `lineIdx`, found from the nearest diff
- * header. Removed lines use the old path; additions and context use the new
- * path. */
-function diffFileNameAt(
-  rawLines: string[],
-  lineIdx: number,
+/**
+ * The file side a diff line belongs to: the old side for a removed line, and
+ * the new side otherwise. A line outside every file is plain text.
+ */
+function diffSideAt(
   model: DiffModel | null,
-): string | undefined {
-  const oldSide = model?.lines[lineIdx]?.kind === "del";
-  let fallback: string | undefined;
-  for (let i = Math.min(lineIdx, rawLines.length - 1); i >= 0; i--) {
-    if (model?.lines[i]?.kind !== "meta") continue;
-    const l = rawLines[i];
-    if (l.startsWith("+++ ")) {
-      const path = parserFileName(l.slice(4).split("\t")[0]);
-      if (path !== "/dev/null") {
-        if (!oldSide) return path;
-        fallback ??= path;
-      }
-    }
-    if (l.startsWith("--- ")) {
-      const path = parserFileName(l.slice(4).split("\t")[0]);
-      if (path !== "/dev/null") {
-        if (oldSide) return path;
-        fallback ??= path;
-      }
-    }
-    if (l.startsWith("diff --git ")) {
-      const file = parseDiff(l.replace(/\r$/, ""))?.files[0];
-      return (oldSide ? file?.oldPath : file?.newPath) ?? fallback;
-    }
+  line: number,
+  languages: readonly DiffFileLanguages[],
+): DiffSide {
+  const fileIndex = model ? diffFileIndexAt(model, line) : -1;
+  if (!model || fileIndex < 0) {
+    return { fileName: undefined, language: plainTextLanguage };
   }
-  return fallback;
+  return diffFileSide(
+    model.files[fileIndex],
+    model.lines[line]?.kind === "del" ? "old" : "new",
+    languages[fileIndex],
+  );
 }
 
-function parserFileName(value: string): string {
-  return value.replace(/\r$/, "").replace(/"$/, "");
+/**
+ * One side of a diff file, named by that side's path and falling back to the
+ * other side's path when the file is created or deleted.
+ */
+function diffFileSide(
+  file: DiffFile,
+  side: "old" | "new",
+  { oldLanguage, newLanguage }: DiffFileLanguages,
+): DiffSide {
+  return side === "old"
+    ? { fileName: file.oldPath ?? file.newPath, language: oldLanguage }
+    : { fileName: file.newPath ?? file.oldPath, language: newLanguage };
 }
 
 export const _internal = {
@@ -1961,8 +1965,30 @@ export const _internal = {
   changedStatefulFileOutputs,
 };
 
+/**
+ * The languages decided for a diff's files when it opened, while the edited
+ * diff still parses into those files. An edited diff that parses into other
+ * files decides its languages again, from its own paths and content and from
+ * `ws`.
+ */
+function editedLanguages(
+  decided: readonly DiffFileLanguages[],
+  text: string,
+  model: DiffModel,
+  ws: DiffWorkspace,
+): readonly DiffFileLanguages[] {
+  return decided.length === model.files.length
+    ? decided
+    : diffLanguages(text, model, ws);
+}
+
+/**
+ * Rebuild an edited diff's document, reading each file side in the language
+ * `edit` decided for it.
+ */
 function reparse(
   ws: DiffWorkspace,
+  edit: DiffEdit,
   text: string,
   cache?: WorkspaceCache,
   completeFiles?: DiffHighlightFiles,
@@ -1973,10 +1999,18 @@ function reparse(
   // An edit keeps every line's marker, so the text still parses as a diff; if a
   // pathological edit breaks that, fall back to a plain parse so highlighting
   // still updates.
-  if (!model) return languageForFile(undefined).parseDocument(text);
-  if (!completeFiles) {
-    return buildDiffDocument(text, model, ws, cache, viewMode).doc;
-  }
+  if (!model) return plainTextLanguage.parseDocument(text);
+  const languages = editedLanguages(edit.languages, text, model, ws);
+  const build = (workspace: DiffWorkspace, buildCache?: WorkspaceCache) =>
+    buildDiffDocument(
+      text,
+      model,
+      workspace,
+      buildCache,
+      viewMode,
+      languages,
+    ).doc;
+  if (!completeFiles) return build(ws, cache);
   const editedFiles = collectFileOutputs(
     text,
     completeFiles.fileText,
@@ -1989,9 +2023,8 @@ function reparse(
   );
   const statefulPaths = new Set<string>();
   let hunkIndex = 0;
-  for (const file of model.files) {
-    const oldLanguage = languageForFile(file.oldPath ?? file.newPath);
-    const newLanguage = languageForFile(file.newPath ?? file.oldPath);
+  for (const [fileIndex, file] of model.files.entries()) {
+    const { oldLanguage, newLanguage } = languages[fileIndex];
     const needsCompleteFile = oldLanguage.highlightFullFileOnDiffEdit ||
       newLanguage.highlightFullFileOnDiffEdit;
     for (const _hunk of file.hunks) {
@@ -2004,9 +2037,7 @@ function reparse(
     completeFiles.fileText,
     statefulPaths,
   );
-  if (statefulEdits.size === 0) {
-    return buildDiffDocument(text, model, ws, cache, viewMode).doc;
-  }
+  if (statefulEdits.size === 0) return build(ws, cache);
   // Reconstructed files make the edited new side the complete source used for
   // syntax highlighting and diff verification.
   const editedWorkspace: DiffWorkspace = {
@@ -2034,13 +2065,7 @@ function reparse(
   };
   const editedCache: WorkspaceCache = new Map(cache);
   for (const path of statefulEdits.keys()) editedCache.delete(path);
-  return buildDiffDocument(
-    text,
-    model,
-    editedWorkspace,
-    editedCache,
-    viewMode,
-  ).doc;
+  return build(editedWorkspace, editedCache);
 }
 
 function writeWorkspaceFile(
@@ -2449,7 +2474,7 @@ function collectFileOutputs(
     const fileLines = fileContentLines(base);
     const representedLineCount = Math.max(
       0,
-      ...splices.map((splice) => splice.startIndex + splice.newCount),
+      maxOf(splices.map((splice) => splice.startIndex + splice.newCount)),
     );
     if (
       representedLineCount === fileLines.length + 1 &&
@@ -2485,7 +2510,7 @@ function collectFileOutputs(
           nearbyProvenanceEnding(index, h.lineEndings, ending),
         );
       });
-      fileLines.splice(h.startIndex, h.newCount, ...replacement);
+      spliceAll(fileLines, h.startIndex, h.newCount, replacement);
     }
     out.set(
       path,

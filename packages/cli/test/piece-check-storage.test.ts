@@ -27,9 +27,9 @@ describe("piece check storage", () => {
   for (const cache of ["warm", "stale", "source-only"]) {
     it(`leaves all storage unchanged with a ${cache} current compiled cache`, async () => {
       const signer = await Identity.fromPassphrase("piece check storage");
-      const session = await createSession({
+      const session = createSession({
         identity: signer,
-        spaceName: crypto.randomUUID(),
+        spaceDid: (await Identity.generate()).did(),
       });
       const server = newLoopbackServer();
       const directory = await Deno.makeTempDir();

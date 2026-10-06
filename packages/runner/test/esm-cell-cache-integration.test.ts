@@ -21,6 +21,7 @@ import {
   sourceDocKey,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -73,7 +74,7 @@ describe("ESM compile via content-addressed cell cache", () => {
 
   afterEach(async () => {
     await runtime?.patternManager.flushCompileCacheWrites();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose({ closeStorage: false });
     await storageManager?.close();
   });
@@ -87,7 +88,7 @@ describe("ESM compile via content-addressed cell cache", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, compiled as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     return result.getAsQueryResult();
@@ -313,7 +314,7 @@ describe("ESM compile via content-addressed cell cache", () => {
 
       const legacyTx = firstRuntime.edit();
       const previousIdentity = legacyTx.getCfcState().implementationIdentity;
-      legacyTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(legacyTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -330,10 +331,10 @@ describe("ESM compile via content-addressed cell cache", () => {
           cell.set(stored);
         }
       } finally {
-        legacyTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(legacyTx, previousIdentity);
       }
       legacyTx.prepareCfc();
-      expect((await legacyTx.commit()).error).toBeUndefined();
+      expect((await legacyTx.commit().settled).error).toBeUndefined();
 
       const restoredCoverage = new PatternCoverageCollector();
       const restoredRuntime = newRuntime(restoredCoverage);
@@ -376,7 +377,7 @@ describe("ESM compile via content-addressed cell cache", () => {
       undefined,
       damageTx,
     ).set({ damaged: true });
-    expect((await damageTx.commit()).error).toBeUndefined();
+    expect((await damageTx.commit().settled).error).toBeUndefined();
 
     const repaired = await pm.compilePattern(PROGRAM, {
       space,
@@ -411,7 +412,7 @@ describe("ESM compile via content-addressed cell cache", () => {
     const pm = runtime.patternManager;
     await pm.compilePattern(PROGRAM, { space, tx });
     await pm.flushCompileCacheWrites();
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const { entryIdentity } = await (runtime.harness as Engine)
@@ -487,7 +488,7 @@ describe("ESM compile via content-addressed cell cache", () => {
       sourceTx,
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const runtime2 = newRuntime();
     const originalEditWithRetry = runtime2.editWithRetry.bind(runtime2);
@@ -605,7 +606,7 @@ describe("ESM compile via content-addressed cell cache", () => {
           tx2,
         );
         const result = runtime2.run(tx2, loaded!, { value: 7 }, resultCell);
-        await tx2.commit();
+        await tx2.commit().settled;
         await result.pull();
         expect(result.getAsQueryResult()).toEqual({ result: 14 });
         await runtime2.patternManager.flushCompileCacheWrites();
@@ -676,7 +677,7 @@ describe("ESM compile via content-addressed cell cache", () => {
       sourceTx,
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const pattern = await runtime.patternManager.compilePattern(PROGRAM);
     runtime.patternManager.associatePatternIdentity(pattern, {
@@ -713,7 +714,7 @@ describe("ESM compile via content-addressed cell cache", () => {
     await pm1.compilePattern(PROGRAM, { space, tx });
     await pm1.flushCompileCacheWrites();
     expect(pm1.getCompileCacheStats().misses).toBe(1);
-    await tx.commit();
+    await tx.commit().settled;
 
     // Session 2: a brand-new runtime on the same storage warms from the cache.
     const runtime2 = newRuntime();
@@ -729,7 +730,7 @@ describe("ESM compile via content-addressed cell cache", () => {
       // The cache-served pattern is a real, frozen pattern.
       expect(typeof warm).toBe("function");
     } finally {
-      await tx2.commit();
+      await tx2.commit().settled;
       await runtime2.dispose({ closeStorage: false });
     }
   });
@@ -755,7 +756,7 @@ describe("ESM compile via content-addressed cell cache", () => {
       });
       expect(typeof compiled).toBe("function");
     } finally {
-      await dtx.commit();
+      await dtx.commit().settled;
       await disabled.dispose({ closeStorage: false });
     }
   });
@@ -848,7 +849,7 @@ describe("ESM compile cache — Pattern.inSpace A → B routing", () => {
       expect(inA.size).toBe(0);
       readTx.abort?.();
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.dispose({ closeStorage: false });
     }
   });
@@ -868,7 +869,7 @@ describe("ESM compile cache — Pattern.inSpace A → B routing", () => {
         tx: tx1,
       });
       await rt1.patternManager.flushCompileCacheWrites();
-      await tx1.commit();
+      await tx1.commit().settled;
       await rt1.storageManager.synced();
 
       // Session 2: fresh runtime, same storage → warm hit when loading into B.
@@ -886,7 +887,7 @@ describe("ESM compile cache — Pattern.inSpace A → B routing", () => {
         misses: 0,
         byIdentityHits: 0,
       });
-      await tx2.commit();
+      await tx2.commit().settled;
     } finally {
       await rt2?.dispose({ closeStorage: false });
       await rt1.dispose({ closeStorage: false });

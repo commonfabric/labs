@@ -21,7 +21,6 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { isDID } from "@commonfabric/identity";
-import { CompilerStackLoadError } from "@commonfabric/runner";
 import {
   type InitializationData,
   type IPCClientMessage,
@@ -32,13 +31,13 @@ import {
   isIPCClientNotification,
   NotificationType,
   RequestType,
-  RuntimeErrorCode,
 } from "@/protocol/mod.ts";
 import { RuntimeProcessor } from "@/backends/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import type { MessagePortLike } from "@/shared/message-port-like.ts";
 import { describeFailure } from "@/shared/utils.ts";
 import { postThrough } from "./post-to-client.ts";
+import { runtimeErrorCode } from "./runtime-error.ts";
 import {
   type ClientId,
   OWNER_CLIENT_ID,
@@ -87,7 +86,10 @@ export interface RuntimeClientsOptions {
    * caller substituting {@link RuntimeProcessor.initialize} still reaches its
    * substitute.
    */
-  initializeRuntime?: (data: InitializationData) => Promise<RuntimeProcessor>;
+  initializeRuntime?: (
+    data: InitializationData,
+    clients: () => Iterable<WorkerClient>,
+  ) => Promise<RuntimeProcessor>;
 }
 
 /** One connected client, its channel, and whether its attach is settled. */
@@ -108,13 +110,14 @@ export class RuntimeClients {
   readonly #setConsoleBridge: (enabled: boolean) => void;
   readonly #initializeRuntime: (
     data: InitializationData,
+    clients: () => Iterable<WorkerClient>,
   ) => Promise<RuntimeProcessor>;
 
   constructor(options: RuntimeClientsOptions) {
     this.#owner = options.owner ?? ownerClient;
     this.#setConsoleBridge = options.setConsoleBridge;
     this.#initializeRuntime = options.initializeRuntime ??
-      ((data) => RuntimeProcessor.initialize(data));
+      ((data, clients) => RuntimeProcessor.initialize(data, clients));
   }
 
   /** The client that owns the worker and initializes its runtime. */
@@ -274,7 +277,12 @@ export class RuntimeClients {
           throw new Error("Initialization of WorkerRuntime already attempted.");
         }
         this.#setConsoleBridge(request.data.forwardWorkerConsole === true);
-        this.#initialization = this.#initializeRuntime(request.data);
+        this.#initialization = this.#initializeRuntime(request.data, () => [
+          this.#owner,
+          ...[...this.#attachedClients.values()]
+            .filter(({ attached }) => attached)
+            .map(({ client }) => client),
+        ]);
         this.#runtime = await this.#initialization;
         this.#reply({ msgId: message.msgId }, request.type, client);
         return;
@@ -402,9 +410,7 @@ export class RuntimeClients {
       console.error("[RuntimeWorker] Error:", error);
       const type = isIPCClientMessage(message) ? message.data.type : "invalid";
       ipcLogger.debug(`responded-error/${type}`, () => []);
-      const code = error instanceof CompilerStackLoadError
-        ? RuntimeErrorCode.CompilerStackLoadFailed
-        : undefined;
+      const code = runtimeErrorCode(error);
 
       // A reply is addressed by `msgId`, and what reaches here need not have
       // one: the decode above admits every `FabricValue`, `undefined` and a

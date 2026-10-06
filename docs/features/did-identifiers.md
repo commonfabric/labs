@@ -35,6 +35,7 @@ Import the DID vocabulary from the `/did` entry point.
 | --- | --- |
 | `isDID(value)` | The rule above, as a type predicate over `unknown`. |
 | `isDIDKey(value)` | The same test against `did:key:`, for a caller that supports only that method. |
+| `isWellFormedDID(value)` | A DID in DID Core syntax, at most 256 characters: the narrower question below, asked where a DID is shown or read as a principal. |
 | `parseDID(value)` | The DID split into `method` and `id`, or `undefined` when it is not a DID. |
 | `assertNotDID(value, role)` | Throws when `value` is a DID. `role` opens the message: `assertNotDID(name, "A space name")`. |
 | `DID_PREFIX`, `DID_KEY_PREFIX` | The literal prefixes, for a caller that has to slice or restate them. |
@@ -69,11 +70,20 @@ harness reads a space DID off a store file's name under the same shape. Both
 strings go on to name a file on disk, and a string that proves nothing about
 which space a file holds must not be read as proving one.
 
+`isWellFormedDID` is the narrower question for a DID a person sees or a claim
+names as its principal. `isDID` admits whitespace, zero-width and
+direction-override characters, and uppercase method names after `did:`, so two
+spellings of one principal could both pass, or a room could make a principal
+read as something it is not. The custody seal shows its seats and readers
+through it, and `representsPrincipalSubject` in
+`packages/runner/src/cfc/represents-principal.ts` reads a `represents-principal`
+subject only when it holds.
+
 ## Values that must not be a DID
 
 The mirror of the rule. A space is addressed either by its DID or by a name,
-and a name is turned into a DID by deriving a key from the name itself
-(`createSession` in `packages/identity/src/session.ts`). A name that is also a
+and a legacy name is turned into a DID by deriving a key from the name itself
+(`legacySpaceDid` in `packages/identity/src/legacy-space.ts`). A name that is also a
 DID therefore addresses one space when it travels as a name and a different
 space when it travels as a DID — the same string, two spaces, decided by the
 route it took.
@@ -83,14 +93,13 @@ to its own handling. A surface that accepts only a name refuses a DID rather
 than deriving a space from one. `assertNotDID` is how it does that where a
 generic message will do:
 
-- `createSession({ spaceName })` — the derivation itself, and the backstop
-  under every other named-space path.
+- `legacySpaceDid(name)` — the derivation itself, and the backstop under
+  every path that opens a space by legacy name. `PatternFactory.inSpace(name)`
+  is not one of them: its name resolves through an allocation record in the
+  calling space, to a space with a random DID, and is never derived.
 - `appViewToUrlPath` and `isAppView` in `packages/navigation/src/view.ts` — a
   view's URL is read back by `urlToAppView`, which routes a DID-shaped first
   segment to `spaceDid`, so a DID-shaped name would not survive the round trip.
-- `deriveSpaceDid` in `packages/state-inspector/discover.ts`, and
-  `cloneIntoNewSpace` in the piece menu — both derive a key from a name and
-  also show or address that name elsewhere.
 
 A surface with something better to say tests `isDID` and raises its own error.
 The harness console's `--fabric-space` is the example: its message names

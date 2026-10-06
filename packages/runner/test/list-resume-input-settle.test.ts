@@ -12,7 +12,7 @@ import {
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -62,8 +62,8 @@ class SM extends StorageManager {
   private constructor(o: Options, s: MemoryV2Server.Server) {
     super(o, new F(() => s));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
@@ -110,14 +110,7 @@ describe("list builtin resume input-settle", () => {
   let server: MemoryV2Server.Server;
 
   beforeEach(() => {
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
   });
   afterEach(async () => {
     await server.close();
@@ -146,7 +139,7 @@ describe("list builtin resume input-settle", () => {
       tx0,
     );
     rt1.run(tx0, compiled, { items }, rc1);
-    await tx0.commit();
+    await tx0.commit().settled;
     for (let k = 0; k < 10; k++) {
       await rc1.pull();
       await rt1.idle();
@@ -161,7 +154,7 @@ describe("list builtin resume input-settle", () => {
     rt1.scheduler.dispose();
     const tx1 = rt1.edit();
     rc1.withTx(tx1).key("items").set([]);
-    await tx1.commit();
+    await tx1.commit().settled;
     await rt1.patternManager.flushCompileCacheWrites();
     await sm1.synced();
     await rt1.dispose();
@@ -180,7 +173,7 @@ describe("list builtin resume input-settle", () => {
         compiled.resultSchema,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
       const started = await rt2.start(rc2);
       expect(started).toBe(true);
       for (let k = 0; k < 20; k++) {

@@ -46,6 +46,7 @@
 // session by construction, no leader election, no shared persisted
 // session.
 
+import { spliceAll } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
   type ClientCommit,
@@ -276,7 +277,7 @@ export class EventAppendQueue {
       // Intents a dead predecessor replica left in the manager-shared
       // store were fired EARLIER than anything this instance enqueues:
       // they discharge first.
-      this.#queue.unshift(...persisted);
+      spliceAll(this.#queue, 0, 0, persisted);
       for (const entry of persisted) {
         if (entry.clientSeq >= this.#clientSeq) {
           this.#clientSeq = entry.clientSeq + 1;
@@ -523,7 +524,18 @@ export class EventAppendQueue {
           attempt = 0;
           continue;
         }
-        if (REFUSED_ERROR_NAMES.has(name)) {
+        const verdict = error as {
+          permanentEvidence?: unknown;
+          aclRevision?: unknown;
+          retriable?: unknown;
+        } | undefined;
+        // A current ACL denial proves this append was not admitted. A
+        // session challenge race remains retryable and carries no such basis.
+        const aclRefusal = name === "AuthorizationError" &&
+          verdict?.permanentEvidence === true &&
+          typeof verdict.aclRevision === "number" &&
+          verdict.retriable !== true;
+        if (REFUSED_ERROR_NAMES.has(name) || aclRefusal) {
           logger.warn("event-append-refused", () => [
             `event append ${next.eventId} refused deterministically; ` +
             "dropped from the queue",

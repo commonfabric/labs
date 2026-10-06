@@ -33,6 +33,8 @@ describe("CFC prepare reproduction", () => {
         "overlapWildcardQueries",
         "overlapConcreteQueries",
         "authoritativeCoverCalls",
+        "stagedReferenceDerivations",
+        "stagedReferenceCacheHits",
         "flowTemplateEntriesMinted",
         "flowTemplateContainers",
       ] as const satisfies readonly CfcPreparationWork[];
@@ -85,7 +87,7 @@ describe("CFC prepare reproduction", () => {
           },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const select = runtime.edit();
       source.withTx(select).get();
       const selected = runtime.getCell(space, "selected", {
@@ -98,7 +100,7 @@ describe("CFC prepare reproduction", () => {
           (_, n) => source.withTx(select).key(String(n)),
         ),
       );
-      expect((await select.commit()).error).toBeUndefined();
+      expect((await select.commit().settled).error).toBeUndefined();
       const { commonfabric } = createTrustedBuilder(runtime);
       const { pattern, lift } = commonfabric;
       const render = lift<{ n: number }>((item) => ({
@@ -157,7 +159,7 @@ describe("CFC prepare reproduction", () => {
         { values: selected.withTx(tx) },
         runtime.getCell(space, "mapped-result", undefined, tx),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await result.pull();
       await runtime.idle();
       const rendered = result.key("rendered").get() as readonly {

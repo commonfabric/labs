@@ -7,17 +7,25 @@
  * and what `loom connector handles` prints — says which handles exist and what
  * each one's reference is, but records no label class. `pieces.json` declares
  * each connector piece's `sqlite_sources`, whose table contract carries the
- * per-column `ifc` the daemon seeded, and that is where a handle's CFC class is
+ * per-column `ifc` the daemon seeded, and that is where a handle's CFC classes are
  * written down. They join on piece, connection, and companion key. Connection
- * identity names a grant; its declared CFC class describes what it holds.
+ * identity names a grant; its declared CFC classes describe what it holds.
  *
- * A handle whose class cannot be read is not guessed at and not granted: it is
- * returned as unnamed, with the reason, for the launcher to print. A console
- * that silently held one fewer reference than its report claimed would be the
- * failure this whole launch path exists to prevent.
+ * The classes are description, not identity: a contract that declares none is
+ * still granted, under its connection's name. A handle the records cannot
+ * place is not guessed at and not granted: it is returned as unnamed, with the
+ * reason, for the launcher to print. A console that silently held one fewer
+ * reference than its report claimed would be the failure this whole launch
+ * path exists to prevent.
  */
 
+import {
+  rowLabelSpecOf,
+  ruleConstrainsConfidentiality,
+  validateRowLabelSpec,
+} from "@commonfabric/memory/sqlite/row-label";
 import { renderCellReference } from "@commonfabric/runner/shared";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { parseHandleRef } from "../src/handle-table.ts";
@@ -26,6 +34,7 @@ import { HARNESS_WELL_KNOWN_GRANT_NAMES } from "../src/contracts/well-known-gran
 import {
   checkConnectorGrantSpec,
   connectorGrantName,
+  isConnectorObservationTimestamp,
 } from "../src/well-known-grants.ts";
 
 /** The CFC atom type whose `class` names what a column holds. */
@@ -111,6 +120,65 @@ export const declaredClasses = (source: Record<string, unknown>): string[] => {
 };
 
 /**
+ * Whether one `sqlite_sources` entry's table contract declares confidentiality
+ * for what it reads: a column with a non-empty `ifc.confidentiality`, or a
+ * table whose `rowLabel` is valid and constrains confidentiality (as the
+ * runner judges it). Integrity alone does not count. A contract that declares
+ * none serves its rows without confidentiality, so it is not granted, whatever
+ * classes it does or does not name.
+ */
+export const declaresConfidentiality = (
+  source: Record<string, unknown>,
+): boolean => {
+  // An invalid rule is refused separately (`invalidRowLabel`), before this.
+  const tables = asRecord(source.tables) ?? {};
+  for (const table of Object.values(tables)) {
+    const properties = asRecord(asRecord(table)?.properties) ?? {};
+    const rule = rowLabelSpecOf(table);
+    if (
+      rule !== undefined &&
+      validateRowLabelSpec(rule, Object.keys(properties), properties) ===
+        undefined &&
+      ruleConstrainsConfidentiality(rule)
+    ) {
+      return true;
+    }
+    for (const column of Object.values(properties)) {
+      const confidentiality = asRecord(asRecord(column)?.ifc)?.confidentiality;
+      if (Array.isArray(confidentiality) && confidentiality.length > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+/**
+ * Why a table's `rowLabel` in one `sqlite_sources` entry is invalid, judged
+ * with the runner's own validator and arguments, or undefined when every rule
+ * is valid. The runner refuses every read of a database whose rule fails this
+ * (`row-label-read.ts`), so granting it would hand sessions a store no query
+ * can read.
+ */
+export const invalidRowLabel = (
+  source: Record<string, unknown>,
+): string | undefined => {
+  const tables = asRecord(source.tables) ?? {};
+  for (const [name, table] of Object.entries(tables)) {
+    const record = asRecord(table);
+    if (record?.rowLabel === undefined) continue;
+    const properties = asRecord(record.properties) ?? {};
+    const reason = validateRowLabelSpec(
+      record.rowLabel,
+      Object.keys(properties),
+      properties,
+    );
+    if (reason !== undefined) return `table \`${name}\`: ${reason}`;
+  }
+  return undefined;
+};
+
+/**
  * The key one injected handle is identified by on both sides of the join: the
  * piece, connection, and companion key Loom declares for the store.
  */
@@ -119,6 +187,112 @@ const handleKey = (
   connection: string,
   companion: string,
 ): string => JSON.stringify([piece, connection, companion]);
+
+/** Descriptive metadata published on one source receipt. */
+type ConnectorReceiptMetadata = Pick<
+  HarnessConnectorGrantSpec,
+  "rowCount" | "viewer" | "observation"
+>;
+
+/** Keeps agreed metadata and marks disagreements without choosing one receipt. */
+const mergeReceiptMetadata = (
+  target: ConnectorReceiptMetadata,
+  candidate: ConnectorReceiptMetadata,
+): void => {
+  if (target.rowCount !== candidate.rowCount) delete target.rowCount;
+  if (!deepEqual(target.viewer, candidate.viewer)) {
+    target.viewer = { identity: "conflicting" };
+  }
+  if (!deepEqual(target.observation, candidate.observation)) {
+    target.observation = { newestAt: null, reason: "conflicting-receipts" };
+  }
+};
+
+/** Reads source metadata by store identity, retaining agreement across repeats. */
+const sourceReceiptMetadata = (
+  rows: unknown,
+): Map<string, ConnectorReceiptMetadata> => {
+  const receipts = new Map<string, ConnectorReceiptMetadata>();
+  if (!Array.isArray(rows)) return receipts;
+  for (const row of rows) {
+    const source = asRecord(row);
+    const piece = asNonEmptyString(source?.piece);
+    const connection = asNonEmptyString(source?.connection_id);
+    const companion = asNonEmptyString(source?.companion_key);
+    if (
+      piece === undefined || connection === undefined ||
+      (source?.companion_key !== undefined && companion === undefined)
+    ) continue;
+    const count = source?.row_count;
+    const rowCount = source?.state === "linked" &&
+        typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ? count
+      : undefined;
+    const key = handleKey(piece, connection, companion ?? "");
+    const viewer = receiptViewer(source?.viewer);
+    const observation = receiptObservation(source);
+    const metadata = {
+      ...(rowCount === undefined ? {} : { rowCount }),
+      ...(viewer === undefined ? {} : { viewer }),
+      ...(observation === undefined ? {} : { observation }),
+    };
+    const previous = receipts.get(key);
+    if (previous === undefined) {
+      receipts.set(key, metadata);
+    } else {
+      mergeReceiptMetadata(previous, metadata);
+    }
+  }
+  return receipts;
+};
+
+/** Reads account identity without treating a local source as an unknown account. */
+const receiptViewer = (
+  value: unknown,
+): HarnessConnectorGrantSpec["viewer"] => {
+  const viewer = asRecord(value);
+  const reason = asNonEmptyString(viewer?.absent_reason);
+  if (viewer?.kind === "none") {
+    return {
+      identity: "none",
+      reason: reason ?? "reason not reported",
+    };
+  }
+  if (viewer?.kind === "unknown") {
+    return {
+      identity: "unknown",
+      ...(reason === undefined ? {} : { reason }),
+    };
+  }
+  if (viewer?.kind !== "account") {
+    return undefined;
+  }
+  const sourceId = asNonEmptyString(viewer.source_id);
+  const email = viewer.email === null ? null : asNonEmptyString(viewer.email);
+  const label = asNonEmptyString(viewer.label);
+  return {
+    identity: "account",
+    ...(sourceId === undefined ? {} : { sourceId }),
+    ...(email === undefined ? {} : { email }),
+    ...(label === undefined ? {} : { label }),
+    ...(reason === undefined ? {} : { reason }),
+  };
+};
+
+/**
+ * Reads record observation time and the receipt's reason when none is available.
+ */
+const receiptObservation = (
+  receipt: Record<string, unknown> | undefined,
+): HarnessConnectorGrantSpec["observation"] => {
+  const newestAt = asNonEmptyString(receipt?.newest_observed_at);
+  if (isConnectorObservationTimestamp(newestAt)) {
+    return { newestAt: new Date(newestAt).toISOString() };
+  }
+  if (receipt?.newest_observed_at != null) return undefined;
+  const reason = asNonEmptyString(receipt?.newest_observed_at_reason);
+  return reason === undefined ? undefined : { newestAt: null, reason };
+};
 
 /**
  * The `sqlite_sources` entries `pieces.json` declares, keyed by
@@ -204,7 +378,7 @@ export const resolveConnectorGrants = (
   if (document === undefined) {
     throw new Error(
       `\`${records.handlesJsonPath}\` does not hold a JSON object; loom ` +
-        `writes {schema_version, written_at, space, handles}`,
+        `writes {schema_version, written_at, space, handles, sources}`,
     );
   }
   const handles = document.handles;
@@ -221,6 +395,7 @@ export const resolveConnectorGrants = (
   // reference that carries a different one is not this instance's to grant.
   const receiptSpace = asNonEmptyString(document.space);
   const sources = sourcesByHandle(records.piecesJson, records.piecesJsonPath);
+  const receipts = sourceReceiptMetadata(document.sources);
   const grants: HarnessConnectorGrantSpec[] = [];
   const unnamed: UnnamedConnectorHandle[] = [];
   const candidates = new Map<string, HarnessConnectorGrantSpec[]>();
@@ -309,22 +484,24 @@ export const resolveConnectorGrants = (
       );
       continue;
     }
+    const badRule = invalidRowLabel(matchingSources[0]!);
+    if (badRule !== undefined) {
+      skip(
+        `its declared rowLabel is invalid (${badRule})`,
+        "Correct the rowLabel in this connector's sqlite_sources, then restart the console.",
+      );
+      continue;
+    }
+    if (!declaresConfidentiality(matchingSources[0]!)) {
+      skip(
+        "its declared table contract declares no confidentiality",
+        "Declare per-column ifc.confidentiality (or a rowLabel confidentiality) in this connector's sqlite_sources, then restart the console.",
+      );
+      continue;
+    }
+    // Descriptive only: the grant is named by its connection, and a contract
+    // that classifies nothing is granted with an empty list.
     const classes = declaredClasses(matchingSources[0]!);
-    if (classes.length === 0) {
-      skip(
-        "its declared table contract carries no CFC class",
-        "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
-      );
-      continue;
-    }
-    if (classes.length > 1) {
-      skip(
-        `its declared table contract carries ${classes.length} CFC classes ` +
-          `(${classes.join(", ")}); this grant requires one declared class`,
-        "Use a connector table contract with one declared CFC class per grant, then restart the console.",
-      );
-      continue;
-    }
     const name = connectorGrantName(grantSource);
     if (RESERVED_GRANT_NAMES.has(name)) {
       skip(
@@ -333,9 +510,17 @@ export const resolveConnectorGrants = (
       );
       continue;
     }
+    const receipt = receipts.get(
+      handleKey(piece, connection, companionKey ?? ""),
+    );
+    const viewer = receipt === undefined
+      ? receiptViewer(handle?.viewer)
+      : receipt.viewer;
     const grant: HarnessConnectorGrantSpec = {
       name,
-      cfcClass: classes[0]!,
+      cfcClasses: classes,
+      ...receipt,
+      ...(viewer === undefined ? {} : { viewer }),
       ref: renderCellReference(link, { space: link.space, scope: "space" }),
       source: grantSource,
     };
@@ -354,18 +539,25 @@ export const resolveConnectorGrants = (
   }
   for (const entries of candidates.values()) {
     const first = entries[0]!;
-    if (
-      entries.every((entry) =>
-        entry.ref === first.ref && entry.cfcClass === first.cfcClass
-      )
-    ) {
+    // One store, one reference. Two pieces may declare it with contracts that
+    // classify it differently (one is relabeled before the other); the
+    // classes only describe the store, so the grant carries every class
+    // either declares. A different reference is a different store under one
+    // name, and that is withheld.
+    if (entries.every((entry) => entry.ref === first.ref)) {
+      for (const entry of entries.slice(1)) {
+        mergeReceiptMetadata(first, entry);
+        for (const value of entry.cfcClasses ?? []) {
+          if (!first.cfcClasses!.includes(value)) first.cfcClasses!.push(value);
+        }
+      }
       grants.push(first);
     } else {
       for (const entry of entries) {
         unnamed.push({
           ...entry.source,
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
           remedy:
             "Reconcile the connection's store declarations and receipts in Loom, then restart the console.",
           state: "degraded",
@@ -436,7 +628,20 @@ export const parseConnectorGrants = (
     const grant = {
       name,
       ref,
+      ...(record?.cfcClasses === undefined
+        ? {}
+        : { cfcClasses: record.cfcClasses as string[] }),
       ...(cfcClass === undefined ? {} : { cfcClass }),
+      ...(record?.rowCount === undefined
+        ? {}
+        : { rowCount: record.rowCount as number }),
+      ...(record?.viewer === undefined
+        ? {}
+        : { viewer: record.viewer as HarnessConnectorGrantSpec["viewer"] }),
+      ...(record?.observation === undefined ? {} : {
+        observation: record
+          .observation as HarnessConnectorGrantSpec["observation"],
+      }),
       source: {
         connection,
         piece,

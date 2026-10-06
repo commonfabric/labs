@@ -7,6 +7,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   cfcLabelViewForCellWithStatus,
   cfcLabelViewForResolvedCellWithStatus,
+  cfcLabelViewForResolvedTarget,
 } from "../src/cfc/label-view.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-label-view-resolved");
@@ -51,7 +52,7 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
     const tx = runtime.edit();
     write(tx as never);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   it("reaches a label two docs away, behind a link the path CROSSES", async () => {
@@ -139,6 +140,12 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
       for (const atom of onehop) expect(resolved).toContain(atom);
       expect(resolved).toContain("from-slot");
       expect(resolved).toContain("from-target");
+
+      // The resolved target's own view leaves the slot's label out, since
+      // that label describes the link rather than the value it reaches.
+      expect(atoms({ view: cfcLabelViewForResolvedTarget(slot) })).toEqual([
+        "from-target",
+      ]);
     });
   });
 

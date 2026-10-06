@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   atomEntails,
   atomPatternBindingsEqual,
@@ -174,6 +175,13 @@ describe("CFC atom patterns", () => {
       // wildcard, so it still binds (only MALFORMED var records are rejected).
       expect(matchAtomPattern({ var: "$v" }, { var: "$x" }))
         .toEqual({ "$v": { var: "$x" } });
+    });
+
+    it("returns `null` for a `FabricSpecialObject` pattern against a record", () => {
+      // A special object has no own fields, so as a record pattern it would
+      // name nothing and match every record. It is a leaf instead.
+      const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
+      expect(matchAtomPattern(bytes, userA)).toBeNull();
     });
   });
 
@@ -390,6 +398,13 @@ describe("CFC atom patterns", () => {
         .toBe(true);
       expect(clauseSubsumes(cfcAtom.expires(2_000), cfcAtom.expires(1_000)))
         .toBe(false);
+    });
+
+    it("tells apart two special objects of one class by their content", () => {
+      const bytes = (...content: number[]) =>
+        new FabricBytes(new Uint8Array(content));
+      expect(atomEntails(bytes(1, 2), bytes(1, 2))).toBe(true);
+      expect(atomEntails(bytes(1, 2), bytes(3, 4))).toBe(false);
     });
   });
 

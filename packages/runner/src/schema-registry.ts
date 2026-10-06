@@ -54,6 +54,19 @@ export function onSchemaRegistryClear(listener: () => void): void {
 
 let activeLeases = 0;
 
+let clears = 0;
+
+/**
+ * The registry's current epoch: how many times it has cleared in this realm.
+ * A value holding `cid:` references minted from the registry — a compiled
+ * pattern's serialized graph, for one — is usable only in the epoch that
+ * minted them, so a cache of such values records this number and serves an
+ * entry only while it is unchanged.
+ */
+export function schemaRegistryEpoch(): number {
+  return clears;
+}
+
 /**
  * Acquires a retention lease on the registry, returning its release. Every
  * `StorageManager` holds one for its lifetime; when the last lease in the
@@ -74,6 +87,7 @@ export function acquireSchemaRegistryLease(): () => void {
     released = true;
     activeLeases--;
     if (activeLeases === 0) {
+      clears++;
       documentsByHash.clear();
       completeClosures.clear();
       for (const listener of clearListeners) listener();

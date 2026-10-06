@@ -49,8 +49,8 @@ find. Follow whichever arrangement the directory already uses.
 
 Name the file `<topic>.test.ts`, where `<topic>` is one of:
 
-- The base name of the source file under test — `value-hash.test.ts` for
-  `value-hash.ts`. This is the default.
+- The base name of the source file under test — `value-clone.test.ts` for
+  `value-clone.ts`. This is the default.
 - The name of a single class, function, or other export, when the file tests
   only that one thing — `SchemaAndHash.test.ts`. Prefer this when it applies.
 - A `lower-kebab-case` phrase describing the subject, when the tests span
@@ -102,6 +102,15 @@ a file and skips the rest, so the case whose setup came from a sibling fails
 there and nowhere else.
 [Test selection](test-selection.md#a-case-that-fails-only-when-its-siblings-do-not-run)
 holds the recipe for running one case of a file with its siblings skipped.
+
+The shuffle every run applies does not find such a dependence either, and the
+shape this guide asks for is why. `deno test --shuffle` reorders a run's files
+and each file's top-level registrations, and a file holding one top-level
+`describe()` registers one test whose cases are its steps, which keep their
+order. So a case leaning on a sibling is caught by a lane that skips that
+sibling, and by nothing else.
+[Every test run shuffles its order](TESTING.md#every-test-run-shuffles-its-order)
+covers what the shuffle does reach.
 
 ### Describing a class
 

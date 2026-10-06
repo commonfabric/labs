@@ -15,6 +15,7 @@ import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("cfc agent tool-input integrity");
 const space = signer.did();
@@ -134,7 +135,7 @@ async function setupSendMail(
   );
   const result = runtime.run(tx, testPattern, {}, resultCell);
   runtime.prepareTxForCommit(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -173,7 +174,7 @@ async function setupSendMail(
   // cfc-integrity-mint-gate.test.ts).
   const seedKernelRecipient = async (name: string, value: string) => {
     const seedTx = runtime.edit();
-    seedTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seedTx, {
       kind: "builtin",
       builtinId: "agent-kernel-demo",
     });
@@ -188,7 +189,7 @@ async function setupSendMail(
     );
     cell.set(value);
     seedTx.prepareCfc();
-    const commit = await seedTx.commit();
+    const commit = await seedTx.commit().settled;
     expect(commit.ok).toBeDefined();
     await runtime.idle();
     return {
@@ -220,14 +221,14 @@ async function setupSendMail(
       },
     } as const satisfies JSONSchema;
     const seedTx = runtime.edit();
-    seedTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seedTx, {
       kind: "builtin",
       builtinId: "llm-dialog",
     });
     const list = runtime.getCell(space, name, stampingSchema, seedTx);
     list.push({ role: "tool", content: value });
     seedTx.prepareCfc();
-    const commit = await seedTx.commit();
+    const commit = await seedTx.commit().settled;
     expect(commit.ok).toBeDefined();
     await runtime.idle();
 
@@ -266,7 +267,7 @@ async function setupSendMail(
     );
     cell.set(value);
     seedTx.prepareCfc();
-    const commit = await seedTx.commit();
+    const commit = await seedTx.commit().settled;
     expect(commit.ok).toBeDefined();
     await runtime.idle();
     return {
@@ -523,7 +524,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       // builtinTools=true → the generic `invoke` tool is available.
@@ -640,7 +641,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -759,7 +760,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -855,7 +856,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -958,7 +959,7 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(

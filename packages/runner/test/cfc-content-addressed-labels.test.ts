@@ -200,7 +200,7 @@ const declaredWrite = async (
   const envelopeWritten = details.some((detail) =>
     detail.address.id === id && detail.address.path[0] === "cfc"
   );
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
   return {
     id,
     cidWrites,
@@ -646,7 +646,7 @@ describe("CFC content-addressed labels", () => {
           space,
           id: id as URI,
           scope: "space",
-          path: ["value", "secret"],
+          path: ["secret"],
         })).toBe(true);
         tx.abort();
         return Promise.resolve();
@@ -668,7 +668,7 @@ describe("CFC content-addressed labels", () => {
           space,
           id: id as URI,
           scope: "space",
-          path: ["value", "elsewhere"],
+          path: ["elsewhere"],
         })).toBe(false);
         tx.abort();
         return Promise.resolve();
@@ -760,7 +760,7 @@ describe("CFC content-addressed labels", () => {
         }, tx);
         cell.set({ secret: "updated" });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain("cannot be resolved");
       });
     });
@@ -846,7 +846,7 @@ describe("CFC content-addressed labels", () => {
         space,
         id: "of:nested" as URI,
         scope: "space",
-        path: ["value", "anything"],
+        path: ["anything"],
       })).toBe(true);
     });
 
@@ -876,7 +876,7 @@ describe("CFC content-addressed labels", () => {
           space,
           id: id as URI,
           scope: "space",
-          path: ["value", "secret"],
+          path: ["secret"],
         })).toBe(true);
         tx.abort();
         return Promise.resolve();

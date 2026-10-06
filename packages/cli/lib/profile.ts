@@ -19,8 +19,10 @@
 import type { CellScope } from "@commonfabric/api";
 import {
   type Cell,
+  cellRuntime,
   getMetaLink,
   type IExtendedStorageTransaction,
+  sendEvent,
 } from "@commonfabric/runner";
 
 import { canonicalAddress } from "./callable.ts";
@@ -103,15 +105,26 @@ export async function createdByThisCall(
   candidates: [string, Cell<unknown>][],
   name: string,
 ): Promise<[string, Cell<unknown>] | undefined> {
-  if (candidates.length <= 1) return candidates[0];
+  if (candidates.length === 0) return undefined;
   const named: [string, Cell<unknown>][] = [];
   for (const candidate of candidates) {
-    const argument = getMetaLink(candidate[1], "argument");
+    // A foreign list handle can address a redirect slot. Load and resolve it
+    // outside the list snapshot before reading the profile result metadata.
+    const addressed = candidate[1].withTx().asSchema(undefined);
+    await addressed.sync();
+    const profile = addressed.resolveAsCell();
+    await profile.sync();
+    const resolved: [string, Cell<unknown>] = [
+      profile.getAsNormalizedFullLink().space,
+      profile,
+    ];
+    if (candidates.length === 1) return resolved;
+    const argument = getMetaLink(profile, "argument");
     if (argument === undefined) continue;
-    const initialName = candidate[1].runtime.getCellFromLink(argument)
+    const initialName = cellRuntime(candidate[1]).getCellFromLink(argument)
       .key("initialName");
     await initialName.sync();
-    if (String(initialName.get() ?? "") === name) named.push(candidate);
+    if (String(initialName.get() ?? "") === name) named.push(resolved);
   }
   if (named.length === 1) return named[0];
   throw new Error(
@@ -142,7 +155,7 @@ function sendCreate(
   return new Promise((resolve, reject) => {
     try {
       // deno-lint-ignore no-explicit-any
-      (root.key("createProfile") as Cell<any>).send(event, resolve, {
+      sendEvent(root.key("createProfile"), event, resolve, {
         onAppended: (delivery, appendedTx) => {
           if (!delivery.delivered && appendedTx.status().status !== "error") {
             reject(new Error(`event append refused: ${delivery.refused}`));
@@ -171,9 +184,9 @@ function sendCreate(
  * space, rather than through the home connection that sent the create: in
  * the runtime that ran the handler the piece's nodes do not run on demand —
  * a start there wires the scheduler and a pull materializes nothing — while
- * a fresh runtime resuming the piece from storage runs them. The shape of
- * the step is `cf cell get --step`'s (`getCellValue()`, lib/piece.ts): the
- * piece started through `getPieceCell()`, pulled, synced, settled, synced.
+ * a fresh runtime resuming the piece from storage runs them. The step starts
+ * the piece through `getPieceCell()`, pulls it, syncs storage, waits for
+ * scheduler idle, and syncs again.
  * The stop and dispose close the connection down the way a one-shot command
  * closes it.
  *

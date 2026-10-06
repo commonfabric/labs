@@ -56,10 +56,13 @@ import type { JSONSchemaObj } from "../builder/types.ts";
 import { type CellScope, NAME, type Pattern } from "../builder/types.ts";
 import type { Cell, MemorySpace, Stream } from "../cell.ts";
 import {
+  cellRuntime,
+  cellTx,
   isCell,
   isStream,
   markRuntimeInjectedEventKeys,
   recordRelevantSchemaWritePolicyInput,
+  sendEvent,
 } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import {
@@ -111,6 +114,7 @@ import { writeResultSchemaMeta } from "../result-schema-meta.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
+  snapshotQueryResult,
 } from "../query-result-proxy.ts";
 import { Runtime, spaceCellSchema } from "../runtime.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
@@ -127,6 +131,7 @@ import {
 } from "./llm-schemas.ts";
 import { resolveStoredPatternAsync } from "./op-pattern-ref.ts";
 import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 // Message schema that mints the `LlmDerived` provenance stamp (Epic D1).
 // Recorded as the schema write-policy input for each model-produced message's
@@ -198,13 +203,10 @@ type SerializeForLLMObservationParams = {
 
 function normalizeInputSchema(schemaLike: unknown): JSONSchema {
   let inputSchema: any = schemaLike;
-  if (isBoolean(inputSchema)) {
-    inputSchema = {
-      type: "object",
-      properties: {},
-      additionalProperties: inputSchema,
-    };
-  }
+  // `false` is the argument schema of a pattern that takes no argument, which
+  // the runner runs with no input. Its object form accepts only `{}`, which is
+  // the one call such a tool takes.
+  if (isBoolean(inputSchema)) inputSchema = objectSchemaOfBoolean(inputSchema);
   if (!isObjectNotArray(inputSchema)) inputSchema = { type: "object" };
   const stripped = stripInjectedResult(inputSchema);
   return prepareSchemaForLLM(stripped);
@@ -307,7 +309,11 @@ function resolveRefsForLLM(
     const result: any = {};
     for (const [key, value] of Object.entries(nodeObj)) {
       if (key === "$defs") continue; // strip $defs from output
-      if (Array.isArray(value)) {
+      if (key === "additionalProperties" && value === false) {
+        // This keyword controls object openness; converting `false` to an
+        // object would permit the extra properties the schema forbids.
+        result[key] = value;
+      } else if (Array.isArray(value)) {
         result[key] = value.map((item) =>
           isWalkableObjectOrArray(item) || typeof item === "boolean"
             ? resolve(item, refDepth, activeRefs)
@@ -326,11 +332,25 @@ function resolveRefsForLLM(
 }
 
 /**
- * Prepare a schema for use in LLM tool definitions by:
- * 1. Stripping internal `asCell` markers and removing cycles
- * 2. Inlining all $ref references
+ * The object form of a boolean schema: an object that declares no properties
+ * and allows any others (`true`) or none (`false`). The LLM routes take a
+ * schema only as an object.
+ */
+function objectSchemaOfBoolean(schema: boolean): JSONSchema {
+  return { type: "object", properties: {}, additionalProperties: schema };
+}
+
+/**
+ * Prepare a schema for an LLM request, as a tool's input or as the shape of a
+ * generated object, by:
+ * 1. Writing a `true` schema in its object form (`objectSchemaOfBoolean`). A
+ *    `false` schema stays as written: its object form would accept `{}`, where
+ *    `false` accepts nothing, so the LLM routes refuse the request instead
+ * 2. Stripping internal `asCell` markers and removing cycles
+ * 3. Inlining all $ref references
  */
 function prepareSchemaForLLM(schema: JSONSchema): JSONSchema {
+  if (schema === true) return objectSchemaOfBoolean(schema);
   if (!isObjectOrArray(schema)) return schema;
   const sanitized = sanitizeSchemaForLinks(schema);
   return resolveRefsForLLM(sanitized);
@@ -1011,11 +1031,9 @@ function resolveContextCellRef(cell: unknown): Cell<any> | undefined {
 function readCellValueForObservation(
   cell: Cell<unknown>,
 ): unknown {
-  const readTx = cell.runtime.readTx(
-    (cell as unknown as { tx?: IExtendedStorageTransaction }).tx,
-  );
+  const readTx = cellRuntime(cell).readTx(cellTx(cell));
   const link = resolveLink(
-    cell.runtime,
+    cellRuntime(cell),
     readTx,
     cell.getAsNormalizedFullLink(),
     "top",
@@ -2184,12 +2202,14 @@ function buildAssistantMessage(
       text: content,
     });
   } else if (Array.isArray(content)) {
-    assistantContentParts.push(
-      ...content.filter((part) => part.type === "text") as BuiltInLLMTextPart[],
-    );
+    for (const part of content) {
+      if (part.type === "text") {
+        assistantContentParts.push(part);
+      }
+    }
   }
 
-  assistantContentParts.push(...toolCallParts);
+  for (const part of toolCallParts) assistantContentParts.push(part);
 
   return {
     role: "assistant",
@@ -2225,6 +2245,11 @@ function effectiveObservationCeiling(
   sink: string,
   patternBound: readonly CfcConfClause[] | undefined,
 ): readonly CfcConfClause[] | undefined {
+  // The pattern's bound arrives as a view of the builtin's input. The bound
+  // this returns is carried into request snapshots and read by post-commit
+  // tool reads, after the transaction that read the input has finished, so it
+  // is detached here, once.
+  const ownBound = snapshotQueryResult(patternBound);
   const ceilings = runtime.cfcSinkMaxConfidentiality;
   // Object.hasOwn guard: the sink name is a runner-controlled literal today, but
   // a name colliding with an Object.prototype member must resolve to "no
@@ -2232,7 +2257,7 @@ function effectiveObservationCeiling(
   const deploymentCeiling = Object.hasOwn(ceilings, sink)
     ? ceilings[sink]
     : undefined;
-  return meetCfcObservationCeilings(patternBound, deploymentCeiling);
+  return meetCfcObservationCeilings(ownBound, deploymentCeiling);
 }
 
 function toolAllowsObservedConfidentiality(
@@ -2884,7 +2909,7 @@ async function handleRead(
     // If our cell is an intermediate with a parent result, follow that
     const parentLink = getMetaLink(cell, "result");
     if (parentLink !== undefined) {
-      const parentCell = cell.runtime.getCellFromLink(parentLink);
+      const parentCell = cellRuntime(cell).getCellFromLink(parentLink);
       await parentCell.pull();
       schema = parentCell.schema ?? getCellSchema(parentCell);
       cell = schema ? parentCell.asSchema(schema) : parentCell;
@@ -3139,7 +3164,12 @@ async function handleInvoke(
     );
 
     if (pattern) {
-      runtime.run(tx, pattern, invocationArgs, result);
+      // The model's tool call instantiates the pattern, in a continuation of
+      // the dialog's action: no principal's act attributes what its setup
+      // initializes.
+      runtime.run(tx, pattern, invocationArgs, result, {
+        attributeInitialization: false,
+      });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a
       // `result` of its own. Overwriting would silently DISCARD caller data
@@ -3152,7 +3182,8 @@ async function handleInvoke(
       // always gets the injected cell.
       const injectResult =
         !(isObjectOrArray(input) && Object.hasOwn(input, "result"));
-      handler.withTx(tx).send(
+      sendEvent(
+        handler.withTx(tx),
         injectResult
           ? {
             ...input,
@@ -3483,7 +3514,7 @@ export function llmDialog(
         turn.internal.withTx(tx).key("requestId").set("");
       }
       runtime.prepareTxForCommit(tx);
-      return tx.commit().then((outcome) => {
+      return tx.commit().settled.then((outcome) => {
         if (outcome.error) {
           logger.warn(
             "dialog-claim-cleanup-failed",
@@ -3933,10 +3964,14 @@ export function llmDialog(
 
     // An empty `pinnedCells` belongs to every resolved instance; an
     // initialized symbolic handle does not establish another actor's stored
-    // state.
+    // state. Stored pins are written back as stored: a pin a handler wrote may
+    // sit in a document of its own, and the raw write keeps the link to it.
+    const stored = result.withTx(tx).getRaw() as
+      | Record<string, FabricValue>
+      | undefined;
     result.withTx(tx).setRawUntyped({
-      ...result.withTx(tx).getRaw(),
-      pinnedCells: result.withTx(tx).key("pinnedCells").get() ?? [],
+      ...stored,
+      pinnedCells: stored?.pinnedCells ?? [],
     } as FabricValue);
     // The dialog's handlers are fields of this document, and a stream holds
     // nothing, so the document keeps its result schema the way a piece's
@@ -4104,8 +4139,8 @@ async function startRequest(
       tx,
       messagesCell.getAsNormalizedFullLink(),
     );
-    messagesCell.withTx(tx).push(
-      ...messages.map((message) => {
+    messagesCell.withTx(tx).pushAll(
+      messages.map((message) => {
         const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
           base.space,
           { llmDialog: { message: cause, id: crypto.randomUUID() } },
@@ -4127,15 +4162,16 @@ async function startRequest(
     // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
     // audit S4) admits it only from builtin authors — the same gating that
     // stops pattern code from forging the stamp.
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "llmDialog",
     });
     // Record the stamping schema for each pushed message's own entity doc
     // (every message is appended as a link to a document of its own, so each
-    // one is separately addressable). The messages link carries its own schema, which wins over
-    // an `asSchema` handle inside `push()` (`resolvedLink.schema ?? ...`), so
-    // the stamp cannot ride the array handle — instead this mirrors the
+    // one is separately addressable). The messages link carries its own schema,
+    // which wins over an `asSchema` handle inside `pushAll()`
+    // (`resolvedLink.schema ?? ...`), so the stamp cannot ride the array
+    // handle — instead this mirrors the
     // split-entity idiom in data-updating.ts (`recordRelevantSchemaWrite-
     // PolicyInput` on the child doc), which also marks the transaction
     // CFC-relevant so `prepareTxForCommit` runs the persist pass that mints

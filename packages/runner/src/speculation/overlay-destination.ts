@@ -94,11 +94,14 @@ import type {
   NativeStorageCommit,
   Result,
   SealedCommitVerdict,
+  TransactionCommitOptions,
+  TransactionCommitReceipt,
   TransactionSealDestination,
   Unit,
   URI,
 } from "../storage/interface.ts";
 import type { PostCommitSideEffect } from "../cfc/types.ts";
+import { createTransactionCommitReceipt } from "../storage/commit-receipt.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
 
 const logger = getLogger("speculation-overlay", {
@@ -559,16 +562,17 @@ export class SpeculationOverlayDestination
     return this.#intentCheckMaxVisits;
   }
 
-  seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>> {
+  /** Accepts speculative work or forwards an ordinary store commit. */
+  seal(
+    tx: IExtendedStorageTransaction,
+    options?: TransactionCommitOptions,
+  ): TransactionCommitReceipt {
     const kind = speculationRunContextOf(tx)?.kind;
     if (kind !== "derivation" && kind !== "event-handler") {
-      // Bookkeeping runs and unstamped transactions commit exactly as
-      // today. Scheduler-stamped runs — derivations since Phase 2,
-      // event handlers since Phase 3 (events.md §7: the F10 interim's
-      // handler-write commit path is DELETED) — divert below.
-      return tx.tx.commit();
+      // Ordinary writes use the store's verdict, coverage, and sync hold.
+      return tx.tx.commit(options);
     }
-    return this.#sealSpeculative(tx);
+    return createTransactionCommitReceipt(this.#sealSpeculative(tx));
   }
 
   async #sealSpeculative(
@@ -2051,8 +2055,9 @@ export class SpeculationOverlayDestination
           const state = view(doc.id, doc.scope);
           // A content-addressed doc the store holds witnesses at ANY
           // cover seq (#6304). Its stored envelope is immutable —
-          // admission refuses a `cid:` delete or patch outright, and a
-          // `cid:` set unless the WHOLE stored envelope, metadata
+          // admission refuses every operation but `set` against a `cid:`
+          // id outright, and a `cid:` set unless the WHOLE stored
+          // envelope, metadata
           // included, is value-equal (memory/v2 engine.ts's
           // content-addressed immutability pass; this witness rests on
           // that boundary, so a metadata-write carve-out for cid docs

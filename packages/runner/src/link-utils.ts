@@ -5,7 +5,7 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   deepFrozenCloneAndInternSchema,
   internSchema,
@@ -42,6 +42,8 @@ import {
 } from "./builder/types.ts";
 import {
   type Cell,
+  cellRuntime,
+  cellTx,
   isAnyCell,
   isCell,
   type MemorySpace,
@@ -357,12 +359,11 @@ export function createSigilLinkFromParsedLink(
     keepAsCell?: KeepAsCell;
   } = {},
 ): SigilLink {
-  // Create the base structure
-  const sigil: SigilLink = linkRefFrom<CellLinkRefPayload>({
+  // The payload is built in full before the link is made, since a link's
+  // payload is fixed once it is.
+  const reference: CellLinkRefPayload = {
     path: link.path.map((p) => p.toString()),
-  });
-
-  const reference = linkRefPayload(sigil);
+  };
 
   // Handle base cell for relative references
   if (options.base) {
@@ -409,7 +410,7 @@ export function createSigilLinkFromParsedLink(
     reference.overwrite = "redirect";
   }
 
-  return sigil;
+  return linkRefFrom<CellLinkRefPayload>(reference);
 }
 
 /**
@@ -473,6 +474,8 @@ export enum KeepAsCell {
   // Keep the entire asCell entry (preserves cell, opaque, and stream).
   All = "All",
 }
+
+const PRESERVE_PATTERN_RESULT_CELL = "__ctPreservePatternResultCell";
 
 // Identity-keyed memo for `sanitizeSchemaForLinks` (see the function body).
 // Values are always deep-frozen OBJECT schemas: boolean/undefined inputs take
@@ -760,15 +763,29 @@ function recursiveStripAsCellFromSchema(
   let result;
   // Shallow copy — only top-level keys are deleted/replaced; children are
   // handled by recursive calls that create their own copies.
+  const {
+    [PRESERVE_PATTERN_RESULT_CELL]: preservePatternResultCell,
+    ...schemaWithoutPreserveMarker
+  } = schema as JSONSchemaObj & {
+    readonly __ctPreservePatternResultCell?: boolean;
+  };
   if (context.keepAsCell === KeepAsCell.All) {
-    result = { ...schema };
+    result = { ...schemaWithoutPreserveMarker };
   } else {
-    const { asCell: _c, ...restSchema } = schema;
+    const { asCell: _c, ...restSchema } = schemaWithoutPreserveMarker;
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    // If we're keeping streams and the outermost is a stream, keep it
+    const outer = asCellValues.at(0);
+    const outerKind = ContextualFlowControl.getAsCellKind(outer);
+    // Pattern results ordinarily materialize cells. A schema assembled by
+    // trusted pattern code can retain one explicitly scoped link; the private
+    // marker is consumed here and never reaches the serialized contract.
+    const keepMarkedCell = context.keepAsCell === KeepAsCell.OnlyStream &&
+      preservePatternResultCell === true && outerKind === "cell" &&
+      (schema.scope !== undefined ||
+        (typeof outer === "object" && Object.hasOwn(outer, "scope")));
     if (
-      context.keepAsCell === KeepAsCell.OnlyStream &&
-      ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "stream"
+      (context.keepAsCell === KeepAsCell.OnlyStream &&
+        outerKind === "stream") || keepMarkedCell
     ) {
       result = { asCell: asCellValues, ...restSchema };
     } else {
@@ -819,7 +836,7 @@ function recursiveStripAsCellFromSchema(
         result[key] = processedDefs;
       } else if (Array.isArray(value)) {
         // Handle arrays
-        result[key] = value.map((item) =>
+        (result as Record<string, unknown>)[key] = value.map((item) =>
           isWalkableObjectOrArray(item)
             ? recursiveStripAsCellFromSchema(
               item,
@@ -830,11 +847,12 @@ function recursiveStripAsCellFromSchema(
         );
       } else {
         // Handle objects
-        result[key] = recursiveStripAsCellFromSchema(
-          value,
-          context,
-          depth + 1,
-        );
+        (result as Record<string, unknown>)[key] =
+          recursiveStripAsCellFromSchema(
+            value,
+            context,
+            depth + 1,
+          );
       }
     }
   }
@@ -921,7 +939,7 @@ export function getMetaCell(
     ...(resultCellLink.scope !== undefined && { scope: resultCellLink.scope }),
     ...(schema !== undefined && { schema }),
   };
-  return resultCell.runtime.getCellFromLink(metaLink, undefined, tx);
+  return cellRuntime(resultCell).getCellFromLink(metaLink, undefined, tx);
 }
 
 export function getDerivedInternalCellLink(
@@ -995,7 +1013,7 @@ export function getDerivedInternalCell(
   descriptor: DerivedInternalCellDescriptor,
   tx?: IExtendedStorageTransaction,
 ): Cell {
-  return resultCell.runtime.getCellFromLink(
+  return cellRuntime(resultCell).getCellFromLink(
     getDerivedInternalCellLink(resultCell, descriptor),
     descriptor.schema,
     tx,
@@ -1045,10 +1063,10 @@ export function ownerStreamSchema(
   if (target.path.length > 0) return undefined;
   const ownerLink = getMetaLink(cell, "result");
   if (ownerLink === undefined) return undefined;
-  const owner = cell.runtime.getCellFromLink(
+  const owner = cellRuntime(cell).getCellFromLink(
     { ...ownerLink, path: [], schema: undefined },
     undefined,
-    cell.tx,
+    cellTx(cell),
   );
   const manifest = owner.getMetaRaw("internal", META_READ_OPTIONS);
   if (!Array.isArray(manifest)) return undefined;

@@ -20,7 +20,7 @@ const exists = async (path: string): Promise<boolean> => {
 
 describe("pattern-compat-accepted-breaks", () => {
   // The compatibility run reaches these entries only after compiling every
-  // authored pattern, and it reads each one under the shard that examined its
+  // authored pattern, and it reads each one in the run that examined its
   // pattern. So the shape of an entry — a pattern that exists, a baseline that
   // exists, a pair named once, a path spelled the way the proof spells it — is
   // worth settling here, in milliseconds, against the files on disk.

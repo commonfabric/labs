@@ -9,9 +9,9 @@
  *
  * The rest is what may be shared and what must be rebuilt. A value already in
  * the requested state comes back as it is unless a copy was forced,
- * inherently immutable values are never copied at all, and a null prototype is
- * canonicalized rather than carried through, not being a shape the value type
- * admits.
+ * inherently immutable values are never copied at all, and a null-prototype
+ * object, not being a shape the value type admits, is refused rather than
+ * copied into a record it is not.
  *
  * Cycles are detected on the deep paths, and the subclass matrix asks the same
  * questions of every concrete class rather than trusting one to stand in for
@@ -30,7 +30,6 @@ import {
   type FabricValue,
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
-  isValidFabricValue,
 } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
@@ -332,12 +331,10 @@ describe("cloneIfNecessary()", () => {
     });
   });
 
-  describe(`\`null\` prototype canonicalization`, () => {
-    // A null-prototype object is not a `FabricValue`, so none can arrive here
-    // by any validating route. Should one reach this function anyway, the
-    // clone leaves in the shape a `FabricPlainObject` has -- the same
-    // answer the array case gives an `Array` subclass -- rather than
-    // propagating a shape the model has no representation for.
+  describe(`null-prototype objects`, () => {
+    // A null-prototype object is not a `FabricValue`, so none can arrive by
+    // any validating route. Should one reach this function anyway, it is
+    // refused rather than copied into a record it is not.
 
     function nullProto(
       fields: Record<string, unknown>,
@@ -356,38 +353,22 @@ describe("cloneIfNecessary()", () => {
         ["shallow and unfrozen", { frozen: false, deep: false }],
       ] as const
     ) {
-      it(`re-roots a null-prototype object, ${label}`, () => {
+      it(`throws for a null-prototype object, ${label}`, () => {
         const value = nullProto({ a: 1, b: "two" });
-        const result = cloneIfNecessary(
-          value as FabricValue,
-          opts as CloneOptions | undefined,
-        ) as Record<string, unknown>;
 
-        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
-        expect(result.a).toBe(1);
-        expect(result.b).toBe("two");
-        expect(Object.isFrozen(result)).toBe(opts?.frozen !== false);
+        expect(() =>
+          cloneIfNecessary(
+            value as FabricValue,
+            opts as CloneOptions | undefined,
+          )
+        ).toThrow("Cannot clone");
       });
     }
 
-    it("re-roots a nested null-prototype object on a deep clone", () => {
+    it("throws for a nested null-prototype object on a deep clone", () => {
       const value = { child: nullProto({ v: 42 }) };
-      const result = cloneIfNecessary(value as FabricValue) as {
-        child: Record<string, unknown>;
-      };
-
-      expect(Object.getPrototypeOf(result.child)).toBe(Object.prototype);
-      expect(result.child.v).toBe(42);
-    });
-
-    it("produces a value `isValidFabricValue()` accepts", () => {
-      // The point of canonicalizing: what comes out is a member of the type,
-      // where the input was not.
-
-      const value = nullProto({ a: 1 });
-      expect(isValidFabricValue(value)).toBe(false);
-      expect(isValidFabricValue(cloneIfNecessary(value as FabricValue))).toBe(
-        true,
+      expect(() => cloneIfNecessary(value as FabricValue)).toThrow(
+        "Cannot clone",
       );
     });
   });

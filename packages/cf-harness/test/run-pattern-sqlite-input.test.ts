@@ -95,9 +95,9 @@ describe("run_pattern over a database handle input", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `sqlite-input-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
@@ -136,7 +136,7 @@ describe("run_pattern over a database handle input", () => {
       sql: "INSERT INTO messages (id, subject) VALUES (?, ?)",
       params: [1, subject],
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     return createLLMFriendlyLink(handle.getAsNormalizedFullLink(), space);
   }

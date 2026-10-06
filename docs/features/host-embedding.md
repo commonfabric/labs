@@ -35,6 +35,9 @@ weeks later.
 | 5 | Guarded-define idiom | API | `ui` | yes | `src/v2/components/host-embedding-guarded-define.test.ts` |
 | 6 | Trusted-mark threat model | policy record | `runner` | n/a | `test/cfc-ui-contract.test.ts` — `host embedding contract: trusted-mark threat model` |
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
+| 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
+| 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
+| 10 | Native reviewed controls | trusted host API | `runner` | available | `runner/test/native-ui.test.ts` |
 
 ---
 
@@ -156,17 +159,19 @@ also guarded by `packages/shell/test/runtime-navigation.test.ts`.
 **Contract.** A right-click on a piece rendered by `cf-render` opens
 `cf-piece-menu` for that piece. **View source** shows the piece's retained
 authored files. **Origin and history** shows its active origin and recorded
-source revisions. **Clone fresh piece into new space** creates a copy with
-default input data in a unique named space owned by the current user, then
-navigates to it. **Clone piece and copy data into new space** takes detached
-snapshots of the selected piece's current input and stateful internal data.
-Computed values are recomputed in the new space. Data linked from another space
-is rejected because it cannot be captured atomically. Both actions move clone
-progress and failures from the context menu into a dialog. The copy follows
-the selected piece when that piece is detached. When the selected piece already
-follows an origin, the copy follows that same origin. A piece with an active
-origin also has **Stop following source**. That action keeps the exact current
-source and clears the active origin.
+source revisions. **Clone fresh piece into new space** creates a space with a
+random DID, owned by the current user and listed in their Home space list,
+creates a copy with default input data there, then navigates to it by the
+space's DID. A clone that fails takes the space back out of the Home space list.
+**Clone piece and copy data into new space** takes detached snapshots of the
+selected piece's current input and stateful internal data. Computed values are
+recomputed in the new space. Data linked from another space is rejected because
+it cannot be captured atomically. Both actions move clone progress and failures
+from the context menu into a dialog. The copy follows the selected piece when
+that piece is detached. When the selected piece already follows an origin, the
+copy follows that same origin. A piece with an active origin also has **Stop
+following source**. That action keeps the exact current source and clears the
+active origin.
 
 Historical entries can restore an exact retained source version or resume
 following an earlier web or fabric origin. Each entry can show its exact
@@ -206,6 +211,16 @@ Calling `RuntimeClient.createPiece()` with an HTTP or HTTPS `URL` creates a
 followed piece. The runtime records the canonical URL and retained initial
 source in one creation transaction. Calling it with a source string or
 `Program` creates a detached piece when that source can be retained.
+
+For a persistent host UI piece, pass a stable `cause` in the options to
+`RuntimeClient.createPiece(source, space, options)` or
+`RuntimeInternals.createPiece(space, source, options)`. The cause derives the
+piece's identity within that space, so repeated calls address the same piece
+across reloads. Repeated creation requires the same pattern identity; supplying
+a different pattern is rejected, so a stable cause does not perform a source
+upgrade. Each call reapplies setup and inputs to the existing pattern; it is
+not a lookup that leaves an existing piece untouched. Omitting `cause`
+allocates a new identity. Use a distinct cause for each independent host piece.
 
 `updatePieceSource()` returns a one-use `confirmationToken` with an
 incompatibility warning. Passing that token back confirms only the reported
@@ -385,6 +400,139 @@ pin/arrange flows ride the UI-variants abstraction (`UI` / `CHIP_UI` /
 asserts against the real pattern sources that the pin writer carries no
 `uiContract` while the create surface does, and that `addPiece` is a
 `Stream`.
+
+---
+
+## 8. Trusted snapshot sharing
+
+`RuntimeClient.prepareSnapshotShare(sourceRef, { user: recipientRef })` prepares
+a JSON snapshot for one recipient. The recipient must carry one persisted
+principal attestation at the selected path. The alternative
+`{ space: destinationRef }` selects the space holding that cell. The response
+contains an opaque `id`, the exact `value`, and the verified `audience` atom.
+The worker reads stored policy; client-provided schema and label views grant no
+authority.
+
+The runtime uses its authenticated, bounded read ceiling when one is configured.
+Without a runtime-wide ceiling, preparation requires the source to fit the
+authenticated actor's own `User` ceiling. The default shell can therefore
+share an actor-private draft but cannot preview a source labeled only for
+another user. The source is read by the trusted worker before this check; the
+preview is returned only after it passes.
+
+The trusted host displays that value and audience and requires a trusted user
+confirmation before calling `RuntimeClient.commitSnapshotShare(id)`. The result
+is a new `CellHandle` naming the shared copy. The source remains unchanged. The
+runtime permits release only of the authenticated actor's own User clauses.
+Other clauses must already admit the recipient and remain on the copy. A changed
+source, recipient, or actor invalidates the preview. Each confirmation is
+consumed once, including on a failed commit.
+
+This is a trusted host capability. Authored patterns cannot obtain the worker's
+consent object or call this transport. The host's confirmation command supplies
+the renderer-trusted `ShareSnapshot` provenance; it accepts no authored event
+claims. An embedder exposing this command to untrusted content would delegate
+its release authority. The boundary protects against authored code and does not
+prove user intent against a malicious host.
+
+Previews belong to the client that prepared them. Another attached client cannot
+use the id. The host calls `RuntimeClient.cancelSnapshotShare(id)` when it
+closes or replaces a confirmation; client detachment and backend disposal also
+discard pending consent. The worker retains the consent object; only the preview
+crosses IPC.
+
+**Tests.** `packages/runtime-client/test/backends/snapshot-share.test.ts` covers
+source-schema rejection, preview binding, client isolation, one-use consent, and
+disposal. `packages/runtime-client/test/snapshot-share.test.ts` holds the public
+client API and wire shapes.
+
+---
+
+## 9. Custody seal and trust configuration
+
+A host declares the trust statements its worker runtime evaluates concept guards
+under with `RuntimeClientOptions.cfcTrustConfig`, which reaches the worker as
+`InitializationData.cfcTrustConfig` and the runtime as
+`RuntimeOptions.cfcTrustConfig`. A default profile that trusts a reviewed
+custody policy as a trusted declassifier is one statement naming that policy's
+exact `policyDigest` and one delegation to its verifier. The configuration is
+part of the runtime's security context, so an attach asserting another one is
+refused. Configurations compare by the digest the runner gives the configuration
+it normalizes, so key order, a key written as `undefined`, and an empty list
+written out or left out do not refuse an attach. Absent a trust configuration,
+no concept guard is satisfied and every custody seal is refused.
+
+`RuntimeClient.prepareCustodySeal({ draft, terms, policy, allowedSources })`
+prepares a [custody seal](../specs/cfc-custody-seal.md). Each field is a cell
+reference: the actor's draft, the room's terms document, a cell holding the
+room's policy reference or declaring the policy in its label, and the actor's
+source policy, which must be in the actor's home space. The worker reads each and returns an opaque `id`, the actor,
+the room space, the room's readers from its access list, the terms, the instance
+digest, the policy, the sources the draft draws on, and the exact stance. The
+worker read every field and checked the seal's invariants over them. The terms'
+optional `question` and `answers` are display fields it does not check: nothing
+verifies that the room's policy releases only those answers.
+
+The trusted host shows that preview and requires a trusted user confirmation
+before calling `RuntimeClient.commitCustodySeal(id)`, which returns the
+actor's receipt, the instance's box and the instance. The box is what the
+room's projector reads; the entry's blinded key is not returned. The worker builds the renderer-trusted `CustodySeal` gesture
+itself; the request carries no event. The seal is bound to what the actor
+reviewed: at commit it reads the draft, the terms, the room's readers, the
+policy cell and the source policy again, and a changed value in any of them,
+or a changed actor, makes the review stale. The transaction that writes the
+entry then verifies that every one of those reads still holds, so a change that
+lands after the commit's checks and before the entry is written refuses the
+seal too. A policy cell that now holds another reference refuses the seal
+rather than sealing the reference that was reviewed. Each confirmation is
+consumed once, including on a failed commit. `cancelCustodySeal(id)`, client
+detachment and backend disposal discard pending consent, and a preview belongs
+to the client that prepared it. A client that detaches while its commit is in
+flight aborts it: nothing is sealed unless the entry's transaction was sent
+before the client left. A commit aborted after the receipt was written leaves
+a receipt with no entry, which is how the actor's home space records a seal
+that did not commit. As with snapshot
+sharing, an embedder exposing this transport to untrusted content delegates the
+actor's consent. `cf-custody-seal` is the component that drives it.
+
+---
+
+## 10. Native reviewed controls
+
+A host running the runtime in its own process, and drawing a control natively
+rather than rendering a pattern's surface, sends that control's action through
+`bindNativeUiControl()` from `@commonfabric/runner/native-ui`. It binds one
+stream to one reviewed surface and action, read once at the call, so a later
+change to the descriptor object changes nothing the control sends. The function
+it returns sends the payload's fields with `native` provenance for that surface
+and action, carrying the renderer-trust mark; a `provenance` field in the
+payload is replaced. A write gated on that surface and action, such as a
+`TrustedActionWrite`, then commits as it would for a click on the rendered
+surface. This is the sanctioned issuance path §6 calls for, for a host's own
+surface, in place of a host building the provenance and marking the event
+itself.
+
+The runtime's ordinary checks still apply: the writer the contract names, the
+surface and action, the actor, and the space's access list. The mark reaches a
+served handler the way a DOM event's does, through the attestation the firing
+runtime writes on the stream entry
+([events, §2](../specs/server-side-execution/events.md#2-lifecycle-end-to-end)). A native event is not a trusted gesture: `isTrustedGesture()` admits only
+events of `dom` origin, so a native control cannot confirm a snapshot share, a
+custody seal, a reviewed intent, or a change to a space's access list.
+
+This is a trusted host capability that mints trusted events. The host calls the
+returned function only from the control's real user-input path, with exactly
+the values the control showed, and keeps it away from pattern code, loaded web
+content, automation and agent interfaces, generic IPC, URL handlers, and
+restored state. A host that cannot hold that boundary renders the pattern's
+reviewed surface for the write instead. The generic `cell:send` request marks
+nothing, and pattern source cannot import the module.
+
+**Test.** `packages/runner/test/native-ui.test.ts` covers a gated write
+committing through a real handler and one bound to another action being
+refused, the provenance and payload sent, capture of the descriptor, a
+replaced payload `provenance`, an unmarked copy matching nothing, and the
+event not counting as a trusted gesture.
 
 ---
 

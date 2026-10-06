@@ -39,6 +39,8 @@ export type {
   CfcPromptSlotRunManifest,
   CfcResourceAtom,
   CfcSpaceAtom,
+  CfcStamp,
+  CfcThisPolicyModuleIdentityPattern,
   CfcThisPolicyPattern,
   CfcThisPolicySubjectPattern,
   CfcUserAtom,
@@ -63,6 +65,7 @@ export type {
   TrustedActionWrite,
   TrustedActionWriteWithIntegrity,
   WriteAuthorizedBy,
+  WritePolicyAnyOf,
 } from "./cfc.ts";
 
 export {

@@ -59,7 +59,7 @@ Deno.test("json: language metadata selects JSON-shaped names without a JSON suff
   assertEquals(languageForFile("/repo/deno.lock").id, "json");
   assertEquals(languageForFile("bay.code-workspace").id, "json");
   assertEquals(languageForFile("ios/Package.resolved").id, "json");
-  assertEquals(languageForFile("Cargo.lock").id, "plain-text");
+  assertEquals(languageForFile("Cargo.lock").id, "toml");
   assertEquals(languageForFile("package.resolved").id, "plain-text");
 });
 

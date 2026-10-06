@@ -339,7 +339,7 @@ deno task cf check packages/patterns/d3-shared-bars/main.tsx --no-run
 
 In a real browser, verify all of the following:
 
-- loading controls remain disabled until the joint pull barrier resolves;
+- loading controls remain disabled until all initial pulls complete;
 - every mark has accessible text and a stable D3 key;
 - a shared update rerenders without a reload;
 - concurrent appends preserve every new member;

@@ -20,7 +20,10 @@
  * as the fallback for a person whose host has no queue for this piece. What
  * this shares with the person workbench lives in `../workbench/`. One start
  * at a time: while a start is unconfirmed, Start is disabled with the reason,
- * and the words a start sent clear from the composer.
+ * and the words a start sent clear from the composer. With `startSurface`
+ * set to `desktop`, a start opens Claude Code on this Mac with the kickoff
+ * ready to send instead of running its first turn here; the session the app
+ * makes carries the start's id as `startedAs`, which confirms the start.
  */
 
 import {
@@ -59,20 +62,24 @@ import {
   dropStart,
   indexNoteOf,
   isEmptyText,
+  pairingsOf,
   recentRowsOf,
   recordAttachment,
   recordStart,
   sessionDotColor,
   type SessionIndexView,
+  type SessionPairing,
   type SessionRow,
   sessionRowsOf,
   type SessionStart,
   type ShownHarness,
+  startedAsOf,
   startingOf,
 } from "../workbench/sessions.ts";
 import {
   checkoutOptionsOf,
   configuredSourcesOf,
+  desktopSourcesOf,
   mintSessionId,
   pendingStartOf,
   sourceOptionsOf,
@@ -149,6 +156,11 @@ export interface WorkbenchInput {
    * tool or network approval headlessly.
    */
   startMode?: string | Default<"">;
+  /** Where a started session runs: `headless` (the default) runs the first
+   * turn on this Mac through the connector; `desktop` opens Claude Code on
+   * this Mac with the kickoff ready to send, takes no mode, and the session
+   * the app makes joins once the person sends it and the connector sees it. */
+  startSurface?: string | Default<"">;
   /**
    * Harnesses to list in the picker beside the connector's sources, for a
    * machine that shows a harness it does not run. Picking one starts nothing.
@@ -317,12 +329,26 @@ const detachFromRow = handler<void, {
   starts: Writable<SessionStart[] | Default<[]>>;
   sourceId: string;
   nativeSessionId: string;
-}>((_, { attached, starts, sourceId, nativeSessionId }) => {
-  // A confirmed start is attached through its own record; detaching drops
-  // whichever record the session has.
-  dropAttachment(attached, sourceId, nativeSessionId);
-  dropStart(starts, sourceId, nativeSessionId);
-});
+  /** The id the start that made the session named, or "". */
+  startedAs: string;
+  /** The pairings the complete index carries: a row the index has dropped
+   * shows from its record, naming no start, and the start's id comes from
+   * here instead. */
+  pairings: SessionPairing[];
+}>(
+  (_, { attached, starts, sourceId, nativeSessionId, startedAs, pairings }) => {
+    // A confirmed start is attached through its own record; detaching drops
+    // whichever record the session has, under the session's own id or the
+    // id its desktop start named.
+    dropAttachment(attached, sourceId, nativeSessionId);
+    dropStart(
+      starts,
+      sourceId,
+      nativeSessionId,
+      startedAs || startedAsOf(pairings, sourceId, nativeSessionId),
+    );
+  },
+);
 
 const useDefaultPrompt = handler<void, {
   spawnPrompt: Writable<string>;
@@ -353,6 +379,11 @@ export const startSessionCommand = handler<void, {
   shortName: string;
   title: string;
   startMode: string;
+  /** Where the session runs: "desktop" opens Claude Code on this Mac and
+   * sends no mode; anything else runs the first turn here. */
+  startSurface: string;
+  /** The sources that can open a session in Claude Code on this Mac. */
+  desktopSources: string[];
   /** The title of a start the index has not confirmed, or "": one start at
    * a time, so a second click while the first is on its way sends nothing. */
   pending: string;
@@ -374,6 +405,8 @@ export const startSessionCommand = handler<void, {
     startable: state.configuredSources,
     kickoff: state.kickoff,
     pending: state.pending,
+    surface: state.startSurface.trim(),
+    desktopCapable: state.desktopSources,
   });
   if (blocked) return;
   const sourceId = startSourceOf(
@@ -385,6 +418,7 @@ export const startSessionCommand = handler<void, {
   const sessionTitle = state.shortName
     ? `topic #${state.shortName}: ${state.title}`
     : state.title;
+  const desktop = state.startSurface.trim() === "desktop";
   const command = startCommandValue({
     ownerDid: state.ownerDid,
     idPrefix: "workbench",
@@ -393,7 +427,8 @@ export const startSessionCommand = handler<void, {
     text: state.kickoff,
     cwd: state.spawnRoot.get().trim(),
     title: sessionTitle,
-    mode: state.startMode.trim(),
+    mode: desktop ? undefined : state.startMode.trim(),
+    surface: desktop ? "desktop" : undefined,
   });
   state.commands.push(command.value);
   // Recorded, not attached: nothing here knows whether a queue took the
@@ -424,6 +459,7 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
       commands,
       starts,
       startMode,
+      startSurface,
       harnessesShown,
     },
   ) => {
@@ -457,8 +493,11 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
     const indexNote = indexNoteOf({ index: sessions });
     const ownerDid = sessions?.ownerDid ?? "";
     const mode = startMode ?? "";
+    const surface = startSurface ?? "";
+    const desktopSources = desktopSourcesOf({ index: sessions });
+    const pairings = pairingsOf({ index: sessions });
     const startModeNote = computed(() =>
-      mode.trim()
+      mode.trim() && surface.trim() !== "desktop"
         ? ` The first turn runs under the "${mode.trim()}" permission mode; the kickoff below is exactly what it receives.`
         : ""
     );
@@ -479,8 +518,20 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
       startable: configuredSources,
       kickoff,
       pending: pendingStart,
+      surface,
+      desktopCapable: desktopSources,
     });
     const canStart = isEmptyText({ text: startBlocker });
+    const startNote = computed(() =>
+      surface.trim() === "desktop"
+        ? "Opens Claude Code on this Mac with the kickoff ready to send; the start shows above as starting until you send it there and the connector sees the session, and can be withdrawn until then."
+        : "Runs the first turn on this Mac through the connector; the start shows above as starting until the connector publishes the session, and can be withdrawn until then."
+    );
+    const startingCaption = computed(() =>
+      surface.trim() === "desktop"
+        ? "sent to Claude Code on this Mac; attaches once you send it there and the connector sees the session"
+        : "sent to the connector; attaches when the session appears in the index"
+    );
     // The one handler the queue accepts writes from, bound here for Start
     // and once per starting row for Withdraw.
     const startSession = startSessionCommand({
@@ -496,6 +547,8 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
       shortName,
       title,
       startMode: mode,
+      startSurface: surface,
+      desktopSources,
       pending: pendingStart,
     });
 
@@ -535,7 +588,7 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
       const source = (sourceId ?? "").trim();
       const native = (nativeSessionId ?? "").trim();
       dropAttachment(attached, source, native);
-      dropStart(starts, source, native);
+      dropStart(starts, source, native, startedAsOf(pairings, source, native));
     });
 
     return {
@@ -710,6 +763,8 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
                                     starts,
                                     sourceId: row.sourceId,
                                     nativeSessionId: row.nativeSessionId,
+                                    startedAs: row.startedAs,
+                                    pairings,
                                   })}
                                 >
                                   Detach
@@ -752,7 +807,7 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
                                     tone="muted"
                                     truncate
                                   >
-                                    {`${start.sourceId} · sent to the connector; attaches when the session appears in the index`}
+                                    {`${start.sourceId} · ${startingCaption}`}
                                   </cf-text>
                                 </cf-vstack>
                                 <cf-button
@@ -772,6 +827,8 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
                                     shortName,
                                     title,
                                     startMode: mode,
+                                    startSurface: surface,
+                                    desktopSources,
                                     pending: pendingStart,
                                     withdraw: start.commandId,
                                   })}
@@ -976,9 +1033,7 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
                           tone="muted"
                           data-start-note=""
                         >
-                          {canStart
-                            ? "Runs the first turn on this Mac through the connector; the start shows above as starting until the connector publishes the session, and can be withdrawn until then."
-                            : startBlocker}
+                          {canStart ? startNote : startBlocker}
                           {startModeNote}
                         </cf-text>
                       </cf-hstack>

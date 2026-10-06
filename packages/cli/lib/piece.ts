@@ -12,10 +12,16 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import { createSession, type Identity, Session } from "@commonfabric/identity";
+import {
+  createSession,
+  type Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { setLLMUrl } from "@commonfabric/llm";
 import {
@@ -32,6 +38,7 @@ import {
 } from "@commonfabric/piece";
 import {
   assertPieceInputPath,
+  completeServedRegistration,
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
   PieceController,
@@ -39,9 +46,13 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  servedInstantiatePiece,
+  ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
 import {
   Cell,
+  cellRuntime,
+  cellTx,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -68,6 +79,7 @@ import {
   Runtime,
   runtimePresets,
   RuntimeProgram,
+  SpaceNotFoundError,
   UI,
   VNode,
 } from "@commonfabric/runner";
@@ -140,6 +152,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -191,6 +204,7 @@ export interface SpaceConfig {
 /** Metadata returned for a piece whose stored data matches a search query. */
 export interface PieceSearchResult {
   id: string;
+  reference: string;
   name?: string;
   patternRef?: PiecePatternRef;
 }
@@ -558,11 +572,12 @@ export async function withRuntimeCleanupOnFailure<T>(
 
 async function makeSession(config: SpaceConfig): Promise<Session> {
   const identity = await loadIdentity(config.identity);
-  if (isDID(config.space)) {
-    return createSession({ identity, spaceDid: config.space });
-  } else {
-    return createSession({ identity, spaceName: config.space });
-  }
+  return createSession({
+    identity,
+    spaceDid: isDID(config.space)
+      ? config.space
+      : await legacySpaceDid(config.space),
+  });
 }
 
 /**
@@ -662,7 +677,6 @@ export async function loadPieces(
           storageManager: StorageManager.open({
             as: session.as,
             memoryHost: new URL(config.apiUrl),
-            spaceIdentity: session.spaceIdentity,
           }),
           experimental,
           errorHandlers: [
@@ -723,6 +737,7 @@ export async function loadPieces(
       () =>
         new PiecesController(session, runtime, {
           deferSpaceCellSync,
+          ...(isDID(config.space) ? {} : { spaceName: config.space }),
         }),
     );
     if (deferSpaceCellSync) {
@@ -787,26 +802,33 @@ export async function listPieces(
   config: SpaceConfig,
   deps: PieceOperationDependencies = {},
 ): Promise<
-  { id: string; name?: string; patternRef?: PiecePatternRef; error?: string }[]
+  (PieceSearchResult & { error?: string })[]
 > {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const registeredPieces = await pieces.getRegisteredPieces();
   return Promise.all(
     registeredPieces.map(async (piece) => {
+      const reference = createLLMFriendlyLink(
+        piece.getCell().getAsNormalizedFullLink(),
+      );
       try {
-        const livePiece = await pieces.get(piece.id, true);
+        const owner = piece.pieces();
+        const cell = await owner.getPieceCell(piece.getCell(), true);
+        const livePiece = new PieceController(owner, cell);
         const name = (await (
           livePiece.getCell().key(NAME) as Cell<unknown>
         ).pull()) as string | undefined;
         const patternRef = await livePiece.getPatternRef();
         return {
           id: piece.id,
+          reference,
           name,
           patternRef,
         };
       } catch (err) {
         return {
           id: piece.id,
+          reference,
           error: err instanceof Error ? err.message : String(err),
         };
       }
@@ -936,6 +958,12 @@ function cellValueTraversalKey(cell: Cell<unknown>): string {
   });
 }
 
+/** Identify a piece's document independently of its selected fields or view labels. */
+function pieceDocumentIdentity(cell: Cell<unknown>): string {
+  const { space, id, scope } = cell.getAsNormalizedFullLink();
+  return hashStringOf({ space, id, scope });
+}
+
 interface PieceOwnerCache {
   cells: Map<string, Promise<string | undefined>>;
   documents: Map<string, string | null>;
@@ -943,7 +971,7 @@ interface PieceOwnerCache {
 
 async function resolveRegisteredDocumentOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
 ): Promise<string | undefined> {
   let current = cell;
@@ -975,8 +1003,9 @@ async function resolveRegisteredDocumentOwner(
     const currentId = pieceId(current);
     // Nested piece results can point to a parent result. Stop at the nearest
     // registered result before following its parent metadata.
-    if (currentId !== undefined && registeredPieceIds.has(currentId)) {
-      return finish(currentId);
+    const currentDocument = pieceDocumentIdentity(current);
+    if (registeredPieceDocuments.has(currentDocument)) {
+      return finish(currentDocument);
     }
 
     await current.sync();
@@ -986,15 +1015,15 @@ async function resolveRegisteredDocumentOwner(
       (getPatternIdentityRef(current) !== undefined ||
         argumentLink !== undefined)
     ) {
-      return finish(currentId);
+      return finish(currentDocument);
     }
     const resultLink = getMetaLink(current, "result");
     if (resultLink === undefined) return finish(undefined);
 
-    current = current.runtime.getCellFromLink(
+    current = cellRuntime(current).getCellFromLink(
       { ...resultLink, path: [], schema: undefined },
       undefined,
-      current.tx,
+      cellTx(current),
       getCarriedCfcLabelView(current),
     );
   }
@@ -1002,7 +1031,7 @@ async function resolveRegisteredDocumentOwner(
 
 function registeredDocumentOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
 ): Promise<string | undefined> {
   const key = cellDocumentTraversalKey(cell);
@@ -1011,28 +1040,28 @@ function registeredDocumentOwner(
   }
   return resolveRegisteredDocumentOwner(
     cell,
-    registeredPieceIds,
+    registeredPieceDocuments,
     ownerCache,
   );
 }
 
 async function resolveRegisteredPieceOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
   cellIsMaterialized: boolean,
 ): Promise<string | undefined> {
   if (!cellIsMaterialized) await cell.sync();
   return registeredDocumentOwner(
     cell.resolveAsCell(),
-    registeredPieceIds,
+    registeredPieceDocuments,
     ownerCache,
   );
 }
 
 function registeredPieceOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
   cellIsMaterialized: boolean,
 ): Promise<string | undefined> {
@@ -1041,7 +1070,7 @@ function registeredPieceOwner(
   if (owner === undefined) {
     owner = resolveRegisteredPieceOwner(
       cell,
-      registeredPieceIds,
+      registeredPieceDocuments,
       ownerCache,
       cellIsMaterialized,
     );
@@ -1051,8 +1080,8 @@ function registeredPieceOwner(
 }
 
 interface SearchOwnership {
-  pieceId: string;
-  registeredPieceIds: ReadonlySet<string>;
+  pieceDocument: string;
+  registeredPieceDocuments: ReadonlySet<string>;
   ownerCache: PieceOwnerCache;
 }
 
@@ -1127,11 +1156,11 @@ async function searchTextMatches(
   if (isCell(rootCell)) {
     const owner = await registeredPieceOwner(
       rootCell,
-      ownership.registeredPieceIds,
+      ownership.registeredPieceDocuments,
       ownership.ownerCache,
       false,
     );
-    if (owner !== undefined && owner !== ownership.pieceId) return false;
+    if (owner !== undefined && owner !== ownership.pieceDocument) return false;
   }
 
   const value = await rootCell.pull();
@@ -1177,11 +1206,13 @@ async function searchTextMatches(
         if (!next.value.ownershipEstablished) {
           const owner = await registeredPieceOwner(
             current,
-            ownership.registeredPieceIds,
+            ownership.registeredPieceDocuments,
             ownership.ownerCache,
             false,
           );
-          if (owner !== undefined && owner !== ownership.pieceId) continue;
+          if (owner !== undefined && owner !== ownership.pieceDocument) {
+            continue;
+          }
         }
 
         const nested = await current.pull();
@@ -1200,11 +1231,11 @@ async function searchTextMatches(
       try {
         const owner = await registeredPieceOwner(
           sourceCell,
-          ownership.registeredPieceIds,
+          ownership.registeredPieceDocuments,
           ownership.ownerCache,
           true,
         );
-        if (owner !== undefined && owner !== ownership.pieceId) continue;
+        if (owner !== undefined && owner !== ownership.pieceDocument) continue;
         ownershipEstablished = true;
       } catch (error) {
         reportReadError?.(error);
@@ -1232,11 +1263,13 @@ async function searchTextMatches(
         if (!ownershipEstablished) {
           const owner = await registeredPieceOwner(
             sourceCell,
-            ownership.registeredPieceIds,
+            ownership.registeredPieceDocuments,
             ownership.ownerCache,
             true,
           );
-          if (owner !== undefined && owner !== ownership.pieceId) continue;
+          if (owner !== undefined && owner !== ownership.pieceDocument) {
+            continue;
+          }
           ownershipEstablished = true;
         }
 
@@ -1345,8 +1378,8 @@ export async function searchPieces(
   // against a server-hosted index.
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const registeredPieces = await pieces.getRegisteredPieces();
-  const registeredPieceIds = new Set(
-    registeredPieces.map((piece) => piece.id),
+  const registeredPieceDocuments = new Set(
+    registeredPieces.map((piece) => pieceDocumentIdentity(piece.getCell())),
   );
   const ownerCache: PieceOwnerCache = {
     cells: new Map(),
@@ -1380,7 +1413,11 @@ export async function searchPieces(
         inputMatches = await searchTextMatches(
           inputCell,
           normalizedQuery,
-          { pieceId: piece.id, registeredPieceIds, ownerCache },
+          {
+            pieceDocument: pieceDocumentIdentity(piece.getCell()),
+            registeredPieceDocuments,
+            ownerCache,
+          },
           NO_IGNORED_ROOT_KEYS,
           (error) => reportSearchError(piece.id, "input data", error),
         );
@@ -1395,7 +1432,11 @@ export async function searchPieces(
           resultMatches = await searchTextMatches(
             resultCell,
             normalizedQuery,
-            { pieceId: piece.id, registeredPieceIds, ownerCache },
+            {
+              pieceDocument: pieceDocumentIdentity(piece.getCell()),
+              registeredPieceDocuments,
+              ownerCache,
+            },
             RESULT_IGNORED_ROOT_KEYS,
             (error) => reportSearchError(piece.id, "result data", error),
           );
@@ -1417,7 +1458,14 @@ export async function searchPieces(
         } catch (error) {
           reportSearchError(piece.id, "metadata", error);
         }
-        matches[index] = { id: piece.id, name, patternRef };
+        matches[index] = {
+          id: piece.id,
+          reference: createLLMFriendlyLink(
+            piece.getCell().getAsNormalizedFullLink(),
+          ),
+          name,
+          patternRef,
+        };
       }
     }
   };
@@ -1636,36 +1684,84 @@ async function lifecycleClient(
 }
 
 /**
- * The served half of `newPiece`: the serving runtime compiles the program
- * and materializes the piece — the creation act, with its registry entry
- * and its name in the same transaction — and this connection then starts
- * it the way it starts any piece it opens, running the graph as
- * speculation while the server derives on demand. The request is awaited
- * without a wall-clock bound: a creation the server is still committing
- * is not one to walk away from, since it lands whether or not this
- * process waits. `boundStart` is the bound the local start runs under.
+ * Creates or resumes a piece with an atomic creation receipt. A serving
+ * deployment executes the transaction remotely; an ordinary client executes
+ * the same operation locally. Registration retains its delivery identity, so
+ * an uncertain response can be retried without reinitializing the document.
+ * `boundStart` bounds only the local start, after creation and registration.
  */
-async function createOnServer(
+async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
   program: RuntimeProgram,
   entry: EntryConfig,
-  options: { start?: boolean; slug?: string; force?: boolean } | undefined,
+  options: {
+    input?: object;
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  } | undefined,
   deps: PieceOperationDependencies,
   boundStart: <T>(start: Promise<T>) => Promise<T>,
 ): Promise<{ id: string; getCell: () => Cell<unknown> }> {
-  const receipt = await (deps.instantiatePieceOnServer ??
-    instantiatePieceOnServer)(await lifecycleClient(config, deps), {
-      space: pieces.getSpace(),
-      program,
-      ...(entry.repository === undefined
-        ? {}
-        : { repository: entry.repository }),
-      ...(options?.slug === undefined ? {} : { slug: options.slug }),
-      ...(options?.force === undefined ? {} : { force: options.force }),
-      register: true,
-      ...(options?.start === false ? { start: false } : {}),
-    });
+  const requestKey = options?.requestKey ?? crypto.randomUUID();
+  const receipt = await (async () => {
+    try {
+      const client = await lifecycleClient(config, deps);
+      const request = {
+        requestKey,
+        ...(options?.input === undefined ? {} : { argument: options.input }),
+        ...(entry.repository === undefined
+          ? {}
+          : { repository: entry.repository }),
+        ...(options?.slug === undefined ? {} : { slug: options.slug }),
+        ...(options?.force === undefined ? {} : { force: options.force }),
+        register: true,
+      };
+      if (servesLifecycleVerbs(pieces)) {
+        return await (deps.instantiatePieceOnServer ??
+          instantiatePieceOnServer)(client, {
+            ...request,
+            space: pieces.getSpace(),
+            program,
+            ...(options?.start === false ? { start: false } : {}),
+          });
+      }
+      const created = await servedInstantiatePiece(pieces, {
+        ...request,
+        source: { program },
+        actingUser: client.identity.did(),
+      });
+      return await completeServedRegistration(
+        pieces,
+        created,
+        client.identity.did(),
+      );
+    } catch (error) {
+      if (
+        error instanceof ServedLifecycleRefusal ||
+        (error instanceof ServedLifecycleError && error.status >= 400 &&
+          error.status < 500 && error.status !== 408)
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Piece creation outcome may be incomplete. Retry the same command ` +
+          `with --request-key ${requestKey}. ` +
+          (error instanceof Error ? error.message : String(error)),
+        { cause: error },
+      );
+    }
+  })();
+  if (receipt.registration?.status !== "handled") {
+    throw new Error(
+      `Piece ${receipt.pieceId} was created but registration is ` +
+        `${receipt.registration?.status ?? "unconfirmed"}. ` +
+        `Retry the same command with --request-key ${requestKey}. ` +
+        (receipt.registration?.error ?? ""),
+    );
+  }
   const cell = await pieces.getPieceCell(receipt.pieceId, false);
   if (options?.start !== false) await boundStart(pieces.startPiece(cell));
   return { id: receipt.pieceId, getCell: () => cell };
@@ -1675,16 +1771,24 @@ async function createOnServer(
  * Creates a new piece from source code and optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
- * refuses one, and `force` takes it. Against a serving deployment the name
- * rides the creation transaction, so the refusal leaves nothing behind.
- * Otherwise the refusal arrives after the piece exists, so it names the
- * piece as well as the flag: an operator who meant to repoint has an id to
- * name, and one who did not has a piece to find.
+ * refuses one, and `force` takes it. With a request key or a serving
+ * deployment, the name rides the creation transaction, so the refusal
+ * leaves nothing behind. Otherwise the refusal arrives after the piece exists,
+ * so it names the piece as well as the flag: an operator who meant to repoint
+ * has an id to name, and one who did not has a piece to find.
  */
 export async function newPiece(
   config: SpaceConfig,
   entry: EntryConfig,
-  options?: { start?: boolean; slug?: string; force?: boolean },
+  options?: {
+    /** Initial argument committed during setup, before registration or start. */
+    input?: object;
+
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  },
   deps: PieceOperationDependencies = {},
 ): Promise<string> {
   const pieces = await timeCliPhase(
@@ -1694,7 +1798,8 @@ export async function newPiece(
 
   // Against a serving deployment the space root is the serving loop's to
   // ensure — it does so on activation, ahead of the verb this command sends
-  // — and a served creation that finds no root refuses with `no-space-root`.
+  // — and a served creation that finds no root retains its piece and reports
+  // failed registration, which the same request key can resume.
   // Otherwise registration through `pieces.add()` requires an existing
   // default pattern and fails before sending if none exists. Ensuring it
   // creates an absent root and reconciles and repairs an existing one; fail
@@ -1708,14 +1813,25 @@ export async function newPiece(
       );
     }
   } catch (error) {
+    if (error instanceof SpaceNotFoundError) {
+      throw new Error(
+        `${error.message}. Opening a space never creates one; create one ` +
+          `with: ${cliCommand(["space", "create"])}`,
+        { cause: error },
+      );
+    }
     throw new Error(
       `Could not initialize the space's default pattern: ${
         error instanceof Error ? error.message : String(error)
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
-        `If this space's root pattern predates a runtime format change, ` +
-        `repair it with: ${cliCommand(["space", "recreate-root"])}`,
+        `If a non-Home space's root pattern predates a runtime format change, ` +
+        `repair it with: ${cliCommand(["space", "recreate-root"])}. ` +
+        `Update an existing Home in place with ${
+          cliCommand(["piece", "setsrc"])
+        } ` +
+        `to preserve its account data.`,
       { cause: error },
     );
   }
@@ -1757,11 +1873,12 @@ export async function newPiece(
     });
     return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
   };
+  const receipted = served || options?.requestKey !== undefined;
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
-      served
-        ? createOnServer(
+      receipted
+        ? createWithReceipt(
           config,
           pieces,
           program,
@@ -1773,15 +1890,15 @@ export async function newPiece(
         : boundStart(pieces.create(program, {
           repository: entry.repository,
           start: options?.start,
+          ...(options?.input === undefined ? {} : { input: options.input }),
         })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // A served creation named and registered the piece in its own
-  // transaction; what follows is the client-side creation's second half.
-  if (served) return piece.id;
+  // Receipt-backed creation returns after both setup and registration commit.
+  if (receipted) return piece.id;
 
   if (options?.slug) {
     try {
@@ -1984,6 +2101,13 @@ async function updateOnServer(
   };
 }
 
+/** A follow receipt includes the incompatibility this invocation accepted. */
+export type FollowPieceSourceResult =
+  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | (Extract<PieceSourceActionResult, { status: "applied" }> & {
+    acceptedIncompatibility?: string;
+  });
+
 /**
  * Points a piece at `origin` and adopts what that origin currently serves,
  * in one source transition (`repoint`). From then on the piece follows the
@@ -2002,8 +2126,10 @@ async function updateOnServer(
 export async function followPieceSource(
   config: PieceConfig,
   origin: string,
+  options: Pick<SetPiecePatternOptions, "dangerouslyAllowIncompatibleSchema"> =
+    {},
   deps: PieceOperationDependencies = {},
-): Promise<PieceSourceActionResult> {
+): Promise<FollowPieceSourceResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   // Against a serving deployment a source transition is the serving
   // runtime's to commit, and the served update verb carries no origin yet;
@@ -2025,7 +2151,22 @@ export async function followPieceSource(
     undefined,
     resolvedConfig.pieceScope,
   );
-  const result = await piece.changeSource({ kind: "repoint", url: origin });
+  const action = { kind: "repoint" as const, url: origin };
+  let result: FollowPieceSourceResult = await piece.changeSource(action);
+  if (
+    result.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const acceptedIncompatibility = result.message;
+    result = await piece.changeSource(action, {
+      confirmedChange: result.prepared,
+    });
+    if (result.status === "applied") {
+      result = { ...result, acceptedIncompatibility };
+    }
+  }
   if (result.status === "applied") noteWroteTo(config.space);
   return result;
 }
@@ -2331,7 +2472,7 @@ async function tryResolveLivePieceToolCallable(
   );
   pieces.runtime.run(tx, pattern, input, liveResult);
   pieces.runtime.prepareTxForCommit?.(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await pieces.runtime.idle();
 
   const callableCell = liveResult.key(callableName).asSchemaFromLinks();
@@ -2517,10 +2658,10 @@ async function isDocumentOf(
   const sameDocument = (link: NormalizedFullLink) =>
     sameCellAddress({ ...link, path: [] }, { ...owner, path: [] });
   const link = cell.getAsNormalizedFullLink();
-  const document = cell.runtime.getCellFromLink(
+  const document = cellRuntime(cell).getCellFromLink(
     { ...link, path: [], schema: undefined },
     undefined,
-    cell.tx,
+    cellTx(cell),
   );
   await document.sync();
   const backLink = getMetaLink(document, "result");
@@ -4785,7 +4926,7 @@ export function cachedResultFields(
   result: Readonly<unknown>,
 ): CachedResultField[] {
   if (!isObjectNotArray(result)) return [];
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const tx = runtime.readTx();
   const cached: CachedResultField[] = [];
   for (const name of Object.keys(result)) {
@@ -4891,7 +5032,7 @@ export async function inspectPiece(
   }));
   const resultCell = await piece.result.getCell();
   const inputCell = await piece.input.getCell();
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const sourceLink = resolveLink(
     runtime,
     runtime.readTx(),
@@ -5264,7 +5405,7 @@ export async function setCellCfcLabel(
     },
   }).applyCfcSchemaToExistingValue();
   pieces.runtime.prepareTxForCommit(tx);
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error !== undefined) {
     throw new Error(
       `Could not set the CFC label at ${
@@ -5336,15 +5477,17 @@ export async function getCellValue(
         () => targetCell.pull(),
       );
       await timeCliPhase(
-        "getCellValue.step.synced.beforeIdle",
+        "getCellValue.step.synced.beforeSettled",
         () => pieces.synced(),
       );
+      // Async query results and their reactive updates must arrive before
+      // the read; scheduler idle alone can leave their initial values visible.
       await timeCliPhase(
-        "getCellValue.step.runtime.idle",
-        () => pieces.runtime.idle(),
+        "getCellValue.step.runtime.settled",
+        () => pieces.runtime.settled(Infinity),
       );
       await timeCliPhase(
-        "getCellValue.step.synced.afterIdle",
+        "getCellValue.step.synced.afterSettled",
         () => pieces.synced(),
       );
     }
@@ -5535,8 +5678,9 @@ export async function setCellValue(
 
 /**
  * What a {@link callPieceHandler} call supplies: the connection its
- * resolution runs over, and the three execution deps a handling can observe
- * through a call that returns nothing.
+ * resolution runs over, the three execution deps a handling can observe
+ * through a call that returns nothing, and the `sendEvent` a test stands in
+ * for the dispatch.
  *
  * Narrower than {@link PieceCallableDependencies} by the fields this path
  * cannot keep. The input readers and the help prefix have no bearing on it —
@@ -5549,7 +5693,10 @@ export async function setCellValue(
  * {@link executePieceCallable}, which returns one.
  */
 export type PieceHandlerCallDeps =
-  & Pick<CallableExecutionDeps, "invocation" | "onPhase" | "skipReadback">
+  & Pick<
+    CallableExecutionDeps,
+    "invocation" | "onPhase" | "skipReadback" | "sendEvent"
+  >
   & Pick<PieceCallableDependencies, "loadPieces" | "loadPiece">;
 
 /**
@@ -5924,7 +6071,24 @@ export async function setHomePattern(
 }
 
 /**
- * Reset the home pattern to the system default.
+ * Creates a space owned by the configured identity and returns its DID. The
+ * space gets a random DID and is born granting its creator alone; it is
+ * recorded in the identity's Home space list under `label`.
+ */
+export async function createSpace(
+  config: Omit<SpaceConfig, "space">,
+  label?: string,
+): Promise<string> {
+  const identity = await loadIdentity(config.identity);
+  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
+  const pieces = await loadPieces(homeConfig);
+  const space = await pieces.createSpace(label);
+  noteWroteTo(homeConfig.space);
+  return space;
+}
+
+/**
+ * Initializes an absent Home with the system default; refuses existing Home.
  */
 export async function resetHomePattern(
   config: Omit<SpaceConfig, "space">,

@@ -21,6 +21,8 @@ import {
   setCellCfcLabelFromCommand,
   setQuietMode,
 } from "../commands/piece.ts";
+import { CellImpl } from "../../runner/src/cell.ts";
+import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import { cell } from "../commands/cell.ts";
 import { cf, stripAnsi } from "./utils.ts";
 
@@ -59,7 +61,7 @@ describe("cf piece CFC labels", () => {
     const tx = runtime.edit();
     root.withTx(tx).set({ body: "hello" });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const piece = {
       input: { getCell: () => Promise.resolve(root) },
@@ -296,7 +298,7 @@ describe("cf piece CFC labels", () => {
     const storedLink = linked.getAsLink();
     root.withTx(seed).key("body").setRawUntyped(storedLink);
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const updated = await setCellCfcLabel(
       pieceConfig,
@@ -327,7 +329,7 @@ describe("cf piece CFC labels", () => {
     });
     root.withTx(seed).key("body").setRawUntyped(storedRedirect);
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const updated = await setCellCfcLabel(
       pieceConfig,
@@ -372,7 +374,7 @@ describe("cf piece CFC labels", () => {
     const seed = runtime.edit();
     fabricRoot.withTx(seed).set({ body: original });
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     await fabricRoot.pull();
     const before = fabricRoot.key("body").getRawUntyped();
     const piece = {
@@ -528,7 +530,7 @@ describe("cf piece CFC labels", () => {
     const tx = runtime.edit();
     schemaRoot.withTx(tx).set({ body: "hello" });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const schemaDeps = {
       ...deps,
@@ -562,33 +564,31 @@ describe("cf piece CFC labels", () => {
   });
 
   it("rejects an ambiguous observation class instead of choosing one", async () => {
-    const labelSymbol = Object.getOwnPropertySymbols(
-      Object.getPrototypeOf(root),
-    ).find((symbol) => symbol.description === "cfcLabelView");
-    expect(labelSymbol).toBeDefined();
-    if (labelSymbol === undefined) throw new Error("Missing CFC label carrier");
-
-    const ambiguousCell = {
-      key: () => ambiguousCell,
-      pull: () => Promise.resolve(),
-      getRaw: () => "hello",
-      schema: {},
-      [labelSymbol]: () => ({
+    // The root, carrying a view whose `body` has entries of two observation
+    // classes.
+    const ambiguousCell = new CellImpl(
+      runtime,
+      undefined,
+      root.getAsNormalizedFullLink(),
+      false,
+      undefined,
+      "cell",
+      {
         version: 1,
         entries: [
           {
-            path: [],
+            path: ["body"],
             label: { confidentiality: ["team"] },
             observes: "value",
           },
           {
-            path: [],
+            path: ["body"],
             label: { integrity: ["reviewed"] },
             observes: "shape",
           },
         ],
-      }),
-    };
+      },
+    );
     const ambiguousDeps = {
       ...deps,
       loadPieces: () =>
@@ -650,20 +650,17 @@ describe("cf piece CFC labels", () => {
   });
 
   it("fails when label metadata cannot be read", async () => {
-    const failingCell = {
-      pull: () => Promise.resolve(),
-      key: () => failingCell,
-      getAsNormalizedFullLink: () => ({
-        space: signer.did(),
-        id: "unreadable-labels",
-        path: [],
-      }),
-      runtime: {
-        readTx: () => {
+    // The root, read through a transaction whose every read fails.
+    const failingCell = new CellImpl(
+      runtime,
+      interceptTransaction(runtime.edit(), (method, _args, proceed) => {
+        if (method === "readOrThrow" || method === "readValueOrThrow") {
           throw new Error("metadata unavailable");
-        },
-      },
-    };
+        }
+        return proceed();
+      }),
+      root.getAsNormalizedFullLink(),
+    );
     let editCalled = false;
     const failingPieces = {
       runtime: {
@@ -726,7 +723,7 @@ describe("cf piece CFC labels", () => {
     const t1 = runtime.edit();
     row.withTx(t1).set({ secret: "top secret", shouted: "TOP SECRET" });
     runtime.prepareTxForCommit(t1);
-    expect((await t1.commit()).error).toBeUndefined();
+    expect((await t1.commit().settled).error).toBeUndefined();
 
     const query = runtime.getCell<never>(
       signer.did(),
@@ -736,7 +733,7 @@ describe("cf piece CFC labels", () => {
     const t2 = runtime.edit();
     query.withTx(t2).key("result").key(0).setRawUntyped(row.getAsLink());
     runtime.prepareTxForCommit(t2);
-    expect((await t2.commit()).error).toBeUndefined();
+    expect((await t2.commit().settled).error).toBeUndefined();
 
     const chainRoot = runtime.getCell<never>(
       signer.did(),
@@ -746,7 +743,7 @@ describe("cf piece CFC labels", () => {
     const t3 = runtime.edit();
     chainRoot.withTx(t3).key("q").setRawUntyped(query.getAsLink());
     runtime.prepareTxForCommit(t3);
-    expect((await t3.commit()).error).toBeUndefined();
+    expect((await t3.commit().settled).error).toBeUndefined();
 
     const chainPiece = {
       input: { getCell: () => Promise.resolve(chainRoot) },

@@ -10,7 +10,7 @@ import {
   cellHasOwnerConfidentiality,
   cellHasOwnerProtection,
 } from "@commonfabric/agents-connector/fabric-graph";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -31,6 +31,10 @@ import {
   SharedServerStorageManager,
   sourceDescriptor,
 } from "./debug_view_support.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug command authorization resolves local schema definitions", () => {
   assertEquals(
@@ -82,9 +86,9 @@ Deno.test("debug command authorization resolves local schema definitions", () =>
 });
 
 Deno.test("debug deployment requires verified command authorization", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-command-authorization-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -127,9 +131,9 @@ Deno.test("debug deployment requires verified command authorization", async () =
 });
 
 Deno.test("debug deployment protects its result before starting", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-protection-failure-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -186,9 +190,9 @@ Deno.test("debug deployment protects its result before starting", async () => {
 });
 
 Deno.test("debug deployment refuses a pre-created unprotected piece", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-piece-squatting-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -229,7 +233,7 @@ Deno.test("debug deployment refuses a pre-created unprotected piece", async () =
     );
     const seed = runtime.edit();
     squattedPiece.withTx(seed).setRawUntyped({ spoofed: true });
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
 
     await assertRejects(
@@ -252,9 +256,9 @@ Deno.test("debug deployment refuses a pre-created unprotected piece", async () =
 });
 
 Deno.test("debug deployment refuses an unprotected registration", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-registration-squatting-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -283,7 +287,7 @@ Deno.test("debug deployment refuses an unprotected registration", async () => {
     };
     const seed = runtime.edit();
     registration.withTx(seed).setRawUntyped(squattedRegistration);
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
 
     await assertRejects(
@@ -308,8 +312,8 @@ Deno.test("debug deployment refuses an unprotected registration", async () => {
 
 Deno.test("debug registration rejects writes from another owner", async () => {
   const server = newSharedServer();
-  const spaceName = `debug-registration-owner-${crypto.randomUUID()}`;
-  const readerSession = await createSession({ identity, spaceName });
+  const spaceDid = (await Identity.generate()).did();
+  const readerSession = createSession({ identity, spaceDid });
   const readerStorage = SharedServerStorageManager.connectTo(server, {
     as: readerSession.as,
   });
@@ -346,11 +350,11 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       true,
     );
     const attack = readerRuntime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: "principal:did:key:other-owner",
       actingPrincipal: "did:key:other-owner",
     });
-    attack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(attack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -362,7 +366,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       retiredCauses: [],
     });
     attack.prepareCfc();
-    const result = await attack.commit();
+    const result = await attack.commit().settled;
     assertEquals(result.error !== undefined, true);
 
     const debugPiece = await readerManager.getPieceCell(
@@ -383,11 +387,11 @@ Deno.test("debug registration rejects writes from another owner", async () => {
     );
     const originalArgument = argument.getRaw();
     const argumentAttack = readerRuntime.edit();
-    argumentAttack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(argumentAttack, {
       id: "principal:did:key:other-owner",
       actingPrincipal: "did:key:other-owner",
     });
-    argumentAttack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(argumentAttack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -396,12 +400,12 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       ownerDid: "did:key:other-owner",
     });
     argumentAttack.prepareCfc();
-    const argumentAttackResult = await argumentAttack.commit();
+    const argumentAttackResult = await argumentAttack.commit().settled;
     assertEquals(argumentAttackResult.error !== undefined, true);
     assertEquals(argument.getRaw(), originalArgument);
 
     const ownerUpdate = readerRuntime.edit();
-    ownerUpdate.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(ownerUpdate, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -410,7 +414,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       ownerDid: "did:key:other-owner",
     });
     ownerUpdate.prepareCfc();
-    const ownerUpdateResult = await ownerUpdate.commit();
+    const ownerUpdateResult = await ownerUpdate.commit().settled;
     if (ownerUpdateResult.error) throw ownerUpdateResult.error;
     await assertRejects(
       () => deployAgentSessionsDebugView(readerManager, target),
@@ -435,9 +439,9 @@ Deno.test("debug registration rejects writes from another owner", async () => {
 });
 
 Deno.test("debug registration rejects another owner-scoped writer", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-registration-writer-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -460,7 +464,7 @@ Deno.test("debug registration rejects another owner-scoped writer", async () => 
       agentPrincipalSchema(session.as.did(), [otherWriter]),
     );
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "builtin",
       builtinId: otherWriter,
     });
@@ -473,7 +477,7 @@ Deno.test("debug registration rejects another owner-scoped writer", async () => 
     });
     registration.withTx(seed).applyCfcSchemaToExistingValue();
     seed.prepareCfc();
-    const seeded = await seed.commit();
+    const seeded = await seed.commit().settled;
     if (seeded.error) throw seeded.error;
     assertEquals(
       cellHasOwnerProtection(runtime.readTx(), registration, session.as.did()),

@@ -79,7 +79,10 @@ describe("cfcLabelViewsEqual()", () => {
     )).toBe(true);
   });
 
-  it("returns `true` for a logical path spelled with and without its `value` root", () => {
+  it("returns `false` for paths that differ only by a leading `value` segment", () => {
+    // A view's paths are logical, so `["value","body"]` names the `body` of a
+    // payload field called `value`, not the top-level `body`.
+
     expect(cfcLabelViewsEqual(
       {
         version: 1,
@@ -89,7 +92,7 @@ describe("cfcLabelViewsEqual()", () => {
         version: 1,
         entries: [{ path: ["body"], label: { integrity: ["t"] } }],
       },
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it("returns `true` for `undefined` and a view whose entries all canonicalize away", () => {

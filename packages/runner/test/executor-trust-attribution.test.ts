@@ -29,6 +29,9 @@
 // - INV-G: `trustSnapshotForPrincipal` composes the same revision as the
 //   default provider, config digest included, so a trust-config change
 //   invalidates per-run served digests exactly as ambient ones.
+// - a declared writer's claim: a served handler whose position declares a
+//   writer and no gesture, reached by another handler's `send()` from a plain
+//   fire, mints the entry's actor.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -43,9 +46,13 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import { currentPrincipal } from "../src/builder/current-principal.ts";
+import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const spaceSigner = await Identity.fromPassphrase("trust attribution space");
 const space = spaceSigner.did() as MemorySpace;
@@ -74,11 +81,38 @@ const BUMP_PATTERN = [
   ">(({ value }) => ({ value, bump: bump({ value }) }));",
 ].join("\n");
 
+// `post` is the declared writer of each note it appends, with no gesture,
+// and `relay` reaches it with a `send()`.
+const NOTES_PATTERN = [
+  "import {",
+  "  AuthoredByCurrentUser, handler, pattern, Stream, Writable,",
+  "  WriteAuthorizedBy,",
+  "} from 'commonfabric';",
+  "type Note = AuthoredByCurrentUser<",
+  "  WriteAuthorizedBy<{ text: string }, typeof post>",
+  ">;",
+  "type Posted = { text: string };",
+  "interface Notes {",
+  "  notes: Writable<Note[]>;",
+  "}",
+  "const post = handler<Posted, Notes>(",
+  "  (event, { notes }) => { notes.push({ text: event.text }); },",
+  ");",
+  "const relay = handler<Posted, { next: Stream<Posted> }>(",
+  "  (event, { next }) => { next.send({ text: event.text }); },",
+  ");",
+  "export default pattern<",
+  "  { notes: Writable<Note[]> },",
+  "  { notes: Note[]; relay: Stream<Posted> }",
+  ">(({ notes }) => ({ notes, relay: relay({ next: post({ notes }) }) }));",
+].join("\n");
+
 // The authored vocabulary, in the explicit-schema form the compiled
 // `AuthoredByCurrentUser` / `RepresentsCurrentUser` wrappers lower to
 // (packages/api/cfc.ts): a current-principal placeholder subject under
-// `addIntegrity`, gated by `writeAuthorizedBy` + a `uiContract` that a
-// renderer-trusted event must match (cfc/prepare.ts's non-owner arm).
+// `addIntegrity`, gated by the `writeAuthorizedBy` that cfc/prepare.ts's
+// non-owner arm requires, and by a `uiContract` that a renderer-trusted event
+// must match.
 const TRUSTED_WRITER = "test.ow34-trusted-writer";
 const UI_CONTRACT = {
   helper: "UiAction",
@@ -255,16 +289,21 @@ describe("executor-trust-attribution", () => {
     return { manager, runtime };
   };
 
-  /** Compile + run the bump pattern on `runtime`, returning its cells. */
+  /**
+   * Compile + run `source` (the bump pattern unless given) on `runtime`, with
+   * `initial` as its argument, returning its cells.
+   */
   const standUp = async (
     runtime: Runtime,
     names: { arg: string; result: string },
+    source: string = BUMP_PATTERN,
+    initial: Record<string, unknown> = { value: 0 },
   ) => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
-      files: [{ name: "/main.tsx", contents: BUMP_PATTERN }],
+      files: [{ name: "/main.tsx", contents: source }],
     }, { space });
-    const argument = runtime.getCell<{ value: number }>(
+    const argument = runtime.getCell<Record<string, unknown>>(
       space,
       names.arg,
       undefined,
@@ -278,13 +317,13 @@ describe("executor-trust-attribution", () => {
     await result.sync();
     {
       const seed = runtime.edit();
-      argument.withTx(seed).set({ value: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      argument.withTx(seed).set(initial);
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     return { compiled, argument, result };
   };
@@ -363,7 +402,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, event) => {
           const docName = (event as { doc?: string })?.doc ?? "flag5-doc";
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -429,7 +468,7 @@ describe("executor-trust-attribution", () => {
       const serving = servingRuntime!;
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, _event) => {
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -485,7 +524,7 @@ describe("executor-trust-attribution", () => {
           if (kind === "s18-setup") {
             // A LEGIT mint first, so the doc holds a well-formed
             // envelope for the forgery to target.
-            tx.setCfcImplementationIdentity({
+            setCfcImplementationIdentity(tx, {
               kind: "builtin",
               builtinId: TRUSTED_WRITER,
             });
@@ -577,7 +616,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, event) => {
           const docName = (event as { doc?: string })?.doc ?? "multi-doc";
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -682,7 +721,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, _event) => {
           dispatches += 1;
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -704,10 +743,10 @@ describe("executor-trust-attribution", () => {
               permanentEvidence: false as const,
             };
             (tx as unknown as {
-              commit: () => Promise<{ error: typeof error }>;
+              commit: () => ReturnType<typeof createTransactionCommitReceipt>;
             }).commit = () => {
               tx.abort(new Error(error.message));
-              return Promise.resolve({ error });
+              return createTransactionCommitReceipt(Promise.resolve({ error }));
             };
           }
         },
@@ -757,7 +796,7 @@ describe("executor-trust-attribution", () => {
           const poke = clientRuntime!.edit();
           clientRuntime!.getCell<number>(space, "replay-activate", undefined)
             .withTx(poke).set(1);
-          expect((await poke.commit()).error).toBeUndefined();
+          expect((await poke.commit().settled).error).toBeUndefined();
         }
         // Ordered barrier for the negative: append a FRESH entry on the
         // same stream and wait for ITS consequence — the drain processes
@@ -1039,6 +1078,126 @@ describe("executor-trust-attribution", () => {
       } finally {
         await runtime.dispose();
         await manager.close();
+      }
+    });
+  });
+
+  describe("currentPrincipal()", () => {
+    it("returns the entry's firedAt.user in a served handler, the subject that run's authored-by claim names, whatever the payload names", async () => {
+      // The probe stands in for a pattern handler, so it pushes the handler
+      // frame the runner pushes around one.
+
+      const { engine, cancelDemand, sidecarId, streamLink, result } =
+        await warmServedStream({
+          arg: "current-principal-arg",
+          result: "current-principal-result",
+        });
+      const serving = servingRuntime!;
+      let seen: string | undefined = "not called";
+      const cancelProbe = serving.scheduler.addEventHandler(
+        (tx, _event) => {
+          const frame = pushFrame({
+            runtime: serving,
+            tx,
+            inHandler: true,
+            frameKind: "handler",
+          });
+          try {
+            seen = currentPrincipal();
+          } finally {
+            popFrame(frame);
+          }
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: TRUSTED_WRITER,
+          });
+          serving.getCell(space, "current-principal-doc", authoredDocSchema, tx)
+            .set({ body: "hello", claim: "a claim" });
+        },
+        streamLink,
+      );
+      try {
+        result.key("bump").send(trustedPayload({
+          kind: "current-principal",
+          acting: { user: bobSigner.did(), session: "bob-session" },
+          user: bobSigner.did(),
+          principal: bobSigner.did(),
+          firedAt: { user: bobSigner.did(), session: "bob-session" },
+        }));
+        await clientRuntime!.idle();
+        await clientRuntime!.storageManager.synced();
+        await awaitAdmitted(
+          server,
+          () =>
+            entryByKind(engine, sidecarId, "current-principal")
+              ?.consequenced === true,
+        );
+        const entry = entryByKind(engine, sidecarId, "current-principal")!;
+        expect(entry.error).toBeUndefined();
+        expect(entry.firedAt?.user).toBe(aliceSigner.did());
+        expect(seen).toBe(aliceSigner.did());
+
+        const docId = clientRuntime!.getCell(
+          space,
+          "current-principal-doc",
+          undefined,
+        ).getAsNormalizedFullLink().id;
+        await awaitAdmitted(
+          server,
+          () => Engine.read(engine, { id: docId })?.value !== undefined,
+        );
+        expect(
+          principalSubjects(Engine.read(engine, { id: docId }), "authored-by"),
+        ).toEqual([seen]);
+      } finally {
+        cancelProbe();
+        cancelDemand();
+      }
+    });
+  });
+  describe("a declared writer's `authored-by` claim", () => {
+    it("names the entry's firedAt.user on a note a served handler writes with no gesture, reached by a `send()` from a plain fire", async () => {
+      ({ manager: clientManager, runtime: clientRuntime } = openClient());
+      const engine = await server.engineForSpace(space);
+      const { argument, result } = await standUp(
+        clientRuntime,
+        { arg: "notes-arg", result: "notes-result" },
+        NOTES_PATTERN,
+        { notes: [] },
+      );
+      const cancelDemand = result.sink(() => {});
+      try {
+        await clientRuntime.idle();
+        await clientRuntime.storageManager.synced();
+        host = newHost();
+        result.key("relay").send({ text: "hello" });
+        await clientRuntime.idle();
+        await clientRuntime.storageManager.synced();
+        // `push()` stores each note as a document of its own, linked from
+        // the list, and the claim is on that document.
+        const argumentId = argument.getAsNormalizedFullLink().id;
+        const noteIds = () =>
+          ((Engine.read(engine, { id: argumentId })?.value as
+            | { notes?: { "/": { "link@1": { id: string } } }[] }
+            | undefined)?.notes ?? []).map((note) => note["/"]["link@1"].id);
+        const errors = () =>
+          sidecarIdsIn(engine).flatMap((id) =>
+            entriesIn(engine, id).flatMap((entry) =>
+              entry.error === undefined ? [] : [entry.error]
+            )
+          );
+        await awaitAdmitted(
+          server,
+          () => noteIds().length === 1 || errors().length > 0,
+        );
+        expect(errors()).toEqual([]);
+        const note = Engine.read(engine, { id: noteIds()[0] });
+        expect(note?.value).toEqual({ text: "hello" });
+        expect(principalSubjects(note, "authored-by")).toEqual([
+          aliceSigner.did(),
+        ]);
+      } finally {
+        cancelDemand();
       }
     });
   });

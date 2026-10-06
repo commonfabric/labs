@@ -648,9 +648,11 @@ Deno.test("generateObject<T>(spreadOptions) spreads a non-literal options expres
   const output = await t(source);
   const [schema] = emittedSchemas(parseModule(output));
   assertEquals((schema.properties as Obj).ok.type, "boolean");
-  // Non-literal options become { ...opts, schema: ... }; the spread is a
-  // printer-level construct, so it is checked as text.
-  assertStringIncludes(output, "...opts");
+  const [call] = callsNamed(parseModule(output), "generateObject");
+  const spreads = collect(call!, ts.isSpreadAssignment);
+  assertEquals(spreads.length, 1);
+  assert(ts.isIdentifier(spreads[0]!.expression));
+  assertEquals(spreads[0]!.expression.text, "opts");
 });
 
 //
@@ -719,6 +721,38 @@ Deno.test("cell(value) assigned to a PerSpace<T> variable reads the space scope 
   const output = await t(source);
   const [schema] = emittedSchemas(parseModule(output));
   assertEquals(schema.scope, "space");
+});
+
+Deno.test("cell(value) assigned to a variable typed by an alias of PerSession<T> reads the session scope from the annotation", async () => {
+  const source = [
+    "/// <cts-enable />",
+    'import { cell, PerSession } from "commonfabric";',
+    "type Count = PerSession<number>;",
+    "const c: Count = cell(0);",
+  ].join("\n");
+  const output = await t(source);
+  const [schema] = emittedSchemas(parseModule(output));
+  // The checker reports the alias `Count`, so the scope is read from the
+  // brand `PerSession` leaves on the resolved type.
+  assertEquals(schema.scope, "session");
+});
+
+Deno.test("pattern result field typed by an alias of PerUser<T> keeps the user scope", async () => {
+  const source = [
+    "/// <cts-enable />",
+    'import { computed, pattern, PerUser } from "commonfabric";',
+    "type Rec = PerUser<{ a: number }>;",
+    "export default pattern<{ x: number }>(({ x }) => {",
+    "  const v: Rec = computed(() => ({ a: x }));",
+    "  return { v };",
+    "});",
+  ].join("\n");
+  const output = await t(source);
+  const { output: result } = patternSchemas(parseModule(output));
+  assertEquals(
+    (result.properties as Record<string, { scope?: string }>).v.scope,
+    "user",
+  );
 });
 
 //

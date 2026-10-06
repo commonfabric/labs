@@ -667,15 +667,20 @@ export class CommandWorker {
       publicationFailed = true;
       publicationError = error;
     }
+    // The command's own session is refreshed unless the driver named
+    // another, or none: a desktop start opens the app and the person sends
+    // the prompt, so no session exists to read yet, and reading the one the
+    // command named would fail the refresh.
+    const affected = result.affectedSession === undefined
+      ? command.nativeSessionId
+      : result.affectedSession;
     if (
-      driver &&
+      driver && affected !== null &&
       (result.status === "succeeded" || command.type === "prompt" ||
         command.type === "start")
     ) {
       await Promise.allSettled(
-        this.#targets.map((target) =>
-          target.refreshSession(driver, command.nativeSessionId)
-        ),
+        this.#targets.map((target) => target.refreshSession(driver, affected)),
       );
     }
     if (publicationFailed) throw publicationError;
@@ -708,6 +713,11 @@ export class CommandWorker {
         const cwd = optionalString(command.payload.cwd, "start cwd");
         const title = optionalString(command.payload.title, "start title", 512);
         const mode = optionalString(command.payload.mode, "start mode", 128);
+        const surface = optionalString(
+          command.payload.surface,
+          "start surface",
+          32,
+        );
         return driver.startSession(
           command.nativeSessionId,
           {
@@ -719,6 +729,7 @@ export class CommandWorker {
             ...(cwd !== undefined ? { cwd } : {}),
             ...(title !== undefined ? { title } : {}),
             ...(mode !== undefined ? { mode } : {}),
+            ...(surface !== undefined ? { surface } : {}),
           },
           {
             force: command.force,

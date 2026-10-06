@@ -1,17 +1,13 @@
 import {
   action,
   computed,
-  Default,
   equals,
-  handler,
   NAME,
   pattern,
-  type PerSession,
   type PerSpace,
   type PerUser,
   Stream,
   UI,
-  Writable,
 } from "commonfabric";
 import {
   createRandomImportedClaimedMessages,
@@ -29,7 +25,6 @@ import {
   messagesValue,
   type MyProfileCell,
   participantClaimsValue,
-  type RoomDraftCell,
   roomsValue,
   type SharedChatMessage,
   type SharedMessagesCell,
@@ -38,6 +33,7 @@ import {
   type SharedProfilesValue,
   type SharedRoomsCell,
   type SharedRoomsValue,
+  type SubmittedTextEvent,
   TrustedAdminPanel,
   type TrustedAdminPolicyEvent,
   TrustedChatSendSurface,
@@ -45,22 +41,11 @@ import {
   TrustedRoomAddSurface,
 } from "./trusted.tsx";
 
-type DraftCell = Writable<string | Default<"">>;
-
 const messageCountText = (count: number): string =>
   count === 0 ? "No messages yet" : `${count} message${count === 1 ? "" : "s"}`;
 
 const roomCountText = (count: number): string =>
   count === 0 ? "No rooms yet" : `${count} room${count === 1 ? "" : "s"}`;
-
-const draftText = (draft: DraftCell): string =>
-  (draft.get() as string | undefined) ?? "";
-
-const writeDraftText = handler<string, { value: DraftCell }>(
-  (nextValue, { value }) => {
-    value.set(nextValue);
-  },
-);
 
 interface SharedTranscriptInput {
   myProfile: MyProfileCell;
@@ -212,10 +197,6 @@ export interface GroupChatDemoInput {
   messages?: PerSpace<SharedMessagesCell>;
   rooms?: PerSpace<SharedRoomsCell>;
   adminRegistry?: PerSpace<ChatAdminRegistryCell>;
-  profileDraft?: PerUser<DraftCell>;
-  messageDraft?: PerUser<DraftCell>;
-  hostMessageDraft?: PerSession<DraftCell>;
-  roomDraft?: PerSession<RoomDraftCell>;
 }
 
 export interface GroupChatDemoOutput {
@@ -226,24 +207,16 @@ export interface GroupChatDemoOutput {
   messages: PerSpace<SharedMessagesCell>;
   rooms: PerSpace<SharedRoomsCell>;
   adminRegistry: PerSpace<ChatAdminRegistryCell>;
-  profileDraft: PerUser<DraftCell>;
-  messageDraft: PerUser<DraftCell>;
-  hostMessageDraft: PerSession<DraftCell>;
-  roomDraft: PerSession<RoomDraftCell>;
-  setProfileDraft: Stream<string>;
-  setMessageDraft: Stream<string>;
-  setHostMessageDraft: Stream<string>;
-  setRoomDraft: Stream<string>;
   currentProfileName: string;
   currentUserIsAdmin: boolean;
   currentUserCanManageAdmins: boolean;
-  saveProfile: Stream<void>;
+  saveProfile: Stream<SubmittedTextEvent>;
   toggleCurrentUserAdmin: Stream<TrustedAdminPolicyEvent>;
   toggleParticipantAdmin: Stream<TrustedAdminPolicyEvent>;
   toggleEveryoneAdmin: Stream<TrustedAdminPolicyEvent>;
-  sendTrustedMessage: Stream<void>;
-  addTrustedRoom: Stream<void>;
-  hostLookalikeSend: Stream<void>;
+  sendTrustedMessage: Stream<SubmittedTextEvent>;
+  addTrustedRoom: Stream<SubmittedTextEvent>;
+  hostLookalikeSend: Stream<SubmittedTextEvent>;
   addRandomMessages: Stream<void>;
 }
 
@@ -254,10 +227,6 @@ export const GroupChatDemo = pattern<GroupChatDemoInput, GroupChatDemoOutput>((
     messages,
     rooms,
     adminRegistry,
-    profileDraft,
-    messageDraft,
-    hostMessageDraft,
-    roomDraft,
   }: GroupChatDemoInput,
 ): GroupChatDemoOutput => {
   const myProfileCell: MyProfileCell = myProfile!;
@@ -265,14 +234,9 @@ export const GroupChatDemo = pattern<GroupChatDemoInput, GroupChatDemoOutput>((
   const messagesCell: SharedMessagesCell = messages!;
   const roomsCell: SharedRoomsCell = rooms!;
   const adminRegistryCell: ChatAdminRegistryCell = adminRegistry!;
-  const profileDraftCell: DraftCell = profileDraft!;
-  const messageDraftCell: DraftCell = messageDraft!;
-  const hostMessageDraftCell: DraftCell = hostMessageDraft!;
-  const roomDraftCell: RoomDraftCell = roomDraft!;
   const trustedProfileSave = TrustedProfileSaveSurface({
     myProfile: myProfileCell,
     profiles: profilesCell,
-    nameDraft: profileDraftCell,
   } as TrustedProfileSaveSurfaceInputArg);
   const trustedAdminPanel = TrustedAdminPanel({
     profiles: profilesCell,
@@ -283,24 +247,17 @@ export const GroupChatDemo = pattern<GroupChatDemoInput, GroupChatDemoOutput>((
   const trustedSend = TrustedChatSendSurface({
     profiles: profilesCell,
     myProfile: myProfileCell,
-    messageDraft: messageDraftCell,
     messages: messagesCell,
   } as TrustedChatSendSurfaceInputArg);
   const trustedRoomAdd = TrustedRoomAddSurface({
     myProfile: myProfileCell,
     adminRegistry: adminRegistryCell,
-    roomDraft: roomDraftCell,
     rooms: roomsCell,
   } as TrustedRoomAddSurfaceInputArg);
   const hostLookalikeSend = commitTrustedMessageSend({
     myProfile: myProfileCell,
-    messageDraft: hostMessageDraftCell,
     messages: messagesCell,
   } as TrustedMessageSendInputArg);
-  const setProfileDraft = writeDraftText({ value: profileDraftCell });
-  const setMessageDraft = writeDraftText({ value: messageDraftCell });
-  const setHostMessageDraft = writeDraftText({ value: hostMessageDraftCell });
-  const setRoomDraft = writeDraftText({ value: roomDraftCell });
   const participantCountLabel = computed(() => {
     const count =
       participantClaimsValue(profilesCell, myProfileCell, messagesCell).length;
@@ -308,9 +265,6 @@ export const GroupChatDemo = pattern<GroupChatDemoInput, GroupChatDemoOutput>((
   });
   const roomCountLabel = computed(() =>
     roomCountText(roomsValue(roomsCell).length)
-  );
-  const hostSendDisabled = computed(() =>
-    draftText(hostMessageDraftCell).trim().length === 0
   );
   const addRandomMessagesDisabled = computed(() =>
     participantClaimsValue(profilesCell, myProfileCell, messagesCell).length ===
@@ -420,26 +374,14 @@ export const GroupChatDemo = pattern<GroupChatDemoInput, GroupChatDemoOutput>((
           </cf-card>
 
           <cf-card id="host-send-panel">
-            <cf-hstack slot="content" gap="2" align="center" wrap>
-              <cf-vgroup
-                gap="sm"
-                style={{ minWidth: "16rem", flex: "1 1 16rem" }}
-              >
-                <cf-input
-                  id="host-message-draft"
-                  size="sm"
-                  $value={hostMessageDraft}
-                  placeholder="Write a message"
-                />
-              </cf-vgroup>
-              <cf-button
-                id="host-send-button"
-                disabled={hostSendDisabled}
-                onClick={hostLookalikeSend}
-              >
-                Send
-              </cf-button>
-            </cf-hstack>
+            <cf-submit-input
+              slot="content"
+              id="host-send-button"
+              inputId="host-message-draft"
+              placeholder="Write a message"
+              buttonText="Send"
+              onClick={hostLookalikeSend}
+            />
           </cf-card>
 
           <cf-button
@@ -459,14 +401,6 @@ export const GroupChatDemo = pattern<GroupChatDemoInput, GroupChatDemoOutput>((
     messages: messagesCell as PerSpace<SharedMessagesCell>,
     rooms: roomsCell as PerSpace<SharedRoomsCell>,
     adminRegistry: adminRegistryCell as PerSpace<ChatAdminRegistryCell>,
-    profileDraft: profileDraftCell as PerUser<DraftCell>,
-    messageDraft: messageDraftCell as PerUser<DraftCell>,
-    hostMessageDraft: hostMessageDraftCell as PerSession<DraftCell>,
-    roomDraft: roomDraftCell as PerSession<RoomDraftCell>,
-    setProfileDraft,
-    setMessageDraft,
-    setHostMessageDraft,
-    setRoomDraft,
     currentProfileName: trustedProfileSave.currentProfileName,
     currentUserIsAdmin: computed(() =>
       currentProfileIsAdmin(myProfileCell, adminRegistryCell)

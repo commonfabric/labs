@@ -1618,8 +1618,13 @@ function samePosition(one: Position, other: Position): boolean {
  * This module writes it and never reads it — the reader does that — in two
  * places: in front of a key a bare path would not reach, and in front of what
  * follows a handle, which is read as what follows this head is.
+ *
+ * It is exported because a verb writes it too. `where scope <value>` sets the
+ * scope by moving the place the way `cd` moves it, which means composing the
+ * operand that carries a qualifier and no walk, and one spelling of the head
+ * is what keeps that operand the same operand a person types.
  */
-const RELATIVE_HEAD = ".";
+export const RELATIVE_HEAD = ".";
 
 /**
  * The character a numbered handle opens with, which a listing prints in front
@@ -1646,10 +1651,28 @@ export const HANDLE_SIGIL = "%";
  * operand that named no key *and* looks like an attempt at the scope.
  */
 export function scopeMoveHint(operand: string): string {
-  return operand.startsWith("@") && CELL_SCOPE_VALUES.has(operand.slice(1))
+  return isScopeWord(operand)
     ? ` \`${RELATIVE_HEAD}${operand}\` is what moves the scope.`
     : "";
 }
+
+/**
+ * Whether `operand` is a scope word and nothing else: the sigil, and one of
+ * the scopes the runtime knows, with no path after it.
+ *
+ * It is the whole of what a setter for the scope may take. Composing an
+ * operand out of anything wider would hand the caller the navigation grammar
+ * under a name that says it sets one dimension — `where scope /pieces` would
+ * move the position — so the check is here beside the words rather than at
+ * each caller.
+ */
+export function isScopeWord(operand: string): boolean {
+  return operand.startsWith("@") && CELL_SCOPE_VALUES.has(operand.slice(1));
+}
+
+/** The scope words, in the spelling an operand and the record both write. */
+export const SCOPE_WORDS: readonly string[] = [...CELL_SCOPE_VALUES]
+  .map((scope) => `@${scope}`);
 
 /**
  * The member an operand writes to select a piece's arguments cell, which is

@@ -3,7 +3,7 @@
  * `compileTestPatterns()` reports for a file that compiles and one that
  * does not, and the exit the command takes on the latter. The cache the pass
  * leaves behind is pinned across processes in
- * `test-runner-compile-byte-cache.test.ts`.
+ * `test-runner-compile-byte-cache.serial.test.ts`.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -112,7 +112,14 @@ describe(
         );
         expect(compiled).toBe(0);
         expect(failed).toEqual([GOOD]);
-        expect(logged).toContain("  ✗ settle-step.test.tsx: wedged");
+        // What follows the file's name is the error as the runner formats
+        // it, whose stack depends on what else this process has compiled.
+        expect(
+          logged.some((line) =>
+            line.startsWith("  ✗ settle-step.test.tsx: ") &&
+            line.includes("wedged")
+          ),
+        ).toBe(true);
       });
     });
 

@@ -1,7 +1,11 @@
 import { assertEquals } from "@std/assert";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  CFC_CONCEPT_KIND,
+  cfcAtom,
+} from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import {
   isCell as isRuntimeCell,
@@ -9,7 +13,9 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import {
+  buildCfcPolicyArtifactManifest,
   createRenderConfidentialityResolver,
+  PROMPT_CAVEAT_FAMILY_KINDS,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
@@ -20,6 +26,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 import type { WorkerVNode } from "../src/worker/types.ts";
@@ -28,7 +35,9 @@ import { normalizeRenderDeclassificationPolicy } from "../src/worker/types.ts";
 function createOpsCollector() {
   const allOps: VDomOp[] = [];
   return {
-    onOps: (ops: VDomOp[]) => allOps.push(...ops),
+    onOps: (ops: VDomOp[]) => {
+      for (const op of ops) allOps.push(op);
+    },
     clear: () => {
       allOps.length = 0;
     },
@@ -79,6 +88,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     kind: "authored-by",
     subject: signer.did(),
   };
+  const OTHER_PRINCIPAL = "did:key:z6MkotherPrincipalWhoDidNotWriteThisText";
 
   try {
     const tx = runtime.edit();
@@ -201,6 +211,96 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         },
       },
     });
+    // Profiles labeled the way a Fabric profile is: each owner-protected field
+    // carries its owner's `represents-principal`, and the root carries none.
+    const seedFieldLabeledProfile = (
+      cause: string,
+      owners: { name: string; avatar: string },
+    ) => {
+      const profile = runtime.getCell<{ name: string; avatar: string }>(
+        signer.did(),
+        cause,
+        undefined,
+        tx,
+      );
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(tx, {
+        space: signer.did(),
+        id: profile.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { name: "Alice", avatar: "A" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: (["name", "avatar"] as const).map((field) => ({
+              path: [field],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: owners[field],
+                }],
+              },
+            })),
+          },
+        },
+      });
+    };
+    seedFieldLabeledProfile("cfc-render-policy-field-labeled-profile", {
+      name: signer.did(),
+      avatar: signer.did(),
+    });
+    // The signer owns the field whose path sorts first in the stored label, so
+    // a reader taking the first principal it finds would admit the signer's
+    // text; only one requiring every principal blocks it.
+    seedFieldLabeledProfile("cfc-render-policy-two-owner-profile", {
+      name: OTHER_PRINCIPAL,
+      avatar: signer.did(),
+    });
+    // A message whose `authorProfile` links the field-labeled profile: its
+    // stored label holds the profile's owner atoms only as entries the link
+    // carried, which name whom the linked profile represents.
+    const linkingMessage = runtime.getCell<{ authorProfile: unknown }>(
+      signer.did(),
+      "cfc-render-policy-linking-message",
+      undefined,
+      tx,
+    );
+    seedStoredEnvelope(tx, {
+      space: signer.did(),
+      id: linkingMessage.getAsNormalizedFullLink().id!,
+      type: "application/json",
+      path: [],
+    }, {
+      value: {
+        authorProfile: runtime.getCell(
+          signer.did(),
+          "cfc-render-policy-field-labeled-profile",
+          undefined,
+          tx,
+        ).getAsLink(),
+      },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: (["name", "avatar"] as const).map((field) => ({
+            path: ["authorProfile", field],
+            label: {
+              integrity: [{
+                kind: "represents-principal",
+                subject: signer.did(),
+              }],
+            },
+            origin: "link" as const,
+          })),
+        },
+      },
+    });
     const authoredByProfileText = runtime.getCell<string>(
       signer.did(),
       "cfc-render-policy-authored-by-profile-text",
@@ -231,7 +331,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         },
       },
     });
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assertEquals(commitResult.ok !== undefined, true);
 
     const confidential = runtime.getCell<string>(
@@ -258,6 +358,20 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       signer.did(),
       "cfc-render-policy-authored-by-profile-text",
     );
+    const fieldLabeledProfileCell = runtime.getCell<{ name: string }>(
+      signer.did(),
+      "cfc-render-policy-field-labeled-profile",
+    );
+    const twoOwnerProfileCell = runtime.getCell<{ name: string }>(
+      signer.did(),
+      "cfc-render-policy-two-owner-profile",
+    );
+    const linkedAuthorProfileCell = runtime.getCell<
+      { authorProfile: unknown }
+    >(
+      signer.did(),
+      "cfc-render-policy-linking-message",
+    ).key("authorProfile");
     const dummyTx = runtime.edit();
     const dummyCell = runtime.getCell(
       signer.did(),
@@ -582,7 +696,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           declassifyConfidentiality: [healthRecordAtom],
           $value: confidential.getAsLink({ includeSchema: true }),
         });
-        const propsCommitResult = await propsTx.commit();
+        const propsCommitResult = await propsTx.commit().settled;
         assertEquals(propsCommitResult.ok !== undefined, true);
 
         const boundaryProps = runtime.getCell(
@@ -857,7 +971,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           maxConfidentiality: [],
           $value: confidential.getAsLink({ includeSchema: true }),
         });
-        const propsCommitResult = await propsTx.commit();
+        const propsCommitResult = await propsTx.commit().settled;
         assertEquals(propsCommitResult.ok !== undefined, true);
 
         const boundaryProps = runtime.getCell(
@@ -912,7 +1026,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           declassifyConfidentiality: [healthRecordAtom],
           $value: confidential.getAsLink({ includeSchema: true }),
         });
-        const propsCommitResult = await propsTx.commit();
+        const propsCommitResult = await propsTx.commit().settled;
         assertEquals(propsCommitResult.ok !== undefined, true);
 
         const boundaryProps = runtime.getCell(
@@ -1310,6 +1424,104 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           assertEquals(
             renderedText.includes("Content hidden by integrity policy"),
             false,
+          );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "strict text integrity derives authorship from a profile a message links",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+        const root: WorkerVNode = {
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            author: linkedAuthorProfileCell as never,
+          },
+          children: [authoredByProfileTextCell as never],
+        };
+
+        const cancel = reconciler.mount(root);
+        try {
+          await t.settle();
+
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Profile-authored note"), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "strict text integrity derives authorship from a profile labeled on its fields",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+        const root: WorkerVNode = {
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            author: fieldLabeledProfileCell as never,
+          },
+          children: [authoredByProfileTextCell as never],
+        };
+
+        const cancel = reconciler.mount(root);
+        try {
+          await t.settle();
+
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Profile-authored note"), true);
+          assertEquals(
+            renderedText.includes("Content hidden by integrity policy"),
+            false,
+          );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "strict text integrity blocks text under a profile whose fields name two principals",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+        const root: WorkerVNode = {
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            author: twoOwnerProfileCell as never,
+          },
+          children: [authoredByProfileTextCell as never],
+        };
+
+        const cancel = reconciler.mount(root);
+        try {
+          await t.settle();
+
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(renderedText.includes("Profile-authored note"), false);
+          assertEquals(
+            renderedText.includes("Content hidden by integrity policy"),
+            true,
           );
         } finally {
           cancel();
@@ -2064,7 +2276,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             }),
           ],
         });
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2185,7 +2397,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             children: [],
           }],
         });
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2296,7 +2508,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             children: [],
           }],
         });
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2344,7 +2556,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         requiredIntegrity.set(signedReleaseAtom);
         runtime.prepareTxForCommit(tx);
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const collector = createOpsCollector();
@@ -2373,7 +2585,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           const updateTx = runtime.edit();
           liveRequiredIntegrity.withTx(updateTx).set(otherReleaseAtom);
           runtime.prepareTxForCommit(updateTx);
-          const updateResult = await updateTx.commit();
+          const updateResult = await updateTx.commit().settled;
           assertEquals(updateResult.ok !== undefined, true);
           await t.settle();
 
@@ -2394,7 +2606,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           const relaxTx = runtime.edit();
           liveRequiredIntegrity.withTx(relaxTx).set(signedReleaseAtom);
           runtime.prepareTxForCommit(relaxTx);
-          const relaxResult = await relaxTx.commit();
+          const relaxResult = await relaxTx.commit().settled;
           assertEquals(relaxResult.ok !== undefined, true);
           await t.settle();
 
@@ -2734,7 +2946,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         },
       },
     });
-    assertEquals((await caveatTx.commit()).ok !== undefined, true);
+    assertEquals((await caveatTx.commit().settled).ok !== undefined, true);
 
     const plainRoot = (child: unknown): WorkerVNode => ({
       type: "vnode",
@@ -2993,7 +3205,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           "Other user's note",
           otherUserDid,
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         // The H3a initial profile shape: acting-user DID string plus the
         // influence-class caveat-kind allow-list.
@@ -3022,6 +3234,130 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             .map((op) => op.text);
           assertEquals(renderedText.includes("Acting user's own note"), true);
           assertEquals(renderedText.includes("Other user's note"), false);
+          assertEquals(renderedText.includes("Content hidden by policy"), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "the prompt-caveat family renders the acting user's own unscreened text",
+      async () => {
+        // SC-54 (proposed §8.10.6) admits the §10.1 prompt-caveat family at
+        // the default display ceiling: a prompt caveat says not to trust the
+        // content as instructions to a model, and a display shows it to the
+        // acting user. The acting user's own note renders under the
+        // unscreened tier in either spelling. The same note stays hidden
+        // under the retired unsuffixed kind (#5661) and under a caveat kind
+        // outside the family, so the family is not "any caveat". The ceiling
+        // and resolver are the production shape lib-shell builds.
+        const seedTx = runtime.edit();
+        const seedCaveated = (id: string, value: string, kind: string) => {
+          const cell = runtime.getCell<string>(
+            signer.did(),
+            id,
+            undefined,
+            seedTx,
+          );
+          const link = cell.getAsNormalizedFullLink();
+          writeSeedEnvelopeDoc(seedTx, signer.did());
+          seedStoredEnvelope(seedTx, {
+            space: signer.did(),
+            id: link.id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value,
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: {
+                    confidentiality: [signer.did(), {
+                      type: CFC_ATOM_TYPE.Caveat,
+                      kind,
+                      source: "of:untrusted-sender",
+                    }],
+                  },
+                }],
+              },
+            },
+          });
+          return cell;
+        };
+        const unscreened = seedCaveated(
+          "cfc-render-policy-own-unscreened",
+          "Owner's own unscreened message",
+          CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+        );
+        const unscreenedShort = seedCaveated(
+          "cfc-render-policy-own-unscreened-short",
+          "Owner's own message, short spelling",
+          "prompt-injection-risk-unscreened",
+        );
+        const retired = seedCaveated(
+          "cfc-render-policy-own-retired-kind",
+          "Owner's note under the retired kind",
+          "prompt-injection-risk",
+        );
+        const offFamily = seedCaveated(
+          "cfc-render-policy-own-off-family",
+          "Owner's note under another caveat",
+          "https://example.test/cfc/concepts/not-a-prompt-caveat",
+        );
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
+
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+              signer.did(),
+            ],
+            caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+          }),
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [
+            unscreened as never,
+            unscreenedShort as never,
+            retired as never,
+            offFamily as never,
+          ],
+        });
+        try {
+          await t.settle();
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(
+            renderedText.includes("Owner's own unscreened message"),
+            true,
+          );
+          assertEquals(
+            renderedText.includes("Owner's own message, short spelling"),
+            true,
+          );
+          assertEquals(
+            renderedText.includes("Owner's note under the retired kind"),
+            false,
+          );
+          assertEquals(
+            renderedText.includes("Owner's note under another caveat"),
+            false,
+          );
           assertEquals(renderedText.includes("Content hidden by policy"), true);
         } finally {
           cancel();
@@ -3085,7 +3421,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           "Other-space note",
           cfcAtom.space("did:key:z6MkOtherSpaceOutsideRoles"),
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         // The §8.10.6 default display ceiling: acting-user identity + personal
         // space principal forms. The acting user's own space is the one
@@ -3206,7 +3542,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             ],
           },
         );
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
 
         // Marker + caveat under a root ceiling that allow-lists the influence
         // kind: the caveat renders, the marker stays blocked.
@@ -3337,7 +3673,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const markerLabeled = runtime.getCell<string>(
           signer.did(),
           "cfc-render-policy-read-failed",
@@ -3471,7 +3807,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const teamLabeled = runtime.getCell<string>(
           signer.did(),
           "cfc-stage4-team-note",
@@ -3486,7 +3822,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         {
           const seed = runtime.edit();
           plainCell.withTx(seed).set("Plain note");
-          assertEquals((await seed.commit()).ok !== undefined, true);
+          assertEquals((await seed.commit().settled).ok !== undefined, true);
         }
 
         // Start denying (ACL unsynced), then grant + fire the subscription.
@@ -3594,6 +3930,385 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
 
     await t.step(
+      "watches nothing for a cell whose label cannot be read",
+      async () => {
+        const unreadable = patchableCell(runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-unreadable",
+        ));
+        unreadable.resolveAsCell = () => {
+          throw new Error("label resolution failed");
+        };
+        const subscribed: string[] = [];
+        const errors: Error[] = [];
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          onError: (error) => errors.push(error),
+          renderConfidentialityCeiling: {
+            atoms: [cfcAtom.user(signer.did())],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+          }),
+          membershipProvider: {
+            readerRole: () => null,
+            subscribe: (space) => {
+              subscribed.push(space);
+              return () => {};
+            },
+          },
+          modulePolicySource: {
+            subscribe: (_reference, space) => {
+              subscribed.push(space);
+              return () => {};
+            },
+          },
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [unreadable as never],
+        });
+        try {
+          await t.settle();
+          assertEquals(
+            collector.getOpsOfType("create-text").map((op) => op.text)
+              .includes("Content hidden by policy"),
+            true,
+          );
+          assertEquals(subscribed, []);
+          assertEquals(errors, []);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "reactively re-renders a PolicyOf cell once its manifest arrives",
+      async () => {
+        // The direct-release rule (packages/patterns/cfc-exchange-rules): the
+        // owner holds HasRole on their own space, so the only thing sealing
+        // this value is the manifest not having synced yet.
+        const manifest = buildCfcPolicyArtifactManifest({
+          formatVersion: 1,
+          moduleIdentity: "UsUHkONMerVZwnUOIBrbzrUlhEfaV0SByvpFqW28WLg",
+          symbol: "directReleaseRules",
+          template: {
+            templateVersion: 1,
+            exchangeRules: [{
+              name: "releaseToSpaceReader",
+              preCondition: {
+                confidentiality: [{ thisPolicy: true }],
+                integrity: [{
+                  type: CFC_ATOM_TYPE.HasRole,
+                  principal: { var: "reader" },
+                  space: { thisPolicyField: "subject" },
+                  role: "reader",
+                }],
+              },
+              postCondition: {
+                confidentiality: [{
+                  type: CFC_ATOM_TYPE.User,
+                  subject: { var: "reader" },
+                }],
+                integrity: [],
+              },
+            }],
+            dependencies: { authorityOnly: [], dataBearing: [] },
+            integrityRequirements: {},
+          },
+        });
+        // The policy's subject is a different space from the one the label is
+        // stored in, so the watch below can only name the storage space if
+        // manifests are looked up where the label was read, not by subject.
+        const subjectSpace =
+          "did:key:z6MkPolicySubjectSpaceForManifestLocality";
+        const policyRef = cfcAtom.modulePolicyRef(
+          manifest.manifest.moduleIdentity,
+          manifest.manifest.symbol,
+          manifest.policyDigest,
+          subjectSpace,
+        );
+        const seedTx = runtime.edit();
+        const sealedCell = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-awaiting-manifest",
+          undefined,
+          seedTx,
+        );
+        const sealedLink = sealedCell.getAsNormalizedFullLink();
+        writeSeedEnvelopeDoc(seedTx, signer.did());
+        seedStoredEnvelope(seedTx, {
+          space: signer.did(),
+          id: sealedLink.id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: "Direct release",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { confidentiality: [policyRef], integrity: [] },
+              }],
+            },
+          },
+        });
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
+        const sealed = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-awaiting-manifest",
+        );
+
+        let installed = false;
+        const listeners: Array<
+          { digest: string; space: string; onChange: () => void }
+        > = [];
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+            ],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did(), subjectSpace],
+            modulePolicyResolver: (_reference, spaces) =>
+              installed && spaces.includes(signer.did()) ? manifest : undefined,
+          }),
+          modulePolicySource: {
+            subscribe: (reference, space, onChange) => {
+              const entry = {
+                digest: reference.policyDigest,
+                space,
+                onChange,
+              };
+              listeners.push(entry);
+              return () => {
+                const index = listeners.indexOf(entry);
+                if (index >= 0) listeners.splice(index, 1);
+              };
+            },
+          },
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [sealed as never],
+        });
+        const rendered = () =>
+          collector.getOpsOfType("create-text").map((op) => op.text)
+            .includes("Direct release");
+        try {
+          await t.settle();
+          assertEquals(rendered(), false);
+          // Watched where the label is stored, the space its manifest lives.
+          assertEquals(
+            listeners.map(({ digest, space }) => [digest, space]),
+            [[manifest.policyDigest, signer.did()]],
+          );
+
+          installed = true;
+          collector.clear();
+          for (const listener of [...listeners]) listener.onChange();
+          await t.settle();
+          assertEquals(rendered(), true);
+        } finally {
+          cancel();
+        }
+        assertEquals(listeners, []);
+
+        // A source whose subscribe throws leaves the cell unwatched and still
+        // gated; the throw does not escape into the render.
+        const errors: Error[] = [];
+        const throwingCollector = createOpsCollector();
+        const throwing = new WorkerReconciler({
+          onOps: throwingCollector.onOps,
+          onError: (error) => errors.push(error),
+          renderConfidentialityCeiling: {
+            atoms: [cfcAtom.user(signer.did())],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+            modulePolicyResolver: () => undefined,
+          }),
+          modulePolicySource: {
+            subscribe: () => {
+              throw new Error("manifest store unavailable");
+            },
+          },
+        });
+        const cancelThrowing = throwing.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [sealed as never],
+        });
+        try {
+          await t.settle();
+          assertEquals(errors, []);
+          assertEquals(
+            throwingCollector.getOpsOfType("create-text").map((op) => op.text)
+              .includes("Direct release"),
+            false,
+          );
+        } finally {
+          cancelThrowing();
+        }
+      },
+    );
+
+    await t.step(
+      "reactively re-renders a PolicyOf cell once its subject space's ACL grants READ",
+      async () => {
+        // The label carries no Space atom: the module rule adds
+        // Space(THIS_POLICY.subject) during evaluation. The subject space's
+        // ACL is watched all the same, so a later READ grant re-renders.
+        const subjectSpace = "did:key:z6MkPolicySubjectSpaceReactive";
+        const manifest = buildCfcPolicyArtifactManifest({
+          formatVersion: 1,
+          moduleIdentity: "sha256:reactive-release-module",
+          symbol: "releaseToMembers",
+          template: {
+            templateVersion: 1,
+            exchangeRules: [{
+              name: "releaseWhenTallied",
+              preCondition: {
+                confidentiality: [{ thisPolicy: true }],
+                integrity: [{
+                  type: "TallyComplete",
+                  space: { thisPolicyField: "subject" },
+                }],
+              },
+              postCondition: {
+                confidentiality: [{
+                  type: CFC_ATOM_TYPE.Space,
+                  id: { thisPolicyField: "subject" },
+                }],
+                integrity: [],
+              },
+            }],
+            dependencies: { authorityOnly: [], dataBearing: [] },
+            integrityRequirements: {},
+          },
+        });
+        const policyRef = cfcAtom.modulePolicyRef(
+          manifest.manifest.moduleIdentity,
+          manifest.manifest.symbol,
+          manifest.policyDigest,
+          subjectSpace,
+        );
+        const seedTx = runtime.edit();
+        const sealedCell = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-reactive-ballot",
+          undefined,
+          seedTx,
+        );
+        const sealedLink = sealedCell.getAsNormalizedFullLink();
+        writeSeedEnvelopeDoc(seedTx, signer.did());
+        seedStoredEnvelope(seedTx, {
+          space: signer.did(),
+          id: sealedLink.id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: "Sealed ballot",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: {
+                  confidentiality: [policyRef],
+                  integrity: [{ type: "TallyComplete", space: subjectSpace }],
+                },
+              }],
+            },
+          },
+        });
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
+        const sealed = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-reactive-ballot",
+        );
+
+        let granted = false;
+        const listeners: Array<{ space: string; onChange: () => void }> = [];
+        const provider: SpaceMembershipProvider = {
+          readerRole: (space) =>
+            granted && space === subjectSpace ? "reader" : null,
+          subscribe: (space, onChange) => {
+            const entry = { space, onChange };
+            listeners.push(entry);
+            return () => {
+              const index = listeners.indexOf(entry);
+              if (index >= 0) listeners.splice(index, 1);
+            };
+          },
+        };
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+            ],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            membershipProvider: provider,
+            modulePolicyResolver: () => manifest,
+          }),
+          membershipProvider: provider,
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [sealed as never],
+        });
+        const rendered = () =>
+          collector.getOpsOfType("create-text").map((op) => op.text)
+            .includes("Sealed ballot");
+        try {
+          await t.settle();
+          assertEquals(rendered(), false);
+          assertEquals(
+            listeners.map((listener) => listener.space),
+            [subjectSpace],
+          );
+
+          granted = true;
+          collector.clear();
+          for (const listener of [...listeners]) listener.onChange();
+          await t.settle();
+          assertEquals(rendered(), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
       "reactively re-renders a root-mounted Space(X) cell once its ACL grants READ",
       async () => {
         // The root-mounted cell is an egress too (codex P2): a Space(X) cell
@@ -3628,7 +4343,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
-        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        assertEquals((await seedTx.commit().settled).ok !== undefined, true);
         const teamLabeled = runtime.getCell<string>(
           signer.did(),
           "cfc-stage4-root-note",

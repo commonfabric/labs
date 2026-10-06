@@ -1,5 +1,9 @@
 import { assertEquals } from "@std/assert";
-import { createSession, Identity } from "@commonfabric/identity";
+import { Identity } from "@commonfabric/identity";
+import {
+  getServerExecutionConfig,
+  setServerExecutionConfig,
+} from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -14,6 +18,25 @@ import { type FactoryInput } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+
+/**
+ * Returns the DID the allocation record `callingSpace` holds for the
+ * `PatternFactory.inSpace(name)` target `name`, or `undefined` when it holds
+ * none.
+ */
+const allocatedSpace = async (
+  runtime: Runtime,
+  callingSpace: string,
+  name: string,
+): Promise<string | undefined> => {
+  const record = runtime.getCell(
+    callingSpace as typeof space,
+    { inSpaceAllocation: { space: callingSpace, name } },
+    { type: "object", properties: { did: { type: "string" } } } as const,
+  );
+  await record.sync();
+  return record.get()?.did;
+};
 
 Deno.test("Cell.key keeps base scope; schema carries the scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
@@ -180,7 +203,7 @@ Deno.test("handler bindings preserve scoped cells selected from pattern input sc
       newRoomName: "",
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -188,7 +211,7 @@ Deno.test("handler bindings preserve scoped cells selected from pattern input sc
     const setTx = runtime.edit();
     result.key("newRoomName").withTx(setTx).set("Project");
     runtime.prepareTxForCommit(setTx);
-    await setTx.commit();
+    await setTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -372,7 +395,7 @@ Deno.test("per-user pointer can create and update a space-scoped profile cell", 
       messages: [],
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -458,7 +481,7 @@ Deno.test("pattern factory .asScope() sets child pattern result scope", async ()
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -503,7 +526,7 @@ Deno.test("pattern factory .inSpace() routes child pattern result to DID space",
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -526,10 +549,6 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
   });
   const tx = runtime.edit();
   const spaceName = `pattern-factory-in-space-${crypto.randomUUID()}`;
-  const expectedSpace = (await createSession({
-    identity: signer,
-    spaceName,
-  })).space;
 
   try {
     const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
@@ -550,7 +569,7 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
     );
 
     const result = runtime.run(tx, Root, { value: "named child" }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -562,6 +581,11 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
     const actionLink = parseLink(result.key("child").getRaw(), result);
     const actionResult = runtime.getCellFromLink(actionLink!);
     const childLink = actionResult.resolveAsCell().getAsNormalizedFullLink();
+    // The name resolves to the space the calling space's allocation record
+    // names, which is a space of its own.
+    const expectedSpace = await allocatedSpace(runtime, space, spaceName);
+    assertEquals(typeof expectedSpace, "string");
+    assertEquals(expectedSpace === space, false);
     assertEquals(childLink?.space, expectedSpace);
     assertEquals(
       await result.key("child", "value").pull(),
@@ -631,7 +655,7 @@ Deno.test("pattern factory .inSpace() handler side effect can write linked child
 
     const result = runtime.run(tx, Root, { profile }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -660,10 +684,6 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
   const tx = runtime.edit();
   const spaceName =
     `pattern-factory-in-space-annotation-${crypto.randomUUID()}`;
-  const expectedSpace = (await createSession({
-    identity: signer,
-    spaceName,
-  })).space;
 
   try {
     const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
@@ -712,7 +732,7 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
 
     const result = runtime.run(tx, Root, { target }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -726,6 +746,11 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
     // The child space is resolved before the handler write lands, so the
     // target holds a direct link to the child in the resolved space.
     const childLink = parseLink(target.getRaw(), target);
+    // The name resolves to the space the calling space's allocation record
+    // names, which is a space of its own.
+    const expectedSpace = await allocatedSpace(runtime, space, spaceName);
+    assertEquals(typeof expectedSpace, "string");
+    assertEquals(expectedSpace === space, false);
     assertEquals(childLink?.space, expectedSpace);
     assertEquals(
       await target.key("value").pull(),
@@ -745,10 +770,6 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
   });
   const tx = runtime.edit();
   const spaceName = `pattern-factory-in-space-writeonly-${crypto.randomUUID()}`;
-  const expectedSpace = (await createSession({
-    identity: signer,
-    spaceName,
-  })).space;
 
   try {
     const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
@@ -804,7 +825,7 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
 
     const result = runtime.run(tx, Root, { target }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -818,6 +839,11 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
     // The child space is resolved before the writeonly handler write lands, so
     // the target holds a direct link to the child in the resolved space.
     const childLink = parseLink(target.getRaw(), target);
+    // The name resolves to the space the calling space's allocation record
+    // names, which is a space of its own.
+    const expectedSpace = await allocatedSpace(runtime, space, spaceName);
+    assertEquals(typeof expectedSpace, "string");
+    assertEquals(expectedSpace === space, false);
     assertEquals(childLink?.space, expectedSpace);
     assertEquals(
       await target.key("value").pull(),
@@ -862,7 +888,7 @@ Deno.test("pattern factory .inSpace() with a cell uses that cell's space", async
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -907,7 +933,7 @@ Deno.test("pattern factory .inSpace() without a space creates a fresh DID space 
     );
 
     const result = runtime.run(tx, Root, { value: "random child" }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -963,7 +989,7 @@ Deno.test("pattern result schema scope overrides factory .asScope()", async () =
     );
 
     const result = runtime.run(tx, Root, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await result.pull();
 
@@ -1034,7 +1060,7 @@ Deno.test("cross-space scoped links preserve target space and resolved scope", a
       setupTx,
     );
     target.set("target value");
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     const source = runtime.getCell<{ linked?: unknown }>(
       space,
@@ -1185,7 +1211,7 @@ Deno.test("lift can read session-scoped cell passed from pattern input", async (
     );
     const result = runtime.run(tx, Root, { sessionTarget }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1248,7 +1274,7 @@ Deno.test("broad computed output links to narrower scoped result", async () => {
     );
 
     const result = runtime.run(tx, Root, { secret }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1321,7 +1347,7 @@ Deno.test("opaque JS action result uses narrowest effective output scope", async
     );
 
     const result = runtime.run(tx, Root, { secret }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1385,7 +1411,7 @@ Deno.test("opaque JS action result schema scope participates in effective output
     );
 
     const result = runtime.run(tx, Root, { value: 41 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1450,7 +1476,7 @@ Deno.test("map keeps outer list scope and narrows per-element result cells", asy
 
     const result = runtime.run(tx, Root, { values: [item as any] }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1576,7 +1602,7 @@ Deno.test("map updates when derived list is narrowed by session input", async ()
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1679,7 +1705,7 @@ Deno.test("map materializes initially populated list selected by session input",
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1773,7 +1799,7 @@ Deno.test("ifElse selected branch materializes map over session-derived list", a
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -1871,7 +1897,7 @@ Deno.test("ifElse selected VNode branch materializes map over session-derived li
       selectedRoom,
     }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2034,14 +2060,14 @@ Deno.test("map materializes list through session boxed space-scoped reference", 
 
     const result = runtime.run(tx, Root, { selectedRoom }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
 
     const updateTx = runtime.edit();
     selectedRoom.withTx(updateTx).set({ room: room as unknown as Room });
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2105,7 +2131,7 @@ Deno.test("filter narrows output list when scoped element controls cardinality",
 
     const result = runtime.run(tx, Root, { values: [item as any] }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2168,7 +2194,7 @@ Deno.test("flatMap narrows output list when scoped element controls cardinality"
 
     const result = runtime.run(tx, Root, { values: [item as any] }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2221,7 +2247,7 @@ Deno.test("ifElse output follows condition scope", async () => {
 
     const result = runtime.run(tx, Root, { condition }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2371,7 +2397,7 @@ Deno.test("session scoped derived chains update when broad inputs change", async
       { conversation, room },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2385,7 +2411,7 @@ Deno.test("session scoped derived chains update when broad inputs change", async
     conversation.withTx(updateTx).set({
       rooms: { lobby: [{ body: "hello" }], workshop: [] },
     });
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2436,7 +2462,7 @@ Deno.test("when keeps condition scope while selecting narrower value link", asyn
 
     const result = runtime.run(tx, Root, { value }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2491,7 +2517,7 @@ Deno.test("fetchJson state cells use narrowest input scope", async () => {
 
     const result = runtime.run(tx, Root, { url }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2546,7 +2572,7 @@ Deno.test("generateText result cell uses narrowest input scope", async () => {
 
     const result = runtime.run(tx, Root, { prompt }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2598,7 +2624,7 @@ Deno.test("llmDialog result cell uses narrowest input scope", async () => {
 
     const result = runtime.run(tx, Root, { messages }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2654,7 +2680,7 @@ Deno.test("wish current-space output follows query input scope", async () => {
 
     const result = runtime.run(tx, Root, { query }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2716,7 +2742,7 @@ Deno.test("wish home-space output is at least user scoped", async () => {
 
     const result = runtime.run(tx, Root, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2783,7 +2809,7 @@ Deno.test("wish result schema scope overrides query-derived scope", async () => 
 
     const result = runtime.run(tx, Root, { query }, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -2836,7 +2862,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
     // Write an object that OMITS the scoped property.
     cell.set({ title: "hello" } as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     // Inspect the base-scope slot through a schema-less handle (so no
@@ -2861,7 +2887,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
     const writeTx = runtime.edit();
     schemaless.withTx(writeTx).key("myProfile").key("name").set("Ada");
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     const userInstance = createCell<{ name: string }>(
@@ -2883,7 +2909,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
     const rewriteTx = runtime.edit();
     cell.withTx(rewriteTx).set({ title: "hello again" } as never);
     runtime.prepareTxForCommit(rewriteTx);
-    await rewriteTx.commit();
+    await rewriteTx.commit().settled;
     await runtime.idle();
 
     assertEquals(
@@ -2930,7 +2956,7 @@ Deno.test("schema-less write AT a scoped slot follows the stored redirect", asyn
 
     cell.set({} as never);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const baseLink = cell.key("profileDraft").getAsNormalizedFullLink();
@@ -2954,7 +2980,7 @@ Deno.test("schema-less write AT a scoped slot follows the stored redirect", asyn
     const writeTx = runtime.edit();
     schemaless.withTx(writeTx).key("profileDraft").set("Alice");
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     // The base slot still holds the redirect, not the raw string.
@@ -3030,7 +3056,7 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
     );
     const result = runtime.run(tx, Root, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -3072,7 +3098,7 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
     );
     consumer.set({ name: "Ada" });
     runtime.prepareTxForCommit(writeTx);
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await runtime.idle();
 
     const parentArgument = runtime.getCellFromLink(
@@ -3097,6 +3123,569 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
       },
     );
     assertEquals(userInstance.getRaw(), { name: "Ada" });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+for (const recordScope of ["space", "user"] as const) {
+  Deno.test(`child reads a ${recordScope}-scoped cell passed into a value-scoped argument slot`, async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+
+    try {
+      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+
+      const recordBase = runtime.getCell<{ status: string }>(
+        space,
+        `value-scoped argument slot ${recordScope} record`,
+        undefined,
+        tx,
+      );
+      const record = createCell<{ status: string }>(
+        runtime,
+        { ...recordBase.getAsNormalizedFullLink(), scope: recordScope },
+        tx,
+      );
+      record.set({ status: "done" });
+
+      // What `Writable<PerUser<Run>>` emits: the scope sits on the value,
+      // beside a plain `asCell` entry.
+      const runSchema = {
+        type: "object",
+        properties: { status: { type: "string" } },
+        asCell: ["cell"],
+        scope: "user",
+      } as const;
+
+      const readStatus = lift(
+        ({ run }: { run: Cell<{ status?: string }> }) =>
+          run.get()?.status ?? "missing",
+        {
+          type: "object",
+          properties: { run: runSchema },
+          required: ["run"],
+        },
+        { type: "string" },
+      );
+
+      const Child = pattern<{ run: Cell<{ status: string }> }>(
+        ({ run }) => ({ status: readStatus({ run }) }),
+        {
+          type: "object",
+          properties: { run: runSchema },
+          required: ["run"],
+        },
+      );
+
+      const Root = pattern<{ record: Cell<{ status: string }> }>(
+        ({ record }) => ({ child: Child({ run: record }) }),
+        {
+          type: "object",
+          properties: {
+            record: {
+              type: "object",
+              properties: { status: { type: "string" } },
+              asCell: ["cell"],
+            },
+          },
+          required: ["record"],
+        },
+      );
+
+      const resultCell = runtime.getCell(
+        space,
+        `value-scoped argument slot ${recordScope} result`,
+        undefined,
+        tx,
+      );
+      const result = runtime.run(tx, Root, { record }, resultCell);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await result.pull();
+
+      assertEquals(
+        result.key("child").key("status").get() as unknown,
+        "done",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+}
+
+Deno.test("child reads a plain value passed into a value-scoped argument slot from the scoped instance", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+
+    const runSchema = {
+      type: "object",
+      properties: { status: { type: "string" } },
+      asCell: ["cell"],
+      scope: "user",
+    } as const;
+
+    const readStatus = lift(
+      ({ run }: { run: Cell<{ status?: string }> }) =>
+        run.get()?.status ?? "missing",
+      {
+        type: "object",
+        properties: { run: runSchema },
+        required: ["run"],
+      },
+      { type: "string" },
+    );
+
+    const Child = pattern<{ run: Cell<{ status: string }> }>(
+      ({ run }) => ({ status: readStatus({ run }) }),
+      {
+        type: "object",
+        properties: { run: runSchema },
+        required: ["run"],
+      },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "value-scoped argument slot plain value result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(
+      tx,
+      Child,
+      { run: { status: "done" } } as never,
+      resultCell,
+    );
+    runtime.prepareTxForCommit(tx);
+    await tx.commit().settled;
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    await result.pull();
+
+    assertEquals(result.key("status").get() as unknown, "done");
+
+    // The content lives in the user instance; the base slot redirects to it.
+    const argument = runtime.getCellFromLink(getMetaLink(result, "argument")!);
+    const baseSlot = createCell<{ run: unknown }>(
+      runtime,
+      { ...argument.getAsNormalizedFullLink(), schema: undefined },
+    ).key("run");
+    assertEquals(parseLink(baseSlot.getRaw(), baseSlot)?.scope, "user");
+    const userInstance = createCell<{ status: string }>(
+      runtime,
+      {
+        ...argument.getAsNormalizedFullLink(),
+        path: ["run"],
+        schema: undefined,
+        scope: "user",
+      },
+    );
+    assertEquals(userInstance.getRaw(), { status: "done" });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("a write through a value-scoped slot's handle lands in the passed cell's own instance", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const record = runtime.getCell<{ status: string }>(
+      space,
+      "value-scoped slot write-back record",
+      undefined,
+      tx,
+    );
+    record.set({ status: "done" });
+
+    const runSchema = {
+      type: "object",
+      properties: { status: { type: "string" } },
+      asCell: ["cell"],
+      scope: "user",
+    } as const;
+    const argumentSchema = {
+      type: "object",
+      properties: { run: runSchema },
+      required: ["run"],
+    } as const;
+    const Child = pattern<{ run: Cell<{ status: string }> }>(
+      ({ run }) => ({ run }),
+      argumentSchema,
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "value-scoped slot write-back result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Child, { run: record } as never, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit().settled;
+    await runtime.idle();
+
+    // Write the way a handler does: through the handle the slot reads as.
+    const writeTx = runtime.edit();
+    const argument = createCell<{ run: Cell<{ status: string }> }>(
+      runtime,
+      {
+        ...getMetaLink(result, "argument")!,
+        schema: argumentSchema,
+      },
+      writeTx,
+    );
+    argument.get().run.set({ status: "finished" });
+    runtime.prepareTxForCommit(writeTx);
+    await writeTx.commit().settled;
+    await runtime.idle();
+
+    // The record's shared instance holds the content, not a redirect to a
+    // per-user instance other readers would find empty.
+    const recordRaw = createCell<{ status: string }>(
+      runtime,
+      { ...record.getAsNormalizedFullLink(), schema: undefined },
+    );
+    assertEquals(recordRaw.getRaw(), { status: "finished" });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+for (
+  const [slotSpelling, recordScope, expected] of [
+    ["user-scoped", "space", "Ada"],
+    ["user-scoped", "session", "missing"],
+    ["user-capped handle", "space", "Ada"],
+    ["user-capped handle", "session", "missing"],
+  ] as const
+) {
+  Deno.test(`a nested binding below a ${slotSpelling} slot reads a ${recordScope}-scoped cell passed into it as ${expected}`, async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+
+    try {
+      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+      const profileBase = runtime.getCell<{ name: string }>(
+        space,
+        `nested binding ${slotSpelling} ${recordScope} profile`,
+        undefined,
+        tx,
+      );
+      const profile = createCell<{ name: string }>(
+        runtime,
+        { ...profileBase.getAsNormalizedFullLink(), scope: recordScope },
+        tx,
+      );
+      profile.set({ name: "Ada" });
+
+      const readName = lift(
+        ({ name }: { name?: string }) => name ?? "missing",
+        { type: "object", properties: { name: { type: "string" } } },
+        { type: "string" },
+      );
+      const Child = pattern<{ profile: { name: string } }>(
+        ({ profile }) => ({ name: readName({ name: profile.name }) }),
+        {
+          type: "object",
+          properties: {
+            profile: slotSpelling === "user-scoped"
+              ? {
+                type: "object",
+                properties: { name: { type: "string" } },
+                scope: "user",
+              }
+              : {
+                type: "object",
+                properties: { name: { type: "string" } },
+                asCell: [{ kind: "cell", scope: "user" }],
+              },
+          },
+          required: ["profile"],
+        },
+      );
+
+      const resultCell = runtime.getCell(
+        space,
+        `nested binding ${slotSpelling} ${recordScope} result`,
+        undefined,
+        tx,
+      );
+      const result = runtime.run(
+        tx,
+        Child,
+        { profile } as never,
+        resultCell,
+      );
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await result.pull();
+
+      assertEquals(result.key("name").get() as unknown, expected);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+}
+
+Deno.test("a handle-scoped argument slot does not follow a narrower cell passed into it", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const recordBase = runtime.getCell<{ status: string }>(
+      space,
+      "handle-scoped slot session record",
+      undefined,
+      tx,
+    );
+    const record = createCell<{ status: string }>(
+      runtime,
+      { ...recordBase.getAsNormalizedFullLink(), scope: "session" },
+      tx,
+    );
+    record.set({ status: "done" });
+
+    // What `PerUser<Writable<Run>>` emits: the scope caps the handle.
+    const runSchema = {
+      type: "object",
+      properties: { status: { type: "string" } },
+      asCell: [{ kind: "cell", scope: "user" }],
+    } as const;
+    const readStatus = lift(
+      ({ run }: { run: Cell<{ status?: string }> }) =>
+        run.get()?.status ?? "missing",
+      { type: "object", properties: { run: runSchema }, required: ["run"] },
+      { type: "string" },
+    );
+    const Child = pattern<{ run: Cell<{ status: string }> }>(
+      ({ run }) => ({ status: readStatus({ run }) }),
+      { type: "object", properties: { run: runSchema }, required: ["run"] },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "handle-scoped slot session result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Child, { run: record } as never, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit().settled;
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    await result.pull();
+
+    assertEquals(result.key("status").get() as unknown, "missing");
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+for (const serverExecution of [false, true]) {
+  for (const passed of ["a plain value", "a space-scoped cell"] as const) {
+    Deno.test(
+      `a session-scoped argument slot reads ${passed} passed into it${
+        serverExecution ? " with server execution" : ""
+      }`,
+      async () => {
+        const prior = getServerExecutionConfig();
+        setServerExecutionConfig(serverExecution);
+        try {
+          const storageManager = StorageManager.emulate({ as: signer });
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager,
+          });
+          const tx = runtime.edit();
+
+          try {
+            const { lift, pattern } =
+              createTrustedBuilder(runtime).commonfabric;
+            const name = `session slot ${passed} ${serverExecution}`;
+            const draftSchema = {
+              type: "object",
+              properties: { text: { type: "string" } },
+              asCell: ["cell"],
+              scope: "session",
+            } as const;
+            const readText = lift(
+              ({ draft }: { draft: Cell<{ text?: string }> }) =>
+                draft.get()?.text ?? "missing",
+              {
+                type: "object",
+                properties: { draft: draftSchema },
+                required: ["draft"],
+              },
+              { type: "string" },
+            );
+            const Child = pattern<{ draft: Cell<{ text: string }> }>(
+              ({ draft }) => ({ text: readText({ draft }) }),
+              {
+                type: "object",
+                properties: { draft: draftSchema },
+                required: ["draft"],
+              },
+            );
+
+            let draft: unknown = { text: "hello" };
+            if (passed === "a space-scoped cell") {
+              const cell = runtime.getCell<{ text: string }>(
+                space,
+                `${name} draft`,
+                undefined,
+                tx,
+              );
+              cell.set({ text: "hello" });
+              draft = cell;
+            }
+            const resultCell = runtime.getCell(
+              space,
+              `${name} result`,
+              undefined,
+              tx,
+            );
+            const result = runtime.run(
+              tx,
+              Child,
+              { draft } as never,
+              resultCell,
+            );
+            runtime.prepareTxForCommit(tx);
+            await tx.commit().settled;
+            await runtime.idle();
+            await runtime.storageManager.synced();
+            await result.pull();
+
+            assertEquals(result.key("text").get() as unknown, "hello");
+          } finally {
+            await runtime.dispose();
+            await storageManager.close();
+          }
+        } finally {
+          setServerExecutionConfig(prior);
+        }
+      },
+    );
+  }
+}
+
+Deno.test("a user-capped child slot does not follow a session cell relayed through a parent slot", async () => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+
+  try {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+
+    const profileBase = runtime.getCell<{ name: string }>(
+      space,
+      "relayed session profile",
+      undefined,
+      tx,
+    );
+    const profile = createCell<{ name: string }>(
+      runtime,
+      { ...profileBase.getAsNormalizedFullLink(), scope: "session" },
+      tx,
+    );
+    profile.set({ name: "Ada" });
+
+    const readName = lift(
+      ({ name }: { name?: string }) => name ?? "missing",
+      { type: "object", properties: { name: { type: "string" } } },
+      { type: "string" },
+    );
+
+    const Child = pattern<{ profile: { name: string } }>(
+      ({ profile }) => ({ name: readName({ name: profile.name }) }),
+      {
+        type: "object",
+        properties: {
+          profile: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+        required: ["profile"],
+      },
+    );
+
+    // The parent slot caps nothing, so the child's own cap is the only thing
+    // standing between its read and the session cell the parent relays.
+    const Root = pattern<{ profile: { name: string } }>(
+      ({ profile }) => ({ child: Child({ profile }) }),
+      {
+        type: "object",
+        properties: {
+          profile: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            asCell: ["cell"],
+          },
+        },
+        required: ["profile"],
+      },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "relayed session profile result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, Root, { profile } as never, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit().settled;
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    await result.pull();
+
+    assertEquals(
+      result.key("child").key("name").get() as unknown,
+      "missing",
+    );
   } finally {
     await runtime.dispose();
     await storageManager.close();

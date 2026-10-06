@@ -1,4 +1,10 @@
-import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
+import {
+  cloneIfNecessary,
+  debugStr,
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+  type FabricValue,
+} from "@commonfabric/data-model";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -6,13 +12,14 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { createSession, Identity } from "@commonfabric/identity";
+import { legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
-import { sameAcl } from "@commonfabric/memory/acl";
+import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
   type CellScope,
   commitPreconditionValueHash,
+  type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
   resetCommitPreconditionsConfig,
@@ -34,7 +41,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
-import { popFrame, pushFrame } from "./builder/pattern.ts";
+import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
 import type {
   AnyCell,
   Frame,
@@ -71,6 +78,7 @@ import {
   type CfcTriggerReadGating,
   type CfcTrustConfig,
   type CfcTrustConfigInput,
+  type CfcTxState,
   type CfcWriteFloorMode,
   DEFAULT_SINK_MAX_CONFIDENTIALITY,
   linkCfcLabelView,
@@ -79,7 +87,11 @@ import {
   type SinkMaxConfidentiality,
   type TrustSnapshot,
 } from "./cfc/mod.ts";
+import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
+import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
+  CFC_POLICY_MANIFEST_ID_PREFIX,
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
   validateCfcPolicyArtifactManifest,
@@ -89,11 +101,18 @@ import {
   RuntimeOwnedStores,
 } from "./cfc/runtime-owned-stores.ts";
 import {
+  type CfcExternalContentObservation,
   type RuntimeWritePolicyAuthorization,
+  runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
+import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { waveRunContextOf } from "./executor/wave.ts";
+import {
+  type DelegatedCarriage,
+  waveRunActorOf,
+  waveRunContextOf,
+} from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -124,10 +143,12 @@ import {
 import {
   type PieceSourceTransition,
   Runner,
+  type RunnerRunOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
 } from "./runner.ts";
+import { brandRuntime } from "./runtime-brand.ts";
 import { Action, Scheduler } from "./scheduler.ts";
 import {
   type CommitBackpressurePolicy,
@@ -140,7 +161,12 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "./space-host.ts";
+import { SpaceAccessWatch } from "./space-access-watch.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
   type EventIntentOutcome,
@@ -148,7 +174,11 @@ import {
   stampSpeculationRunContext,
 } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
-import { ExtendedStorageTransaction } from "./storage/extended-storage-transaction.ts";
+import {
+  type CfcInstrumentationHooks,
+  ExtendedStorageTransaction,
+  setCfcTrustSnapshot,
+} from "./storage/extended-storage-transaction.ts";
 import type {
   ACL,
   ChangeGroup,
@@ -339,11 +369,32 @@ export interface ExperimentalOptions {
    */
   serverExecution?: boolean | undefined;
 
+  /**
+   * The `agent` builtin (`docs/common/capabilities/agent.md`): a pattern's
+   * request for an agent run, staged as a sink request and handed to a
+   * runner through an `AgentRun` record. When false, the builtin settles
+   * every request with an error naming this flag and stages nothing. Defaults
+   * to on.
+   */
+  agentBuiltin?: boolean | undefined;
+
   /** Global default for server-selected view replication. Defaults to off. */
   viewScopedReplication?: boolean | undefined;
 
   /** Web client override; an explicit value takes precedence over the default. */
   webViewScopedReplication?: boolean | undefined;
+
+  /**
+   * The memory sessions of every space on one host share one connection,
+   * which each key authenticates on once
+   * (`docs/specs/memory-v2/connection-multiplexing.md`). When false, each
+   * space has a connection of its own, named in the connection's address,
+   * and every `session.open` is signed. A memory server under this flag
+   * verifies `connection.auth` and advertises `connectionAuth`. Defaults to
+   * off: a deployment that routes a connection by the space its address
+   * names cannot serve a connection that carries several.
+   */
+  sharedMemoryConnection?: boolean | undefined;
 }
 
 /**
@@ -499,7 +550,9 @@ export type ServerRunInfo = {
    * protocol.md §2b): the compile-cache / program-materialization
    * writeback into a piece's OWN space, riding the carriage of the
    * provisioning or demanding run that triggered it — the served mirror
-   * of the client committing the program under the user's own session.
+   * of the client committing the program under the user's own session —
+   * and the `agent` effect's index entry in the requester's home space,
+   * riding the carriage of the run that staged the request.
    * The wave's conflict machinery still treats the contribution as
    * bookkeeping (rebase-or-drop; the writeback's own retry re-issues);
    * only the accept gate and the foreign batch's delegated admission
@@ -507,10 +560,7 @@ export type ServerRunInfo = {
    * bookkeeping, protocol.md §1's "The SpaceServer's own writes") and
    * never derived by the stamper — the caller attributes the trigger,
    * or the foreign write stays refused (fail-closed). */
-  delegated?: {
-    acting: { user: string; session?: string };
-    capabilityRef: string;
-  };
+  delegated?: DelegatedCarriage;
 };
 
 /**
@@ -697,49 +747,43 @@ export interface RuntimeOptions {
   cfcSinkMaxConfidentiality?: SinkMaxConfidentiality;
 
   /**
-   * Runtime-wide read ceiling: the confidentiality every `db.query` this
-   * runtime issues reads under. A query declaring no ceiling of its own reads
-   * under this one; a query declaring one (the `maxConfidentiality` option or
+   * Runtime-wide read ceiling: the confidentiality every cell payload read
+   * and `db.query` this runtime issues reads under. A session-scoped query
+   * declaring no ceiling of its own reads under this one; a session-scoped
+   * query declaring one (the `maxConfidentiality` option or
    * the Row schema's `MaxConfidentiality`) reads under the meet of the two,
    * so a query tightens this ceiling and never widens it. Placeholder atoms
    * (`{ __ctDbOwner: true }`, `{ __ctCurrentPrincipal: true }`) resolve per
    * query, as they do in a query's own ceiling. Defaults to none: the owner
    * view, every row returned.
    *
-   * Per runtime rather than per pattern because the only carrier a pattern
-   * can read is a cell in the space, shared by every runtime on it; a lens
-   * that differs per device or per run has to ride the runtime. For the same
-   * reason the ceiling applies only to a query whose result is
-   * session-scoped by the pattern's own declaration (`PerSession<>`,
-   * `.asScope("session")`, or a session-scoped db): a space- or user-shared
-   * result is one cell every runtime on the space resolves, and a runtime
-   * cannot narrow it for itself. A query with a broader result is refused
-   * through the runtime's error handlers, and nothing shared is written.
+   * Per runtime rather than per pattern because a pattern's inputs live in
+   * shared cells. Session-scoped queries meet this ceiling into row filtering;
+   * shared queries materialize under their own declared contract, independent
+   * of the observing runtime. A shared result's array shape carries the join
+   * of all row labels, including rows its declared contract skips, so cell
+   * reads withhold row counts and membership as well as protected payloads.
    *
-   * The refusal bounds what THIS runtime queries; it does not reach a
-   * shared cell another runtime already filled. A pattern whose output is
-   * space-scoped and that an unbounded runtime ran first leaves its result
-   * in a cell this runtime resolves like any other shared value, refusal or
-   * not — so a bounded runtime must run its patterns with session-scoped
-   * outputs, and what protects a shared cell is the cell's own label under
-   * the commit-boundary gates, not this option. Carrying the ceiling into
-   * the cell read path (a labeled cell that does not fit reads as withheld)
-   * is the follow-up that closes that seam.
+   * Cell and transaction payload reads measure the stored label at the
+   * requested path, including descendants when returning an object. A value
+   * outside the ceiling throws `CfcReadCeilingError` before returning content;
+   * `cfcReadOnExceed` applies only to SQLite row filtering. Ordinary cells have
+   * no database context for resolving placeholder atoms: use concrete clauses
+   * for cell observation. An unresolved placeholder cannot admit a concrete
+   * label merely because that label names a database owner.
    *
-   * Governs the runtime that performs the query — a client runtime executing
-   * its own patterns, or a serving runtime for every run it serves — and the
-   * sqlite read surface only: every `db.query`, aggregates included. Cell
-   * reads are governed by the commit-boundary gates, and a host's direct
-   * sqlite bridge refuses labeled tables outright. Validated and deep-frozen
-   * at construction; an empty list, which admits nothing, is refused (omit
-   * the option for no ceiling).
+   * Governs client runtimes and served runs; a serving runtime meets its own
+   * ceiling with the carried session ceiling. A host's direct sqlite bridge
+   * refuses labeled tables outright. Validated and deep-frozen at construction;
+   * an empty list, which admits nothing, is refused (omit the option for no
+   * ceiling).
    *
    * A client under server execution executes no query of its own: the
    * space server's runtime serves them. Its ceiling travels with its
    * sessions instead — declared through the storage manager
    * (`setSessionReadCeiling`) into every signed `session.open` descriptor
    * before a session opens — and the serving loop stamps it onto every run
-   * it serves as one of those sessions, whose queries then read under the
+   * it serves as one of those sessions, whose cell reads and queries use the
    * serving runtime's option met with it. Such a client refuses a storage
    * manager that cannot carry the ceiling, and a server that does not
    * record one (`sessionReadCeiling` absent from its protocol flags).
@@ -860,6 +904,12 @@ export interface CfcRuntimeStats {
   /** Authoritative cover lookups for carried link-view entries. */
   authoritativeCoverCalls: number;
 
+  /** Uncached staged-reference label derivations. */
+  stagedReferenceDerivations: number;
+
+  /** Staged-reference label results reused within one derivation. */
+  stagedReferenceCacheHits: number;
+
   /** Child templates minted by flow persistence. */
   flowTemplateEntriesMinted: number;
 
@@ -916,6 +966,8 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   overlapWildcardQueries: 0,
   overlapConcreteQueries: 0,
   authoritativeCoverCalls: 0,
+  stagedReferenceDerivations: 0,
+  stagedReferenceCacheHits: 0,
   flowTemplateEntriesMinted: 0,
   flowTemplateContainers: 0,
   cfcPreparedTx: 0,
@@ -976,10 +1028,31 @@ export const spaceCellSchema = internSchema(
   },
 );
 
-const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
+/** The allocation record a space holds for one `PatternFactory.inSpace`
+ *  name: the DID of the space the name reaches. */
+const inSpaceAllocationSchema = {
   type: "object",
-  additionalProperties: true,
+  properties: { did: { type: "string" } },
 } as const satisfies JSONSchema;
+
+/**
+ * The key under which a space created for the `inSpace` name `name` of the
+ * space `space` is remembered: the name, together with the owner and the
+ * grants the space was created with, so that only a request for the same
+ * access-control document finds it. Grants are keyed in principal order.
+ */
+const inSpaceCreationKey = (
+  space: MemorySpace,
+  name: string,
+  owner: DID,
+  grants: ACL = {},
+): string =>
+  JSON.stringify([
+    space,
+    name,
+    owner,
+    Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+  ]);
 
 export interface SpaceCellContents {
   defaultPattern: Cell<unknown>;
@@ -1005,6 +1078,102 @@ function cellAsLink(value: object | ((...args: never[]) => unknown)): unknown {
   return isCell(value) ? value.toSigilLinkOrNull() : value;
 }
 
+type ExternalObservationReceiptPayload = {
+  runtime: object;
+  sourceTx: IExtendedStorageTransaction;
+  targetTx: IExtendedStorageTransaction;
+  space: MemorySpace;
+  producer: string;
+  trustSnapshot: TrustSnapshot | undefined;
+  trustConfig: CfcTxState["trustConfig"];
+  policySnapshot: { readonly digest: string } | undefined;
+  moduleDelegations: CfcTxState["moduleDelegations"];
+  posture: readonly unknown[];
+  observation: CfcExternalContentObservation;
+  consumed: boolean;
+};
+
+const externalObservationReceipts = new WeakMap<
+  object,
+  ExternalObservationReceiptPayload
+>();
+
+const externalObservationPosture = (
+  state: Readonly<CfcTxState>,
+): readonly unknown[] => [
+  state.enforcementMode,
+  state.flowLabelsMode,
+  state.writeFloorMode,
+  state.triggerReadGating,
+  state.decomposedEnvelopes,
+  state.contentAddressedLabels,
+  state.policyEvaluationMode,
+  state.labelMetadataProtectionMode,
+  state.declaredMonotonicityMode,
+];
+
+const moduleDelegationsEqual = (
+  left: CfcTxState["moduleDelegations"],
+  right: CfcTxState["moduleDelegations"],
+): boolean => {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [space, leftModules] of left) {
+    const rightModules = right.get(space);
+    if (rightModules === undefined || leftModules.size !== rightModules.size) {
+      return false;
+    }
+    for (const [moduleIdentity, delegated] of leftModules) {
+      if (!deepEqual(delegated, rightModules.get(moduleIdentity))) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
+
+const copyModuleDelegations = (
+  source: CfcTxState["moduleDelegations"],
+): CfcTxState["moduleDelegations"] => {
+  const copy = new Map<
+    MemorySpace,
+    ReadonlyMap<string, readonly string[]>
+  >();
+  for (const [space, modules] of source) {
+    copy.set(
+      space,
+      new Map(
+        [...modules].map(([identity, predecessors]) => [
+          identity,
+          [...predecessors],
+        ]),
+      ),
+    );
+  }
+  return copy;
+};
+
+const externalObservationRefusal = (
+  message: string,
+  state?: Readonly<CfcTxState>,
+): Error =>
+  Object.assign(new Error(message), {
+    name: "CfcCommitRefusalError",
+    refusals: [...(state?.refusalDetails ?? [])],
+  });
+
+/** Maximum load waves an external observation traversal may discover. */
+const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
+
+/** A document a commit retry's catch-up could not load, and the reason. */
+export type CommitRetryPullFailure = {
+  space: MemorySpace;
+  id: URI;
+  scope?: CellScope;
+  error: unknown;
+};
+
 /**
  * Main Runtime class that orchestrates all services in the runner package.
  *
@@ -1028,6 +1197,7 @@ function cellAsLink(value: object | ((...args: never[]) => unknown)): unknown {
 export class Runtime {
   #tearingDownWrites = false;
   readonly #writeTeardown = new AbortController();
+  readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1166,6 +1336,9 @@ export class Runtime {
    * subscriptions). */
   #installedSpaceOpenObserver: ((space: MemorySpace) => void) | undefined;
 
+  /** The watch `spaceAccessWatch` creates on first use. */
+  #spaceAccessWatch: SpaceAccessWatch | undefined;
+
   /**
    * Whether _this_ runtime explicitly set the `serverExecution` flag at
    * construction (the only case its dispose participates in the process-global
@@ -1220,20 +1393,41 @@ export class Runtime {
     return this.#writeTeardown.signal;
   }
 
-  /** Cache of resolved PatternFactory.inSpace("name") space DIDs. */
-  readonly #spaceNameToDid = new Map<string, MemorySpace>();
-  /** The genesisAcl each name was first resolved with, so an identical
-   * re-resolution is a retry and a different one is refused. */
-  readonly #spaceNameGenesisAcls = new Map<string, ACL>();
-  /** Resolutions in flight, by name: a second caller joins the first
-   * rather than racing it to registration, so two documents for one name
-   * cannot both register before either is cached. */
-  readonly #spaceNameResolutions = new Map<string, Promise<MemorySpace>>();
+  /**
+   * The space created for each request to resolve a
+   * `PatternFactory.inSpace(name)` target no allocation record named yet,
+   * keyed by {@link inSpaceCreationKey}. Nothing removes an entry: a run
+   * suspended to resolve a name is retried on the promise that the name
+   * resolves the next time without suspending, and that promise is the
+   * retry's only bound.
+   */
+  readonly #inSpaceCreated = new Map<string, MemorySpace>();
+
+  /**
+   * Resolutions in flight, by {@link inSpaceCreationKey}: a second request
+   * for the same owner and grants joins the first rather than creating a
+   * second space. A request for other owner or grants creates its own.
+   */
+  readonly #inSpaceResolutions = new Map<string, Promise<MemorySpace>>();
+
+  /** Legacy space names this runtime has derived, and their DIDs. */
+  readonly #legacySpaceDids = new Map<string, MemorySpace>();
 
   #defaultFrame?: Frame;
   #queues = new Map<string, AsyncSemaphoreQueue>();
   #writeDebugContext = new WriteDebugContextStorage<string>();
   #cfcStats: CfcRuntimeStats = initialCfcRuntimeStats();
+
+  /**
+   * The hooks every transaction `edit()` opens reports its CFC work through.
+   * Built once, in the constructor, after `cfcPrefixProvenanceStats`, which
+   * decides whether the prefix-provenance counter is among them. Each hook
+   * reads the runtime's fields when it is called rather than when it was
+   * built, and a hook that acts on a transaction is handed it, so one frozen
+   * object serves them all.
+   */
+  readonly #cfcInstrumentation: CfcInstrumentationHooks;
+
   readonly #policyManifests = new Map<string, PolicyArtifactManifestV1>();
   readonly #policyManifestSpaces = new Map<string, Set<MemorySpace>>();
 
@@ -1294,7 +1488,9 @@ export class Runtime {
       if (next === predecessor) return true;
       if (visited.has(next)) continue;
       visited.add(next);
-      pending.push(...(spaceDelegations.get(next) ?? []));
+      for (const ancestor of spaceDelegations.get(next) ?? []) {
+        pending.push(ancestor);
+      }
     }
     return false;
   }
@@ -1333,7 +1529,9 @@ export class Runtime {
           const predecessor = pending.pop()!;
           if (predecessor === identity || inherited.has(predecessor)) continue;
           inherited.add(predecessor);
-          pending.push(...(spaceDelegations.get(predecessor) ?? []));
+          for (const ancestor of spaceDelegations.get(predecessor) ?? []) {
+            pending.push(ancestor);
+          }
         }
         if (inherited.size > 0) {
           spaceSnapshot.set(identity, [...inherited].sort());
@@ -1454,8 +1652,17 @@ export class Runtime {
       );
       const existing = snapshotQueryResult(cell.get());
       if (existing === undefined) {
+        // No create-only mark. The document is content-addressed, so every
+        // participant of a shared space installs the same bytes under the same
+        // id, and a replica that has not loaded it yet reads it as absent. A
+        // create-only mark turns that stale absence into a permanent
+        // `receipt-exists` rejection, which drops the whole transaction — an
+        // event handler's first labeled write included. The absence read above
+        // is a confirmed read of this document, so a document another writer
+        // created since this replica's basis is a retryable stale-read
+        // conflict instead. The retry reads the document, and the branch below
+        // either accepts it as the same artifact or refuses a different one.
         cell.set(artifact);
-        tx.markCreateOnly?.(cell.getAsNormalizedFullLink());
       } else {
         let verified: PolicyArtifactManifestV1;
         try {
@@ -1545,6 +1752,8 @@ export class Runtime {
   }
 
   constructor(options: RuntimeOptions) {
+    brandRuntime(this);
+
     // Validate-then-apply: option combinations are refused BEFORE any
     // process-global write (the ambient experimental-flag propagation
     // below, the server-execution enabler), so a refused construction
@@ -1596,14 +1805,13 @@ export class Runtime {
       }
     }
 
-    // Unlike ambient flags, computedCellIds and plainResultReceipts are
-    // consumed from this Runtime instance (the builder frame and the runner's
-    // receipt-only branch respectively). Normalize their local defaults after
-    // override logging so an omitted option does not appear as an explicit
-    // `true` override.
+    // These flags are consumed from this Runtime instance. Normalize their
+    // local defaults after override logging so an omitted option does not
+    // appear as an explicit `true` override.
     this.experimental.computedCellIds ??= true;
     this.experimental.plainResultReceipts ??= true;
     this.experimental.lazyMaterialization ??= true;
+    this.experimental.agentBuiltin ??= true;
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -1717,6 +1925,11 @@ export class Runtime {
       (this.storageManager as {
         setTelemetry?: (telemetry: RuntimeTelemetry) => void;
       }).setTelemetry?.(this.telemetry);
+      // Declared before any session opens, since the choice is made per
+      // session as it is created.
+      this.storageManager.setSharedMemoryConnection?.(
+        this.experimental.sharedMemoryConnection === true,
+      );
       this.moduleByteCache = options.moduleByteCache;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
@@ -1728,8 +1941,15 @@ export class Runtime {
       this.#trustRevision = this.cfcTrustConfig === undefined
         ? this.id
         : `${this.id}/trust:${this.cfcTrustConfig.digest}`;
+      // The principal and the revision are both fixed for the runtime's
+      // lifetime, so one frozen snapshot serves every transaction. Handing
+      // each the same object is what lets `edit()` attach it without
+      // freezing a copy per transaction.
+      const ambientTrustSnapshot = deepFreeze(
+        this.trustSnapshotForPrincipal(actingPrincipal),
+      );
       this.trustSnapshotProvider = options.trustSnapshotProvider ??
-        (() => this.trustSnapshotForPrincipal(actingPrincipal));
+        (() => ambientTrustSnapshot);
       this.userIdentityDID = options.storageManager.as.did() as DID;
       this.moduleRegistry = new ModuleRegistry(this);
       this.patternManager = new PatternManager(this);
@@ -1750,6 +1970,7 @@ export class Runtime {
       this.cfcLabelMetadataProtection = dials.cfcLabelMetadataProtection;
       this.cfcDeclaredMonotonicity = dials.cfcDeclaredMonotonicity;
       this.cfcPrefixProvenanceStats = options.cfcPrefixProvenanceStats ?? false;
+      this.#cfcInstrumentation = this.#buildCfcInstrumentation();
       // Deep-freeze: the ceiling is CFC enforcement config, so a caller must not
       // be able to mutate it (per-sink array or the map) after construction to
       // change what egresses are allowed (review on #3993).
@@ -1860,7 +2081,7 @@ export class Runtime {
       }
 
       // Push a default frame with this runtime so builder functions can access it
-      this.#defaultFrame = pushFrame({ runtime: this });
+      this.#defaultFrame = pushRuntimeDefaultFrame(this);
     } catch (error) {
       this.#releaseServerExecutionEnabler();
       throw error;
@@ -1887,8 +2108,8 @@ export class Runtime {
    *
    * Each entry carries the pattern run it belongs to, as the address key of the
    * run's result cell — the `parentCell` every raw builtin is handed. Entries
-   * with no owner belong to no single run: the scheduler's commit promises,
-   * which are the barrier that a fire-and-forget builtin's outbox flush has
+   * with no owner belong to no single run: the scheduler's post-commit effect
+   * promises, which are the barrier that a fire-and-forget builtin's outbox flush has
    * registered its own work. `settledFor()` waits for those as well as the
    * run's own, because that handoff is how the run's work first becomes
    * visible.
@@ -1970,9 +2191,9 @@ export class Runtime {
   /**
    * Register an in-flight async builtin operation so `settled()` waits for it
    * instead of racing the post-commit flush. The scheduler registers an
-   * effect-bearing commit's promise here (a race-free barrier — the flush runs
-   * inside that commit), and the fire-and-forget builtins register their
-   * network/LLM promise. Normalized to always resolve (failures are settled, not
+   * effect-bearing commit's `postCommitEffectsSettled()` promise here,
+   * covering the flush's handoff to the builtin's own work. Fire-and-forget
+   * builtins register their network/LLM promise. Normalized to always resolve (failures are settled, not
    * thrown) and auto-removed once it settles, so a rejecting promise is safe and
    * never leaks.
    *
@@ -1995,10 +2216,11 @@ export class Runtime {
    * Wait until the runtime is fully settled: the scheduler is idle, storage is
    * synced, AND every in-flight async builtin operation (`trackAsyncWork`) has
    * completed — including the reactive cascade its result writeback triggers.
-   * This is the "wait for everything, including async builtin I/O" companion to
-   * `idle()` (which intentionally returns before that I/O so handlers don't
-   * block on the network). Bounded: a builtin whose result re-triggers more
-   * async work converges in a few rounds.
+   * Re-checked until all of those hold at once, because each can restart the
+   * others. This is the "wait for everything, including async builtin I/O"
+   * companion to `idle()` (which intentionally returns before that I/O so
+   * handlers don't block on the network). Bounded: a builtin whose result
+   * re-triggers more async work converges in a few rounds.
    */
   async settled(maxRounds = 50): Promise<void> {
     for (let round = 0; round < maxRounds; round++) {
@@ -2009,6 +2231,9 @@ export class Runtime {
       // rechecks scheduler work whenever pending commits drain.
       await this.scheduler.idleWithPendingCommits();
       await this.storageManager.synced();
+      // Work queued while storage synced is work the barrier above has
+      // stopped watching.
+      if (!this.scheduler.isIdleWithPendingCommits()) continue;
       if (this.#pendingAsyncWork.size === 0) return;
       await Promise.allSettled([...this.#pendingAsyncWork.keys()]);
     }
@@ -2052,6 +2277,7 @@ export class Runtime {
     while (!signal?.aborted) {
       await this.scheduler.idleWithPendingCommits();
       await this.storageManager.synced();
+      if (!this.scheduler.isIdleWithPendingCommits()) continue;
       const relevant = [...this.#pendingAsyncWork]
         .filter(([, key]) => key === undefined || key === ownerKey)
         .map(([promise]) => promise);
@@ -2112,9 +2338,9 @@ export class Runtime {
    * Clean up resources and cancel all operations.
    *
    * NOTE: This does not wait for in-flight transactions to settle.
-   * Any unawaited tx.commit() calls will be canceled when
+   * Commits whose receipt.settled remains pending will be canceled when
    * storageManager.close() tears down storage sessions. Callers
-   * should await all pending commits before calling dispose().
+   * should await pending receipts' .settled before calling dispose().
    *
    * `closeStorage: false` leaves the storage manager OPEN for a caller that
    * OWNS it and is still using it — a second runtime sharing the same store, or
@@ -2273,6 +2499,9 @@ export class Runtime {
       // released by the time it does, not whether disposal fails.
       this.scheduler.dispose();
       this.runner.dispose();
+      // The storage manager can outlive this runtime, so the subscription the
+      // watch holds on it goes now.
+      this.#spaceAccessWatch?.dispose();
 
       // Pop the default frame
       if (this.#defaultFrame) {
@@ -2336,7 +2565,50 @@ export class Runtime {
     if (debugActionId) {
       (tx as { debugActionId?: string }).debugActionId = debugActionId;
     }
-    const wrapped = new ExtendedStorageTransaction(tx, {
+    const wrapped = new ExtendedStorageTransaction(
+      tx,
+      this.#cfcInstrumentation,
+    );
+    wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
+    wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
+    wrapped.setCfcWriteFloorMode(this.cfcWriteFloor);
+    wrapped.setCfcTriggerReadGating(this.cfcTriggerReadGating);
+    wrapped.setCfcDecomposedEnvelopes(this.cfcDecomposedEnvelopes);
+    wrapped.setCfcContentAddressedLabels(this.cfcContentAddressedLabels);
+    wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
+    wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
+    wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
+    wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
+    wrapped.setCfcTrustConfig(this.cfcTrustConfig);
+    wrapped.setCfcModuleDelegations(
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+    setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
+    wrapped.configureSealDestination(
+      this.#transactionSealDestination ?? this.#speculationDestination(),
+    );
+    wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
+    this.#transactions.add(wrapped);
+    return wrapped;
+  }
+
+  /**
+   * Helper for the constructor, which builds the hooks `edit()` hands every
+   * transaction.
+   */
+  #buildCfcInstrumentation(): CfcInstrumentationHooks {
+    const hooks: CfcInstrumentationHooks = {
+      checkReadCeiling: (readingTx, address, options) => {
+        const carried = waveRunContextOf(readingTx)?.readCeiling;
+        const ceiling = carried === undefined
+          ? this.cfcReadMaxConfidentiality
+          : meetCfcObservationCeilings(
+            this.cfcReadMaxConfidentiality,
+            carried.maxConfidentiality,
+          );
+        assertCfcReadCeiling(readingTx, address, ceiling, options);
+      },
       resolvePolicyManifest: (
         reference,
         tx,
@@ -2425,28 +2697,8 @@ export class Runtime {
           },
         }
         : {}),
-    });
-    wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
-    wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
-    wrapped.setCfcWriteFloorMode(this.cfcWriteFloor);
-    wrapped.setCfcTriggerReadGating(this.cfcTriggerReadGating);
-    wrapped.setCfcDecomposedEnvelopes(this.cfcDecomposedEnvelopes);
-    wrapped.setCfcContentAddressedLabels(this.cfcContentAddressedLabels);
-    wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
-    wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
-    wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
-    wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
-    wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
-    wrapped.setCfcTrustConfig(this.cfcTrustConfig);
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
-    wrapped.setCfcTrustSnapshot(this.trustSnapshotProvider());
-    wrapped.configureSealDestination(
-      this.#transactionSealDestination ?? this.#speculationDestination(),
-    );
-    wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
-    return wrapped;
+    };
+    return Object.freeze(hooks);
   }
 
   /**
@@ -2457,8 +2709,8 @@ export class Runtime {
    * second scope instance of this one, say — still holds stays.
    *
    * Takes the runtime's write-policy authorization, like the enrollment it
-   * undoes: pattern-authored code reaches this object through a cell, and a
-   * release it made would refuse another piece's writes.
+   * undoes: a release made by any other caller would refuse another piece's
+   * writes.
    */
   releaseRuntimeOwnedStores(
     owner: NormalizedFullLink,
@@ -2524,6 +2776,17 @@ export class Runtime {
    * Undefined in the OFF arm and on serving runtimes. */
   get effectsChannel(): EffectsChannel | undefined {
     return this.#effectsChannel;
+  }
+
+  /**
+   * Runs actions again when the memory server starts or stops refusing this
+   * runtime a space, for as long as this runtime lives.
+   */
+  get spaceAccessWatch(): SpaceAccessWatch {
+    return this.#spaceAccessWatch ??= new SpaceAccessWatch(
+      this.storageManager,
+      this.scheduler,
+    );
   }
 
   /**
@@ -2633,11 +2896,11 @@ export class Runtime {
    * trust-config change invalidates per-run prepared digests exactly as
    * it does ambient ones. On a runtime constructed with a CUSTOM
    * `trustSnapshotProvider` this still composes the RUNTIME's revision,
-   * not the provider's. The DEFAULT provider routes every ordinary
-   * edit() transaction through this method; the run stamper is the
-   * ADDITIONAL serving-path caller, and a serving runtime refuses a
-   * custom provider at construction, so the two composition paths can
-   * never disagree on a serving runtime.
+   * not the provider's. The DEFAULT provider's one snapshot, which
+   * every ordinary edit() transaction gets, is composed here; the run
+   * stamper is the ADDITIONAL serving-path caller, and a serving runtime
+   * refuses a custom provider at construction, so the two composition
+   * paths can never disagree on a serving runtime.
    */
   trustSnapshotForPrincipal(principal: string): TrustSnapshot {
     return {
@@ -2674,6 +2937,23 @@ export class Runtime {
     ) {
       stampSpeculationRunContext(tx, info);
     }
+  }
+
+  /**
+   * The delegated carriage a bookkeeping write into `space` is stamped with
+   * ({@link ServerRunInfo.delegated}): `carriage` when `space` is not the
+   * space this runtime serves, and none otherwise, since a write into the
+   * served space, and every write off the serving posture, is the runtime's
+   * own.
+   */
+  delegationForWriteTo(
+    space: MemorySpace,
+    carriage: ServerRunInfo["delegated"],
+  ): Pick<ServerRunInfo, "delegated"> {
+    const served = this.storageManager.servingHomeSpace;
+    return carriage !== undefined && served !== undefined && space !== served
+      ? { delegated: carriage }
+      : {};
   }
 
   /**
@@ -2853,6 +3133,9 @@ export class Runtime {
    * @param fn - Function to execute with the transaction.
    * @param maxRetries - Maximum combined number of reconciliation re-runs and
    *   commit-rejection retries after the initial invocation.
+   * @param options - Source-update authorization and an optional owner signal.
+   *   A signal enables cooperative CFC preparation and stops canceled work
+   *   before commit or retry. Callers without one prepare synchronously.
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
@@ -2861,21 +3144,26 @@ export class Runtime {
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
     maxRetries: number = DEFAULT_MAX_RETRIES,
-    options: { sourceUpdate?: PreparedSourceUpdate } = {},
+    options: { sourceUpdate?: PreparedSourceUpdate; signal?: AbortSignal } = {},
   ): Promise<
     { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
   > {
-    const teardownResult = (): {
+    const signal = options.signal === undefined
+      ? this.#writeTeardown.signal
+      : AbortSignal.any([options.signal, this.#writeTeardown.signal]);
+    const stoppedResult = (): {
       ok?: undefined;
       error: CommitError;
     } => ({
       error: {
         name: "StorageTransactionAborted" as const,
-        message: "editWithRetry stopped because the runtime is disposing",
-        reason: new Error("runtime disposing"),
+        message: this.#tearingDownWrites
+          ? "editWithRetry stopped because the runtime is disposing"
+          : "editWithRetry stopped because its owner canceled",
+        reason: signal.reason,
       },
     });
-    if (this.#tearingDownWrites) return Promise.resolve(teardownResult());
+    if (signal.aborted) return Promise.resolve(stoppedResult());
     const tx = this.edit(options);
     this.scheduler.beginReadAttempt(tx, "editWithRetry");
     tx.tx.immediate = true;
@@ -2899,24 +3187,36 @@ export class Runtime {
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
     > => {
-      if (this.#tearingDownWrites) {
-        tx.abort("editWithRetry stopped because the runtime is disposing");
-        return Promise.resolve(teardownResult());
+      if (signal.aborted) {
+        tx.abort(signal.reason);
+        return Promise.resolve(stoppedResult());
       }
+      let preparation: Promise<void> | void;
       try {
-        this.prepareTxForCommit(tx);
+        preparation = options.signal === undefined
+          ? this.prepareTxForCommit(tx)
+          : tx.prepareForCommitCooperatively(signal);
       } catch (error) {
         if (tx.status().status === "ready") tx.abort(error);
         throw error;
       }
-      return tx.commit().then(async ({ error }) => {
+      const commit = preparation === undefined
+        ? tx.commit().settled
+        : preparation.then(() => {
+          if (signal.aborted && tx.status().status === "ready") {
+            tx.abort(signal.reason);
+          }
+          return tx.commit().settled;
+        });
+      return commit.then(async ({ error }) => {
         if (error) {
+          if (signal.aborted) return stoppedResult();
           if (maxRetries > 0 && isRetryableCommitRejection(error)) {
             await this.awaitCommitRetryReadiness(
               error,
-              this.#writeTeardown.signal,
+              signal,
             );
-            if (this.#tearingDownWrites) return teardownResult();
+            if (signal.aborted) return stoppedResult();
             return this.editWithRetry<T>(fn, maxRetries - 1, options);
           } else {
             return { error };
@@ -2924,6 +3224,7 @@ export class Runtime {
         }
         return { ok: result };
       }).catch((error) => {
+        if (tx.status().status === "ready") tx.abort(error);
         return {
           error: {
             name: "StorageTransactionAborted" as const,
@@ -2959,9 +3260,9 @@ export class Runtime {
       : 0;
     if (typeof reconciliation === "number") return commitPrepared();
     return reconciliation.then((present) => {
-      if (this.#tearingDownWrites) {
-        tx.abort("editWithRetry stopped because the runtime is disposing");
-        return teardownResult();
+      if (signal.aborted) {
+        tx.abort(signal.reason);
+        return stoppedResult();
       }
       if (present > 0) {
         tx.abort(
@@ -3058,14 +3359,21 @@ export class Runtime {
    * without scope use the space instance. If no array entry names a usable
    * address, the singular conflict supplies the recovery target.
    *
-   * Recovery is best-effort: failed waits and pulls leave the fresh retry's
-   * commit to decide whether its basis is valid. Aborting `teardownSignal`
-   * ends the wait; callers must check their lifetime before requeueing work.
+   * A policy manifest is pulled with the documents its rules live in, since
+   * a retry verifies the whole artifact.
+   *
+   * Recovery is best-effort: a failed wait or pull leaves the fresh retry's
+   * commit to decide whether its basis is valid. The pulls that failed are
+   * returned, each with its reason, so that a caller whose retry cannot
+   * succeed without a document can tell a document that could not be loaded
+   * from one that is absent. Aborting `teardownSignal` ends the wait and
+   * returns no failures; callers must check their lifetime before requeueing
+   * work.
    */
   async awaitCommitRetryReadiness(
     error: unknown,
     teardownSignal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<CommitRetryPullFailure[]> {
     const waitUnlessTeardown = async (
       operation: PromiseLike<unknown>,
     ): Promise<boolean> => {
@@ -3090,12 +3398,14 @@ export class Runtime {
       ?.readyToRetry;
     if (typeof readyToRetry === "function") {
       try {
-        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) return;
+        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) {
+          return [];
+        }
       } catch {
         // Readiness aborted — the retry's commit decides.
       }
     }
-    if (teardownSignal?.aborted) return;
+    if (teardownSignal?.aborted) return [];
     type ConflictAddress = { space: MemorySpace; of: URI; scope?: CellScope };
     const isPullableConflict = (value: unknown): value is ConflictAddress => {
       const conflict = value as Partial<ConflictAddress> | null | undefined;
@@ -3112,6 +3422,7 @@ export class Runtime {
       : isPullableConflict(rejection?.conflict)
       ? [rejection.conflict]
       : [];
+    const failures: CommitRetryPullFailure[] = [];
     const pulls: Promise<unknown>[] = [];
     const seen = new Set<string>();
     for (const conflict of conflicts) {
@@ -3122,23 +3433,39 @@ export class Runtime {
       });
       if (seen.has(key)) continue;
       seen.add(key);
+      const failed = (reason: unknown) => {
+        failures.push({
+          space: conflict.space,
+          id: conflict.of,
+          scope: conflict.scope,
+          error: reason,
+        });
+      };
       try {
         pulls.push(
           Promise.resolve(
             this.storageManager.open(conflict.space).sync(
               conflict.of,
-              { path: [], schema: false },
+              {
+                path: [],
+                schema: conflict.of.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX)
+                  ? CFC_POLICY_MANIFEST_DOC_SCHEMA
+                  : false,
+              },
               conflict.scope,
             ),
-          ).catch(() => undefined),
+          ).then((result) => {
+            if (result?.error !== undefined) failed(result.error);
+          }, failed),
         );
-      } catch {
-        // A synchronous pull failure leaves the retry's commit to decide.
+      } catch (reason) {
+        failed(reason);
       }
     }
-    if (pulls.length > 0) {
-      await waitUnlessTeardown(Promise.all(pulls));
+    if (pulls.length > 0 && !await waitUnlessTeardown(Promise.all(pulls))) {
+      return [];
     }
+    return failures;
   }
 
   /**
@@ -3312,6 +3639,293 @@ export class Runtime {
    */
   prepareTxForCommit(tx: IExtendedStorageTransaction): void {
     tx.prepareForCommit();
+  }
+
+  /**
+   * Admits one host-observed value through the ordinary CFC write boundary
+   * without committing the staged document. The returned object is opaque:
+   * its evidence lives only in this module's WeakMap and is usable once by a
+   * matching transaction on this runtime.
+   */
+  async prepareExternalContentObservation(options: {
+    targetTx: IExtendedStorageTransaction;
+    space: MemorySpace;
+    cause: unknown;
+    schema: JSONSchema;
+    value: unknown;
+    producer: string;
+  }): Promise<object> {
+    const targetState = options.targetTx.getCfcState();
+    if (
+      !this.#transactions.has(options.targetTx) ||
+      options.targetTx.status().status !== "ready" ||
+      targetState.implementationIdentity?.kind !== "builtin" ||
+      targetState.implementationIdentity.builtinId !== options.producer
+    ) {
+      throw externalObservationRefusal(
+        "external content observation target does not match this runtime and producer",
+        targetState,
+      );
+    }
+    const tx = this.edit();
+    const cell = this.getCell<unknown>(
+      options.space,
+      options.cause,
+      options.schema,
+      tx,
+    );
+    try {
+      await cell.sync();
+      cell.set(options.value);
+      this.prepareTxForCommit(tx);
+      const preparedState = tx.getCfcState();
+      const enforcementDisabled = preparedState.enforcementMode === "disabled";
+      if (!enforcementDisabled && preparedState.prepare.status !== "prepared") {
+        throw externalObservationRefusal(
+          "CFC refused the external content observation",
+          preparedState,
+        );
+      }
+      if (
+        preparedState.consultedGrants.length > 0 ||
+        preparedState.consultedPolicyManifests.length > 0
+      ) {
+        throw externalObservationRefusal(
+          "external content observation admission depends on mutable policy evidence",
+          preparedState,
+        );
+      }
+      const policySnapshot = preparedState.policySnapshot === undefined
+        ? undefined
+        : { digest: preparedState.policySnapshot.digest };
+      if (
+        !deepEqual(targetState.trustSnapshot, preparedState.trustSnapshot) ||
+        !deepEqual(targetState.trustConfig, preparedState.trustConfig) ||
+        !deepEqual(
+          targetState.policySnapshot === undefined
+            ? undefined
+            : { digest: targetState.policySnapshot.digest },
+          policySnapshot,
+        ) ||
+        !moduleDelegationsEqual(
+          targetState.moduleDelegations,
+          preparedState.moduleDelegations,
+        ) ||
+        !deepEqual(
+          externalObservationPosture(targetState),
+          externalObservationPosture(preparedState),
+        )
+      ) {
+        throw externalObservationRefusal(
+          "external content observation admission context changed",
+          preparedState,
+        );
+      }
+      const evidence = {
+        trustSnapshot: preparedState.trustSnapshot === undefined
+          ? undefined
+          : { ...preparedState.trustSnapshot },
+        trustConfig: preparedState.trustConfig,
+        policySnapshot,
+        moduleDelegations: copyModuleDelegations(
+          preparedState.moduleDelegations,
+        ),
+        posture: [...externalObservationPosture(preparedState)],
+      };
+
+      // This read runs only after the staged write passed preparation, or in
+      // disabled mode where preparation is intentionally a no-op. Traversal
+      // can discover an unloaded linked document and start its sync, so each
+      // arrival is followed by another read until no link-target load remains.
+      // Each pass drops current-instant read memoization so a value materialized
+      // by the preceding load is traversed rather than answered from its hole.
+      // The storage manager deduplicates every document load for the session;
+      // a finite observed value therefore reaches this fixed point without a
+      // timer or retrying a failed request.
+      let loadRound = 0;
+      for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
+        tx.resetCurrentReadMemoization();
+        cell.get({ traverseCells: true });
+        // Link resolution can register its tracked sync in a promise
+        // continuation. Let that continuation run before inspecting the
+        // manager's settled pool, or a just-kicked load looks absent here.
+        await Promise.resolve();
+        if (
+          (this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) === 0
+        ) {
+          break;
+        }
+        await (this.storageManager.crossSpaceSettled?.() ?? Promise.resolve());
+      }
+      if (loadRound === EXTERNAL_OBSERVATION_LOAD_ROUNDS) {
+        throw externalObservationRefusal(
+          "external content observation traversal did not converge",
+          tx.getCfcState(),
+        );
+      }
+      tx.prepareCfc();
+      const finalPreparedState = tx.getCfcState();
+      if (
+        !enforcementDisabled &&
+        finalPreparedState.prepare.status !== "prepared"
+      ) {
+        throw externalObservationRefusal(
+          "CFC refused the traversed external content observation",
+          finalPreparedState,
+        );
+      }
+      if (
+        finalPreparedState.consultedGrants.length > 0 ||
+        finalPreparedState.consultedPolicyManifests.length > 0
+      ) {
+        throw externalObservationRefusal(
+          "external content observation traversal depends on mutable policy evidence",
+          finalPreparedState,
+        );
+      }
+      if (
+        !deepEqual(
+          finalPreparedState.trustSnapshot,
+          evidence.trustSnapshot,
+        ) ||
+        !deepEqual(finalPreparedState.trustConfig, evidence.trustConfig) ||
+        !deepEqual(
+          finalPreparedState.policySnapshot === undefined
+            ? undefined
+            : { digest: finalPreparedState.policySnapshot.digest },
+          evidence.policySnapshot,
+        ) ||
+        !moduleDelegationsEqual(
+          finalPreparedState.moduleDelegations,
+          evidence.moduleDelegations,
+        ) ||
+        !deepEqual(
+          externalObservationPosture(finalPreparedState),
+          evidence.posture,
+        )
+      ) {
+        throw externalObservationRefusal(
+          "external content observation context changed during traversal",
+          finalPreparedState,
+        );
+      }
+      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(tx);
+      const source = cell.getAsNormalizedFullLink();
+      const observation = cloneIfNecessary({
+        source: {
+          space: source.space,
+          id: source.id,
+          scope: source.scope,
+          path: source.path,
+        },
+        flow: {
+          confidentiality: [...flow.confidentiality],
+          integrity: [...flow.integrity],
+        },
+        consumed: {
+          confidentiality: [...consumed.confidentiality],
+          integrity: [...consumed.integrity],
+        },
+        labeledSpaces: [...(flow.labeledSpaces ?? [])],
+        sources: consumed.sources.map((entry) => ({
+          atom: entry.atom,
+          read: entry.read,
+          labelPath: entry.labelPath,
+        })),
+      } as FabricValue) as unknown as CfcExternalContentObservation;
+      const receipt = Object.freeze({});
+      externalObservationReceipts.set(receipt, {
+        runtime: this,
+        sourceTx: tx,
+        targetTx: options.targetTx,
+        space: options.space,
+        producer: options.producer,
+        ...evidence,
+        observation,
+        consumed: false,
+      });
+      return receipt;
+    } finally {
+      if (tx.status().status === "ready") {
+        tx.abort("external content observation recorded");
+      }
+    }
+  }
+
+  /** Records a receipt from {@link prepareExternalContentObservation}. */
+  recordExternalContentObservation(
+    tx: IExtendedStorageTransaction,
+    receipt: object,
+    options: { space: MemorySpace; producer: string },
+  ): void {
+    const payload = externalObservationReceipts.get(receipt);
+    const state = tx.getCfcState();
+    const mismatches = [
+      ["missing", payload === undefined],
+      ["consumed", payload?.consumed === true],
+      ["runtime", payload !== undefined && payload.runtime !== this],
+      ["target", payload !== undefined && payload.targetTx !== tx],
+      ["target-owner", !this.#transactions.has(tx)],
+      ["source-open", payload?.sourceTx.status().status === "ready"],
+      ["space", payload !== undefined && payload.space !== options.space],
+      [
+        "producer",
+        payload !== undefined && payload.producer !== options.producer,
+      ],
+      ["target-closed", tx.status().status !== "ready"],
+      [
+        "trust",
+        payload !== undefined &&
+        !deepEqual(state.trustSnapshot, payload.trustSnapshot),
+      ],
+      [
+        "trust-config",
+        payload !== undefined &&
+        !deepEqual(state.trustConfig, payload.trustConfig),
+      ],
+      [
+        "policy",
+        payload !== undefined && !deepEqual(
+          state.policySnapshot === undefined
+            ? undefined
+            : { digest: state.policySnapshot.digest },
+          payload.policySnapshot,
+        ),
+      ],
+      [
+        "delegations",
+        payload !== undefined &&
+        !moduleDelegationsEqual(
+          state.moduleDelegations,
+          payload.moduleDelegations,
+        ),
+      ],
+      [
+        "posture",
+        payload !== undefined &&
+        !deepEqual(externalObservationPosture(state), payload.posture),
+      ],
+      ["identity-kind", state.implementationIdentity?.kind !== "builtin"],
+      [
+        "identity-producer",
+        state.implementationIdentity?.kind === "builtin" &&
+        state.implementationIdentity.builtinId !== options.producer,
+      ],
+    ].filter(([, mismatch]) => mismatch).map(([name]) => name);
+    if (payload === undefined || mismatches.length > 0) {
+      throw externalObservationRefusal(
+        `external content observation receipt does not match this result write (${
+          mismatches.join(", ")
+        })`,
+        state,
+      );
+    }
+    tx.recordCfcExternalContentObservation(
+      payload.observation,
+      runtimeWritePolicyAuthorization,
+    );
+    payload.consumed = true;
   }
 
   /**
@@ -3631,6 +4245,25 @@ export class Runtime {
     return principal as DID | undefined;
   }
 
+  /**
+   * Returns the principal a handler run on `tx` acts for: the actor of the
+   * event it handles. On a client runtime that is the runtime's own user. On a
+   * serving runtime it is the acting user stamped on the run's wave context,
+   * which the serving loop takes from the event's server-stamped `firedAt` or
+   * from the run that emitted the event, and `undefined` for a run with no
+   * actor or no transaction. It is never the serving runtime's own identity,
+   * and nothing in the event's payload reaches it. A space a served run
+   * creates for a `PatternFactory.inSpace()` target is owned by this principal.
+   *
+   * Like `homeSpacePrincipalFor()`, except that a run on another principal's
+   * scope instance still returns the actor rather than the instance's owner,
+   * and the transaction's read scope is left as it is.
+   */
+  actingPrincipalFor(tx?: IExtendedStorageTransaction): DID | undefined {
+    if (!this.servingPosture) return this.userIdentityDID;
+    return tx === undefined ? undefined : waveRunActorOf(tx);
+  }
+
   getHomeSpaceCell(
     tx?: IExtendedStorageTransaction,
   ): Cell<SpaceCellContents> {
@@ -3655,176 +4288,220 @@ export class Runtime {
   }
 
   /**
-   * Returns the DID for a named `PatternFactory.inSpace("name")` target if it
-   * has already been resolved (or is itself a DID), otherwise `undefined`.
+   * Creates a space and returns its DID. The space's key is generated from
+   * random data, signs one genesis commit whose access-control document makes
+   * `owner` its only OWNER alongside `grants`, and is dropped once that commit
+   * is confirmed. The DID is returned only after that confirmation.
    *
-   * Synchronous so the pattern builder can route a child result into the target
-   * space at graph-construction time. On a miss, the caller records the name as
-   * pending and the runner resolves it via {@link resolveSpaceName} before
-   * re-running the handler/action (see RetryImmediately).
+   * `owner` defaults to the identity this runtime acts as. A serving runtime
+   * acts as a service, and a space it creates on a user's behalf must be
+   * owned by that user, so a serving runtime requires `owner`. `root`
+   * reserves the space's root pattern in the same commit; see
+   * `IStorageManager.createSpace`.
+   *
+   * @throws If the storage manager cannot create spaces, if the memory server
+   *   refuses the genesis commit, or if a serving runtime supplies no owner.
    */
-  resolveSpaceNameSync(name: string): MemorySpace | undefined {
-    if (isDID(name)) return name;
-    return this.#spaceNameToDid.get(name);
+  async createSpace(
+    options: { owner?: DID; grants?: ACL; root?: GenesisRoot } = {},
+  ): Promise<MemorySpace> {
+    if (this.servingPosture && options.owner === undefined) {
+      throw new Error(
+        "A serving runtime creates a space only on behalf of a user, and " +
+          "no owner was supplied",
+      );
+    }
+    if (this.storageManager.createSpace === undefined) {
+      throw new Error("This storage manager cannot create spaces");
+    }
+    const owner = options.owner ?? this.userIdentityDID;
+    return await this.storageManager.createSpace(
+      { ...options.grants, [owner]: "OWNER" },
+      options.root,
+    );
   }
 
   /**
-   * Resolves a named `inSpace` target to a DID, caching the result.
+   * Whether `space` is a space: whether it has an access-control document, or
+   * holds a space cell written before access-control documents existed. A DID
+   * that has neither has no history, and opening it must leave it that way.
+   * A DID the identity this runtime acts as is refused access to is a space.
    *
-   * NOTE(#1): The derivation is intentionally name-based for now — `createSession`
-   * derives the space key from the name alone (the identity is ignored on the
-   * `spaceName` path), so equal names map to the same shared space across users.
-   * This is the deliberate "shared profile space" behavior today; revisit once
-   * we can derive unique space DIDs from a string.
-   *
-   * OW31 (RULED 2026-08-18): `options.owner` names the fresh space's
-   * genesis ACL OWNER. On a SERVING runtime the caller MUST supply the
-   * run's ACTING principal (the serving-side resolvePendingSpaceNames
-   * threads it from the frame tx's wave run context) — a serving runtime
-   * with no actor REFUSES to register, mirroring getHomeSpaceCell's
-   * refusal: a served `.inSpace()` with no acting identity must never
-   * mint a service-owned space (builtins.md §5; protocol.md §2b). On a
-   * client the owner is omitted and the genesis names the manager's own
-   * signer — the active user, byte-identical to before.
-   *
-   * `options.genesisAcl` is the exact ACL document the space is born with
-   * when this resolution creates it (its first and only commit — no
-   * world-writable default is ever written), validated by the memory
-   * server's genesis admission; on a space that already exists the open
-   * proceeds only if it is owned exactly as the document says, else
-   * refuses. It is
-   * refused together with `owner` (two descriptions of one document), for
-   * a bare DID (no key to register against), and for a name already
-   * resolved — by anything, including a pattern's `inSpace(name)` — unless
-   * with the identical document; see `IStorageManager.registerSpaceIdentity`.
-   * The name is cached at resolution, before the server can refuse the
-   * document, so a refusal surfaced later (on the first sync) has no
-   * correction path through this method: register a corrected document
-   * with the storage manager directly, or use a fresh runtime. A SERVING
-   * runtime refuses it outright: served provisioning names the run's
-   * acting user OWNER through the OW31 owner path, and a document that
-   * bypassed that path could name any principal — including the service —
-   * on a space the acting user asked for. A creator that wants a sealed
-   * space mints it from its own (client) runtime.
+   * @throws If loading either document fails for any other reason, since
+   *   that load decides the answer.
    */
-  async resolveSpaceName(
+  async spaceExists(space: MemorySpace): Promise<boolean> {
+    const provider = this.storageManager.open(space);
+    const aclUri = aclDocId(space) as URI;
+    const spaceCell = this.getSpaceCell(space);
+    const loads = await Promise.all([
+      provider.sync(aclUri),
+      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+    ]);
+    const denied = this.storageManager.spaceAccessError?.(space) ??
+      this.storageManager.authorizationError?.(space);
+    if (denied !== undefined) return true;
+    for (const { error } of loads) {
+      if (error !== undefined) throw error;
+    }
+    const tx = this.edit();
+    try {
+      const acl = tx.readOrThrow({
+        space,
+        id: aclUri,
+        type: "application/json",
+        path: [],
+      });
+      return acl !== undefined || spaceCell.withTx(tx).getRaw() !== undefined;
+    } finally {
+      tx.abort();
+    }
+  }
+
+  /**
+   * Asks the memory server once more for `space`, if it refused this
+   * runtime's session there, and resolves once it has decided. An admission
+   * runs again every computation whose `spaceAccess(target)` answer turned on
+   * the refusal, and repeats the loads the refusal failed; a refusal leaves
+   * the space refused. It is for a host that has reason to think the verdict
+   * changed, and does nothing for a space this runtime has not opened. It
+   * rejects on any failure other than a refusal. See
+   * `IStorageManager.retrySpaceAccess()`.
+   */
+  async retrySpaceAccess(space: MemorySpace): Promise<void> {
+    await this.storageManager.retrySpaceAccess?.(space);
+  }
+
+  /**
+   * Returns the DID the legacy space name `name` resolves to, once
+   * {@link resolveLegacySpaceName} has derived it in this runtime, and
+   * `undefined` before then.
+   */
+  legacySpaceDidSync(name: string): MemorySpace | undefined {
+    return this.#legacySpaceDids.get(name);
+  }
+
+  /**
+   * Returns the DID the legacy space name `name` resolves to (see
+   * `legacySpaceDid` in `@commonfabric/identity`), and remembers it for
+   * {@link legacySpaceDidSync}. Resolving a name opens and creates nothing.
+   */
+  async resolveLegacySpaceName(name: string): Promise<MemorySpace> {
+    const known = this.#legacySpaceDids.get(name);
+    if (known !== undefined) return known;
+    const did = await legacySpaceDid(name);
+    this.#legacySpaceDids.set(name, did);
+    return did;
+  }
+
+  /**
+   * Returns the space the `PatternFactory.inSpace(name)` target `name` names
+   * in `space`, reading within `tx`, or `undefined` if the name has not been
+   * resolved yet.
+   *
+   * The calling space holds one allocation record per name. When the record
+   * exists, its DID is the answer. When it does not, and an earlier
+   * {@link resolveInSpaceName} created a space for the same request, that DID
+   * is the answer and the record is written in `tx`: the record then commits
+   * in the same commit as the writes that refer to the space, or not at all.
+   * The request is `grants` and the owner {@link actingPrincipalFor} gives
+   * `tx`, so the space a run records was created with the access-control
+   * document that run asked for. `tx` reads the absent record, so a
+   * concurrent writer of the same record makes this commit conflict, and the
+   * run that follows reads the record it wrote.
+   *
+   * Synchronous so the pattern builder can route a child's result into its
+   * space while it constructs the graph. On `undefined` the caller records the
+   * name as pending, and the runner resolves it with
+   * {@link resolveInSpaceName} before running the handler or action again.
+   */
+  resolveInSpaceNameSync(
+    space: MemorySpace,
     name: string,
-    options?: { owner?: DID; genesisAcl?: ACL },
+    tx: IExtendedStorageTransaction,
+    grants?: ACL,
+  ): MemorySpace | undefined {
+    const record = this.#inSpaceAllocationCell(space, name, tx);
+    const recorded = record.get()?.did;
+    if (isDID(recorded)) return recorded;
+    const owner = this.actingPrincipalFor(tx);
+    const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
+      inSpaceCreationKey(space, name, owner, grants),
+    );
+    if (created !== undefined) record.set({ did: created });
+    return created;
+  }
+
+  /**
+   * Resolves the `PatternFactory.inSpace(name)` target `name` in `space`, so
+   * that {@link resolveInSpaceNameSync} returns its DID from then on for the
+   * same request.
+   *
+   * The calling space's allocation record decides when it exists. Otherwise
+   * this creates a space owned by `options.owner` with `options.grants`, whose
+   * DID the next run making the same request records. A record naming a DID
+   * that has no history is reported rather than replaced: the record is
+   * immutable, and replacing the space it names would move whatever the
+   * name's writers expect to find.
+   *
+   * The record is written after the space is created, and only one of the
+   * runs racing to write it commits. The space another run created is then
+   * named by nothing, and holds nothing but its access-control document,
+   * which names its owner.
+   *
+   * @throws If the record names a DID that is not a space, if loading what
+   *   decides that fails, or if creating a space fails.
+   */
+  async resolveInSpaceName(
+    space: MemorySpace,
+    name: string,
+    options: { owner?: DID; grants?: ACL } = {},
   ): Promise<MemorySpace> {
-    if (options?.owner !== undefined && options?.genesisAcl !== undefined) {
-      // Two descriptions of one document: refused before anything else,
-      // cached path included, mirroring registerSpaceIdentity.
-      throw new Error(
-        `space-name resolution for "${name}": supply either owner or ` +
-          "genesisAcl, not both — genesisAcl is the whole genesis document, " +
-          "and owner only names the OWNER of the default one",
-      );
-    }
-    if (
-      options?.genesisAcl !== undefined &&
-      this.storageManager.registerSpaceIdentity === undefined
-    ) {
-      // No seam to hand the document to; the optional call below would
-      // drop it and the space would be born with the default.
-      throw new Error(
-        `space-name resolution for "${name}" cannot register a genesisAcl: ` +
-          "this storage manager has no registerSpaceIdentity seam, so " +
-          "nothing would write the document",
-      );
-    }
-    const inFlight = this.#spaceNameResolutions.get(name);
-    if (inFlight !== undefined) {
-      // Join the resolution already under way — its rejection is this
-      // caller's too — then take the cached path: an identical document is
-      // a retry, a different one is refused.
-      await inFlight;
-      return await this.resolveSpaceName(name, options);
-    }
-    const cached = this.resolveSpaceNameSync(name);
-    if (options?.genesisAcl !== undefined) {
-      // A document the resolution cannot honor is refused, never dropped:
-      // the caller asked for a space born closed.
-      if (isDID(name)) {
-        throw new Error(
-          `space-name resolution for the DID ${name} cannot register a ` +
-            "genesisAcl: the runtime derives no space key for a bare DID, " +
-            "so nothing would write the document (register the identity " +
-            "with the storage manager directly)",
-        );
-      }
-      if (cached !== undefined) {
-        const recorded = this.#spaceNameGenesisAcls.get(name);
-        if (recorded === undefined || !sameAcl(recorded, options.genesisAcl)) {
+    const creationKey = inSpaceCreationKey(
+      space,
+      name,
+      options.owner ?? this.userIdentityDID,
+      options.grants,
+    );
+    const inFlight = this.#inSpaceResolutions.get(creationKey);
+    if (inFlight !== undefined) return await inFlight;
+    const resolution = (async (): Promise<MemorySpace> => {
+      const record = this.#inSpaceAllocationCell(space, name);
+      await record.sync();
+      const recorded = record.get()?.did;
+      if (isDID(recorded)) {
+        if (!(await this.spaceExists(recorded))) {
           throw new Error(
-            `space-name "${name}" was already resolved` +
-              (recorded === undefined
-                ? " without a genesisAcl"
-                : " with a different genesisAcl") +
-              "; the supplied document cannot be the space's genesis",
+            debugStr`The space ${space} records ${recorded} as its space ` +
+              debugStr`${name}, and no space has that DID`,
           );
         }
-        return cached;
+        return recorded;
       }
-    }
-    if (cached !== undefined) return cached;
-    if (this.servingPosture && options?.genesisAcl !== undefined) {
-      throw new Error(
-        `space-name resolution for "${name}" on a serving runtime does not ` +
-          "accept genesisAcl: served provisioning names the run's acting " +
-          "identity OWNER through the owner path (OW31, RULED 2026-08-18), " +
-          "and a caller-supplied document would bypass it",
-      );
-    }
-    if (this.servingPosture && options?.owner === undefined) {
-      throw new Error(
-        `space-name resolution for "${name}" on a serving runtime requires ` +
-          "the run's acting identity as genesis owner (OW31, RULED " +
-          "2026-08-18; builtins.md §5's per-demanding-identity resolution; " +
-          "protocol.md §2b): refusing to register a space identity whose " +
-          "genesis would name the SERVICE as owner",
-      );
-    }
-    const resolution = (async (): Promise<MemorySpace> => {
-      const session = await createSession({
-        identity: this.storageManager.as as unknown as Identity,
-        spaceName: name,
-      });
-      if (options?.genesisAcl !== undefined && !session.spaceIdentity) {
-        throw new Error(
-          `space-name resolution for "${name}" derived no space identity, ` +
-            "so the supplied genesisAcl could not be registered",
-        );
-      }
-      // Register the derived identity only as fresh-space ACL bootstrap
-      // authority. Storage continues to authenticate ordinary reads and
-      // writes as the active user (`storageManager.as`), so resolving a name
-      // does not grant an existing space's key to the caller.
-      if (session.spaceIdentity) {
-        this.storageManager.registerSpaceIdentity?.(
-          session.spaceIdentity,
-          options?.owner !== undefined || options?.genesisAcl !== undefined
-            ? {
-              ...(options.owner !== undefined ? { owner: options.owner } : {}),
-              ...(options.genesisAcl !== undefined
-                ? { genesisAcl: options.genesisAcl }
-                : {}),
-            }
-            : undefined,
-        );
-      }
-      const did = session.space as MemorySpace;
-      this.#spaceNameToDid.set(name, did);
-      if (options?.genesisAcl !== undefined) {
-        this.#spaceNameGenesisAcls.set(name, { ...options.genesisAcl });
-      }
-      return did;
+      const created = this.#inSpaceCreated.get(creationKey) ??
+        await this.createSpace(options);
+      this.#inSpaceCreated.set(creationKey, created);
+      return created;
     })();
-    this.#spaceNameResolutions.set(name, resolution);
+    this.#inSpaceResolutions.set(creationKey, resolution);
     try {
       return await resolution;
     } finally {
-      this.#spaceNameResolutions.delete(name);
+      this.#inSpaceResolutions.delete(creationKey);
     }
+  }
+
+  #inSpaceAllocationCell(
+    space: MemorySpace,
+    name: string,
+    tx?: IExtendedStorageTransaction,
+  ): Cell<{ did?: string } | undefined> {
+    return this.getCell(
+      space,
+      { inSpaceAllocation: { space, name } },
+      inSpaceAllocationSchema,
+      tx,
+    );
   }
 
   // Convenience methods that delegate to the runner
@@ -3868,20 +4545,29 @@ export class Runtime {
     patternFactory: NodeFactory<T, R>,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
     tx: IExtendedStorageTransaction | undefined,
     pattern: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
     tx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R> {
-    return this.runner.run<T, R>(tx, patternOrModule, argument, resultCell);
+    return this.runner.run<T, R>(
+      tx,
+      patternOrModule,
+      argument,
+      resultCell,
+      options,
+    );
   }
 
   /** Runs a pattern after synchronizing its stored dependencies. */
@@ -3943,9 +4629,50 @@ export class Runtime {
    * storage accepted or confirmed the hint.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
-    let route: URL;
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    const accept = storage.registerSpaceHost !== undefined
+      ? storage.registerSpaceHost(space, normalized)
+      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
+    if (accept === undefined) return false; // manager has no remote resolution
+    if (accept) this.#dynamicHosts.set(space, normalized);
+    return accept;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * says why when storage refuses it. A storage manager that gives only a
+   * verdict has its refusal reported as `unspecified`, and one that takes no
+   * hints at all as `no-remote-resolution`.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    let registration: SpaceHostRegistration;
+    if (storage.registerSpaceHostDetailed !== undefined) {
+      registration = storage.registerSpaceHostDetailed(space, normalized);
+    } else if (storage.registerSpaceHost !== undefined) {
+      registration = storage.registerSpaceHost(space, normalized)
+        ? { accepted: true }
+        : { accepted: false, reason: "unspecified" };
+    } else {
+      registration = { accepted: false, reason: "no-remote-resolution" };
+    }
+    if (registration.accepted) this.#dynamicHosts.set(space, normalized);
+    return registration;
+  }
+
+  /**
+   * Returns the normalized origin of `host`. A host that is not an HTTP or
+   * HTTPS origin throws an error naming `space`, with the validation error as
+   * its cause.
+   */
+  #normalizedSpaceHost(space: MemorySpace, host: string): string {
     try {
-      route = normalizeSpaceHost(host);
+      return normalizeSpaceHost(host).toString();
     } catch (cause) {
       if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
@@ -3953,11 +4680,6 @@ export class Runtime {
         { cause },
       );
     }
-    const normalized = route.toString();
-    const accept = this.storageManager.registerSpaceHost?.(space, normalized);
-    if (accept === undefined) return false; // manager has no remote resolution
-    if (accept) this.#dynamicHosts.set(space, normalized);
-    return accept;
   }
 
   /**

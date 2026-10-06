@@ -11,6 +11,7 @@ import { themedChartSeries } from "../theme.ts";
 import { githubCiSpend } from "./github-ci-spend.ts";
 
 const ORG = "acme";
+const ENTERPRISE = "acme-enterprise";
 const D = 86_400_000;
 
 const themedSwatch = (color: string) =>
@@ -69,9 +70,34 @@ const productBudget = (sku: string, amount: number) => ({
 
 const usagePath = (year: number, month: number, org = ORG) =>
   `organizations/${org}/settings/billing/usage?year=${year}&month=${month}`;
-const budgetsPath = (org = ORG) =>
-  `organizations/${org}/settings/billing/budgets`;
+const budgetsPath = (org = ORG, page = 1) =>
+  `organizations/${org}/settings/billing/budgets?` +
+  `per_page=100&scope=organization&page=${page}`;
 const classicPath = (org = ORG) => `orgs/${org}/settings/billing/actions`;
+const enterpriseSummaryPath = (
+  year: number,
+  month: number,
+  day: number,
+) =>
+  `enterprises/${ENTERPRISE}/settings/billing/usage/summary?` +
+  `year=${year}&month=${month}&day=${day}`;
+const enterpriseBudgetsPath = (page = 1) =>
+  `enterprises/${ENTERPRISE}/settings/billing/budgets?` +
+  `per_page=100&scope=enterprise&page=${page}`;
+
+function enterpriseSummaryRoutes(
+  year: number,
+  month: number,
+  throughDay: number,
+  items: Readonly<Record<number, { product: string; netAmount: number }[]>>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Array.from({ length: throughDay }, (_, index) => index + 1).map((day) => [
+      enterpriseSummaryPath(year, month, day),
+      { usageItems: items[day] ?? [] },
+    ]),
+  );
+}
 
 class RejectedRoute {
   constructor(readonly reason: unknown) {}
@@ -93,6 +119,7 @@ async function view(
   now: string,
   routes: Record<string, unknown>,
   env: Record<string, string> = { GH_TOKEN: "gh_pat_x", GH_BILLING_ORG: ORG },
+  observe?: (path: string, init: RequestInit | undefined) => void,
 ): Promise<TileView> {
   const RealDate = Date;
   const realFetch = globalThis.fetch;
@@ -103,9 +130,10 @@ async function view(
       super(args.length === 0 ? fixed : (args[0] as number));
     }
   } as DateConstructor;
-  globalThis.fetch = (input: URL | Request | string) => {
+  globalThis.fetch = (input: URL | Request | string, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const key = url.pathname.slice(1) + url.search;
+    observe?.(key, init);
     if (!(key in routes)) {
       return Promise.resolve(new Response(null, { status: 404 }));
     }
@@ -130,15 +158,216 @@ async function view(
 
 Deno.test("github spend: without a token the tile is gray and names what it needs", async () => {
   const v = await githubCiSpend.collect(ctx({}));
-  assertEquals(v.label, "github spend");
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
+  assertStringIncludes(v.sub ?? "", "GH_BILLING_TOKEN");
   assertStringIncludes(v.sub ?? "", "GH_TOKEN");
-  assertStringIncludes(v.sub ?? "", "org billing read"); // the extra right this tile needs
 });
 
 Deno.test("github spend: a projection with no observed rate window preserves the measured total", () => {
   assertEquals(projectMonthly(37, 0, 31, []), 37);
+});
+
+Deno.test("github spend: enterprise summary includes all cost centers and enterprise budgets", async () => {
+  const requests: {
+    path: string;
+    token: string | null;
+    version: string | null;
+  }[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      ...enterpriseSummaryRoutes(2026, 1, 20, {
+        1: [{ product: "actions", netAmount: 18 }],
+        2: [{ product: "actions", netAmount: 18 }],
+        3: [{ product: "actions", netAmount: 18 }],
+        4: [{ product: "actions", netAmount: 18 }],
+        5: [
+          { product: "actions", netAmount: 18 },
+          { product: "packages", netAmount: 100 },
+        ],
+        6: [{ product: "actions", netAmount: 18 }],
+        7: [{ product: "actions", netAmount: 18 }],
+        8: [{ product: "actions", netAmount: 18 }],
+        9: [{ product: "actions", netAmount: 18 }],
+        10: [{ product: "actions", netAmount: 18 }],
+        18: [{ product: "actions", netAmount: 0 }],
+      }),
+      [enterpriseBudgetsPath()]: {
+        budgets: [
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["actions"],
+            budget_scope: "enterprise",
+            budget_amount: 400,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["packages"],
+            budget_scope: "enterprise",
+            budget_amount: 200,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["actions"],
+            budget_scope: "organization",
+            budget_amount: 10_000,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: ["actions", "packages"],
+            budget_scope: "enterprise",
+            budget_amount: 10_000,
+          },
+          {
+            budget_type: "ProductPricing",
+            budget_product_skus: [null],
+            budget_scope: "enterprise",
+            budget_amount: 10_000,
+          },
+        ],
+      },
+    },
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+      GH_TOKEN: "ordinary-github",
+    },
+    (path, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({
+        path,
+        token: headers.get("authorization"),
+        version: headers.get("x-github-api-version"),
+      });
+    },
+  );
+
+  assertEquals(v.value, "~$482/mo");
+  assertEquals(
+    v.aside,
+    '<span class="hfacet" title="$280 MTD">$280 MTD</span>',
+  );
+  assertStringIncludes(v.extra ?? "", "Budget $600");
+  assertEquals(v.status, "good");
+  assertEquals(
+    v.href,
+    `https://github.com/enterprises/${ENTERPRISE}/settings/billing`,
+  );
+  assert(
+    requests.some(({ path }) =>
+      path === enterpriseSummaryPath(2026, 1, 5)
+    ),
+  );
+  assertEquals(
+    requests.filter(({ path }) =>
+      path.startsWith(
+        `enterprises/${ENTERPRISE}/settings/billing/usage/summary?`,
+      )
+    ).length,
+    51,
+  );
+  assertEquals(
+    requests.every(({ token }) => token === "Bearer enterprise-billing"),
+    true,
+  );
+  assertEquals(
+    requests.every(({ version }) => version === "2026-03-10"),
+    true,
+  );
+});
+
+Deno.test("github spend: an unavailable enterprise day leaves a partial, gray projection", async () => {
+  const routes = enterpriseSummaryRoutes(2026, 1, 20, {
+    1: [{ product: "actions", netAmount: 18 }],
+    2: [{ product: "actions", netAmount: 18 }],
+    3: [{ product: "actions", netAmount: 18 }],
+    4: [{ product: "actions", netAmount: 18 }],
+    5: [{ product: "actions", netAmount: 18 }],
+    6: [{ product: "actions", netAmount: 18 }],
+    7: [{ product: "actions", netAmount: 18 }],
+    8: [{ product: "actions", netAmount: 18 }],
+    9: [{ product: "actions", netAmount: 18 }],
+    10: [{ product: "actions", netAmount: 18 }],
+  });
+  routes[enterpriseSummaryPath(2026, 1, 6)] = {};
+
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    routes,
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+    },
+  );
+
+  assertEquals(v.status, "unknown");
+  assertEquals(v.value, "~$295/mo");
+  assertEquals(
+    v.aside,
+    '<span class="hfacet" title="$162 partial MTD">$162 partial MTD</span>',
+  );
+  assertEquals(v.sub, "1 billing day unavailable");
+  // The missing 6th breaks the line, while all 17 sampled days stay
+  // highlighted rather than dropping the 1st from the rate window.
+  assertEquals((v.extra ?? "").match(/<polyline/g)?.length, 2);
+});
+
+Deno.test("github spend: one unavailable prior enterprise day preserves the rest of its month", async () => {
+  const december = enterpriseSummaryRoutes(
+    2025,
+    12,
+    31,
+    Object.fromEntries(
+      Array.from({ length: 31 }, (_, index) => [
+        index + 1,
+        [{ product: "actions", netAmount: 10 }],
+      ]),
+    ),
+  );
+  december[enterpriseSummaryPath(2025, 12, 20)] = {};
+  const v = await view(
+    "2026-01-03T09:00:00Z",
+    {
+      ...december,
+      ...enterpriseSummaryRoutes(2026, 1, 3, {
+        1: [{ product: "actions", netAmount: 20 }],
+        2: [{ product: "actions", netAmount: 20 }],
+      }),
+    },
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+    },
+  );
+
+  assertEquals(v.status, "good");
+  assertEquals(v.value, "~$332/mo");
+  assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
+  assertStringIncludes(v.extra ?? "", "<polyline");
+});
+
+Deno.test("github spend: enterprise scope never falls back to organization minutes", async () => {
+  const requests: string[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      [classicPath()]: {
+        total_minutes_used: 1000,
+        included_minutes: 3000,
+        total_paid_minutes_used: 0,
+      },
+    },
+    {
+      GH_BILLING_ENTERPRISE: ENTERPRISE,
+      GH_BILLING_TOKEN: "enterprise-billing",
+    },
+    (path) => requests.push(path),
+  );
+
+  assertEquals(v.status, "unknown");
+  assertEquals(v.value, "—");
+  assertEquals(requests.some((path) => path === classicPath()), false);
 });
 
 Deno.test("github spend: projects the month from the settled daily rate, against the GitHub budget", async () => {
@@ -344,6 +573,40 @@ Deno.test("github spend: a budget carrying no amount is no ceiling, not a $0 one
   }
 });
 
+Deno.test("github spend: reads product budgets from every page", async () => {
+  const requests: string[] = [];
+  const v = await view(
+    "2026-01-20T09:00:00Z",
+    {
+      [usagePath(2026, 1)]: {
+        usageItems: [
+          ...days(2026, 1, 1, 10, 18),
+          stillReporting("2026-01-18"),
+        ],
+      },
+      [budgetsPath()]: {
+        budgets: [{
+          budget_type: "SkuPricing",
+          budget_product_sku: "actions_linux",
+          budget_scope: "organization",
+          budget_amount: 10,
+        }],
+        has_next_page: true,
+      },
+      [budgetsPath(ORG, 2)]: {
+        budgets: [productBudget("actions", 400)],
+        has_next_page: false,
+      },
+    },
+    undefined,
+    (path) => requests.push(path),
+  );
+
+  assertStringIncludes(v.extra ?? "", "Budget $400");
+  assertEquals(v.status, "good");
+  assert(requests.includes(budgetsPath(ORG, 2)));
+});
+
 Deno.test("github spend: one product budgeted twice sets one ceiling, not two", async () => {
   // Two organization-wide budgets naming the same product cap that product
   // once. Adding both would compare the projection with twice the ceiling that
@@ -430,6 +693,32 @@ Deno.test("github spend: an undated row weighs on the comparison as it does on t
   assertStringIncludes(v.extra ?? "", "Budget $400");
 });
 
+Deno.test("github spend: a date that names no day reads as no date at all", async () => {
+  // Each of these reaches the report as a date and names no calendar day: not
+  // text, a month past twelve, a day past thirty-one, and the thirtieth of
+  // February, which a lenient parser would roll into March. Each must read
+  // exactly as the undated row above does, chart and all: landing on some
+  // other day would leave the totals as they are and move the chart.
+  const reading = (date: unknown) =>
+    view("2026-01-20T09:00:00Z", {
+      [usagePath(2026, 1)]: {
+        usageItems: [
+          ...days(2026, 1, 1, 10, 18),
+          { ...item("", 100), date },
+          stillReporting("2026-01-18"),
+        ],
+      },
+      [budgetsPath()]: { budgets: [productBudget("actions", 400)] },
+    });
+  const undated = await reading("");
+  const onTheThirteenth = await reading("2026-01-13");
+  // The chart does tell a dated row from an undated one.
+  assert(onTheThirteenth.extra !== undated.extra);
+  for (const date of [null, "2026-13-01", "2026-01-32", "2026-02-30"]) {
+    assertEquals(await reading(date), undated, String(date));
+  }
+});
+
 Deno.test("github spend: the headline sits under the shown budget exactly when the tile is green", async () => {
   // The color comes from the budgeted products while the headline carries
   // every product, so the two are only readable together if the ceiling shown
@@ -486,12 +775,13 @@ Deno.test("github spend: early in the month the rate comes from last month's tai
     [usagePath(2025, 12)]: { usageItems: days(2025, 12, 1, 31, 10) },
     [usagePath(2025, 11)]: { usageItems: days(2025, 11, 1, 30, 10) },
   });
-  // Window = $40 over 2 days here + $120 over the last 12 of December = $160/14
-  // days -> $354 across 31. Rating the two days alone would claim $620.
-  assertEquals(v.value, "~$354/mo");
+  // The 2-day lag has settled only the 1st. Window = $20 over that day + $130
+  // over the last 13 of December = $150/14 days -> $332 across 31. Rating the
+  // settled day alone would claim $620.
+  assertEquals(v.value, "~$332/mo");
   assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
   // November is fetched only to fill the chart, which spans at most 45 days back
-  // from the last day with a figure (January 2nd).
+  // from the newest settled day (January 1st).
   assertEquals(v.duration, 45 * D);
 });
 
@@ -544,7 +834,45 @@ Deno.test("github spend: an unavailable prior month is not zero-spend history", 
   assertEquals(v.value, "~$620/mo");
   assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
   assertEquals(v.status, "bad");
-  assertEquals(v.duration, 2 * D);
+  assertEquals(v.duration, 1 * D); // the settled 1st only
+});
+
+Deno.test("github spend: with no settled day and no prior month, the projection is the month to date", async () => {
+  // The 2nd, with December unreadable. The 2-day lag has settled no January
+  // day, so there is no rate to project from and no day to chart.
+  const v = await view("2026-01-02T09:00:00Z", {
+    [usagePath(2026, 1)]: { usageItems: days(2026, 1, 1, 2, 20) },
+    [budgetsPath()]: { budgets: [productBudget("actions", 30)] },
+  });
+  assertEquals(v.value, "~$40/mo");
+  assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
+  // The budgeted projection holds the same $40 against the $30 budget.
+  assertEquals(v.status, "bad");
+  assertEquals(v.extra?.includes("<polyline"), false);
+  assertEquals(v.duration, 0);
+});
+
+Deno.test("github spend: a day still being reported is left out of the chart and the rate", async () => {
+  // The report already carries rows for the 19th and for today, the 20th,
+  // while both days are still being written: today has so far reached $3 of a
+  // $20 day.
+  const v = await view("2026-01-20T09:00:00Z", {
+    [usagePath(2026, 1)]: {
+      usageItems: [...days(2026, 1, 1, 19, 20), item("2026-01-20", 3)],
+    },
+  });
+  // The month to date counts every row.
+  assertEquals(v.aside, '<span class="hfacet" title="$383 MTD">$383 MTD</span>');
+  // The rate is $360 over the 18 settled days, so the projection is a steady
+  // $20/day across 31. Counting the partial days would project $594.
+  assertEquals(v.value, "~$620/mo");
+  // The line ends on the settled 18th, level with the days before it, rather
+  // than dropping to today's partial $3.
+  assertEquals(v.duration, 18 * D);
+  const base = (v.extra ?? "").match(/<polyline points="([^"]+)"/)?.[1] ?? "";
+  const heights = base.split(" ").map((pair) => pair.split(",")[1]);
+  assertEquals(heights.length, 18);
+  assertEquals(new Set(heights).size, 1);
 });
 
 Deno.test("github spend: a prior month that 404s leaves a hole in the chart, not zeros", async () => {

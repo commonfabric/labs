@@ -43,6 +43,14 @@ export interface HarnessUserTranscriptMessage {
 export interface HarnessAssistantTranscriptMessage {
   role: "assistant";
   content: string;
+
+  /**
+   * The provider's readable summary of the model's reasoning for this turn,
+   * for a person watching the run. The model never reads it back: what carries
+   * its thinking to the next turn is the encrypted reasoning in
+   * `providerContinuation`.
+   */
+  reasoning?: string;
   toolCalls?: readonly HarnessToolCall[];
   nativeModelToolResults?: readonly HarnessNativeModelToolResult[];
   providerContinuation?: HarnessProviderContinuation;

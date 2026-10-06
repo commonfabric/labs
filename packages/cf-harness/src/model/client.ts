@@ -126,14 +126,19 @@ export interface HarnessModelUsage {
   estimateWithheldReason?: HarnessCostEstimateWithheldReason;
 }
 
+/** Reasons a usage record cannot carry a complete cost estimate. */
+export const HARNESS_COST_ESTIMATE_WITHHELD_REASONS = [
+  "unknown-model",
+  "missing-token-counts",
+  "missing-cache-detail",
+  "invalid-token-counts",
+  "inconsistent-token-counts",
+  "provider-pricing-unavailable",
+  "incomplete-estimates",
+] as const;
+
 export type HarnessCostEstimateWithheldReason =
-  | "unknown-model"
-  | "missing-token-counts"
-  | "missing-cache-detail"
-  | "invalid-token-counts"
-  | "inconsistent-token-counts"
-  | "provider-pricing-unavailable"
-  | "incomplete-estimates";
+  typeof HARNESS_COST_ESTIMATE_WITHHELD_REASONS[number];
 
 export const HARNESS_MODEL_USAGE_NUMERIC_FIELDS = [
   "inputTokens",

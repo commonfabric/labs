@@ -434,9 +434,76 @@ describe("PatternIndexClient", () => {
     expect(JSON.parse(requests[0].body)).toEqual({
       patternId: "pat-1",
       eventType: "run_succeeded",
+      did: signer.did(),
       note: "ran in the harness",
     });
     expect(response.ok).toBe(true);
+  });
+
+  it("binds the event author to its signer despite a supplied DID", async () => {
+    const { client, requests } = createClient([jsonResponse({ ok: true })]);
+    const input = {
+      patternId: "pat-1",
+      eventType: "thumbs_up" as const,
+      did: "did:key:zImpersonated",
+    };
+    await client.recordEvent(input);
+
+    const request = requests[0];
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
+    expect(JSON.parse(request.body)).toEqual({
+      patternId: "pat-1",
+      eventType: "thumbs_up",
+      did: signer.did(),
+    });
+  });
+
+  it("signs a retraction as its configured identity and sends only its declared fields", async () => {
+    const request = {
+      patternId: "A".repeat(43),
+      successorPatternId: "B".repeat(43),
+      reason: "Superseded by the corrected reader",
+      ownerDid: "did:key:zOther",
+      retractedBy: "did:key:zOther",
+      admin: true,
+    };
+    const receipt = {
+      patternId: request.patternId,
+      status: "retracted",
+      successorPatternId: request.successorPatternId,
+      retractionReason: request.reason,
+      retractedBy: signer.did(),
+      retractedAt: "2026-09-21T00:00:00.000Z",
+      discoverable: false,
+      changed: true,
+    };
+    const { client, requests } = createClient([jsonResponse(receipt)]);
+
+    expect(await client.retractPattern(request)).toEqual(receipt);
+    expect(requests).toHaveLength(1);
+    const sent = requests[0];
+    expect(sent.url).toBe("https://index.test/api/retractPattern");
+    expect(sent.method).toBe("POST");
+    expect(JSON.parse(sent.body)).toEqual({
+      patternId: request.patternId,
+      successorPatternId: request.successorPatternId,
+      reason: request.reason,
+    });
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(sent.url, {
+        method: sent.method,
+        headers: sent.headers,
+        body: sent.body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
   });
 
   it("posts a publication with its program and declared shapes", async () => {

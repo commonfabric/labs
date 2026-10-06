@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@astral/astral@*": "0.5.6",
     "jsr:@astral/astral@0.5.6": "0.5.6",
     "jsr:@cliffy/command@1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/flags@1.0.0-rc.8": "1.0.0-rc.8",
@@ -76,6 +77,8 @@
     "npm:@arizeai/openinference-semantic-conventions@^2.5.0": "2.5.0",
     "npm:@arizeai/openinference-vercel@^3.1.0": "3.1.0_@ai-sdk+otel@1.0.31__zod@4.4.3_@opentelemetry+api@1.9.1_ai@7.0.31__zod@4.4.3_zod@4.4.3",
     "npm:@babylonjs/core@9.23.0": "9.23.0",
+    "npm:@binclusive/tree-sitter-kotlin-wasm@0.1.0": "0.1.0",
+    "npm:@binclusive/tree-sitter-swift-wasm@0.1.0": "0.1.0",
     "npm:@codemirror/autocomplete@^6.20.3": "6.20.3",
     "npm:@codemirror/collab@6.1.1": "6.1.1",
     "npm:@codemirror/collab@^6.1.1": "6.1.1",
@@ -102,22 +105,22 @@
     "npm:@opentelemetry/api@^1.9.1": "1.9.1",
     "npm:@opentelemetry/context-async-hooks@^2.9.0": "2.9.0_@opentelemetry+api@1.9.1",
     "npm:@opentelemetry/core@^2.9.0": "2.9.0_@opentelemetry+api@1.9.1",
-    "npm:@opentelemetry/exporter-metrics-otlp-proto@0.220": "0.220.0_@opentelemetry+api@1.9.1",
     "npm:@opentelemetry/exporter-trace-otlp-http@0.220": "0.220.0_@opentelemetry+api@1.9.1",
     "npm:@opentelemetry/exporter-trace-otlp-proto@0.220": "0.220.0_@opentelemetry+api@1.9.1",
     "npm:@opentelemetry/resources@^2.9.0": "2.9.0_@opentelemetry+api@1.9.1",
-    "npm:@opentelemetry/sdk-metrics@^2.9.0": "2.9.0_@opentelemetry+api@1.9.1",
     "npm:@opentelemetry/sdk-trace-base@^2.9.0": "2.9.0_@opentelemetry+api@1.9.1",
     "npm:@opentelemetry/sdk-trace-web@^2.9.0": "2.9.0_@opentelemetry+api@1.9.1",
     "npm:@resvg/resvg-js@2.6.2": "2.6.2",
     "npm:@scalar/hono-api-reference@~0.11.11": "0.11.11_hono@4.12.31",
     "npm:@scure/bip39@^2.2.0": "2.2.0",
+    "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0": "0.7.0",
     "npm:@types/d3-array@^3.2.2": "3.2.2",
     "npm:@types/d3-scale@^4.0.9": "4.0.9",
     "npm:@types/d3-shape@^3.1.8": "3.1.8",
     "npm:@types/leaflet@^1.9.21": "1.9.21",
     "npm:@types/react-dom@19.2.5": "19.2.5_@types+react@19.2.18",
     "npm:@types/react@19.2.18": "19.2.18",
+    "npm:@types/ws@8.18.1": "8.18.1",
     "npm:@types/ws@^8.18.1": "8.18.1",
     "npm:@viz-js/viz@3.26.0": "3.26.0",
     "npm:@xyflow/react@^12.11.5": "12.11.5_@types+react@19.2.18_@types+react-dom@19.2.5__@types+react@19.2.18_react@19.2.8_react-dom@19.2.8__react@19.2.8",
@@ -134,6 +137,7 @@
     "npm:esbuild@~0.25.12": "0.25.12",
     "npm:esbuild@~0.25.5": "0.25.12",
     "npm:fake-indexeddb@6.0.0": "6.0.0",
+    "npm:fflate@0.8.3": "0.8.3",
     "npm:fuse-native@*": "2.2.6",
     "npm:hash-wasm@^4.12.0": "4.12.0",
     "npm:hono-pino@~0.10.3": "0.10.3_hono@4.12.31_pino@10.3.1",
@@ -153,9 +157,13 @@
     "npm:ses@^2.2.0": "2.2.0",
     "npm:source-map-js@^1.2.1": "1.2.1",
     "npm:stoker@^2.0.1": "2.0.1_@hono+zod-openapi@1.5.1__hono@4.12.31__zod@4.4.3_hono@4.12.31",
+    "npm:tree-sitter-bash@0.25.1": "0.25.1",
+    "npm:tree-sitter-python@0.25.0": "0.25.0",
     "npm:turndown@^7.2.4": "7.2.4",
     "npm:typescript@6.0.3": "6.0.3",
     "npm:unicode-case-folding@1.1.1": "1.1.1",
+    "npm:web-tree-sitter@0.26.12": "0.26.12",
+    "npm:ws@8.22.0": "8.22.0",
     "npm:ws@^8.21.3": "8.21.3",
     "npm:zod@^4.4.3": "4.4.3"
   },
@@ -585,6 +593,12 @@
     },
     "@babylonjs/core@9.23.0": {
       "integrity": "sha512-FpDaTPx485J1H0AEJpoJ785Z1CwCkEPNnZFu7WzHTy0ByGCy75bkZZILh4QFU4LLnzK1iuHwUfecCguATIeKSA=="
+    },
+    "@binclusive/tree-sitter-kotlin-wasm@0.1.0": {
+      "integrity": "sha512-eCe1sUGBdSVaOxCyb30KyXCx8wawg3CWAN+w9dwpRp5Ro4PPxViF5cKEXU4di/laaVpWgnqJNFMznFb+UXPaXw=="
+    },
+    "@binclusive/tree-sitter-swift-wasm@0.1.0": {
+      "integrity": "sha512-QZr3UahyLhPUZtBmcleKzx/TTWT4dcXv9Xb8OeGrubtqsu1aNbaBYrlzeiM4XZzmm/Q+YDQEnk7/rg15SGZU1A=="
     },
     "@codemirror/autocomplete@6.20.3": {
       "integrity": "sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==",
@@ -1027,29 +1041,6 @@
         "@opentelemetry/semantic-conventions@1.43.0"
       ]
     },
-    "@opentelemetry/exporter-metrics-otlp-http@0.220.0_@opentelemetry+api@1.9.1": {
-      "integrity": "sha512-Yqt3RBw/bRVncaE9qIIhk4WfjbAQqXuP9FgAaU+IKPndnLEp/cUqZlSC324+bpmduRz7DoTjig8Ub0PeILWXUA==",
-      "dependencies": [
-        "@opentelemetry/api",
-        "@opentelemetry/core@2.9.0_@opentelemetry+api@1.9.1",
-        "@opentelemetry/otlp-exporter-base",
-        "@opentelemetry/otlp-transformer",
-        "@opentelemetry/resources",
-        "@opentelemetry/sdk-metrics"
-      ]
-    },
-    "@opentelemetry/exporter-metrics-otlp-proto@0.220.0_@opentelemetry+api@1.9.1": {
-      "integrity": "sha512-lyO+IQBdSvqHN/ZOW/OzrSWemtfD+HgWngn+HBNLhjy0YrCQQTz0OE/kSekH2Pl340dn9DWzhqHdz5Eftr+HLA==",
-      "dependencies": [
-        "@opentelemetry/api",
-        "@opentelemetry/core@2.9.0_@opentelemetry+api@1.9.1",
-        "@opentelemetry/exporter-metrics-otlp-http",
-        "@opentelemetry/otlp-exporter-base",
-        "@opentelemetry/otlp-transformer",
-        "@opentelemetry/resources",
-        "@opentelemetry/sdk-metrics"
-      ]
-    },
     "@opentelemetry/exporter-trace-otlp-http@0.220.0_@opentelemetry+api@1.9.1": {
       "integrity": "sha512-/+ExB3lRkf+erv4PnoywyL7RHKITidxtUpUTS55k7OQ0dB42S7gEF1gry7swb9MSm1hYLUhJg4QQh9W8SpwwqA==",
       "dependencies": [
@@ -1283,6 +1274,14 @@
     },
     "@standard-schema/spec@1.1.0": {
       "integrity": "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="
+    },
+    "@tree-sitter-grammars/tree-sitter-toml@0.7.0": {
+      "integrity": "sha512-873Kl518Qm5ghbWadISY41rwFjee0v+2bU4twwvAw2VAJcWwj2vBo3F3hOCXfbqHaFiqc4qh6eLhkMl2YZJS0g==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
     },
     "@types/d3-array@3.2.2": {
       "integrity": "sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw=="
@@ -1995,6 +1994,9 @@
         "web-streams-polyfill"
       ]
     },
+    "fflate@0.8.3": {
+      "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="
+    },
     "finalhandler@2.1.1": {
       "integrity": "sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA==",
       "dependencies": [
@@ -2345,6 +2347,9 @@
     "negotiator@1.0.0": {
       "integrity": "sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg=="
     },
+    "node-addon-api@8.9.2": {
+      "integrity": "sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg=="
+    },
     "node-domexception@1.0.0": {
       "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
       "deprecated": true
@@ -2683,6 +2688,22 @@
     "toidentifier@1.0.1": {
       "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA=="
     },
+    "tree-sitter-bash@0.25.1": {
+      "integrity": "sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
+    "tree-sitter-python@0.25.0": {
+      "integrity": "sha512-eCmJx6zQa35GxaCtQD+wXHOhYqBxEL+bp71W/s3fcDMu06MrtzkVXR437dRrCrbrDbyLuUDJpAgycs7ncngLXw==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
     "ts-algebra@2.0.0": {
       "integrity": "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw=="
     },
@@ -2734,6 +2755,9 @@
     "web-streams-polyfill@3.3.3": {
       "integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw=="
     },
+    "web-tree-sitter@0.26.12": {
+      "integrity": "sha512-fvqTNZQBGUgUgfP0mHw+iHf9Yf6bRQrp0A3pSf2v/hSKxkT1beCoIWoLVmlPL7O6dmySfSb/t1aJoJvrgTRStw=="
+    },
     "which@2.0.2": {
       "integrity": "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==",
       "dependencies": [
@@ -2746,6 +2770,9 @@
     },
     "ws@8.21.3": {
       "integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="
+    },
+    "ws@8.22.0": {
+      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="
     },
     "yaml@2.9.0": {
       "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
@@ -2841,20 +2868,11 @@
           "npm:typescript@6.0.3"
         ]
       },
-      "packages/background-piece-service": {
-        "dependencies": [
-          "npm:@opentelemetry/api@^1.9.1",
-          "npm:@opentelemetry/context-async-hooks@^2.9.0",
-          "npm:@opentelemetry/exporter-metrics-otlp-proto@0.220",
-          "npm:@opentelemetry/exporter-trace-otlp-proto@0.220",
-          "npm:@opentelemetry/resources@^2.9.0",
-          "npm:@opentelemetry/sdk-metrics@^2.9.0",
-          "npm:@opentelemetry/sdk-trace-base@^2.9.0"
-        ]
-      },
       "packages/cf-harness": {
         "dependencies": [
-          "jsr:@db/sqlite@0.13.0"
+          "jsr:@db/sqlite@0.13.0",
+          "npm:entities@8",
+          "npm:marked@^18.0.6"
         ]
       },
       "packages/cli": {
@@ -2863,9 +2881,15 @@
           "jsr:@cliffy/table@1.0.0-rc.8",
           "jsr:@db/sqlite@0.13.0",
           "jsr:@std/fmt@~1.0.2",
+          "npm:@binclusive/tree-sitter-kotlin-wasm@0.1.0",
+          "npm:@binclusive/tree-sitter-swift-wasm@0.1.0",
+          "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0",
           "npm:entities@8",
           "npm:marked@^18.0.6",
-          "npm:typescript@6.0.3"
+          "npm:tree-sitter-bash@0.25.1",
+          "npm:tree-sitter-python@0.25.0",
+          "npm:typescript@6.0.3",
+          "npm:web-tree-sitter@0.26.12"
         ]
       },
       "packages/connectors/agents/connector": {
@@ -2924,7 +2948,10 @@
           "jsr:@denosaurs/plug@^1.1.0",
           "npm:@codemirror/collab@^6.1.1",
           "npm:@codemirror/state@^6.7.1",
-          "npm:@opentelemetry/api@^1.9.1"
+          "npm:@opentelemetry/api@^1.9.1",
+          "npm:@types/ws@8.18.1",
+          "npm:fflate@0.8.3",
+          "npm:ws@8.22.0"
         ]
       },
       "packages/patterns": {

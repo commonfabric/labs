@@ -34,6 +34,7 @@
  * direction for a system nothing should gate on.
  */
 
+import { duration } from "./test-selection/duration.ts";
 import { join } from "@std/path";
 import { ulid } from "@std/ulid";
 import {
@@ -47,6 +48,7 @@ import {
   testIdentityKey,
   testIdentityOfKey,
 } from "@commonfabric/test-support/records";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   ciSubmissionsPrefix,
   storeBucket,
@@ -54,6 +56,7 @@ import {
 } from "./test-records-config.ts";
 import { rollupShards } from "./test-records-compact.ts";
 import { calibrate, laneObservations } from "./test-selection/calibrate.ts";
+import { calibrationHealth, healthLines } from "./test-selection/health.ts";
 import {
   type AggregateState,
   buildManifest,
@@ -68,8 +71,14 @@ import {
   surfaceName,
   type Unplaced,
 } from "./test-selection/build.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
-import { publishableBaselines } from "./test-selection/baselines.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  unitProcesses,
+  wholeUnits,
+} from "./test-topology.ts";
+import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
+import { measuredCostLines } from "./test-selection/coverage.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   fetchManifest,
@@ -84,6 +93,7 @@ import {
 import {
   type CoverageBaseline,
   declaredSchema,
+  type Manifest,
   MANIFEST_SCHEMA_VERSION,
   serializeManifest,
   writtenAhead,
@@ -125,6 +135,11 @@ export interface StoreAccess {
    * A rollup is a read optimization rather than the record of its day —
    * an object arriving after its shard is written stays in the raw area
    * alone — so a pair taken this way keeps only what the rollup held.
+   * That is also what makes a rollup safe to give up on: a day whose
+   * shards will not read is read from its raw objects instead, which is
+   * how a day with no rollup at all is read, and no record of that day
+   * is lost by it. What it costs is in
+   * `docs/development/test-selection.md`.
    */
   rollupShards(day: string): Promise<string[] | undefined>;
 
@@ -165,6 +180,16 @@ export function liveStore(bucket: string): StoreAccess {
     token: writeToken,
   };
 }
+
+/**
+ * What a run says where it has read part of its window and will not
+ * publish from that. A manifest going stale degrades selection slowly,
+ * where one built from part of a window scores every identity in the
+ * part it missed as though it had not run.
+ */
+const PARTIAL_WINDOW =
+  "test selection: refusing to publish from part of the window. The " +
+  "previous manifest is still the newest one.";
 
 /** How many objects are fetched at once. */
 const DEFAULT_CONCURRENCY = 24;
@@ -295,7 +320,8 @@ async function listSubmissions(
   // one every lane obeys. The run ends instead, and the previous manifest
   // stays newest.
   for (const day of ciDays) {
-    names.push(...await store.list(`${ciSubmissionsPrefix()}/v1/${day}/`));
+    const listed = await store.list(`${ciSubmissionsPrefix()}/v1/${day}/`);
+    for (const name of listed) names.push(name);
   }
   const local = `${storePrefix()}/submissions/local/`;
   for (const name of await store.list(local)) {
@@ -499,8 +525,9 @@ function refusal(
     ahead === undefined ? [] : [ahead]
   );
   if (shapes.length > 0) {
+    const highest = maxOf(shapes);
     lines.push(
-      `deploy a publisher that reads shape ${Math.max(...shapes)} or ` +
+      `deploy a publisher that reads shape ${highest} or ` +
         `above, which is the highest shape any of these is written in`,
     );
   }
@@ -521,23 +548,32 @@ function refusal(
 }
 
 /**
- * The coverage baselines the next manifest carries: what the newest one
- * holds, brought forward, plus whatever the `main` runs since then
- * published. Reading the previous manifest is one public read and is
- * what keeps a publish from asking about every run in the window.
+ * The newest manifest, which the one this run creates follows. Its
+ * coverage baselines are brought forward, and its charges are what this
+ * run's are compared with. The objects a run folds are the ones no
+ * earlier run folded, so the baselines they hold are added to its
+ * baselines rather than standing in for them.
+ *
+ * Throws where the store could not be asked. The objects those baselines
+ * came from are ones no later run folds again, so a manifest published
+ * without them would hold none of them, and neither would any manifest
+ * after it. Where the store answers that it holds no manifest this
+ * publisher can read, there is nothing to follow: the baselines start
+ * empty, and the ones in objects earlier runs folded come back only from
+ * a `--bootstrap`, which folds the window again.
  */
-export async function liveBaselines(
+export async function livePrevious(
   now: Date,
   fetch?: typeof globalThis.fetch,
-): Promise<CoverageBaseline[]> {
+): Promise<Manifest | undefined> {
   const previous = await fetchManifest({
     at: now.toISOString(),
     ...(fetch === undefined ? {} : { fetch }),
   });
-  return await publishableBaselines(
-    now,
-    previous.manifest?.coverageBaselines ?? [],
-  );
+  if (previous.unreachable) {
+    throw new Error(`reading the previous manifest failed: ${previous.absent}`);
+  }
+  return previous.manifest;
 }
 
 /**
@@ -561,7 +597,7 @@ export async function publish(
   store: StoreAccess = liveStore(storeBucket()),
   now: Date = new Date(),
   topology: () => Promise<readonly Suite[]> = () => loadTopology(),
-  baselines: (now: Date) => Promise<CoverageBaseline[]> = liveBaselines,
+  previousManifest: (now: Date) => Promise<Manifest | undefined> = livePrevious,
 ): Promise<number> {
   const options = parseArgs(args);
   if (options === undefined) {
@@ -575,6 +611,18 @@ export async function publish(
   const startedAt = now;
   const today = startedAt.toISOString().slice(0, 10);
   const partitions = dayPartitions(startedAt, options.days);
+  let previous: Manifest | undefined;
+  try {
+    previous = await previousManifest(startedAt);
+  } catch (error) {
+    console.warn(`test selection: ${error}`);
+    console.warn(
+      "test selection: refusing to publish without the coverage baselines " +
+        "the previous manifest carries. The previous manifest is still the " +
+        "newest one.",
+    );
+    return 1;
+  }
   let aggregate: AggregateState;
   if (options.bootstrap) {
     aggregate = emptyAggregate(today);
@@ -618,6 +666,7 @@ export async function publish(
   const resolver = await loadAliasResolver();
   const fold = new Fold(aggregate, resolver, today);
   const runs = new Set<string>();
+  const found: { attempt: number; baseline: CoverageBaseline }[] = [];
   let commit = "unknown";
 
   const noteReport = (report: StoredReport): void => {
@@ -625,6 +674,10 @@ export async function publish(
       const id = group.context?.ci?.workflowRunId;
       if (id !== undefined) runs.add(id);
       if (group.context?.branch === "main") commit = group.context.commit;
+      const attempt = group.context?.ci?.runAttempt ?? 0;
+      for (const baseline of baselinesOf(group)) {
+        found.push({ attempt, baseline });
+      }
     }
   };
 
@@ -679,18 +732,33 @@ export async function publish(
       console.warn(
         `test selection: reading the rollup of ${date} failed: ${error}`,
       );
+      // A failure that left part of the day in the fold is the one this
+      // cannot read its way out of: reading the day again, by any route,
+      // would count that part twice.
+      if (!fold.intact) {
+        console.warn(PARTIAL_WINDOW);
+        return 1;
+      }
+      // Ending the run here would end every later one the same way: the
+      // store holds create and nothing else, so a shard that will not
+      // read stays where it is, and the day is never recorded as folded.
+      // The day's raw objects are all still there, so it is read the long
+      // way instead. The pair is left open rather than settled, so later
+      // runs read the day the same way.
       console.warn(
-        "test selection: refusing to publish from part of the window. " +
-          "The previous manifest is still the newest one.",
+        `test selection: reading ${date} from its raw objects instead, ` +
+          `as a day with no rollup is read`,
       );
-      return 1;
+      ciDays.push(date);
+      continue;
     }
     fold.markSettled(CI_SOURCE, date);
     settled++;
   }
   if (rollups.size > 0) {
     console.log(
-      `test selection: folded ${settled} day(s) from their rollups`,
+      `test selection: folded ${settled} of ${rollups.size} day(s) from ` +
+        `their rollups`,
     );
   }
 
@@ -701,10 +769,7 @@ export async function publish(
     listed = await listSubmissions(store, ciDays, partitions);
   } catch (error) {
     console.warn(`test selection: listing the submissions failed: ${error}`);
-    console.warn(
-      "test selection: refusing to publish from part of the window. The " +
-        "previous manifest is still the newest one.",
-    );
+    console.warn(PARTIAL_WINDOW);
     return 1;
   }
   const fresh = listed.filter((name) => !fold.knows(name));
@@ -736,10 +801,7 @@ export async function publish(
     }
   } catch (error) {
     console.warn(`test selection: reading a submission failed: ${error}`);
-    console.warn(
-      "test selection: refusing to publish from part of the window. The " +
-        "previous manifest is still the newest one.",
-    );
+    console.warn(PARTIAL_WINDOW);
     return 1;
   }
   const folded = fold.finish();
@@ -763,6 +825,7 @@ export async function publish(
   const states = new Map(
     [...folded.states].filter(([key]) => placed.has(key)),
   );
+  const observed = laneObservations(folded.aggregate.lanes ?? []);
 
   const manifest = buildManifest({
     states,
@@ -775,15 +838,20 @@ export async function publish(
     // What a lane costs beyond the tests it runs, from what lanes have
     // spent. Without it the packer charges nothing for opening a
     // capability, starting a runner, or loading a module, and a lane
-    // packed to its budget runs past the bound it is killed at.
-    calibration: calibrate(
-      laneObservations(folded.aggregate.lanes ?? []),
-    ),
+    // packed to its budget runs past the bound it is packed to finish
+    // inside.
+    calibration: calibrate(observed),
   });
-  // What the coverage gate compares a pull request against. It comes from
-  // outside the fold, because the counts are published by the full run on
-  // `main` rather than recorded as tests.
-  manifest.coverageBaselines = await baselines(startedAt);
+  // What the coverage gate compares a pull request against. The full run on
+  // `main` writes the counts as measurements, which the fold passes over,
+  // so they are collected beside it.
+  // Ordered by attempt, stably, so that of two attempts stamped with one
+  // start the later is the one kept.
+  manifest.coverageBaselines = mergeBaselines(
+    previous?.coverageBaselines ?? [],
+    found.sort((a, b) => a.attempt - b.attempt).map(({ baseline }) => baseline),
+    startedAt,
+  );
   manifest.unavailable = suites.flatMap((suite) =>
     suite.unavailable.map((entry) => ({
       suite: suite.id,
@@ -794,10 +862,14 @@ export async function publish(
       reason: entry.reason,
     }))
   );
+  const capabilities = capabilitiesBySuite(suites);
+  const processes = unitProcesses(suites);
   const reference = plan({
     manifest,
     mandatory: new Map(),
-    capabilities: capabilitiesBySuite(suites),
+    capabilities,
+    wholeUnits: wholeUnits(suites),
+    processes,
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every
@@ -814,9 +886,23 @@ export async function publish(
           .map((s) => JSON.stringify(s.entry.test)),
       })),
   }));
+  // Whether the model this manifest carries still describes the lanes.
+  // Nothing obeys it, so the manifest is published whatever it says, and
+  // the dashboard's test selection tile is what shows it.
+  manifest.health = calibrationHealth({
+    manifest,
+    previous,
+    capabilities,
+    processes,
+    observations: observed,
+  });
 
+  for (const line of healthLines(manifest.health)) {
+    console.log(`test selection: ${line}`);
+  }
   summarize(
     manifest,
+    suites,
     reference,
     folded.observations,
     unplaced,
@@ -893,6 +979,7 @@ export function namingSurfaces(keys: readonly string[]): string {
 /** What the job summary says: the shape of what this run decided. */
 function summarize(
   manifest: ReturnType<typeof buildManifest>,
+  topology: readonly Suite[],
   reference: ReturnType<typeof plan>,
   observations: number,
   unplaced: Unplaced,
@@ -908,23 +995,30 @@ function summarize(
   // from different records: a lane writes one per capability it opens,
   // and a pair per batch, and a lane killed part way through a batch
   // leaves the pair unmatched and contributes a setup cost alone.
-  const suites = Object.keys(manifest.calibration.suites).length;
+  const withCoverage = Object.keys(
+    manifest.calibration.suitesWithCoverage ?? {},
+  );
+  const suites = new Set([
+    ...Object.keys(manifest.calibration.suites),
+    ...withCoverage,
+  ]).size;
+  const measured = withCoverage.length;
   console.log(
     `test selection: the cost model holds ${suites} suite(s) and ` +
       `${Object.keys(manifest.calibration.setupCost).length} ` +
-      `capability setup(s)`,
+      `capability setup(s), and ${measured} of those suite(s) have a ` +
+      `cost with coverage on`,
   );
-  // A suite's own figures are what a lane is charged for holding the
-  // suite and for opening each of its units, so a model with no suite in
-  // it charges nothing for either and a lane packed to its budget runs
-  // past the bound it is killed at. A capability setup is measured from
-  // a lane's own records and is unaffected, and the prologue is a fixed
-  // dial rather than a measurement, so it is there either way; this
-  // names the suites rather than everything a lane is charged. Four
-  // things end here — no
-  // lane has run, none recorded what it measured, the fold declines the
-  // records of the ones that did, or the fold stopped reading a figure
-  // it used to read — and the empty map alone says none of them.
+  // A suite's own figures are what a lane is charged for holding the suite and
+  // for opening each of its units, so a model with no suite in it charges
+  // nothing for either and a lane packed to its budget runs past the bound it
+  // is packed to finish inside. A capability setup is measured from a lane's
+  // own records and is unaffected, and the prologue is a fixed dial rather than
+  // a measurement, so it is there either way; this names the suites rather than
+  // everything a lane is charged. Four things end here — no lane has run, none
+  // recorded what it measured, the fold declines the records of the ones that
+  // did, or the fold stopped reading a figure it used to read — and the empty
+  // map alone says none of them.
   if (suites === 0) {
     console.log(
       `test selection: no suite has a measured cost in the last ` +
@@ -943,6 +1037,9 @@ function summarize(
           `fitted without them.`,
       );
     }
+  }
+  for (const line of measuredCostLines(manifest, topology)) {
+    console.log(`test selection: ${line}`);
   }
   if (unplaced.suiteLevel.length > 0) {
     console.log(
@@ -1004,13 +1101,15 @@ function summarize(
     console.log(
       `test selection: lane ${lane.lane} would run ` +
         `${lane.selections.length} test(s) in ` +
-        `${lane.projectedSeconds.toFixed(1)}s of ${LANE_BUDGET_SECONDS}s`,
+        `${duration(lane.projectedSeconds)} of ${
+          duration(LANE_BUDGET_SECONDS)
+        }`,
     );
   }
   if (times.length > 0) {
-    const spread = Math.max(...times) - Math.min(...times);
+    const spread = maxOf(times) - minOf(times);
     console.log(
-      `test selection: ${LANES} lanes, spread ${spread.toFixed(1)}s`,
+      `test selection: ${LANES} lanes, spread ${duration(spread)}`,
     );
   }
   const selected = reference.lanes.reduce(
@@ -1025,7 +1124,7 @@ function summarize(
   const { named, rest } = costliestUnschedulable(reference.unschedulable);
   for (const entry of named) {
     console.log(
-      `test selection: unschedulable, ${entry.cost.toFixed(1)}s: ` +
+      `test selection: unschedulable, ${duration(entry.cost)}: ` +
         JSON.stringify(entry.test),
     );
   }

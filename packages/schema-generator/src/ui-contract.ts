@@ -12,12 +12,12 @@ type EmittedUiContract = NonNullable<
 
 /**
  * Read the UI contract a caller attached to `typeNode`, falling back to the
- * node the current context is formatting. Synthetic nodes are looked up under
- * their original as well.
+ * node the current context is formatting, or whose hints it applies. Synthetic
+ * nodes are looked up under their original as well.
  */
 export function getUiContractHint(
   context: GenerationContext,
-  typeNode: ts.TypeNode | undefined = context.typeNode,
+  typeNode: ts.TypeNode | undefined = context.typeNode ?? context.hintsNode,
 ): UiContractHint | undefined {
   if (!context.schemaHints || !typeNode) {
     return undefined;

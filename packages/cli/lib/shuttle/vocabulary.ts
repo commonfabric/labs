@@ -35,6 +35,7 @@ import type { readWish } from "../wish.ts";
 import { type Announce } from "./announce.ts";
 import { type HeldConnection } from "./connection.ts";
 import { type Editing } from "./editor.ts";
+import { type ExternalLocation } from "./external.ts";
 import { resolveHandle } from "./handles.ts";
 import type { ValueLens } from "./lens.ts";
 import { type ListingDeps, type RowKind } from "./listing.ts";
@@ -108,6 +109,16 @@ export interface Shuttle {
 
   /** Where shuttle stands, which `cd` moves and every other verb reads. */
   readonly place: CurrentPlace;
+
+  /**
+   * The one working position outside the fabric, which `xcd` moves.
+   *
+   * It stands beside the place rather than inside it because the two move
+   * independently: the fabric is the ambient plane, so a bare relative
+   * operand is read against the place and never against this one
+   * (`external.ts`).
+   */
+  readonly external: ExternalLocation;
 
   /** The one connection this process holds. */
   readonly connection: HeldConnection;
@@ -272,8 +283,8 @@ export interface VerbDeps {
    *
    * The rule is what a caller can check, and it is checked: a case cancels
    * from inside each read there is and at each line's first suspension, and
-   * asserts that nothing was read afterwards (`shuttle-verbs.test.ts`). That
-   * observes the property instead of enumerating the boundaries, so a
+   * asserts that nothing was read afterwards (`shuttle-verbs.serial.test.ts`).
+   * That observes the property instead of enumerating the boundaries, so a
    * boundary nobody thought of fails it too.
    *
    * What it cannot stop is a read already sent: the runtime's reads take no
@@ -338,7 +349,7 @@ export type Ran<T> = { readonly kind: "ran"; readonly answer: T };
  * So this is a guarantee against the edit somebody makes, not against the
  * edit somebody constructs, and the cases are what cover the second: a line
  * cancelled at its first suspension reaches this function before its read,
- * and every verb that reads has such a case (`shuttle-verbs.test.ts`).
+ * and every verb that reads has such a case (`shuttle-verbs.serial.test.ts`).
  *
  * There are two checks and not one, and the second is what a caller relies on
  * without knowing it. The first stops the act; the second stops its *answer*,

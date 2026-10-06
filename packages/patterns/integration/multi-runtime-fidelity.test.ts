@@ -14,10 +14,10 @@
 import { assert, assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
-import { Identity } from "@commonfabric/identity";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { isLinkRef } from "@commonfabric/data-model/cell-rep";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { Identity } from "@commonfabric/identity";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   MultiRuntimeHarness,
@@ -78,7 +78,7 @@ describe("multi-runtime harness value fidelity", () => {
     const counts = await alice.loggerCounts();
     assert(
       typeof counts.total === "number",
-      `no total in ${toCompactDebugString(counts)}`,
+      debugStr`no total in $quote,long${counts}`,
     );
     assert(
       Object.keys(counts).length > 1,
@@ -98,11 +98,11 @@ describe("multi-runtime harness value fidelity", () => {
     assertEquals(
       whole.weird,
       41,
-      `weird came back as ${toCompactDebugString(whole.weird)}`,
+      debugStr`weird came back as $quote${whole.weird}`,
     );
     assert(
       isLinkRef(whole.setWeird),
-      `setWeird came back as ${toCompactDebugString(whole.setWeird)}, ` +
+      debugStr`setWeird came back as $quote,long${whole.setWeird}, ` +
         "not the link that reaches it",
     );
     // The containers around it stay containers: the same read annotates each
@@ -110,7 +110,7 @@ describe("multi-runtime harness value fidelity", () => {
     // schema asked for.
     assert(
       isObjectNotArray(whole.$UI) && whole.$UI.name === "div",
-      `the view came back as ${toCompactDebugString(whole.$UI)}`,
+      debugStr`the view came back as $quote,long${whole.$UI}`,
     );
   });
 

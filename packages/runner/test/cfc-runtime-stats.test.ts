@@ -118,6 +118,8 @@ describe("CFC runtime stats", () => {
       overlapWildcardQueries: 0,
       overlapConcreteQueries: 0,
       authoritativeCoverCalls: 0,
+      stagedReferenceDerivations: 0,
+      stagedReferenceCacheHits: 0,
       flowTemplateEntriesMinted: 0,
       flowTemplateContainers: 0,
       cfcPreparedTx: 0,
@@ -169,7 +171,7 @@ describe("CFC runtime stats", () => {
       },
     );
     preparedTx.prepareCfc();
-    expect((await preparedTx.commit()).ok).toBeDefined();
+    expect((await preparedTx.commit().settled).ok).toBeDefined();
     expect(preparedFlushCount).toBe(1);
 
     const rejectTx = runtime.edit();
@@ -191,7 +193,7 @@ describe("CFC runtime stats", () => {
     );
     rejectCell.set({ value: "blocked" });
     expect(rejectTx.prepareCfc()).toBe("");
-    expect((await rejectTx.commit()).error?.message).toContain(
+    expect((await rejectTx.commit().settled).error?.message).toContain(
       "unsupported trust-sensitive claim collection",
     );
 
@@ -215,7 +217,7 @@ describe("CFC runtime stats", () => {
     invalidationCell.set({ secret: "initial" });
     invalidationTx.prepareCfc();
     invalidationCell.set({ secret: "mutated" });
-    expect((await invalidationTx.commit()).error?.message).toContain(
+    expect((await invalidationTx.commit().settled).error?.message).toContain(
       "read-after-prepare",
     );
 
@@ -246,7 +248,7 @@ describe("CFC runtime stats", () => {
       },
     );
     sinkTx.prepareCfc();
-    expect((await sinkTx.commit()).ok).toBeDefined();
+    expect((await sinkTx.commit().settled).ok).toBeDefined();
     expect(flushCount).toBe(1);
 
     expect(runtime.getCfcStats()).toEqual({
@@ -265,6 +267,8 @@ describe("CFC runtime stats", () => {
       overlapWildcardQueries: 0,
       overlapConcreteQueries: 0,
       authoritativeCoverCalls: 0,
+      stagedReferenceDerivations: 0,
+      stagedReferenceCacheHits: 0,
       flowTemplateEntriesMinted: 0,
       flowTemplateContainers: 0,
       cfcPreparedTx: 3,

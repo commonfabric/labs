@@ -66,6 +66,10 @@ describe("CFC label introspection evaluator (inv-12 Stage 2)", () => {
       // Payload paths are value-relative (§4.6.5): "/value/body" is the
       // ENVELOPE spelling of payload "/body" and normalizes to it.
       expect(parseConfLabelTargetPath("/value/body")).toEqual(["body"]);
+      // So a root payload field named `value` is reached through the prefix,
+      // and so is one named `cfc`, which the unprefixed spelling cannot name.
+      expect(parseConfLabelTargetPath("/value/value")).toEqual(["value"]);
+      expect(parseConfLabelTargetPath("/value/cfc")).toEqual(["cfc"]);
     });
 
     it("refuses malformed pointers", () => {

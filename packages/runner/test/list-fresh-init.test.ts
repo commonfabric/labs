@@ -14,7 +14,7 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -58,22 +58,15 @@ class SM extends StorageManager {
   private constructor(o: Options, s: MemoryV2Server.Server) {
     super(o, new F(() => s));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
 // Each call builds an isolated runtime over a fresh in-memory server, so every
 // run is genuinely a first run (no durable carryover to resume against).
 function runtime() {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  const server = newSharedServer();
   const sm = SM.make(signer, server);
   const rt = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -153,7 +146,7 @@ async function runFresh(
       tx0,
     );
     rt.run(tx0, compiled, { items }, rc);
-    await tx0.commit();
+    await tx0.commit().settled;
 
     const trajectory: (unknown[] | null)[] = [];
     const cancel = rc.key("out").sink((v) => {

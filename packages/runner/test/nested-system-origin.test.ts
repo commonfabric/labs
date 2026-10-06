@@ -116,13 +116,13 @@ describe("a child's origin", () => {
       ...(origin === undefined ? {} : { sourceOrigin: origin }),
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await run.pull();
     await runtime.idle();
 
     const spawnTx = runtime.edit();
     run.withTx(spawnTx).key(verb).send({});
-    expect((await spawnTx.commit()).error).toBeUndefined();
+    expect((await spawnTx.commit().settled).error).toBeUndefined();
     await run.pull();
     await runtime.idle();
     await run.pull();
@@ -132,9 +132,14 @@ describe("a child's origin", () => {
       // deno-lint-ignore no-explicit-any
       .get() as any[];
     expect(spawnedLink.getAsNormalizedFullLink().space).not.toBe(space);
-    const spawned = runtime.getCellFromLink(
+    // Provenance belongs to the resolved child; inspecting it requires a
+    // readable projection rather than the list's opaque reference schema.
+    const spawnedHandle = runtime.getCellFromLink(
       spawnedLink.getAsNormalizedFullLink(),
+      {},
     );
+    await spawnedHandle.sync();
+    const spawned = spawnedHandle.resolveAsCell();
     await spawned.sync();
     return {
       nested: getPatternSource(nested),

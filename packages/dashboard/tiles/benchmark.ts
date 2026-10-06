@@ -43,7 +43,9 @@
  * it works when artifacts cannot be read. Without usable data, the dashboard
  * keeps the last completed color and values while a fetch runs, and reads
  * "benchmark data unavailable" after an empty fetch. A failed fetch keeps the
- * last-known processor lines gray and names the reason.
+ * last-known processor lines gray and names the reason. A run list whose
+ * newest run is older than the newest run already collected is a failed fetch
+ * named "run list out of date".
  *
  * Every collection pages the run list, once a minute, which is the cadence the
  * run state needs. The artifact history behind the tile moves with the runs
@@ -63,6 +65,7 @@
  * tile's collection keeps their history warm.
  */
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Ctx, Route, Status, Tile, TileView } from "../types.ts";
 import {
   isCalibrationKey,
@@ -89,6 +92,7 @@ import {
 } from "../ci-job-history.ts";
 import {
   concDot,
+  type DatedRun,
   durationTag,
   escapeHtml,
   friendlyError,
@@ -98,8 +102,12 @@ import {
   humanSpan,
   jsonFromZip,
   multiSparkline,
+  type GitHubJson,
+  isStaleRunList,
   performanceGithub,
   performanceGithubDownload,
+  runArtifactId,
+  STALE_RUNS_ERROR,
 } from "../lib.ts";
 import {
   BENCH_HEADLINE_MAX_AGE_HOURS,
@@ -150,8 +158,7 @@ const COLLECTION_BUCKET_MS = ciHistoryBucketMs(CI_HISTORY_MIN_DAYS);
 const BENCHMARK_REFRESH_MS = 30 * 60_000;
 const BENCHMARK_FETCH_CONCURRENCY = 8;
 
-interface BenchmarkGitHub {
-  json<T>(path: string, token: string): Promise<T>;
+interface BenchmarkGitHub extends GitHubJson {
   download(path: string, token: string): Promise<GitHubDownload>;
 }
 
@@ -186,11 +193,6 @@ interface Run {
   created_at: string;
   conclusion: string | null;
 }
-interface Artifact {
-  id: number;
-  name: string;
-  expired: boolean;
-}
 
 const benchmarkStore = new BenchmarkHistoryStore();
 // Assembled by collect() for the /bench drill-down: each benchmark key with its
@@ -211,11 +213,12 @@ interface BenchmarkSeries {
 }
 
 let snapshot: BenchmarkSeries[] = [];
-// The last benchmarks.yml run list a collection paged, which the drill-down reads
-// to name the run its rerun hand-off points at. A collection replaces it only on
-// a fetch that worked, so the hand-off keeps naming the failed run while a later
-// fetch is in flight or has failed. The tile itself reads the list its own
-// collection fetched, never this one.
+// The last benchmarks.yml run list a collection paged and kept. The drill-down
+// reads it to name the run its rerun hand-off points at, and the next list
+// paged is refused when its newest run is older than this list's. Only a fetch
+// that worked and was not refused replaces it, so the hand-off keeps naming
+// the failed run while a later fetch is in flight or has failed. The tile
+// itself reads the list its own collection fetched, never this one.
 let latestBenchmarkRuns: Run[] | undefined;
 
 export type BenchmarkFetchPhase =
@@ -405,8 +408,16 @@ async function fetchZip(
 
 // The benchmarks.yml runs on main, newest first, paging back until past the
 // window (or the 12-page ceiling). The workflow runs to a four-hourly schedule
-// and on manual dispatch. Both kinds of run land on main, and the list is
-// filtered by branch alone, so it holds either.
+// and on manual dispatch. Both kinds of run land on main, so the list is read
+// unfiltered and narrowed to main here: GitHub answers a list filtered by
+// branch from an index that is often days behind, and an unfiltered one
+// current.
+//
+// A list can still come back ending days back. A list whose
+// newest run is older than the newest run already collected is refused with
+// `STALE_RUNS_ERROR`, and any other list is kept in `latestBenchmarkRuns`.
+// What was collected is the last list kept, or, before one has been kept since
+// the server started, the runs the history cache records.
 async function pageBenchmarkRuns(
   github: BenchmarkGitHub,
   token: string,
@@ -414,18 +425,29 @@ async function pageBenchmarkRuns(
 ): Promise<Run[]> {
   const runs: Run[] = [];
   for (let page = 1; page <= 12; page++) {
-    const response = await github.json<{ workflow_runs?: Run[] }>(
-      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&per_page=100&page=${page}`,
+    const response = await github.json<
+      { workflow_runs?: (Run & { head_branch: string | null })[] }
+    >(
+      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=100&page=${page}`,
       token,
     );
     const batch = response.workflow_runs ?? [];
     if (!batch.length) break;
-    runs.push(...batch);
+    for (const run of batch) if (run.head_branch === "main") runs.push(run);
     if (
       batch.length < 100 ||
       Date.parse(batch[batch.length - 1].created_at) < cutoff
     ) break;
   }
+  const held: readonly DatedRun[] = latestBenchmarkRuns ??
+    benchmarkStore.list().map((run) => ({
+      id: run.runId,
+      created_at: new Date(run.at).toISOString(),
+    }));
+  if (isStaleRunList(`${REPO} ${WORKFLOW} main`, runs, held)) {
+    throw new Error(STALE_RUNS_ERROR);
+  }
+  latestBenchmarkRuns = runs;
   return runs;
 }
 
@@ -440,14 +462,15 @@ async function loadRun(
   let metrics = new Map<string, Stats>();
   let zip: Uint8Array<ArrayBuffer> | undefined;
   try {
-    const arts = await github.json<{ artifacts?: Artifact[] }>(
-      `repos/${REPO}/actions/runs/${run.id}/artifacts`,
+    const artifactId = await runArtifactId({
+      github,
+      runId: run.id,
+      name: ARTIFACT,
       token,
-    );
-    const art = (arts.artifacts ?? []).find((a) =>
-      a.name === ARTIFACT && !a.expired
-    );
-    if (art) zip = await fetchZip(art.id, token, github);
+    });
+    if (artifactId !== undefined) {
+      zip = await fetchZip(artifactId, token, github);
+    }
   } catch (error) {
     // The read failed, so whether this run has usable results is still unknown.
     // Caching the empty map here would answer that question with "no" and never ask
@@ -650,7 +673,6 @@ function benchmarkUnavailable(sub: string, aside?: string): TileView {
   return {
     ...benchmarkDrill,
     aside,
-    label: "all benchmarks",
     status: "unknown",
     value: "—",
     sub,
@@ -993,8 +1015,9 @@ const RUNNING_BADGE =
 // produced no readable data. Its headline reads `failed (was <trend>)` when a
 // cached trend is available, and `failed` otherwise. The line below dates the
 // outage instead of counting the benchmarks measured. `offline` names a fetch
-// failure. The tile then keeps its last-known trends gray, or shows a gray dash
-// when no history is cached.
+// failure and takes that line the same way, so an unreadable collection costs
+// the count rather than adding a line to it. The tile then keeps its
+// last-known trends gray, or shows a gray dash when no history is cached.
 function benchmarkIndexView(
   runs: Run[],
   now: number,
@@ -1039,7 +1062,6 @@ function benchmarkIndexView(
     if (failed) {
       return {
         ...benchmarkDrill,
-        label: "all benchmarks",
         status: "bad",
         value: "failed",
         sub: failSub,
@@ -1093,16 +1115,18 @@ function benchmarkIndexView(
   const windowLabel = headline.windowCount < headline.points.length
     ? ` · last ${humanSpan(spanMs(headline.windowPoints))}`
     : "";
-  // A failed tile has no count line. Its sub line lands in the same place and in
-  // the same style, and names the failure there.
-  const countLine = failed
+  // One line sits under the headline. A tile with something to say about why it
+  // cannot measure says that there, in place of the count, rather than beside
+  // it: a second line would grow the tile past the ones it shares a row with.
+  const sub = offline ?? (failed ? failSub : undefined);
+  const countLine = sub !== undefined
     ? ""
     : `<div style="font-size:13px;color:var(--text-muted);margin:5px 0 0">${count} benchmark${
       count === 1 ? "" : "s"
     }${windowLabel}</div>`;
   const allPoints = indices.flatMap((series) => series.points);
-  const chartStart = Math.min(...allPoints.map((point) => point.at));
-  const chartEnd = Math.max(...allPoints.map((point) => point.at));
+  const chartStart = minOf(allPoints.map((point) => point.at));
+  const chartEnd = maxOf(allPoints.map((point) => point.at));
   const chartSpan = chartEnd - chartStart;
   const chartAxis = chartSpan || 1;
   const chart = multiSparkline(
@@ -1118,13 +1142,12 @@ function benchmarkIndexView(
   );
   return {
     ...benchmarkDrill,
-    label: "all benchmarks",
     status,
     value,
     valueLabel: status === "bad"
       ? `failed (was ${headline.trend.label})`
       : undefined,
-    sub: offline ?? (failed ? failSub : undefined),
+    sub,
     extra: `${countLine}${chart}`,
     duration: chartSpan,
     aside,
@@ -1149,7 +1172,6 @@ async function collectBenchmark(
   try {
     await benchmarkStore.load();
     const runs = knownRuns ?? await pageBenchmarkRuns(github, token, cutoff);
-    latestBenchmarkRuns = runs;
 
     const chosen = sampleBenchmarkRuns(runs, cutoff);
     const priorRefresh = benchmarkStore.refresh;
@@ -1388,6 +1410,14 @@ function benchmarkLastRequestError(): string | null {
     : null;
 }
 
+/**
+ * Makes the tiles hold an empty run list, so that the next list paged is
+ * compared against nothing an earlier test listed or cached.
+ */
+export function forgetBenchmarkRunsForTest(): void {
+  latestBenchmarkRuns = [];
+}
+
 function benchmarkServerContext(): Ctx {
   return {
     runs: () => Promise.resolve([]),
@@ -1426,7 +1456,6 @@ async function collectBenchmarkTileRuns(
     listing,
   ).result;
   const runs = await listing;
-  if (runs) latestBenchmarkRuns = runs;
   await refresh;
   return {
     runs: runs ?? [],
@@ -1436,19 +1465,17 @@ async function collectBenchmarkTileRuns(
 
 /** Builds a benchmark tile over the selected product measurements. */
 function makeBenchmarkTile(
-  id: string,
   label: string,
   select: (key: string) => boolean = () => true,
   href = benchmarkDrill.href,
 ): Tile {
   return {
-    id,
     label,
     intervalMs: 60_000,
     showOnlyCompletedViews: true,
     async collect(ctx): Promise<TileView> {
       const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) return { ...benchmarkUnavailable("set GH_TOKEN"), label, href };
+      if (!token) return { ...benchmarkUnavailable("set GH_TOKEN"), href };
       let collection = benchmarkTileCollections.get(token);
       if (!collection) {
         collection = collectBenchmarkTileRuns(ctx, token).finally(() => {
@@ -1457,14 +1484,14 @@ function makeBenchmarkTile(
         benchmarkTileCollections.set(token, collection);
       }
       const { runs, offline } = await collection;
-      return { ...benchmarkIndexView(runs, Date.now(), select, offline), label, href };
+      return { ...benchmarkIndexView(runs, Date.now(), select, offline), href };
     },
   };
 }
 
 /** All product benchmarks, with the shared performance history routes. */
 export const benchmark: Tile = {
-  ...makeBenchmarkTile("benchmark", "all benchmarks"),
+  ...makeBenchmarkTile("all benchmarks"),
   routes: [
     {
       path: "/bench",
@@ -1508,7 +1535,6 @@ export const benchmark: Tile = {
 
 /** Topic board journey and 100-topic load measurements. */
 export const keyBenchmarks: Tile = makeBenchmarkTile(
-  "key-benchmarks",
   "key benchmarks",
   isKeyBenchmark,
   `${benchmarkDrill.href}&key=1`,
@@ -1849,8 +1875,8 @@ export function benchPage(
       const status = representative.status;
       const pct = representative.pct;
       const allPoints = cpus.flatMap((series) => series.points);
-      const firstAt = Math.min(...allPoints.map((point) => point.at));
-      const lastAt = Math.max(...allPoints.map((point) => point.at));
+      const firstAt = minOf(allPoints.map((point) => point.at));
+      const lastAt = maxOf(allPoints.map((point) => point.at));
       const spark = multiSparkline(
         cpus.map((series) => ({
           vals: series.values,

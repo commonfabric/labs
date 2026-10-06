@@ -25,7 +25,10 @@ describe("piece input paths", () => {
       storageManager: storage,
     });
     pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: crypto.randomUUID() }),
+      createSession({
+        identity: signer,
+        spaceDid: await runtime.createSpace(),
+      }),
       runtime,
     );
     await pieces.synced();
@@ -177,9 +180,10 @@ describe("piece input paths", () => {
       hidden: "retained",
     });
     expect(
-      await piece.input.edit((stored) => ({ value: `${stored} edited` }), [
-        "title",
-      ]),
+      await piece.input.edit(
+        (stored) => ({ value: `${String(stored)} edited` }),
+        ["title"],
+      ),
     ).toEqual({ wrote: true });
     expect(await piece.input.get(["title"])).toBe("Topic edited");
   });

@@ -1,4 +1,8 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import {
+  type FabricPlainObject,
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 
 // Space grouping — "a user's whole world" from a pile of space DBs.
 //
@@ -86,8 +90,8 @@ function didFromPath(path: string): string {
 }
 
 /** A home piece's result value carries both `profiles` and `createProfile`. */
-function isHomeResultValue(v: unknown): boolean {
-  return isObjectNotArray(v) &&
+function isHomeResultValue(v: FabricValue): v is FabricPlainObject {
+  return isFabricPlainObject(v) &&
     "profiles" in v && "createProfile" in v;
 }
 
@@ -152,7 +156,7 @@ export function analyzeSpaceSignals(
     if (!isHomeResultValue(value)) continue;
     isHome = true;
     // `profiles` is a link to the profiles cell; follow it and read the array.
-    const profilesField = (value as Record<string, unknown>).profiles;
+    const profilesField = value.profiles;
     const link = linksWithPaths(profilesField, SPACE_SIGNAL_WALK)
       .links[0]?.link;
     if (!link?.id) continue;

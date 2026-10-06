@@ -20,6 +20,7 @@
 import { assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import { experimentalOptionsFromEnv } from "@commonfabric/runner";
 import {
   type CommitRejection,
@@ -43,8 +44,9 @@ const SERVER_EXECUTION_FROM_ENV = experimentalOptionsFromEnv(Deno.env.get)
  * a step listed there for this file is skipped ONLY when this process runs
  * the ON posture, loudly (the entry's reason is printed), and only while
  * the entry exists — the OFF arm and an unlisted step always run. Never a
- * silent filter: the CI step prints every entry, and the validator
- * requires this file to name each listed step and call this guard.
+ * silent filter: the test topology declares the entry's leaf unavailable,
+ * and the validator requires this file to name each listed step and call
+ * this guard.
  *
  * The registry is EMPTY, so this guard is inert everywhere today. Note the
  * key: it is the RAW env, while the on-skips module asks callers to resolve
@@ -62,9 +64,9 @@ function onArmStepSkip(step: string): { ignore: boolean } {
   );
   if (entry === undefined) return { ignore: false };
   console.warn(
-    `[server-execution ON arm] patterns: SKIPPING STEP ${
-      JSON.stringify(step)
-    } (until ${entry.phase}) — ${entry.reason}`,
+    `[server-execution ON arm] patterns: ` +
+      debugStr`SKIPPING STEP $quote,long${step}` +
+      ` (until ${entry.phase}) — ${entry.reason}`,
   );
   return { ignore: true };
 }
@@ -128,7 +130,7 @@ function minimalCase(
       assertEquals(
         bodies(observerView),
         observerBodies,
-        `observer sees ${JSON.stringify(observerView)}`,
+        debugStr`observer sees $quote,long${observerView}`,
       );
     });
   });
@@ -224,7 +226,7 @@ describe("convergence storm — observer converges with optional scoped links", 
         [...sent].sort(),
         `observer missed messages: sent=${sent.length} ` +
           `landed=${observerView.length} ` +
-          `observer=${JSON.stringify(summarize(observerView))}`,
+          debugStr`observer=$quote,long${summarize(observerView)}`,
       );
 
       // What the storm cost, as opposed to whether it converged. This fixture

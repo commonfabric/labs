@@ -2,7 +2,10 @@ import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
 
 import { collect } from "../transformed-ast.ts";
-import type { TransformationContext } from "../../src/core/mod.ts";
+import {
+  CrossStageState,
+  type TransformationContext,
+} from "../../src/core/mod.ts";
 import type { CaptureTreeNode } from "../../src/utils/capture-tree.ts";
 import {
   analyzeElementBinding,
@@ -49,9 +52,7 @@ function testContext(checker: ts.TypeChecker): TransformationContext {
     factory: ts.factory,
     tsContext: { factory: ts.factory } as ts.TransformationContext,
     options: {},
-    state: {
-      typeRegistry: new WeakMap<ts.Node, ts.Type>(),
-    },
+    state: new CrossStageState(),
     markAsSyntheticComputeCallback: () => {},
     cfHelpers: {
       getHelperExpr: (name: string) => ts.factory.createIdentifier(name),

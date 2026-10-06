@@ -8,6 +8,8 @@
  * unstarted piece, never its full result; the names are cached until the
  * space changes; and a load the header abandons (switcher closed, space
  * switched, header removed) leaves nothing behind for the next open to show.
+ * The desktop switcher stays in the breadcrumb while the piece has no name to
+ * show, and Escape closes it unless another component already handled the key.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -15,6 +17,7 @@ import { expect } from "@std/expect";
 import { TaskStatus } from "@lit/task";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
+import { CellReadRefusedError } from "@commonfabric/runtime-client";
 
 import type { XHeaderView as HeaderViewClass } from "../src/views/HeaderView.ts";
 import { templateMarkup } from "./lit-template-markup.ts";
@@ -96,7 +99,19 @@ function installBrowserGlobals(): () => void {
  * given. `arrived` resolves once a space's name reads are waiting at the gate,
  * so a test can abandon a load that has already done its reading.
  */
-function makeRuntime() {
+function makeRuntime(
+  {
+    refusedReads = 0,
+  }: {
+    /**
+     * How many of the first reads of the `named` piece's name the worker
+     * refuses, as it does a read made before the viewer's membership has
+     * resolved.
+     */
+    refusedReads?: number;
+  } = {},
+) {
+  let refusalsLeft = refusedReads;
   const latches = (): (space: string) => PromiseWithResolvers<void> => {
     const map = new Map<string, PromiseWithResolvers<void>>();
     return (space) => {
@@ -152,6 +167,12 @@ function makeRuntime() {
               rt.reads.push({ space, schema });
               arrival(space).resolve();
               await gate(space).promise;
+              if (id === "named" && refusalsLeft > 0) {
+                refusalsLeft--;
+                throw new CellReadRefusedError({
+                  refusedBy: "display-ceiling",
+                });
+              }
               return value;
             },
           }),
@@ -254,6 +275,85 @@ describe("HeaderView piece list", () => {
       expect(loadingLists(markup)).toBe(0);
       expect(markup).toContain("did:key:first title");
       expect(markup).toContain("Piece #untitl");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the switcher in the breadcrumb while the piece has no name to show", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const view = await mountHeader(makeRuntime());
+      view.headerPieceDropdownOpen = true;
+      for (const pieceTitle of [undefined, ""]) {
+        view.pieceTitle = pieceTitle;
+        const markup = templateMarkup(view.render());
+        const trigger = markup.indexOf('class="header-piece-trigger"');
+        expect(trigger).toBeGreaterThan(-1);
+        expect(markup.slice(trigger, markup.indexOf("</button>", trigger)))
+          .toContain("Untitled");
+        expect(markup).toContain('class="header-piece-dropdown"');
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it("closes the switcher on Escape, unless the key was already handled or ends a composition", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const view = await mountHeader(makeRuntime());
+      const { handleKeyDown } = view.accessForTestingOnly;
+      const escape = (init: { handled?: boolean; isComposing?: boolean }) => {
+        const event = Object.assign(
+          new Event("keydown", { cancelable: true }),
+          { key: "Escape", isComposing: init.isComposing ?? false },
+        );
+        if (init.handled) event.preventDefault();
+        return event as unknown as KeyboardEvent;
+      };
+
+      view.headerPieceDropdownOpen = true;
+      handleKeyDown(escape({ handled: true }));
+      expect(view.headerPieceDropdownOpen).toBe(true);
+      handleKeyDown(escape({ isComposing: true }));
+      expect(view.headerPieceDropdownOpen).toBe(true);
+
+      const unhandled = escape({});
+      handleKeyDown(unhandled);
+      expect(view.headerPieceDropdownOpen).toBe(false);
+      expect(unhandled.defaultPrevented).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("lists a name the worker refuses as withheld, and reads it again at the next open", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const rt = makeRuntime({ refusedReads: 1 });
+      rt.release("did:key:first");
+      const view = await mountHeader(rt);
+      const { pieces } = view.accessForTestingOnly;
+
+      view.headerPieceDropdownOpen = true;
+      await pieces.run();
+      expect(pieces.value).toEqual([
+        { id: "named", name: "Content hidden by policy" },
+        { id: "untitled", name: "Piece #untitl" },
+      ]);
+      // Shown, though not cached.
+      const markup = templateMarkup(view.render());
+      expect(markup).toContain("Content hidden by policy");
+      expect(markup).toContain("Piece #untitl");
+
+      // Not cached: the next open asks again, and the name is admitted now.
+      view.headerPieceDropdownOpen = false;
+      await pieces.run();
+      view.headerPieceDropdownOpen = true;
+      await pieces.run();
+      expect(pieces.value).toEqual(namesIn("did:key:first"));
+      expect(rt.registryReads).toBe(2);
     } finally {
       restore();
     }

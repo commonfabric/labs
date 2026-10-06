@@ -245,14 +245,15 @@ collaborative-doc model as a downgraded/future area. Ref: §14.4.8, §3.1.6.
 
 Not new machinery so much as turning the system on:
 
-- **Flow-labels `off` outside the shell → inv-9 partial.** The router-attack
+- **Flow-labels `off` outside the presets → inv-9 partial.** The router-attack
   flow-taint (§10's own worked example) is stamped where the shell runs
   ([`lib-shell/src/runtime.ts`](../../packages/lib-shell/src/runtime.ts) defaults
-  `cfcFlowLabels` to `persist`) and nowhere else: the `Runtime` default is `off`,
-  and toolshed and background-piece-service pass no CFC options at all, so they
-  inherit it. Move them through `observe` to `persist`. `cfcTriggerReadGating` is
-  `false` in every host on the same footing — turning it on joins the §8.9.2
-  trigger reads to both enforcement gates, the sink-request ceiling and the
+  `cfcFlowLabels` to `persist`) and on toolshed, whose `productionServer`
+  preset pins it to `persist`. The bare `Runtime` default is `off`, so a host
+  that builds a `Runtime` without a preset runs without it. Move that default
+  through `observe` to `persist`. `cfcTriggerReadGating` is `false` in every host on the
+  same footing — turning it on joins the §8.9.2 trigger reads to both
+  enforcement gates, the sink-request ceiling and the
   `requiredIntegrity` input gate
   ([`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`),
   which closes the direct trigger channel; multi-hop closure follows once flow
@@ -333,7 +334,27 @@ Each is bounded and mostly independent. Several are fail-safe today.
 - **§6.5 intent-consumption / attempt-cell contract.** Commit-point single-use
   intent consumption + bounded-retry attempt-cell ledger (`attemptCellId`/
   `consumedCellId`). This is runner-remit even though the rest of the Ch.6 refiner
-  chain is not.
+  chain is not. [Reviewed intents](./cfc-reviewed-intent.md) mint the
+  single-use record a consumer claims attempts against (`idempotencyKey`, `exp`,
+  `maxAttempts`); whether the ledger itself belongs to the runner or to the
+  consumer is an open question there.
+- **A builtin's attribution needs a labeled read.** `TransformedBy` is minted
+  only over a nonempty flow join, so a builtin's transaction that reads nothing
+  labeled writes nothing stamped. Host operations work around it: the custody
+  seal reads an anchor it wrote, and a reviewed intent reads its own receipt,
+  which is why the receipt is written before the record. A way for a builtin
+  to stamp what it writes without a read would remove the workaround and the
+  ordering it forces. ([Reviewed intents](./cfc-reviewed-intent.md#attribution-and-documents-written-once),
+  [sealed custody](./cfc-custody-seal.md#attribution).)
+- **Write-once documents.** Nothing makes a document immutable after its first
+  write. A builtin's record stays as written only because its address is
+  unpredictable and its writer claim refuses other writers; a claim governs
+  its own location and not those below it, so the record repeats it on every
+  member and stores nested values as one leaf string. Create-only marks are
+  enforced only under `experimental.commitPreconditions`. A write-once
+  primitive would state the property directly; the custody seal raises the
+  same question for which instance a room shows
+  ([sealed custody](./cfc-custody-seal.md)).
 - **Projection binding-scoped atom survival (§8.3).** A value-bound atom should
   survive a projection only if the runtime verifies the projected value still
   matches its scope digest. No per-atom conditional survival today (safe: drops or
@@ -378,8 +399,8 @@ spec test failing.
   map ([`atom-classes.ts:30`,`:34`](../../packages/runner/src/cfc/atom-classes.ts),
   both `provenance`) — so no runner code is needed. The residual is spec-side:
   promote them from spec example-only into the §15 atom registry, and reconcile the
-  `structure`/`external-ingest` `LabelComponent` values that extend the spec's
-  3-value enum. (SC-10/20.)
+  `structure`/`minted`/`external-ingest` `LabelComponent` values that extend
+  the spec's 3-value enum. (SC-10/20.)
 
 ---
 

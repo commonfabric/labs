@@ -313,6 +313,16 @@ describe("CFC trust closure (B3)", () => {
       expect(() =>
         buildCfcTrustConfig({
           statements: [{
+            // @ts-expect-error: a `Date` is not a `FabricValue`.
+            concrete: new Date(0),
+            implements: AGE_ROUNDING,
+            verifier: AUDITOR,
+          }],
+        })
+      ).toThrow(/statement.concrete is not a `FabricValue`/);
+      expect(() =>
+        buildCfcTrustConfig({
+          statements: [{
             concrete: roundingCodeAtom,
             implements: "",
             verifier: AUDITOR,

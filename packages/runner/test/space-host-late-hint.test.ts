@@ -15,7 +15,7 @@ import type { ISpaceReplica } from "../src/storage/interface.ts";
 import { Runtime } from "../src/runtime.ts";
 import { loadSchemaDocument } from "../src/cfc/prepare.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -74,14 +74,8 @@ class TestStorageManager extends StorageManager {
 }
 
 const makeServer = (name: string): MemoryV2Server.Server =>
-  new MemoryV2Server.Server({
+  newSharedServer({
     store: new URL(`memory://${name}`),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
   });
 
 /**
@@ -518,9 +512,9 @@ describe("late space host hints", () => {
       ).toBe(true);
       await reader.crossSpaceSettled();
 
-      const rejected = await stale.commit();
+      const rejected = await stale.commit().settled;
       expect(rejected.error?.name).toBe("StorageTransactionInconsistent");
-      const emptyRejected = await emptyReactive.commit();
+      const emptyRejected = await emptyReactive.commit().settled;
       expect(emptyRejected.error).toMatchObject({
         name: "StorageTransactionInconsistent",
         emptyReactiveCommit: true,
@@ -759,7 +753,7 @@ describe("late space host hints", () => {
       expect(
         stale.write(address, { name: "derived from missing data" }).error,
       ).toBeUndefined();
-      const committing = stale.commit();
+      const committing = stale.commit().settled;
       await openingStarted.promise;
 
       expect(
@@ -861,7 +855,7 @@ describe("late space host hints", () => {
         }, { seen: target.ok?.value ?? "missing" }).error,
       ).toBeUndefined();
 
-      const committing = stale.commit();
+      const committing = stale.commit().settled;
       await writeSessionStarted.promise;
       expect(
         reader.registerSpaceHost(
@@ -1264,6 +1258,20 @@ describe("late space host hints", () => {
           "https://different-toolshed.test",
         ),
       ).toBe(false);
+      expect(
+        manager.registerSpaceHostDetailed(
+          targetSpace,
+          "https://different-toolshed.test",
+        ),
+      ).toEqual({ accepted: false, reason: "default-route-in-use" });
+      // The refusal fixes no route: a hint naming the default host, which the
+      // written provider is on, is still confirmed.
+      expect(
+        manager.registerSpaceHostDetailed(
+          targetSpace,
+          "https://default-toolshed.test",
+        ),
+      ).toEqual({ accepted: true });
       expect(provider.replica).toBe(replica);
       expect(provider.replica.getDocument(targetId)).toEqual({
         value: { name: "acknowledged data" },
@@ -1422,9 +1430,10 @@ describe("late space host hints", () => {
   });
 
   it("cancels an in-progress provisional ACL query before replay", async () => {
+    // A Home space (its DID is the signer's own) is the one space a first
+    // mount writes an ACL for.
     const signer = await Identity.fromPassphrase("late-hint-acl-user");
-    const spaceIdentity = await Identity.fromPassphrase("late-hint-acl-space");
-    const targetSpace = spaceIdentity.did();
+    const targetSpace = signer.did();
     const targetId = "of:late-hint-acl-target" as URI;
     const defaultServer = makeServer("late-hint-acl-default");
     const hintedServer = makeServer("late-hint-acl-hinted");
@@ -1455,7 +1464,7 @@ describe("late space host hints", () => {
         if (
           gateDefaultBootstrap &&
           server === defaultServer &&
-          sessionSigner?.did() === spaceIdentity.did()
+          mountOptions.sessionId !== manager.scopeKeyIdentity().sessionId
         ) {
           gateDefaultBootstrap = false;
           const queryGraph = connection.session.queryGraph.bind(
@@ -1481,8 +1490,6 @@ describe("late space host hints", () => {
         return connection;
       },
     });
-    manager.registerSpaceIdentity(spaceIdentity);
-
     try {
       const provider = manager.open(targetSpace);
       const firstRead = provider.sync(targetId, {
@@ -1509,10 +1516,7 @@ describe("late space host hints", () => {
       expect(
         await hintedServer.readDocument(targetSpace, `of:${targetSpace}`),
       ).toEqual({
-        value: {
-          [signer.did()]: "OWNER",
-          "*": "WRITE",
-        },
+        value: { [signer.did()]: "OWNER" },
       });
     } finally {
       bootstrapQueryCancelled.reject(
@@ -1526,8 +1530,7 @@ describe("late space host hints", () => {
 
   it("does not issue ACL setup after immediate manager disposal", async () => {
     const signer = await Identity.fromPassphrase("disposed-acl-user");
-    const spaceIdentity = await Identity.fromPassphrase("disposed-acl-space");
-    const targetSpace = spaceIdentity.did();
+    const targetSpace = signer.did();
     const defaultServer = makeServer("disposed-acl-default");
     const bootstrapQueryStarted = Promise.withResolvers<void>();
     const bootstrapQueryCancelled = Promise.withResolvers<void>();
@@ -1542,7 +1545,7 @@ describe("late space host hints", () => {
           sessionSigner,
           mountOptions,
         );
-        if (sessionSigner?.did() === spaceIdentity.did()) {
+        if (mountOptions.sessionId !== manager.scopeKeyIdentity().sessionId) {
           const queryGraph = connection.session.queryGraph.bind(
             connection.session,
           );
@@ -1574,8 +1577,6 @@ describe("late space host hints", () => {
         return connection;
       },
     });
-    manager.registerSpaceIdentity(spaceIdentity);
-
     try {
       const firstRead = manager.open(targetSpace).sync(
         "of:disposed-acl-target" as URI,
@@ -1604,10 +1605,7 @@ describe("late space host hints", () => {
     const signer = await Identity.fromPassphrase(
       "issued-acl-provisional-user",
     );
-    const spaceIdentity = await Identity.fromPassphrase(
-      "issued-acl-provisional-space",
-    );
-    const targetSpace = spaceIdentity.did();
+    const targetSpace = signer.did();
     const defaultServer = makeServer("issued-acl-provisional-default");
     const factory = new LoopbackSessionFactory(() => defaultServer);
     const manager = TestStorageManager.create(signer, {
@@ -1615,8 +1613,6 @@ describe("late space host hints", () => {
       create: (space, sessionSigner, mountOptions) =>
         factory.create(space, sessionSigner, mountOptions),
     });
-    manager.registerSpaceIdentity(spaceIdentity);
-
     try {
       const read = await manager.open(targetSpace).sync(
         "of:issued-acl-provisional-target" as URI,
@@ -1625,10 +1621,7 @@ describe("late space host hints", () => {
       expect(
         await defaultServer.readDocument(targetSpace, `of:${targetSpace}`),
       ).toEqual({
-        value: {
-          [signer.did()]: "OWNER",
-          "*": "WRITE",
-        },
+        value: { [signer.did()]: "OWNER" },
       });
 
       expect(
@@ -1770,7 +1763,7 @@ describe("late space host hints", () => {
         tx,
       );
       const result = runtime.run(tx, Root, { target }, resultCell);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeUndefined();
       await result.pull();
       expect(result.key("seen").get()).toBeUndefined();

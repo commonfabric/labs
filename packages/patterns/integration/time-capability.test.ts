@@ -19,10 +19,6 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import {
-  currentPatternIntegrationShard,
-  selectPatternIntegrationShard,
-} from "./pattern-integration-shard.ts";
 import { initializeCapabilityGateController } from "./capability-gate-controller.ts";
 import { moduleByteCache } from "./pieces-controller.ts";
 
@@ -31,9 +27,7 @@ const ROOT = join(import.meta.dirname!, "..");
 // Instantiate a pattern with the gate on, materialize its lifts, and return the
 // messages of any TimeCapabilityErrors the scheduler reported.
 async function timeCapabilityErrors(rel: string): Promise<string[]> {
-  const cc = await initializeCapabilityGateController(
-    `${rel}-${crypto.randomUUID()}`,
-  );
+  const cc = await initializeCapabilityGateController();
   const errors: string[] = [];
   cc.runtime.scheduler.onError((err) => {
     if (err?.name === "TimeCapabilityError") errors.push(err.message);
@@ -131,11 +125,20 @@ const CAPABILITY_CASES: CapabilityCase[] = [
     },
   })),
   {
+    name: "opens a space that exists",
+    run: async () => {
+      const cc = await initializeCapabilityGateController();
+      try {
+        expect(await cc.runtime.spaceExists(cc.getSpace())).toBe(true);
+      } finally {
+        await cc.dispose();
+      }
+    },
+  },
+  {
     name: "uses the process-wide pattern integration compile cache",
     run: async () => {
-      const cc = await initializeCapabilityGateController(
-        `compile-cache-${crypto.randomUUID()}`,
-      );
+      const cc = await initializeCapabilityGateController();
       try {
         expect(cc.runtime.moduleByteCache).toBe(moduleByteCache);
       } finally {
@@ -146,11 +149,7 @@ const CAPABILITY_CASES: CapabilityCase[] = [
 ];
 
 describe("capability gate (W1): patterns read the clock only in handlers", () => {
-  const cases = selectPatternIntegrationShard(
-    CAPABILITY_CASES,
-    currentPatternIntegrationShard(),
-  );
-  for (const testCase of cases) {
+  for (const testCase of CAPABILITY_CASES) {
     it(testCase.name, testCase.run);
   }
 });

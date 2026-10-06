@@ -7,7 +7,8 @@
     "console:watch": "cd console && deno run -A ../../felt/cli.ts dev .",
     "console": "deno task console:build && deno run -A console/server.ts",
     "console:launch": "deno task console:build && deno run -A console/launch.ts",
-    "test": "ENV=test deno test --allow-read --allow-write --allow-run --allow-ffi --allow-net --allow-env test audit/test",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read --allow-write --allow-run --allow-ffi --allow-net --allow-env --allow-sys=networkInterfaces test audit/test",
     "cfc-audit": "deno run --allow-read --allow-net audit/cli.ts",
     "cfc-audit-fixtures": "deno run --allow-read --allow-write --allow-env --allow-net audit/test/regenerate-fixtures.ts",
     "probe-skills-sh": "deno run --allow-net=skills.sh scripts/probe-skills-sh.ts",
@@ -30,6 +31,9 @@
     "./artifacts": "./src/artifacts.ts",
     "./cli": "./src/cli.ts",
     "./provenance": "./src/provenance.ts",
+    "./result-writer": "./src/result-writer.ts",
+    "./fabric-session": "./src/fabric-session.ts",
+    "./handle-table": "./src/handle-table.ts",
     "./gateway/openai-client": "./src/gateway/openai-client.ts",
     "./model/client": "./src/model/client.ts",
     "./model/usage": "./src/model/usage.ts",
@@ -43,6 +47,8 @@
     "./contracts/prompt-slot": "./src/contracts/prompt-slot.ts",
     "./contracts/cfc-invocation-context": "./src/contracts/cfc-invocation-context.ts",
     "./contracts/native-model-tool": "./src/contracts/native-model-tool.ts",
+    "./contracts/client-action": "./src/contracts/client-action.ts",
+    "./contracts/client-command": "./src/contracts/client-command.ts",
     "./contracts/image": "./src/contracts/image.ts",
     "./contracts/run-manifest": "./src/contracts/run-manifest.ts",
     "./contracts/observation": "./src/contracts/observation.ts",
@@ -62,6 +68,8 @@
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
-    "@db/sqlite": "jsr:@db/sqlite@0.13.0"
+    "@db/sqlite": "jsr:@db/sqlite@0.13.0",
+    "entities": "npm:entities@^8.0.0",
+    "marked": "npm:marked@^18.0.6"
   }
 }

@@ -29,7 +29,9 @@ export function staleReadAnomalies(
     .all<{ id: string }>();
   const anomalies: StaleRead[] = [];
   for (const { id } of ids) {
-    anomalies.push(...entityConflicts(space, id, opts).staleReads);
+    for (const staleRead of entityConflicts(space, id, opts).staleReads) {
+      anomalies.push(staleRead);
+    }
   }
   return anomalies;
 }

@@ -1,7 +1,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { Identity } from "@commonfabric/identity";
+
+import { CellImpl } from "../src/cell.ts";
 import { createRef } from "../src/create-ref.ts";
-import { isReactiveMarker } from "../src/builder/types.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 
 describe("createRef fail-closed", () => {
   // Regression guard for createRef fail-closed behavior (audit S14).
@@ -12,14 +17,26 @@ describe("createRef fail-closed", () => {
   // where a stable, content-derived one was expected. createRef must fail
   // closed instead.
 
-  it("throws when a Reactive derivation input has no value", () => {
-    const reactiveNoValue = {
-      [isReactiveMarker]: true,
-      export: () => ({ value: null }),
-    };
-    expect(() => createRef({ ref: reactiveNoValue }, "cause")).toThrow(
-      /cannot derive a stable id/,
-    );
+  it("throws when a Reactive derivation input has no value", async () => {
+    const signer = await Identity.fromPassphrase("create ref fail closed");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager,
+    });
+    try {
+      // A cell with no link yet, as the builder makes before a cell has an
+      // identity.
+      const reactiveNoValue = new CellImpl(runtime, undefined)
+        .getAsReactiveProxy();
+
+      expect(() => createRef({ ref: reactiveNoValue }, "cause")).toThrow(
+        /cannot derive a stable id/,
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
   });
 
   it("derives a stable id from concrete inputs (unchanged)", () => {

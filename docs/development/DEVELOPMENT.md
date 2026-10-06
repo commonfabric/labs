@@ -675,7 +675,13 @@ using them is not optional in code that can reach a stored value:
   `FabricValue` without being known to be one — a schema `const` against a
   stored value, a schema default against a materialized one, a write against
   the value it replaces, a request against the snapshot a policy was checked
-  over. It is a structural walk that decides every `FabricSpecialObject` it
+  over. Its operands are values, never query-result views, at any depth. A
+  caller whose operands may hold views compares them with the runner's
+  `fabricAwareEqualThroughViews()`, which walks the views and hands the value
+  model only the special objects they read, or compares stored values (a
+  cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
+  copies a `FabricInstance` read through a view as an empty record. It is a
+  structural walk that decides every `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to
   `valueEqual()`, and a pair whose classes differ, or with a special object on
   one side only, is unequal without either one's contents being read. Neither half serves alone: `valueEqual()` throws
@@ -685,9 +691,14 @@ using them is not optional in code that can reach a stored value:
   call — it decides a container by a content hash cached on identity, where the
   walk pays for every level each time — but it is not a drop-in even there. It
   decides a container by hashing it whole, so it throws on a value holding a
-  cycle and on one holding a class whose codec is a stub, both of which this
-  walk returns for. `valueEqual({ v: aFabricMap }, { v: 5 })` throws where
-  `fabricAwareEqual()` returns `false`.
+  class whose codec is a stub, which this walk returns for.
+  `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
+  returns `false`.
+- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
+  values, and is the comparison for a value against a copy-on-write revision
+  of itself: it walks the two in step and settles a subtree they share by
+  identity, where `valueEqual()` hashes the whole of any operand whose hash it
+  has not cached.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its
@@ -713,6 +724,11 @@ caller. Five shapes cover the tree today:
 - **Treat it as the atomic value it is.** Three sites in `data-updating.ts`
   hand it to the branch that emits it whole: two exclude it from array
   anchoring, and one resets the slot before the per-key writes that follow.
+  `mergeSchemaDefaults()` in `runner-utils.ts` hands a present instance back
+  in place of merging into it, and asks `isFabricInstanceOrView()` rather
+  than `instanceof`, so an instance seen through a cell read -- whose
+  prototype the view erases -- gets the same answer instead of being rebuilt
+  as a record with defaults filled into it.
 - **Compare it by content.** `storage/v2-transaction.ts`'s
   `shallowStructureChanged()` hands both operands to `valueEqual()` rather than
   comparing key sets, which for two special objects would compare two empty
@@ -966,6 +982,32 @@ export const set = (cache: Cache, key: string, value: string) =>
   cache.set(key, value);
 ```
 
+### Spreading a collection into a call
+
+A spread in a call's arguments, as in `records.push(...more)` or
+`Math.max(...times)`, passes each element of the collection as a separate
+argument. V8 limits how many arguments one call can take, and past roughly a
+hundred thousand the call throws `RangeError: Maximum call stack size
+exceeded`. A collection whose size the code does not fix can reach that. Append
+it in a loop, `for (const record of more) records.push(record);`, and take its
+largest or smallest value with `maxOf` or `minOf` from
+`@commonfabric/utils/math`, which walk the collection and otherwise return what
+`Math.max` and `Math.min` would. An array cell is the exception to the loop:
+each `push()` on a cell rebuilds the cell's local copy of the array and records
+an append of its own, so pass the list to `pushAll()` instead, which does that
+once for the whole list.
+
+Replace a range with `spliceAll` from `@commonfabric/utils/arrays`, which gives
+what `splice` would.
+
+The `cf-spread/no-spread-arguments` lint rule (`tasks/lint-spread-arguments.ts`,
+registered in the root `deno.jsonc`) reports every spread into `push`,
+`unshift`, `splice`, `Math.max`, `Math.min`, `String.fromCharCode`, and
+`String.fromCodePoint`, whatever the collection's size, since it cannot tell a
+collection whose size the code fixes from one that grows with data. A spread
+that has to stay, such as one in a test that shows the overflow, sits under a
+`deno-lint-ignore` comment that says why.
+
 ## Build & Test
 
 ### Running Tests
@@ -975,12 +1017,15 @@ export const set = (cache: Cache, key: string, value: string) =>
 > changes.
 
 - For CI wall-time optimization, follow
-  [CI Performance Policy](CI_PERFORMANCE.md). Do not keep splitting jobs once
-  the required test jobs are already in the same rough timing band.
+  [CI Performance Policy](CI_PERFORMANCE.md). CI packs every test into lanes by
+  measured cost, so there are no jobs to split or rebalance by hand; a lane that
+  runs long calls for a split test or a moved dial.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
-- Run all tests using `deno task test` (NOT `deno test`)
-- To run a single test file use `deno test path/to/test.ts`.
+- Run all tests using `deno task test` (NOT `deno test`). It is not a
+  substitute for `deno task check`: every package's tests run under
+  `--no-check`.
+- To run a single test file use `deno test --no-check path/to/test.ts`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -1002,18 +1047,23 @@ suite will break.
    `"test"` entry, naming the member; that check is what keeps a missing entry
    to a message rather than a CI timeout.
 
-   Use `"deno test"` for packages with tests, or `"echo 'No tests defined.'"` as
-   a stub for packages that don't have tests yet. A `"test"` task defined by its
-   `"dependencies"` alone counts too: what the check asks is whether the name
-   resolves in the package's own directory.
+   For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
+   the package's `"deno-test"` task, which runs the tests themselves — a
+   `deno test` for most packages, or a runner of the package's own; see
+   [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
+   the test-records preload reads, as `docs/development/test-records.md`
+   explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**
 
-   ```json
+   ```jsonc
    {
      "name": "@commonfabric/my-package",
      "exports": { ".": "./mod.ts" },
-     "tasks": { "test": "deno test" }
+     "tasks": {
+       "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+       "deno-test": "deno test --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
+     }
    }
    ```
 
@@ -1047,8 +1097,8 @@ deno task integration patterns counter
 - Runs integration tests with `API_URL` pointing to the local server
 - **Automatically stops servers after tests complete**
 
-**Available packages:** `runner`, `runtime-client`, `shell`,
-`background-piece-service`, `patterns`, `cli`, `generated-patterns`
+**Available packages:** `runner`, `runtime-client`, `shell`, `patterns`, `cli`,
+`generated-patterns`
 
 **Log files:** After servers start, check these if something goes wrong:
 

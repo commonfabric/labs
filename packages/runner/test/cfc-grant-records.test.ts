@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
@@ -33,7 +34,10 @@ import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { PreparedDigestInput } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  TransactionWrapper,
+} from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { isStorageTransactionInconsistent } from "../src/storage/rejection.ts";
 import { prepareAndCommit } from "./refused-commit.ts";
@@ -157,7 +161,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       id: `cid:${SECRET_SCHEMA.taggedHashString}`,
       path: [],
     }, { value: SECRET_SCHEMA.schema });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
   };
 
   // The §13.4.4 rule at the network egress boundary: the acting owner's
@@ -219,7 +223,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
     // The trusted policy-writer authors under a builtin identity — the same
     // way the llm/compile-cache builtins author their runtime-evidence
     // writes (codex P1 on #4627).
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "cfc-grant-writer",
     });
@@ -231,7 +235,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       grantedAt: 1000,
       ...overrides,
     });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.ok).toBeDefined();
     return written;
   };
@@ -598,7 +602,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
         expect(() => bare.writeCfcGrant(grant)).toThrow(/builtin/);
         bare.abort();
         const verified = runtime.edit();
-        verified.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(verified, {
           kind: "verified",
           moduleIdentity: "mod:example",
         });
@@ -613,7 +617,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       // intent-evidence chain arrives with intents.
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -632,7 +636,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
     it("refuses audience entries that are not principal-like (§3.1.8)", async () => {
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -663,7 +667,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
     it("refuses a revocation not attributed to the acting principal", async () => {
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -746,7 +750,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
             path: ["value"],
           }, { stashed: source.key("secret").get() });
           tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
 
           const replica = storageManager.open(signer.did())
             .replica as unknown as {
@@ -775,7 +779,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           type: "application/json",
           path: ["value"],
         }, { probe: true });
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.ok).toBeDefined();
         expect(
           tx.getCfcState().diagnostics.some((note) =>
@@ -894,7 +898,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           audience: [userBob],
           grantedAt: 1000,
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         await seedLabeledCell(runtime, "grant-malformed", {
           confidentiality: [cfcAtom.user(signer.did())],
@@ -1053,6 +1057,12 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       expect(attempt({ ...base, resource: undefined })).toThrow(/resource/);
       expect(attempt({ ...base, resource: null })).toThrow(/resource/);
       expect(attempt({ ...base, resource: "" })).toThrow(/resource/);
+    });
+
+    it("rejects a resource that is not a `FabricValue`", () => {
+      expect(attempt({ ...base, resource: new Date(0) })).toThrow(
+        /resource must be a `FabricValue`/,
+      );
     });
 
     it("rejects malformed timestamps and intent ids", () => {
@@ -1252,7 +1262,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
         const resolver = createTxCfcGrantResolver(tx);
-        const cyclic: Record<string, unknown> = {};
+        const cyclic: Record<string, FabricValue> = {};
         cyclic.self = cyclic;
         expect(
           resolver({
@@ -1322,7 +1332,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
           type: "application/json",
           path: ["value"],
         }, { forged: true });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const resolver = createTxCfcGrantResolver(tx);
@@ -1486,7 +1496,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
         );
         wrapper.recordCfcConsultedGrant(entry("d1"));
         expect(tx.getCfcState().consultedGrants.length).toBe(1);
-        wrapper.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(wrapper, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -1617,7 +1627,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
         await writeGrant(runtime, { revoked: { at: 2000, by: signer.did() } });
         // The prepared decision consumed the live grant; the commit must not
         // go through over the revoked one.
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isStorageTransactionInconsistent(result.error)).toBe(true);
         expect(String((result.error as Error).message)).toContain(grant.id);
       });

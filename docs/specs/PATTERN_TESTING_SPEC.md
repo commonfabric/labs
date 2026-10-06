@@ -312,7 +312,7 @@ async function runTestPattern(testPath: string, options: TestOptions): Promise<T
   const tx = runtime.edit();
   const resultCell = runtime.getCell(space, `test-pattern-result-${Date.now()}`, undefined, tx);
   const patternResult = runtime.run(tx, testPatternFactory, {}, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   // No renderer is mounted by default. Values run only when a test step
@@ -396,7 +396,7 @@ async function runTestPattern(testPath: string, options: TestOptions): Promise<T
           ? undefined
           : record
           ? formatAssertRecord(record)
-          : `Expected true, got ${toCompactDebugString(value)}`,
+          : debugStr`Expected true, got $quote,long${value}`,
       });
     } else if (isRender) {
       await materializeTestVDOM(testsCell.key(i).key("render"), settleRuntime);

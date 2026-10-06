@@ -62,6 +62,12 @@ append later would reintroduce exactly the binding the stamp already
 made. `payload` is the only client-authored content field, and
 `clientSeq` the only client-minted part of `firedAt`.
 
+A handler never reads `eventId` itself. `eventKey()` returns it a key derived
+from `eventId`, the acting user and the stream (`deriveEventKey()` in
+`event-identity.ts`), which every run of the event shares, the client's echo and
+the served run included, and which another actor sending the same `eventId`
+does not ([`features/event-key.md`](../../features/event-key.md)).
+
 The shape is settled as specced — every field above is load-bearing
 (RULED 2026-08-02); a later follow-up adds integrity provenance to
 events (e.g. attesting an authentic DOM origin).
@@ -611,6 +617,15 @@ loop's duty).
   Authorization or protocol-shaped failures without positive evidence,
   and ambiguous storage-time or transport outcomes, are not authorized
   for explicit replay.
+- A serving runtime's refusal of a foreign scoped read (protocol.md §2's
+  fail-closed interim) is a `protocol` verdict in `dispatch-load` and
+  terminalizes immediately. The read's scope and the runtime's serving
+  posture decide it, so the same read from the same runtime is refused
+  every time. A handler whose declared inputs reach a user- or
+  session-scoped document in another space therefore seals its
+  `needs-attention` notice at once, and the arrival barrier releases the
+  space's later events without waiting out the budget. Explicit retry
+  is the recovery once a runtime no longer refuses the read.
 - An event held only behind an earlier failed head preserves arrival
   order but records no checkpoint and spends no budget. A load-park
   observation neither increments nor clears the independent cold-view
@@ -730,6 +745,12 @@ loop's duty).
   is in `consequenceOf`" (§4) holds for drops and errors too, and the
   client's step-2 retirement (speculation.md §4) fires for them through
   the same carrier (the entry's own `status` / `error` mark).
+- A client append rejected by a current-ACL `AuthorizationError` carrying
+  `permanentEvidence: true` and a numeric `aclRevision` settles as refused
+  and leaves the append queue. The client does not automatically replay that
+  denied intent after a later access grant. A verdict marked `retriable`, or
+  an authorization failure without the current ACL evidence, retains the
+  queued intent for transport or session recovery.
 - Duplicate submission (client retry after ambiguous network outcome):
   the append is CAS-guarded by `eventId` uniqueness above the dedupe
   horizon (§4) — a duplicate of a not-yet-consequenced event is

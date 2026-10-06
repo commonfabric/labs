@@ -107,7 +107,7 @@ describe("idle convergence hold", () => {
       (_, i) => runtime.getCell<number>(space, `conv-${i}`, undefined, tx),
     );
     for (const c of cells) c.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let step = 0;
@@ -174,7 +174,7 @@ describe("idle convergence hold", () => {
     mid.set(0);
     const out = runtime.getCell<number>(space, "cyc-out", undefined, tx);
     out.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let step = 0;

@@ -5,11 +5,54 @@
 
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
+import {
+  type HarnessClientAction,
+  readHarnessClientActions,
+} from "./client-action.ts";
+
 /** The task's result, independent of whether the model loop ran successfully. */
 export type HarnessTaskOutcome =
-  | { outcome: "completed" }
+  | {
+    outcome: "completed";
+
+    /** The words the person reads, when the task ended with an answer. */
+    answer?: string;
+
+    /** What the person's client should open or run, in order. */
+    actions?: HarnessClientAction[];
+  }
   | { outcome: "question"; question: { text: string } }
   | { outcome: "gave-up"; reason: string };
+
+/**
+ * Reads a completed outcome. Absent answer and actions mean a plain
+ * completion; present ones must be well formed, and an empty action list is
+ * the same as none.
+ */
+const readCompletedOutcome = (
+  record: Record<string, unknown>,
+): HarnessTaskOutcome | undefined => {
+  if (record.question !== undefined || record.reason !== undefined) {
+    return undefined;
+  }
+  const answer = Object.hasOwn(record, "answer") ? record.answer : undefined;
+  if (
+    answer !== undefined &&
+    (typeof answer !== "string" || answer.trim().length === 0)
+  ) {
+    return undefined;
+  }
+  const actions = Object.hasOwn(record, "actions") &&
+      record.actions !== undefined
+    ? readHarnessClientActions(record.actions)
+    : [];
+  if (actions === undefined) return undefined;
+  return {
+    outcome: "completed",
+    ...(answer !== undefined ? { answer } : {}),
+    ...(actions.length > 0 ? { actions } : {}),
+  };
+};
 
 /**
  * Reads a serialized outcome across console versions. Absent legacy fields
@@ -32,9 +75,7 @@ export const readHarnessTaskOutcome = (
   }
   switch (record.outcome) {
     case "completed":
-      return record.question === undefined && record.reason === undefined
-        ? { outcome: "completed" }
-        : undefined;
+      return readCompletedOutcome(record);
     case "question": {
       const question = record.question;
       if (

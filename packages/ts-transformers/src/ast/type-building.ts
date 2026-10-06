@@ -1,11 +1,28 @@
 import ts from "typescript";
-import type { TransformationContext } from "../core/mod.ts";
+import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
+import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
+import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
+import {
+  denotesSameType,
+  readAuthoredTypeNodeOnce,
+  readMemberAnnotation,
+  unwrapTypeParentheses,
+} from "@commonfabric/schema-generator/type-node";
+import type { CrossStageState, TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
+import { getCallArgumentPosition } from "./call-arguments.ts";
+import {
+  detectCellFactoryCallKind,
+  detectDirectBuilderCall,
+  detectNewExpressionKind,
+} from "./call-kind.ts";
+import { unwrapExpression } from "../utils/expression.ts";
 import {
   ensureTypeNodeRegistered,
   inferWidenedTypeFromExpression,
   isUnknownType,
+  TYPE_NODE_FLAGS,
   unwrapCellLikeType,
 } from "./type-inference.ts";
 import {
@@ -348,17 +365,13 @@ export function qualifyCommonFabricTypeRefs(
 }
 
 /**
- * Common flags for type-to-typenode conversion.
- * NoTruncation: Prevents type strings from being truncated
- * UseStructuralFallback: Falls back to structural types when nominal types aren't available
- * UseAliasDefinedOutsideCurrentScope: Prefer existing aliases (e.g. `Cell<T>`
- *   imported at module scope) over their canonical qualified forms (e.g.
- *   `import("commonfabric").Cell<T>`). Without this flag, type-arg
- *   annotations on synthesized helper calls print the import-qualified form
- *   even when an alias is in scope (CT-1615 Berni review on PR #3676).
+ * Flags for printing a type as an annotation the transformer emits:
+ * `TYPE_NODE_FLAGS`, and `UseAliasDefinedOutsideCurrentScope`, which prints an
+ * alias in scope where the type is printed, such as `Cell<T>` imported at
+ * module scope, by its name rather than in its import-qualified form,
+ * `import("commonfabric").Cell<T>`.
  */
-export const DEFAULT_TYPE_NODE_FLAGS = ts.NodeBuilderFlags.NoTruncation |
-  ts.NodeBuilderFlags.UseStructuralFallback |
+export const DEFAULT_TYPE_NODE_FLAGS = TYPE_NODE_FLAGS |
   ts.NodeBuilderFlags.UseAliasDefinedOutsideCurrentScope;
 
 export interface TypeLiteralRegistrationContext {
@@ -370,6 +383,10 @@ export interface TypeLiteralRegistrationContext {
 /**
  * Converts a Type to a TypeNode, optionally registering it in the type registry.
  * Provides a central place for type-to-typenode conversion with consistent flags.
+ * `context.state` records the node as printed from `type`
+ * (`CrossStageState.printedFrom()`), the `unknown` put in place of a type the
+ * checker will not print included. The key is required, so a caller passes
+ * `undefined` only by saying so, where it has no state to hand.
  */
 export function typeToTypeNodeWithRegistry(
   type: ts.Type,
@@ -377,13 +394,18 @@ export function typeToTypeNodeWithRegistry(
     checker: ts.TypeChecker;
     factory: ts.NodeFactory;
     sourceFile: ts.SourceFile;
+    state: CrossStageState | undefined;
   },
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
 ): ts.TypeNode {
-  const rawNode =
-    context.checker.typeToTypeNode(type, context.sourceFile, flags) ??
-      context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+  // `flags` may leave out `AllowEmptyTuple`, which every print needs, as
+  // `TYPE_NODE_FLAGS` says.
+  const rawNode = context.checker.typeToTypeNode(
+    type,
+    context.sourceFile,
+    flags | ts.NodeBuilderFlags.AllowEmptyTuple,
+  ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
   // Rewrite commonfabric type references to the always-resolvable
   // `__cfHelpers.X` qualified form. The printer's natural output references
@@ -408,6 +430,7 @@ export function typeToTypeNodeWithRegistry(
   if (typeRegistry) {
     typeRegistry.set(node, type);
   }
+  context.state?.recordPrintedFrom(node, type);
 
   return node;
 }
@@ -434,22 +457,39 @@ export function expressionToTypeNode(
   expr: ts.Expression,
   context: TransformationContext,
 ): ts.TypeNode {
-  const declaredTypeNode = getDestructuredBindingDeclaredTypeNode(
+  const constructedCell = getConstructedCellTypeNode(
     expr,
-    context,
+    context.checker,
+    context.state.typeRegistry,
   );
-  if (declaredTypeNode) {
-    const type = context.checker.getTypeFromTypeNode(declaredTypeNode);
-    // Deep position-stripped clone: the declaration may live in another
-    // source file, and a shallow clone keeps child positions — the printer
-    // would slice the EMIT file's text at those offsets, corrupting literal
-    // type arguments (`Default<string, .ts";`).
-    const clonedTypeNode = cloneTypeNodeDeepForEmission(
-      declaredTypeNode,
+  if (constructedCell) {
+    // The node spells the cell's value with its constructor's type arguments,
+    // and a pass that rebuilds it from its type prints a `typeof` writer
+    // binding among them as a structural type, so what it is rebuilt into
+    // narrows the value the node spells.
+    const type = context.state.typeRegistry.get(constructedCell);
+    if (type) {
+      context.state.recordDeclaredValue(constructedCell, {
+        type,
+        typeNode: constructedCell,
+      });
+    }
+    return constructedCell;
+  }
+  const symbol = ts.isIdentifier(expr)
+    ? context.checker.getSymbolAtLocation(expr)
+    : undefined;
+  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+  const preserved = declaration && ts.isBindingElement(declaration)
+    ? getPreservedTypeForBindingElement(
+      declaration,
+      context.checker,
       context.state.typeRegistry,
-    );
-    context.state.typeRegistry.set(clonedTypeNode, type);
-    return clonedTypeNode;
+      context.state,
+    )
+    : undefined;
+  if (preserved) {
+    return preserved.typeNode;
   }
 
   // Use inferWidenedTypeFromExpression to widen literal types
@@ -466,28 +506,184 @@ export function expressionToTypeNode(
   );
 }
 
-function getDestructuredBindingDeclaredTypeNode(
-  expr: ts.Expression,
-  context: TransformationContext,
+/**
+ * The type of a cell an expression constructs, written with the type arguments
+ * its author gave the constructor: a `new`, or a constructor's static `of()`.
+ * The expression is read back to the construction through the forms that keep
+ * the cell's identity: an unannotated `const`, a binding an unannotated
+ * `const` destructures straight out of an object literal
+ * ({@link destructuredLiteralValue}), and `.for()`. A property of an object
+ * held elsewhere is a slot a write can replace, so it is not followed.
+ * Printing the inferred type instead expands `typeof handler` into a
+ * structural function type, which cannot name a CFC writer, so this applies
+ * only where the arguments name a value binding ({@link namesValueBinding}).
+ *
+ * `getAuthoredCellValueTypeNode()` in `type-shrinking.ts` is the reader for the
+ * other direction: it starts from a cell's type node and returns the value
+ * type inside it.
+ */
+export function getConstructedCellTypeNode(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  seen = new Set<ts.Node>(),
 ): ts.TypeNode | undefined {
-  if (!ts.isIdentifier(expr)) {
-    return undefined;
-  }
-
-  const symbol = context.checker.getSymbolAtLocation(expr);
-  const declaration = symbol?.valueDeclaration ??
-    (symbol?.declarations?.[0] as ts.Declaration | undefined);
-  if (!declaration || !ts.isBindingElement(declaration)) {
-    return undefined;
-  }
-
-  const typeNode = getDeclaredTypeNodeForBindingElement(
-    declaration,
-    context.checker,
+  const node = unwrapExpression(
+    ts.getOriginalNode(expression, ts.isExpression),
   );
-  return typeNode && shouldPreserveBindingDeclaredTypeNode(typeNode)
-    ? typeNode
+  if (seen.has(node)) return undefined;
+  seen.add(node);
+  if (ts.isIdentifier(node)) {
+    const declaration = readValueSymbol(node, checker)?.valueDeclaration;
+    const value = declaration && ts.isVariableDeclaration(declaration)
+      ? constInitializer(declaration)
+      : declaration && ts.isBindingElement(declaration)
+      ? destructuredLiteralValue(declaration)
+      : undefined;
+    return value &&
+      getConstructedCellTypeNode(value, checker, typeRegistry, seen);
+  }
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "for"
+  ) {
+    return getConstructedCellTypeNode(
+      node.expression.expression,
+      checker,
+      typeRegistry,
+      seen,
+    );
+  }
+  if (
+    !(ts.isNewExpression(node) || ts.isCallExpression(node)) ||
+    !node.typeArguments?.some((argument) =>
+      namesValueBinding(argument, checker)
+    )
+  ) return undefined;
+  const kind = ts.isNewExpression(node)
+    ? detectNewExpressionKind(node, checker)
+    : detectCellFactoryCallKind(node, checker);
+  if (!kind) return undefined;
+  const typeNode = ts.factory.createTypeReferenceNode(
+    ts.factory.createQualifiedName(
+      ts.factory.createIdentifier("__cfHelpers"),
+      kind.factoryName,
+    ),
+    node.typeArguments,
+  );
+  const type = checker.getTypeAtLocation(node);
+  typeRegistry?.set(typeNode, type);
+  return typeNode;
+}
+
+/**
+ * The initializer of `declaration` where nothing can replace the value it
+ * gives: a `const` that writes no type of its own, which would be the
+ * value's spelling instead.
+ */
+function constInitializer(
+  declaration: ts.VariableDeclaration,
+): ts.Expression | undefined {
+  return !declaration.type &&
+      ts.isVariableDeclarationList(declaration.parent) &&
+      (declaration.parent.flags & ts.NodeFlags.Const) !== 0
+    ? declaration.initializer
     : undefined;
+}
+
+/**
+ * The expression in an object literal that `binding` takes its value from,
+ * where an unannotated `const` destructures it straight out of that literal,
+ * through any nesting of object patterns:
+ * `const { items } = { items: new Writable<…>(…) }`. The literal exists only
+ * to be destructured, so no write can replace the value first. `undefined`
+ * for a binding with a default, a rest or computed key, a property a later
+ * spread may override, or any other source.
+ */
+function destructuredLiteralValue(
+  binding: ts.BindingElement,
+): ts.Expression | undefined {
+  if (binding.initializer || binding.dotDotDotToken) return undefined;
+  const pattern = binding.parent;
+  if (!ts.isObjectBindingPattern(pattern)) return undefined;
+  const name = binding.propertyName
+    ? getPropertyNameText(binding.propertyName)
+    : ts.isIdentifier(binding.name)
+    ? binding.name.text
+    : undefined;
+  const host = pattern.parent;
+  const source = ts.isVariableDeclaration(host)
+    ? constInitializer(host)
+    : ts.isBindingElement(host)
+    ? destructuredLiteralValue(host)
+    : undefined;
+  const literal = source && unwrapExpression(source);
+  if (
+    name === undefined || !literal || !ts.isObjectLiteralExpression(literal)
+  ) {
+    return undefined;
+  }
+  const index = literal.properties.findLastIndex((property) =>
+    (ts.isPropertyAssignment(property) ||
+      ts.isShorthandPropertyAssignment(property)) &&
+    getPropertyNameText(property.name) === name
+  );
+  const property = literal.properties[index];
+  if (
+    !property ||
+    literal.properties.slice(index + 1).some(ts.isSpreadAssignment)
+  ) {
+    return undefined;
+  }
+  return ts.isPropertyAssignment(property)
+    ? property.initializer
+    : ts.isShorthandPropertyAssignment(property)
+    ? property.name
+    : undefined;
+}
+
+/**
+ * Whether authored type syntax names a value binding (`typeof handler`)
+ * instead of just a shape: in the node itself, in anything it holds, or in a
+ * type alias or interface it refers to by name, through any import binding.
+ * A generic alias is read without substituting its parameters, since the
+ * question is only whether a `typeof` is written anywhere the reference
+ * reaches; the reference's own arguments are read as the nodes it holds.
+ *
+ * Only declarations in authored modules are followed. A writer binding names
+ * a value in authored code, so an alias that carries one is authored too, and
+ * a declaration file's `typeof` (a brand key, say) names no writer.
+ */
+export function namesValueBinding(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Node>(),
+): boolean {
+  if (ts.isTypeQueryNode(node)) return true;
+  if (ts.isTypeReferenceNode(node)) {
+    const name = ts.isIdentifier(node.typeName)
+      ? node.typeName
+      : node.typeName.right;
+    let symbol = checker.getSymbolAtLocation(name);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    for (const declaration of symbol?.declarations ?? []) {
+      if (
+        !(ts.isTypeAliasDeclaration(declaration) ||
+          ts.isInterfaceDeclaration(declaration)) ||
+        declaration.getSourceFile().isDeclarationFile ||
+        seen.has(declaration)
+      ) continue;
+      seen.add(declaration);
+      if (namesValueBinding(declaration, checker, seen)) return true;
+    }
+  }
+  return ts.forEachChild(
+    node,
+    (child) => namesValueBinding(child, checker, seen) || undefined,
+  ) === true;
 }
 
 export function getDeclaredTypeNodeForBindingElement(
@@ -521,6 +717,355 @@ export function getDeclaredTypeNodeForBindingElement(
   return undefined;
 }
 
+/**
+ * Returns the type node and type to emit for a destructured binding whose
+ * declared type carries a wrapper, or `undefined` when its inferred type loses
+ * nothing.
+ *
+ * A property of a generic input is declared in terms of the input's type
+ * parameters, which mean nothing where the binding is emitted. Each one is
+ * replaced by the caller's type argument, where it sits in a union, an
+ * intersection, parentheses, or a wrapper, and where that argument prints as a
+ * node that reads the same anywhere. Every other generic binding is emitted as
+ * its instantiated declared type, which keeps the wrapper and the complete
+ * value type, and spells a default's value as one more member of the union.
+ */
+export function getPreservedTypeForBindingElement(
+  declaration: ts.BindingElement,
+  checker: ts.TypeChecker,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
+): PreservedBindingType | undefined {
+  const declared = getDeclaredTypeNodeForBindingElement(declaration, checker);
+  const preserved = declared && getPreservedBindingTypeNode(declared, checker);
+  if (!declared || !preserved) return undefined;
+
+  const parameters = new Set<ts.Type>();
+  let everyParameterReplaceable = true;
+  const findParameters = (node: ts.Node, replaceable: boolean) => {
+    if (ts.isTypeReferenceNode(node)) {
+      const type = checker.getTypeFromTypeNode(node);
+      if (type.flags & ts.TypeFlags.TypeParameter) {
+        parameters.add(type);
+        everyParameterReplaceable &&= replaceable;
+      }
+    }
+    // A parameter inside any other type expression, such as `Box<T>` or
+    // `T[K]`, is read through that expression's own generic declaration, so a
+    // node put in its place there changes nothing.
+    const through = ts.isUnionTypeNode(node) ||
+      ts.isIntersectionTypeNode(node) ||
+      ts.isParenthesizedTypeNode(node) ||
+      (ts.isTypeReferenceNode(node) &&
+        shouldPreserveBindingDeclaredTypeNode(node, checker));
+    ts.forEachChild(
+      node,
+      (child) => findParameters(child, replaceable && through),
+    );
+  };
+  findParameters(preserved, true);
+
+  if (parameters.size === 0) {
+    return registerForEmission(
+      preserved,
+      checker.getTypeFromTypeNode(declared),
+      typeRegistry,
+      state,
+    );
+  }
+
+  const instantiated = getInstantiatedBindingType(declaration, checker);
+  if (!instantiated) return undefined;
+  const substituted = everyParameterReplaceable
+    ? substituteTypeParameters(
+      preserved,
+      parameters,
+      instantiated.substitutions,
+      declaration,
+      checker,
+      typeRegistry,
+      state,
+    )
+    : undefined;
+  if (substituted) {
+    return registerForEmission(
+      substituted,
+      instantiated.type,
+      typeRegistry,
+      state,
+    );
+  }
+
+  // The instantiated declared type still carries the wrapper. The binding's
+  // type inside the pattern body does not, and with `Default<{}>` stripped
+  // from `T | {}` that union reduces to `{}`, so returning `undefined` here
+  // would emit a value type without `T`.
+  const typeNode = typeToTypeNodeWithRegistry(
+    instantiated.type,
+    {
+      checker,
+      factory: ts.factory,
+      sourceFile: declaration.getSourceFile(),
+      state,
+    },
+    typeRegistry,
+  );
+  return { typeNode, printedFrom: instantiated.type };
+}
+
+/**
+ * The type node to emit for a destructured binding, and what a reader needs to
+ * read it by. An authored node says what it denotes wherever it is emitted; a
+ * printed node says it only to a reader that holds the type behind it, because
+ * the names it spells resolve to nothing at the position it is emitted into.
+ */
+export interface PreservedBindingType {
+  /** Node emitted for the binding, authored or printed. */
+  readonly typeNode: ts.TypeNode;
+
+  /** Type `typeNode` was printed from, when it was printed, not authored. */
+  readonly printedFrom?: ts.Type;
+}
+
+/**
+ * Helper for `getPreservedTypeForBindingElement()`, which registers `type` for
+ * a clone of `typeNode` that carries no source positions. The node may come
+ * from an alias declared in another module, and the printer reads a positioned
+ * node's text out of the module it is printing.
+ */
+function registerForEmission(
+  typeNode: ts.TypeNode,
+  type: ts.Type,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): PreservedBindingType {
+  const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry, state);
+  typeRegistry?.set(cloned, type);
+  return { typeNode: cloned };
+}
+
+/**
+ * Helper for `getPreservedTypeForBindingElement()`, which replaces each
+ * reference to one of `parameters` in `typeNode` with a node printed from its
+ * type argument. Returns `undefined` when an argument is missing, or prints as
+ * a node that schema generation would read differently where it is emitted.
+ */
+function substituteTypeParameters(
+  typeNode: ts.TypeNode,
+  parameters: ReadonlySet<ts.Type>,
+  substitutions: ReadonlyMap<ts.Type, ts.Type>,
+  declaration: ts.BindingElement,
+  checker: ts.TypeChecker,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  const replacements = new Map<ts.Type, ts.TypeNode>();
+  for (const parameter of parameters) {
+    const argument = substitutions.get(parameter);
+    if (!argument) return undefined;
+    const replacement = typeToTypeNodeWithRegistry(
+      argument,
+      {
+        checker,
+        factory: ts.factory,
+        sourceFile: declaration.getSourceFile(),
+        state,
+      },
+      typeRegistry,
+      DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
+    );
+    if (
+      !readsTheSameWhereEmitted(replacement, argument, declaration, checker)
+    ) {
+      return undefined;
+    }
+    replacements.set(parameter, replacement);
+  }
+
+  const result = ts.transform(typeNode, [(context) => {
+    const substitute = (node: ts.Node): ts.Node => {
+      if (ts.isTypeReferenceNode(node)) {
+        const replacement = replacements.get(checker.getTypeFromTypeNode(node));
+        if (replacement) return replacement;
+      }
+      return ts.visitEachChild(node, substitute, context);
+    };
+    return (node) => ts.visitNode(node, substitute, ts.isTypeNode)!;
+  }]);
+  const substituted = result.transformed[0]!;
+  result.dispose();
+  return substituted;
+}
+
+/**
+ * Helper for `substituteTypeParameters()`, which returns `true` for a node
+ * printed from `type` that schema generation reads as that type. Three forms
+ * are not: a reference with type arguments, whose members are read from its
+ * generic declaration with their parameters unresolved; `import("…").T` and
+ * `typeof x`, which name what the emitting module may not hold; and a name
+ * that, where the binding is declared, is out of scope or names another type.
+ * The printer writes a bare name without asking what it resolves to there.
+ */
+function readsTheSameWhereEmitted(
+  typeNode: ts.TypeNode,
+  type: ts.Type,
+  declaration: ts.BindingElement,
+  checker: ts.TypeChecker,
+): boolean {
+  let inScope: Map<string, ts.Symbol> | undefined;
+  let mentioned: Map<string, ts.Symbol[]> | undefined;
+  const namesTheSameType = (name: string): boolean => {
+    inScope ??= new Map(
+      checker.getSymbolsInScope(declaration, ts.SymbolFlags.Type)
+        .map((symbol) => [symbol.name, symbol]),
+    );
+    mentioned ??= getSymbolsMentionedByType(type, checker);
+    const local = inScope.get(name);
+    const resolved = local && local.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(local)
+      : local;
+    const declared = resolved?.declarations?.[0];
+    return !!declared &&
+      (mentioned.get(name) ?? []).some((symbol) =>
+        symbol.declarations?.[0] === declared
+      );
+  };
+  const reads = (node: ts.Node): boolean => {
+    if (ts.isImportTypeNode(node) || ts.isTypeQueryNode(node)) return false;
+    if (
+      ts.isTypeReferenceNode(node) &&
+      (node.typeArguments?.length || !ts.isIdentifier(node.typeName) ||
+        !namesTheSameType(node.typeName.text))
+    ) {
+      return false;
+    }
+    return ts.forEachChild(node, (child) => !reads(child)) !== true;
+  };
+  return reads(typeNode);
+}
+
+/**
+ * Helper for `readsTheSameWhereEmitted()`, which returns the symbols `type`
+ * mentions, by name: its own, and those of its union and intersection members,
+ * its type arguments, and the properties of its object-literal types.
+ */
+function getSymbolsMentionedByType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): Map<string, ts.Symbol[]> {
+  const mentioned = new Map<string, ts.Symbol[]>();
+  const visited = new Set<ts.Type>();
+  const visit = (current: ts.Type): void => {
+    if (visited.has(current)) return;
+    visited.add(current);
+    for (const symbol of [current.aliasSymbol, current.symbol]) {
+      if (!symbol) continue;
+      const symbols = mentioned.get(symbol.name) ?? [];
+      symbols.push(symbol);
+      mentioned.set(symbol.name, symbols);
+    }
+    current.aliasTypeArguments?.forEach(visit);
+    if (current.isUnionOrIntersection()) current.types.forEach(visit);
+    if (!(current.flags & ts.TypeFlags.Object)) return;
+    const object = current as ts.ObjectType;
+    if (object.objectFlags & ts.ObjectFlags.Reference) {
+      checker.getTypeArguments(object as ts.TypeReference).forEach(visit);
+    }
+    if (object.objectFlags & ts.ObjectFlags.Anonymous) {
+      for (const property of checker.getPropertiesOfType(object)) {
+        visit(checker.getTypeOfSymbol(property));
+      }
+    }
+  };
+  visit(type);
+  return mentioned;
+}
+
+/** Resolves a destructuring path against its input type and collects generic arguments. */
+function getInstantiatedBindingType(
+  declaration: ts.BindingElement,
+  checker: ts.TypeChecker,
+): { type: ts.Type; substitutions: Map<ts.Type, ts.Type> } | undefined {
+  const path: string[] = [];
+  let binding = declaration;
+  while (true) {
+    const key = getBindingElementPropertyKey(binding);
+    if (key === undefined || !ts.isObjectBindingPattern(binding.parent)) {
+      return undefined;
+    }
+    path.unshift(key);
+    const parent = binding.parent.parent;
+    if (!ts.isBindingElement(parent)) break;
+    binding = parent;
+  }
+
+  const root = binding.parent.parent;
+  let input = checker.getTypeAtLocation(binding.parent);
+  if (ts.isParameter(root)) {
+    const callback = root.parent;
+    const position = getCallArgumentPosition(callback);
+    const call = position?.call;
+    if (
+      (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+      callback.parameters[0] === root && position?.index === 0 &&
+      call?.typeArguments?.[0] &&
+      detectDirectBuilderCall(call, checker)?.builderName === "pattern"
+    ) {
+      // The callback's contextual type has already stripped defaults and
+      // scopes. The builder's input retains them and the caller's arguments.
+      input = checker.getTypeFromTypeNode(call.typeArguments[0]);
+    }
+  }
+
+  const substitutions = new Map<ts.Type, ts.Type>();
+  // A union of two instantiations of one generic input gives a parameter two
+  // arguments, and no single node stands for both.
+  const ambiguous = new Set<ts.Type>();
+  const substitute = (parameter: ts.Type, argument: ts.Type) => {
+    const known = substitutions.get(parameter);
+    if (known && known !== argument) ambiguous.add(parameter);
+    substitutions.set(parameter, argument);
+  };
+  const visited = new Set<ts.Type>();
+  const collect = (type: ts.Type) => {
+    if (visited.has(type)) return;
+    visited.add(type);
+    if (type.aliasTypeArguments) {
+      const alias = type.aliasSymbol?.declarations?.find(
+        ts.isTypeAliasDeclaration,
+      );
+      alias?.typeParameters?.forEach((parameter, index) => {
+        const argument = type.aliasTypeArguments![index];
+        if (argument) {
+          substitute(checker.getTypeAtLocation(parameter), argument);
+        }
+      });
+    }
+    if (type.isUnionOrIntersection()) type.types.forEach(collect);
+    if (type.flags & ts.TypeFlags.Object) {
+      const object = type as ts.ObjectType;
+      if (object.objectFlags & ts.ObjectFlags.Reference) {
+        const reference = object as ts.TypeReference;
+        const arguments_ = checker.getTypeArguments(reference);
+        reference.target.typeParameters?.forEach((parameter, index) => {
+          const argument = arguments_[index];
+          if (argument) substitute(parameter, argument);
+        });
+        reference.getBaseTypes()?.forEach(collect);
+      }
+    }
+  };
+
+  for (const key of path) {
+    collect(input);
+    const property = input.getProperty(key);
+    if (!property) return undefined;
+    input = checker.getTypeOfSymbolAtLocation(property, declaration);
+  }
+  for (const parameter of ambiguous) substitutions.delete(parameter);
+  return { type: input, substitutions };
+}
+
 function getBindingElementPropertyKey(
   declaration: ts.BindingElement,
 ): string | undefined {
@@ -549,49 +1094,189 @@ function getBindingElementPropertyKey(
   return undefined;
 }
 
+/**
+ * Returns the type node to emit for a destructured binding in place of its
+ * inferred type, or `undefined` when the inferred type loses nothing. Inside a
+ * pattern body a binding's type has its `Default` and scope wrappers stripped,
+ * so a binding whose declared type carries one is emitted from what its author
+ * wrote. A wrapper reached through a type alias counts the same as one written
+ * in place, and is emitted as the type the alias names.
+ */
+export function getPreservedBindingTypeNode(
+  declaredTypeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  const authored = resolveTypeAliasReferences(declaredTypeNode, checker);
+  return shouldPreserveBindingDeclaredTypeNode(authored, checker)
+    ? authored
+    : undefined;
+}
+
+/**
+ * Helper for `getPreservedBindingTypeNode()`, which replaces each reference to
+ * a type alias that names a wrapper-carrying type with the type node the alias
+ * names, at the node itself, a member of a union or an intersection, and an
+ * argument of `Writable` or of a scope wrapper. Returns the node it was given
+ * when none of those is such a reference.
+ *
+ * Two kinds of reference stay as written. One names a type that carries no
+ * wrapper: nothing in it needs the authored spelling, so the alias keeps its
+ * name. The other names a generic alias, whose type is spelled in terms of the
+ * alias's own type parameters.
+ */
+function resolveTypeAliasReferences(
+  typeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+  resolving: ReadonlySet<ts.TypeNode> = new Set(),
+): ts.TypeNode {
+  const resolve = (node: ts.TypeNode) =>
+    resolveTypeAliasReferences(node, checker, resolving);
+  const resolveAll = (nodes: ts.NodeArray<ts.TypeNode>) => {
+    const resolved = nodes.map(resolve);
+    return resolved.some((node, index) => node !== nodes[index])
+      ? resolved
+      : undefined;
+  };
+
+  if (ts.isParenthesizedTypeNode(typeNode)) {
+    const inner = resolve(typeNode.type);
+    return inner === typeNode.type
+      ? typeNode
+      : ts.factory.updateParenthesizedType(typeNode, inner);
+  }
+
+  if (ts.isUnionTypeNode(typeNode)) {
+    const members = resolveAll(typeNode.types);
+    // A member that named a union contributes that union's members, so the
+    // result stays one flat union.
+    return members
+      ? ts.factory.updateUnionTypeNode(
+        typeNode,
+        ts.factory.createNodeArray(
+          members.flatMap((member) =>
+            ts.isUnionTypeNode(member) ? [...member.types] : [member]
+          ),
+        ),
+      )
+      : typeNode;
+  }
+
+  if (ts.isIntersectionTypeNode(typeNode)) {
+    const members = resolveAll(typeNode.types);
+    return members
+      ? ts.factory.updateIntersectionTypeNode(
+        typeNode,
+        ts.factory.createNodeArray(members),
+      )
+      : typeNode;
+  }
+
+  if (!ts.isTypeReferenceNode(typeNode)) {
+    return typeNode;
+  }
+
+  if (typeNode.typeArguments) {
+    // A scope wrapper is preserved whatever it holds, so its argument is read
+    // through as well. The pass that narrows a captured cell prints an alias
+    // it finds there from the alias's type, where a `Default<typeof X>` is
+    // left holding only `X`'s declared type, and so loses its value unless
+    // that type is a literal one.
+    const wrapperName = getWrapperName(typeNode, checker);
+    const typeArguments =
+      wrapperName === "Writable" || scopeForWrapperName(wrapperName)
+        ? resolveAll(typeNode.typeArguments)
+        : undefined;
+    return typeArguments
+      ? ts.factory.updateTypeReferenceNode(
+        typeNode,
+        typeNode.typeName,
+        ts.factory.createNodeArray(typeArguments),
+      )
+      : typeNode;
+  }
+
+  const aliased = readAuthoredTypeNodeOnce(typeNode, checker);
+  // An alias already being resolved names itself; its reference stays.
+  if (!aliased || resolving.has(aliased)) {
+    return typeNode;
+  }
+  const named = resolveTypeAliasReferences(
+    aliased,
+    checker,
+    new Set([...resolving, aliased]),
+  );
+  return shouldPreserveBindingDeclaredTypeNode(named, checker)
+    ? named
+    : typeNode;
+}
+
+/**
+ * The wrappers a pattern body's view of a binding strips from its type. They
+ * are matched by spelling because what is preserved is the authored node. A
+ * declared type reaches them through a non-generic alias of the author's own
+ * once `resolveTypeAliasReferences()` has replaced the alias with its
+ * declaration; a generic alias stays as written, so a wrapper behind one is
+ * not matched and its declared type is not preserved.
+ */
+const BODY_STRIPPED_WRAPPER_NAMES: ReadonlySet<string> = new Set([
+  "Default",
+  "PerAny",
+  "PerSession",
+  "PerSpace",
+  "PerUser",
+]);
+
+/**
+ * Returns the name of the wrapper `reference` names — `Writable`, or one of
+ * the wrappers a pattern body strips — and `undefined` for a reference to
+ * anything else. A type of the author's own that shares a wrapper's name is
+ * something else: the name counts only where it resolves to the declaration
+ * `commonfabric` exports. Given no checker, or a node the checker cannot
+ * resolve, as a synthesized one is, the spelling alone decides.
+ */
+function getWrapperName(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker | undefined,
+): string | undefined {
+  const identifier = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  const name = identifier.text;
+  if (name !== "Writable" && !BODY_STRIPPED_WRAPPER_NAMES.has(name)) {
+    return undefined;
+  }
+  const symbol = checker?.getSymbolAtLocation(identifier);
+  return !checker || !symbol ||
+      resolvesToCommonFabricSymbol(symbol, checker, name)
+    ? name
+    : undefined;
+}
+
+/**
+ * Returns `true` for a declared type that carries a wrapper the pattern body's
+ * view of a binding strips: as the type itself, as a member of a union or an
+ * intersection, or as the argument of `Writable`.
+ */
 export function shouldPreserveBindingDeclaredTypeNode(
   typeNode: ts.TypeNode,
+  checker?: ts.TypeChecker,
 ): boolean {
-  const unwrapped = unwrapParenthesizedTypeNode(typeNode);
+  const unwrapped = unwrapTypeParentheses(typeNode);
+  const carries = (node: ts.TypeNode) =>
+    shouldPreserveBindingDeclaredTypeNode(node, checker);
 
   if (ts.isTypeReferenceNode(unwrapped)) {
-    const name = ts.isIdentifier(unwrapped.typeName)
-      ? unwrapped.typeName.text
-      : unwrapped.typeName.right.text;
-    if (name === "Writable") {
-      return unwrapped.typeArguments?.some(
-        shouldPreserveBindingDeclaredTypeNode,
-      ) ??
-        false;
-    }
-    return (
-      name === "PerSpace" ||
-      name === "PerUser" ||
-      name === "PerSession" ||
-      name === "PerAny" ||
-      name === "Default"
-    );
+    const name = getWrapperName(unwrapped, checker);
+    return name === "Writable"
+      ? unwrapped.typeArguments?.some(carries) ?? false
+      : name !== undefined;
   }
 
   if (ts.isUnionTypeNode(unwrapped) || ts.isIntersectionTypeNode(unwrapped)) {
-    return unwrapped.types.some(shouldPreserveBindingDeclaredTypeNode);
+    return unwrapped.types.some(carries);
   }
 
   return false;
-}
-
-function unwrapParenthesizedTypeNode(typeNode: ts.TypeNode): ts.TypeNode {
-  let current = typeNode;
-  while (ts.isParenthesizedTypeNode(current)) {
-    current = current.type;
-  }
-  return current;
-}
-
-export function cloneTypeNode<T extends ts.TypeNode>(typeNode: T): T {
-  return (ts.factory as typeof ts.factory & {
-    cloneNode<TNode extends ts.Node>(node: TNode): TNode;
-  }).cloneNode(typeNode);
 }
 
 /**
@@ -606,14 +1291,17 @@ export function cloneTypeNode<T extends ts.TypeNode>(typeNode: T): T {
  * synthetic, forcing the printer to print structurally (literals fall back
  * to their `.text`).
  *
- * Pass `typeRegistry` to carry each node's registered Type onto its clone.
+ * `typeRegistry` and `state` carry each node's registered type, and the type a
+ * print was printed from (`CrossStageState.printedFrom()`), onto its clone: a
+ * clone of a print stands for the same type.
  *
  * (Mirrors the helper of the same name on the lift-capture-shrink branch,
  * #4078 — whichever lands second keeps one copy.)
  */
 export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
   typeNode: T,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): T {
   const nullContext = (ts as typeof ts & {
     nullTransformationContext?: ts.TransformationContext;
@@ -641,6 +1329,10 @@ export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
     const registered = typeRegistry?.get(node);
     if (registered) {
       typeRegistry!.set(result, registered);
+    }
+    const printedFrom = state?.printedFrom(node);
+    if (printedFrom && ts.isTypeNode(result)) {
+      state!.recordPrintedFrom(result, printedFrom);
     }
     return result;
   };
@@ -697,6 +1389,82 @@ function describeCapture(expression: ts.Expression, fallback: string): string {
 }
 
 /**
+ * The symbol of the value `identifier` reads. Written as a shorthand property
+ * (`{ x }`), the identifier's own symbol is the property of the object literal
+ * it writes, which declares nothing about the value; the value's symbol is the
+ * binding `x` names.
+ */
+function readValueSymbol(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  return symbol?.valueDeclaration &&
+      ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
+    ? checker.getShorthandAssignmentValueSymbol(symbol.valueDeclaration) ??
+      symbol
+    : symbol;
+}
+
+/**
+ * The property of a destructured aggregate that `identifier`, a binding the
+ * destructuring declares, reads, or `undefined` for any other identifier. A
+ * `{ x }` shorthand resolves to a value symbol, and the binding element keeps
+ * none of the property's own flags, so what the property declares is read
+ * from the aggregate's type. For a renamed binding (`{ source: local }`) the
+ * property is the SOURCE one. The source key may be an identifier, string, or
+ * numeric literal (`{ "k": local }`, `{ 0: local }`). A computed key
+ * (`{ [expr]: local }`) is not statically resolvable, and a rest binding
+ * (`{ ...local }`) reads no one property, so neither names one.
+ */
+function destructuredSourceProperty(
+  identifier: ts.Identifier,
+  localName: string,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const binding = readValueSymbol(identifier, checker)?.valueDeclaration;
+  if (
+    !binding || !ts.isBindingElement(binding) ||
+    !ts.isObjectBindingPattern(binding.parent)
+  ) {
+    return undefined;
+  }
+  const host = binding.parent.parent;
+  const aggregateType = ts.isParameter(host)
+    ? checker.getTypeAtLocation(host)
+    : ts.isVariableDeclaration(host) && host.initializer
+    ? checker.getTypeAtLocation(host.initializer)
+    : undefined;
+  const key = binding.propertyName;
+  const sourceName = !key
+    ? binding.dotDotDotToken ? undefined : localName
+    : ts.isIdentifier(key) || ts.isStringLiteralLike(key) ||
+        ts.isNumericLiteral(key)
+    ? key.text
+    : undefined;
+  return sourceName === undefined
+    ? undefined
+    : aggregateType?.getProperty(sourceName);
+}
+
+/**
+ * The node `symbol`'s declaration writes its type with, where it writes one:
+ * the node schema generation reads a property through.
+ */
+function declaredTypeNode(
+  symbol: ts.Symbol | undefined,
+): ts.TypeNode | undefined {
+  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+  return declaration &&
+      (ts.isPropertySignature(declaration) ||
+        ts.isPropertyDeclaration(declaration) ||
+        ts.isParameter(declaration) ||
+        ts.isVariableDeclaration(declaration))
+    ? declaration.type
+    : undefined;
+}
+
+/**
  * Builds TypeScript type elements from a capture tree structure.
  * Works for both nested properties within a tree node and root-level entries.
  * Recursively builds nested type literals for hierarchical captures.
@@ -735,6 +1503,38 @@ export function buildTypeElementsFromCaptureTree(
     if (childNode.expression) {
       // Leaf node with source expression - use it directly
       typeNode = expressionToTypeNode(childNode.expression, context);
+      const declaring = ts.isIdentifier(childNode.expression)
+        ? destructuredSourceProperty(childNode.expression, propName, checker) ??
+          readValueSymbol(childNode.expression, checker)
+        : ts.isPropertyAccessExpression(childNode.expression)
+        ? checker.getSymbolAtLocation(childNode.expression.name)
+        : undefined;
+      // A node narrowed from this one narrows the value the leaf's declaration
+      // spells, which a print of its type may not.
+      const declared = declaredTypeNode(declaring);
+      if (declared && declared !== typeNode) {
+        context.state.recordDeclaredValue(typeNode, {
+          type: checker.getTypeAtLocation(childNode.expression),
+          typeNode: declared,
+        });
+      }
+      // A print spells a `typeof` binding as the structural type of the value
+      // it names, from which no reader can tell the binding, so where the
+      // annotation of the member or binding the leaf reads names one, the
+      // print is read as that annotation.
+      const printedType = context.state.printedFrom(typeNode);
+      const annotation = declaring && printedType &&
+        (readMemberAnnotation(declaring, printedType, checker) ??
+          (declared &&
+              denotesSameType(
+                checker.getTypeFromTypeNode(declared),
+                printedType,
+              )
+            ? declared
+            : undefined));
+      if (annotation && namesValueBinding(annotation, checker)) {
+        context.state.recordSchemaHint(typeNode, { spelledBy: annotation });
+      }
 
       // Judge unknown-ness from the type that drives the emitted schema — the
       // same one expressionToTypeNode uses. A bare getTypeAtLocation would skip
@@ -773,42 +1573,13 @@ export function buildTypeElementsFromCaptureTree(
         // read the aggregate property's flag. A field declared `x?: T` is
         // optional; `x: T | undefined` (no `?`) stays required (a required key
         // whose value may be undefined), faithful to TS.
-        let symbol = checker.getSymbolAtLocation(childNode.expression);
-        if (
-          symbol?.valueDeclaration &&
-          ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
-        ) {
-          symbol = checker.getShorthandAssignmentValueSymbol(
-            symbol.valueDeclaration,
-          ) ??
-            symbol;
-        }
-        const binding = symbol?.valueDeclaration;
-        if (
-          binding && ts.isBindingElement(binding) &&
-          ts.isObjectBindingPattern(binding.parent)
-        ) {
-          const host = binding.parent.parent;
-          const aggregateType = ts.isParameter(host)
-            ? checker.getTypeAtLocation(host)
-            : ts.isVariableDeclaration(host) && host.initializer
-            ? checker.getTypeAtLocation(host.initializer)
-            : undefined;
-          // For a renamed binding (`{ source: local }`) the optionality lives on
-          // the SOURCE property, not the local capture name. The source key may
-          // be an identifier, string, or numeric literal (`{ "k": local }`,
-          // `{ 0: local }`); computed keys (`{ [expr]: local }`) aren't
-          // statically resolvable and fall back to the local name.
-          const sourceName = binding.propertyName &&
-              (ts.isIdentifier(binding.propertyName) ||
-                ts.isStringLiteralLike(binding.propertyName) ||
-                ts.isNumericLiteral(binding.propertyName))
-            ? binding.propertyName.text
-            : propName;
-          const sourceProp = aggregateType?.getProperty(sourceName);
-          if (sourceProp && isOptionalSymbol(sourceProp)) {
-            questionToken = factory.createToken(ts.SyntaxKind.QuestionToken);
-          }
+        const sourceProp = destructuredSourceProperty(
+          childNode.expression,
+          propName,
+          checker,
+        );
+        if (sourceProp && isOptionalSymbol(sourceProp)) {
+          questionToken = factory.createToken(ts.SyntaxKind.QuestionToken);
         }
       }
     } else {
@@ -820,9 +1591,13 @@ export function buildTypeElementsFromCaptureTree(
           "Invariant violated: child node has neither expression nor child",
         );
       }
+      // The symbol whose declaration spells the value this level reads part
+      // of.
+      let declaring: ts.Symbol | undefined;
       if (parentType) {
         // We have a parent type - look up this property
         const propSymbol = parentType.getProperty(propName);
+        declaring = propSymbol;
         if (propSymbol) {
           // Get Type for this property to pass to children
           currentType = checker.getTypeOfSymbol(propSymbol);
@@ -857,6 +1632,9 @@ export function buildTypeElementsFromCaptureTree(
           }
           if (ts.isIdentifier(rootExpr)) {
             currentType = checker.getTypeAtLocation(rootExpr);
+            declaring =
+              destructuredSourceProperty(rootExpr, propName, checker) ??
+                checker.getSymbolAtLocation(rootExpr);
           }
         }
       }
@@ -876,6 +1654,13 @@ export function buildTypeElementsFromCaptureTree(
           typeRegistry: context.state.typeRegistry,
         },
       );
+      if (currentType) {
+        const declared = declaredTypeNode(declaring);
+        context.state.recordNarrowedFrom(typeNode, {
+          type: currentType,
+          ...(declared && { typeNode: declared }),
+        });
+      }
     }
 
     properties.push(

@@ -36,12 +36,18 @@ import {
   FragmentWriter,
   repositoryRelativePath,
 } from "@commonfabric/test-support/records";
+import {
+  shuffledPaths,
+  shuffleNotice,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
+  ACLManager,
   ConsoleMethod,
   experimentalOptionsFromEnv,
   parseLink,
@@ -64,9 +70,10 @@ import type {
   SettleStats,
   Stream,
 } from "@commonfabric/runner";
-import type {
-  CfcEnforcementMode,
-  CfcFlowLabelsMode,
+import {
+  type CfcEnforcementMode,
+  type CfcFlowLabelsMode,
+  resetCfcDenialAnnouncements,
 } from "@commonfabric/runner/cfc";
 import {
   type CDFPoint,
@@ -86,6 +93,7 @@ import {
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";
+import { printCfcDenials, warningsCountCfcDenial } from "./cfc-denials.ts";
 import {
   evaluateReadBudget,
   parseReadBudgets,
@@ -392,6 +400,9 @@ export interface TestRunnerOptions {
   /** Override flow-label propagation for every test runtime. */
   cfcFlowLabels?: CfcFlowLabelsMode;
 
+  /** Print each CFC denial, with the inputs behind it, as it happens. */
+  cfcDenials?: boolean;
+
   /** Shared compiled-module-byte cache for direct harness compiles. */
   moduleByteCache?: ModuleByteCache;
 
@@ -444,6 +455,10 @@ export interface TestRunnerOptions {
    * manager, because a callee must not tear down a resource its caller is
    * still using — the snapshot happens after the run returns.
    *
+   * The run writes into the store as it would into its own: the program's
+   * closure, the space's access list when the store holds none, and whatever
+   * the test pattern writes.
+   *
    * The RUNTIME is still torn down (`dispose({ closeStorage: false })`), which
    * is what makes reading the store afterwards a statement about the state the
    * run reached: the runtime that wrote it can no longer commit into it. A
@@ -458,6 +473,12 @@ export interface TestRunnerOptions {
     identity: Identity;
     storageManager: RuntimeOptions["storageManager"];
 
+    /** Waits for host-owned work, such as an external agent, before test steps run. */
+    beforeAssertions?: (
+      runtime: Runtime,
+      result: Cell<unknown>,
+    ) => Promise<void>;
+
     /**
      * Cause for the test pattern's result cell, pinning its entity id.
      *
@@ -466,6 +487,12 @@ export interface TestRunnerOptions {
      * differs every run can never be addressed again.
      */
     resultCause?: unknown;
+
+    /** The API origin serving the caller's remote storage and agent runs. */
+    apiUrl?: URL;
+
+    /** Keeps a caller-provisioned home pattern and its registered services. */
+    preserveDefaultPattern?: boolean;
 
     /** Records every pattern the run materializes; see the vintage capture. */
     onPatternInstantiated?: PatternInstantiationObserver;
@@ -1089,6 +1116,12 @@ export async function runTestPattern(
   testPath: string,
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
+  // A denial logs its warning once per kind, and a denial's warning is what
+  // fails a file that does not allow for one, so each file starts with every
+  // kind unannounced. Otherwise a second file denied the same way would log
+  // nothing, and pass.
+  resetCfcDenialAnnouncements();
+
   // The effective import root: an explicit `root` wins; otherwise the nearest
   // package root above the test file, so imports that span the package (shared
   // helpers, sibling patterns) resolve without a flag. When neither exists the
@@ -1174,11 +1207,17 @@ export async function runTestPattern(
       // `runtimePresets.patternTest` carries the shared first-party posture
       // (CT-1814). Params below are this harness's declared deltas.
       new Runtime(runtimePresets.patternTest({
-        apiUrl: new URL(import.meta.url),
+        apiUrl: options.storageHost?.apiUrl ?? new URL(import.meta.url),
         storageManager,
         experimental: experimentalOptionsFromEnv(Deno.env.get),
         moduleByteCache: options.moduleByteCache ??
           getDefaultModuleByteCache(),
+        // The collector is the runtime's, which makes every compile an
+        // instrumented one and names the instrumented variant wherever the
+        // runtime reads or writes a compiled closure. Replicating a pattern
+        // instantiated with `inSpace()` reads the test's closure that way, so
+        // the variant it asks for is the one the test's compile wrote.
+        ...(patternCoverage !== undefined ? { patternCoverage } : {}),
         // Inject a fetch that honors test-declared `fetchMocks` (scoped to this
         // runtime; no process-global mutation).
         fetch: mockFetch,
@@ -1228,7 +1267,7 @@ export async function runTestPattern(
           .join("\n")
       }`
     );
-    budgetFailures.push(...failures);
+    for (const failure of failures) budgetFailures.push(failure);
     if (options.verbose && readBudgets !== undefined) {
       console.log(
         `    Read budget (${label}): ${budgetMeasurement.total} attempt accesses, ${budgetMeasurement.perRun} maximum body accesses${
@@ -1268,6 +1307,9 @@ export async function runTestPattern(
     runtime.scheduler.setReadStatsEnabled(true);
   }
   runtime.telemetry.addEventListener("telemetry", onReadCost);
+  const stopPrintingDenials = options.cfcDenials
+    ? printCfcDenials((line) => console.log(`    ${line}`))
+    : undefined;
   // Channel 1: capture pattern-code console.error / console.warn calls that
   // flow through the scheduler's harness console event.  The handler must
   // return args unchanged so the call still appears in the host console.
@@ -1320,10 +1362,22 @@ export async function runTestPattern(
       // path does (`patternFromEvaluation`). Without registration, anonymous
       // map/filter/flatMap ops fall back to a defer-corrupted embedded graph and a
       // grandchild derived-internal output throws at bind time (CT-1811).
+      // The closure is written into the test's space, as deploying the test
+      // would write it, so that a pattern the test instantiates with
+      // `inSpace()` can be replicated from it into its own space. A
+      // compile-only run instantiates nothing here, and neither does a
+      // multi-user test, whose participants run in workers of their own; so
+      // neither writes anything, a caller-supplied store included.
       () =>
-        runtime.patternManager.compileAndRegisterModules(program, {
-          patternCoverage,
-        }),
+        runtime.patternManager.compileAndRegisterModules(
+          program,
+          undefined,
+          options.compileOnly ? undefined : {
+            space,
+            when: (result) =>
+              multiUserDescriptorMeta(result.main?.default) === undefined,
+          },
+        ),
     );
     const { main } = evalResult;
 
@@ -1390,11 +1444,25 @@ export async function runTestPattern(
       );
     }
 
+    // The test's space is its identity's home space, and gets the access
+    // list a home space is born with: that identity as its only OWNER. It is
+    // the list `spaceAccess()` reads. A caller-supplied store that already
+    // holds a list keeps it.
+    await withPhase(["runTestPattern", "accessList"], async () => {
+      const acl = new ACLManager(runtime, space);
+      if (await acl.get() === null) await acl.set(space, "OWNER");
+    });
+
     // 3. Set up defaultPattern so wish({ query: "#default" }) resolves.
     // In production, default-app.tsx provides this. The test harness must
     // create a minimal equivalent so patterns that use wish("#default") to
     // access the piece registry and related space services work correctly.
     await withPhase(["runTestPattern", "defaultPatternSetup"], async () => {
+      if (options.storageHost?.preserveDefaultPattern === true) {
+        const home = runtime.getHomeSpaceCell();
+        await home.sync();
+        if (home.get()?.defaultPattern !== undefined) return;
+      }
       const setupTx = runtime.edit();
       const spaceCell = runtime.getCell(space, space, undefined, setupTx);
       const defaultPatternCell = runtime.getCell(
@@ -1430,7 +1498,7 @@ export async function runTestPattern(
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       runtime.prepareTxForCommit?.(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await runtime.idle();
     });
 
@@ -1468,7 +1536,7 @@ export async function runTestPattern(
 
           // Commit the transaction
           runtime.prepareTxForCommit?.(tx);
-          await tx.commit();
+          await tx.commit().settled;
           return value;
         } catch (error) {
           tx.abort(error);
@@ -1505,6 +1573,8 @@ export async function runTestPattern(
     });
     await initializationBudgetSettlement;
     initializationBudgetSettlement = undefined;
+
+    await options.storageHost?.beforeAssertions?.(runtime, patternResult);
 
     // 4. Get the tests array from pattern output (the reserved [TESTS] key)
     const testsCell = await withPhase(
@@ -2230,6 +2300,7 @@ export async function runTestPattern(
     };
   } finally {
     runtime.telemetry.removeEventListener("telemetry", onReadCost);
+    stopPrintingDenials?.();
     if (
       patternCoverage && options.patternCoverageDir &&
       writeLocalPatternCoverage
@@ -2371,7 +2442,15 @@ export async function runTests(
       durationMs: Math.round(durationMs),
     });
 
-  for (const testPath of paths) {
+  // Files run in the order the seed puts them in, so a file that leans
+  // on another file having run fails rather than passing quietly. The
+  // steps inside a file keep their order: a pattern test states its
+  // expectations as a sequence, each one about the state the step before
+  // it left, so their order is the test rather than an accident of it.
+  const seed = shuffleSeed();
+  console.log(shuffleNotice(seed));
+
+  for (const testPath of shuffledPaths(paths, seed)) {
     console.log(`\n${basename(testPath)}`);
     const failedBefore = totalFailed;
     const fileStarted = performance.now();
@@ -2529,6 +2608,16 @@ export async function runTests(
               : msg;
             console.log(`    ${truncated}`);
           }
+          // The `cfc` logger names each kind of denial once and keeps the
+          // reasons at debug, so say where the reasons are.
+          if (
+            !options.cfcDenials &&
+            warningsCountCfcDenial(result.consoleWarnings)
+          ) {
+            console.log(
+              "    Run again with `--cfc-denials` to see what CFC denied, and why.",
+            );
+          }
         }
       }
     }
@@ -2578,7 +2667,7 @@ export async function discoverTestFiles(dir: string): Promise<string[]> {
       } else if (entry.isDirectory) {
         // Recursively search subdirectories
         const subFiles = await discoverTestFiles(`${dir}/${entry.name}`);
-        testFiles.push(...subFiles);
+        for (const subFile of subFiles) testFiles.push(subFile);
       }
     }
   } catch {

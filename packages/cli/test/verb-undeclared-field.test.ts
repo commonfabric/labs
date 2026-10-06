@@ -24,6 +24,7 @@ import {
   VerbInputValidationError,
 } from "../lib/callable.ts";
 import { executePieceCallable } from "../lib/piece.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /**
  * Dispatch `payload` at a verb publishing `schema`, through the same
@@ -52,14 +53,18 @@ async function dispatchedPayload(
       onCommit?.({ status: () => ({ status: "ok" }) });
     },
   };
-  await executeResolvedCallable({
-    callableCell: callableCell as never,
-    callableKind: "handler",
-    cellKey: "probe",
-    pieces: { runtime: {} } as never,
-    space: "did:key:undeclared-field-probe" as never,
-    inputSchema: schema,
-  }, payload);
+  await executeResolvedCallable(
+    {
+      callableCell: callableCell as never,
+      callableKind: "handler",
+      cellKey: "probe",
+      pieces: { runtime: {} } as never,
+      space: "did:key:undeclared-field-probe" as never,
+      inputSchema: schema,
+    },
+    payload,
+    { sendEvent: sendThroughStandIn },
+  );
   return sent;
 }
 
@@ -229,7 +234,7 @@ async function withProgram<T>(
     const rootCell = runtime.getCell(space, "undeclared-field", undefined, tx);
     const root = runtime.run(tx, compiled, {}, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await root.pull();
 
     const piece = {
@@ -1128,7 +1133,7 @@ describe("verb-undeclared-field", () => {
           tx,
         );
         cell.set({ title: "held" });
-        await tx.commit();
+        await tx.commit().settled;
         expect(verbInputSchemaError({ on: cell }, narrowed)).toBeUndefined();
       } finally {
         await runtime.dispose();

@@ -28,6 +28,8 @@
 // Phase 1 stage F. The machinery lands dark, exercised by tests.
 
 import type { CellScope } from "@commonfabric/api";
+import { type DID, isDID } from "@commonfabric/identity/did";
+import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type CommitPrecondition,
   type ConfirmedRead,
@@ -56,10 +58,12 @@ import type {
   TransactionSealDestination,
   Unit,
   URI,
+  WaveWithdrawalCause,
 } from "../storage/interface.ts";
 import { parsePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { ACL_DOCUMENT_WRITE_REFUSED } from "../scheduler/types.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import {
   getTransactionReadActivities,
@@ -173,7 +177,7 @@ export interface WaveRunContext {
    * resolve no scoped addresses at all). */
   scopeKeyIdentity?: ScopeKeyIdentity;
 
-  /** The read ceiling this run's `db.query` reads are bounded by: the
+  /** The read ceiling this run's cell and `db.query` reads are bounded by: the
    * ceiling of the session the run acts as (`scopeKeyIdentity.sessionId`),
    * read from the memory server's session record at the stamp
    * (`Server.sessionReadCeiling`) — declared by the client in its signed
@@ -209,16 +213,6 @@ export interface WaveRunContext {
    * right). */
   emissionAttributionScope?: CellScope;
 }
-
-/** The accept gate's authority probe result (protocol.md §2b): a bare
- * boolean (test/mechanics waves), or the memory server's full verdict —
- * whose `via` arm the wave RETAINS per (space, acting user) so the
- * commit step can force a `creation`-granted target's genesis ahead of
- * the sink (OW31 B4; INV-13's precedence on the engine-direct plane). */
-export type ForeignWriteGrantResult =
-  | boolean
-  | { granted: true; via: "owner" | "creation" | "acl" }
-  | { granted: false; reason?: string };
 
 const waveRunContexts = new WeakMap<object, WaveRunContext>();
 
@@ -352,10 +346,47 @@ export function waveRunContextOf(
   return undefined;
 }
 
+/**
+ * Returns the actor a served run on `tx` acts for: the user its stamped run
+ * context carries, when that is a DID. `undefined` for a run stamped with no
+ * actor, and for a transaction the serving loop did not stamp, which
+ * `waveRunContextOf()` tells apart.
+ */
+export function waveRunActorOf(
+  tx: IExtendedStorageTransaction,
+): DID | undefined {
+  const user = waveRunContextOf(tx)?.acting?.user;
+  return isDID(user) ? user : undefined;
+}
+
+/**
+ * A delegated carriage (protocol.md §2b): the acting identity a write crossing
+ * into another space is made for, and the grant it is admitted under.
+ */
+export type DelegatedCarriage = {
+  acting: { user: string; session?: string };
+  capabilityRef: string;
+};
+
+/**
+ * The delegated carriage a run lends a bookkeeping write it triggers after it
+ * is over: the run's settled acting identity and grant, or none for a run that
+ * acted as nobody.
+ */
+export function delegatedCarriageOf(
+  context: WaveRunContext | undefined,
+): DelegatedCarriage | undefined {
+  const acting = context?.acting;
+  const capabilityRef = context?.capabilityRef;
+  return acting !== undefined && capabilityRef !== undefined
+    ? { acting, capabilityRef }
+    : undefined;
+}
+
 // The DURABLE-acceptance settlement of a tx sealed into a wave: the seal
-// resolves the tx's commit() (acceptance into the wave), but the writes
+// resolves the tx's `commit().settled` (acceptance into the wave). Its writes
 // become durable only at the wave commit — and a conflict there can
-// WITHDRAW the contribution after its commit() already resolved ok. A
+// withdraw the contribution after `commit().settled` resolved `ok`. A
 // caller whose side effects must wait for durability (the pattern swap's
 // teardown + reinstantiation, §3e) awaits this instead. Attached by the
 // accumulator at seal, same side-table mechanism as the run context.
@@ -364,6 +395,9 @@ type WaveSettlement = Result<
   StorageTransactionRejected & {
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
+
+    /** Why the wave withdrew this transaction's contribution. */
+    waveWithdrawalCause?: WaveWithdrawalCause;
   }
 >;
 
@@ -465,10 +499,13 @@ export interface WaveSpaceCommit {
    * reported precondition failure resolve per write class. */
   preconditionOwners?: number[];
 
-  /** Owning contribution index per operation — home batch only. The sink
-   * returns the failed operation for a proven-no-commit row-label refusal,
-   * letting the accumulator identify the one event whose deterministic write
-   * was refused without terminalizing unrelated events in the same wave. */
+  /**
+   * Owning contribution index per operation — home batch only. The sink
+   * returns the failed operation for a proven-no-commit row-label refusal or
+   * ACL-document refusal, letting the accumulator identify the one event
+   * whose deterministic write was refused without terminalizing unrelated
+   * events in the same wave.
+   */
   operationOwners?: number[];
 
   annotations: WaveWriteAnnotation[];
@@ -519,6 +556,20 @@ export interface WaveSpaceCommit {
 }
 
 /**
+ * Whether `error` is the seal's refusal of a transaction that writes a space's
+ * ACL document, carried as the `reason` Error's message, the sentinel
+ * `ACL_DOCUMENT_WRITE_REFUSED`.
+ */
+export function isAclDocumentWriteRefusal(
+  error: unknown,
+): error is { readonly message: string; readonly reason: Error } {
+  const reason = (error as { reason?: unknown } | undefined)?.reason;
+  return reason instanceof Error &&
+    reason.message === ACL_DOCUMENT_WRITE_REFUSED &&
+    typeof (error as { message?: unknown }).message === "string";
+}
+
+/**
  * Why the sink refused a wave commit. `conflictedDocs` names doc-instance
  * keys whose head moved past the wave's basis after the accumulator's own
  * head query — the race window the resolve loop closes;
@@ -526,12 +577,18 @@ export interface WaveSpaceCommit {
  * array. A rejection naming neither is terminal for the wave.
  */
 export interface WaveCommitRejection {
-  name: "WaveCommitRejected" | "RowLabelCommitError";
+  name:
+    | "WaveCommitRejected"
+    | "RowLabelCommitError"
+    | "AclDocumentWriteRefused";
   message: string;
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
 
-  /** Operation index for a deterministic RowLabelCommitError. */
+  /**
+   * Operation index for a deterministic `RowLabelCommitError` or
+   * `AclDocumentWriteRefused`.
+   */
   failedOperation?: number;
 }
 
@@ -872,7 +929,7 @@ export class WaveAccumulator
     | ((
       space: MemorySpace,
       acting: { user: string; session?: string },
-    ) => ForeignWriteGrantResult | Promise<ForeignWriteGrantResult>)
+    ) => boolean | Promise<boolean>)
     | undefined;
 
   /** Grant verdicts per (space, acting user) for THIS wave — one probe
@@ -880,19 +937,6 @@ export class WaveAccumulator
    * can change between waves; a transient probe failure must not stick
    * beyond the wave that observed it). */
   readonly #foreignGrantVerdicts = new Map<string, Promise<boolean>>();
-
-  /** The grant ARM each admitted crossing resolved through, per
-   * (space, acting user) — retained for the commit step (OW31 B4,
-   * protocol.md §2b): a `creation`-granted foreign target's genesis
-   * ACL is forced BEFORE the sink's data batch, so INV-13's precedence
-   * holds on the engine-direct plane too. Only verdicts that carry a
-   * `via` are recorded (a bare-boolean probe records none — such waves
-   * never force a genesis; the sink's seq-0/no-ACL refusal stays the
-   * backstop). */
-  readonly #foreignGrantVia = new Map<
-    string,
-    "owner" | "creation" | "acl"
-  >();
 
   readonly #onForeignWriteRefusal:
     | ((info: { space: MemorySpace; actionId?: string }) => void)
@@ -1011,14 +1055,14 @@ export class WaveAccumulator
      * acting run into any co-hosted space (the F1 vacuous-gate class),
      * so the constructor refuses the combination. The serving loop
      * wires the co-hosted memory server's
-     * `foreignWriteAuthorityFor` (owner-by-identity / fresh-store
-     * creation / the target's own ACL grant — fail-closed otherwise);
+     * `foreignWriteAuthorityFor` (the target's own ACL grant —
+     * fail-closed otherwise, a space no store holds included);
      * a probe that THROWS refuses the crossing (fail closed), scoped
      * to this wave. Probed once per (space, acting user) per wave. */
     foreignWriteGrant?: (
       space: MemorySpace,
       acting: { user: string; session?: string },
-    ) => ForeignWriteGrantResult | Promise<ForeignWriteGrantResult>;
+    ) => boolean | Promise<boolean>;
 
     /** Fired once per refused foreign-space write (above): the serving
      * loop counts it into §7's `foreignWriteRefusals`. */
@@ -1378,9 +1422,22 @@ export class WaveAccumulator
    * have gone consequenced-clean in the committed wave; the serving
    * loop's pre-commit seal-chain barrier is what keeps this arm
    * unreachable in production.
+   *
+   * `error` is the seal's refusal, when the caller has it. A refusal of a
+   * write to a space's ACL document by a run delivering a durable entry
+   * (one whose context carries its `streamEntry`) notes nothing: the refusal
+   * is deterministic, the scheduler seals it as that entry's error
+   * consequence, and a replay would reach the identical refusal. The same
+   * refusal of an in-process run, which has no entry to carry the error,
+   * requeues its event like any other failed seal.
    */
-  noteSealFailure(context: WaveRunContext | undefined): void {
+  noteSealFailure(context: WaveRunContext | undefined, error?: unknown): void {
     if (context?.kind !== "event-handler" || context.eventId === undefined) {
+      return;
+    }
+    if (
+      isAclDocumentWriteRefusal(error) && context.streamEntry !== undefined
+    ) {
       return;
     }
     if (this.#closed) {
@@ -1537,6 +1594,28 @@ export class WaveAccumulator
         },
       };
     }
+    // No run on the served plane writes a space's ACL document, home or
+    // foreign, in any memory ACL mode: nothing here checks INV-12's shape or
+    // the acting user's level, and the engine-direct commit skips the memory
+    // server's check (09-invariants.md, INV-12). Refusing at the seal fails
+    // only this run; `noteSealFailure()` says what happens to its event.
+    const aclId = aclDocId(space);
+    if (native.operations.some((operation) => operation.id === aclId)) {
+      const actionId = assembly.context?.actionId;
+      logger.warn("acl-document-write-refused", () => [
+        `access-list write refused at wave accumulation: action ` +
+        `${actionId ?? "<unstamped>"} attempted to write ${aclId}`,
+      ]);
+      return {
+        error: {
+          name: "StorageTransactionAborted",
+          message: `${aclId} is the space ACL document, and no run on the ` +
+            `served plane may write it: action ` +
+            `${actionId ?? "<unstamped>"} attempted to (INV-12)`,
+          reason: new Error(ACL_DOCUMENT_WRITE_REFUSED),
+        },
+      };
+    }
     if (space !== this.#space) {
       // Accumulation-time gate (serving-loop.md §3d, RULED 2026-08-14
       // (c); lifted by Phase 5 for the SANCTIONED shape only):
@@ -1577,9 +1656,8 @@ export class WaveAccumulator
           "authored row)";
       } else if (!(await this.#foreignGrantFor(space, acting))) {
         why = `the acting identity ${acting.user} holds no structural ` +
-          `write grant for ${space} (protocol.md §2b: owner-by-identity, ` +
-          "fresh-store creation, or the target's own ACL grant; " +
-          "fail-closed otherwise)";
+          `write grant for ${space} (protocol.md §2b: the target's own ` +
+          "ACL grant; fail-closed otherwise)";
       }
       if (why !== undefined) {
         const actionId = assembly.context?.actionId;
@@ -1679,10 +1757,16 @@ export class WaveAccumulator
     }
   }
 
+  /** Whether the lease tenure this wave sealed under has ended. */
+  get #tenureEnded(): boolean {
+    return this.#lease !== undefined &&
+      !this.#lease.isCurrentTenure(this.#sealedTenure);
+  }
+
   #withdraw(
     contribution: WaveContribution,
     message: string,
-    cause?: "contribution-dropped" | "wave-abandoned",
+    cause?: WaveWithdrawalCause,
   ): void {
     contribution.emptySettlement?.resolve({
       error: {
@@ -1762,25 +1846,7 @@ export class WaveAccumulator
     // consumer; inputs unchanged), so a loop that continued after the
     // abort would advance W over derivations that never re-ran
     // (space-server.ts's lease-lost-abort park).
-    if (
-      this.#lease !== undefined &&
-      !this.#lease.isCurrentTenure(this.#sealedTenure)
-    ) {
-      for (const contribution of this.#contributions) {
-        this.#withdraw(
-          contribution,
-          "lease lost mid-wave; the in-flight wave aborts " +
-            "(serving-loop.md §2)",
-        );
-        outcome.dispositions[contribution.index] =
-          contribution.context.kind === "event-handler"
-            ? { kind: "requeued" }
-            : { kind: "dropped" };
-      }
-      this.#reportRequeuedEvents(outcome, () => true);
-      outcome.aborted = "lease-lost";
-      return outcome;
-    }
+    if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
     if (this.#contributions.length === 0) {
       return outcome;
@@ -2265,10 +2331,7 @@ export class WaveAccumulator
       // check): the entry check plus the engine's live-lease row cover
       // today's synchronous sink, but an ASYNC sink would re-open the
       // same-process C7b window between entry and this call.
-      if (
-        this.#lease !== undefined &&
-        !this.#lease.isCurrentTenure(this.#sealedTenure)
-      ) {
+      if (this.#tenureEnded) {
         this.#abortAfterForeignFailure(outcome);
         outcome.aborted = "lease-lost";
         return outcome;
@@ -2335,25 +2398,7 @@ export class WaveAccumulator
 
       // Tenure re-check before every home attempt (see the foreign-loop
       // note): the resolve loop may have awaited the sink several times.
-      if (
-        this.#lease !== undefined &&
-        !this.#lease.isCurrentTenure(this.#sealedTenure)
-      ) {
-        for (const contribution of this.#contributions) {
-          this.#withdraw(
-            contribution,
-            "lease lost mid-wave; the in-flight wave aborts " +
-              "(serving-loop.md §2)",
-          );
-          outcome.dispositions[contribution.index] =
-            contribution.context.kind === "event-handler"
-              ? { kind: "requeued" }
-              : { kind: "dropped" };
-        }
-        this.#reportRequeuedEvents(outcome, () => true);
-        outcome.aborted = "lease-lost";
-        return outcome;
-      }
+      if (this.#tenureEnded) return this.#abortForLostLease(outcome);
       const result = await sink.commitWave(batch);
       if (!result.error) {
         this.#settleVerdicts(
@@ -2369,6 +2414,11 @@ export class WaveAccumulator
         outcome.seq = result.ok.seq;
         return outcome;
       }
+      // The memory server refuses a derived commit whose holder no longer
+      // holds the live lease, and the sink's owner ends the tenure when it
+      // sees such a refusal (serving-loop.md §2). A refusal under an ended
+      // tenure is a lease loss, with no conflict to resolve.
+      if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
       // The sink re-verified inside its transaction and something moved
       // after our head query (or a precondition failed). Fold the news
@@ -2432,8 +2482,12 @@ export class WaveAccumulator
               : { kind: "dropped" };
         }
         this.#reportRequeuedEvents(outcome, () => true);
+        // A deterministic refusal naming its operation terminalizes the
+        // one event that wrote it; replaying it would reach the identical
+        // refusal.
         if (
-          rejection.name === "RowLabelCommitError" &&
+          (rejection.name === "RowLabelCommitError" ||
+            rejection.name === "AclDocumentWriteRefused") &&
           Number.isInteger(rejection.failedOperation)
         ) {
           const owner = batch.operationOwners?.[rejection.failedOperation!];
@@ -2459,7 +2513,9 @@ export class WaveAccumulator
               eventId: context.eventId,
               streamEntry,
               failureClass: "protocol",
-              recoveryEpoch: "row-label-verdict",
+              recoveryEpoch: rejection.name === "RowLabelCommitError"
+                ? "row-label-verdict"
+                : "acl-document-write",
               permanentEvidence: true,
             });
           }
@@ -2767,7 +2823,9 @@ export class WaveAccumulator
       ) {
         consequenceOf.push(context.eventId);
       }
-      outboxAppends.push(...contribution.outboundAppends);
+      for (const append of contribution.outboundAppends) {
+        outboxAppends.push(append);
+      }
       const home = this.#homeSealed(contribution);
       if (home === undefined) continue;
       for (const operation of home.sealed.commit.operations) {
@@ -3040,17 +3098,7 @@ export class WaveAccumulator
     let verdict = this.#foreignGrantVerdicts.get(key);
     if (verdict === undefined) {
       verdict = (async () => await this.#foreignWriteGrant!(space, acting))()
-        .then(
-          (result) => {
-            if (typeof result === "boolean") return result;
-            if (result.granted) {
-              // Retain the grant arm for the commit step (OW31 B4): a
-              // `creation`-granted target's genesis is forced before
-              // the sink applies its data batch.
-              this.#foreignGrantVia.set(key, result.via);
-            }
-            return result.granted;
-          },
+        .catch(
           (error) => {
             logger.warn("foreign-write-grant-probe-failed", () => [
               `the foreign-write authority probe for ${space} (acting ` +
@@ -3066,22 +3114,6 @@ export class WaveAccumulator
     return verdict;
   }
 
-  /** The foreign spaces some admitted crossing of this wave was granted
-   * via the `creation` arm (protocol.md §2b's sanctioned provisioning) —
-   * the targets whose genesis ACL the commit step must force BEFORE the
-   * sink's data batch (OW31 B4; the session-plane precedence clause,
-   * INV-13, mirrored onto the engine-direct plane). Resolved by the time
-   * the wave closes: every admitted crossing awaited its probe at
-   * accumulation. */
-  creationGrantedForeignSpaces(): MemorySpace[] {
-    const spaces = new Set<MemorySpace>();
-    for (const [key, via] of this.#foreignGrantVia) {
-      if (via !== "creation") continue;
-      spaces.add(key.slice(0, key.indexOf("\0")) as MemorySpace);
-    }
-    return [...spaces];
-  }
-
   /** The delegated-identity carriage a contribution's foreign batch
    * carries (protocol.md §2's server-produced authored row): ONE
    * originating chain actor + ONE grant, or none. */
@@ -3090,15 +3122,14 @@ export class WaveAccumulator
     actingSession?: string;
     capabilityRef: string;
   } | undefined {
-    return context.acting !== undefined && context.capabilityRef !== undefined
-      ? {
-        actingPrincipal: context.acting.user,
-        ...(context.acting.session !== undefined
-          ? { actingSession: context.acting.session }
-          : {}),
-        capabilityRef: context.capabilityRef,
-      }
-      : undefined;
+    const carriage = delegatedCarriageOf(context);
+    return carriage === undefined ? undefined : {
+      actingPrincipal: carriage.acting.user,
+      ...(carriage.acting.session !== undefined
+        ? { actingSession: carriage.acting.session }
+        : {}),
+      capabilityRef: carriage.capabilityRef,
+    };
   }
 
   /** The foreign-batch grouping key — (space, acting identity, grant).
@@ -3154,7 +3185,9 @@ export class WaveAccumulator
         for (const operation of sealed.sealed.commit.operations) {
           batch.operations.push(operation);
         }
-        batch.preconditions.push(...sealed.sealed.commit.preconditions ?? []);
+        for (const precondition of sealed.sealed.commit.preconditions ?? []) {
+          batch.preconditions.push(precondition);
+        }
       }
     }
     return [...batches.entries()].map(([key, batch]) => ({ key, batch }));
@@ -3358,6 +3391,27 @@ export class WaveAccumulator
         contribution.resolveVerdict({ committed: { seq } });
       }
     }
+  }
+
+  /**
+   * Withdraws every contribution because the lease tenure ended before the
+   * home commit landed (serving-loop.md §2's stop-committing MUST).
+   */
+  #abortForLostLease(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    for (const contribution of this.#contributions) {
+      this.#withdraw(
+        contribution,
+        "lease lost mid-wave; the in-flight wave aborts " +
+          "(serving-loop.md §2)",
+      );
+      outcome.dispositions[contribution.index] =
+        contribution.context.kind === "event-handler"
+          ? { kind: "requeued" }
+          : { kind: "dropped" };
+    }
+    this.#reportRequeuedEvents(outcome, () => true);
+    outcome.aborted = "lease-lost";
+    return outcome;
   }
 
   #abortAfterForeignFailure(outcome: WaveCommitOutcome): void {

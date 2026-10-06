@@ -1,16 +1,19 @@
 /**
  * The Python language for the pager. It provides lossless syntax highlighting
- * for direct files, diffs, and live edits. Python does not provide structure
- * navigation or a semantic layer.
+ * for direct files, diffs, and live edits, and a structure tree of classes and
+ * functions. Python has no semantic layer.
  */
 
 import type { Language } from "../language.ts";
 import { utf8Decoder } from "../decoder.ts";
+import { remapStructure } from "../../diffremap.ts";
 import {
-  createPythonHighlighter,
-  pythonDocument,
-  pythonHighlightLines,
-} from "./python.ts";
+  createHighlighter,
+  highlightLines,
+  parseDocument,
+  prepareGrammar,
+} from "../treesitter/adapter.ts";
+import { pythonGrammar } from "./python.ts";
 
 export const pythonLanguage: Language = {
   id: "python",
@@ -25,17 +28,23 @@ export const pythonLanguage: Language = {
     interpreters: [
       /^python(?:\d+(?:\.\d+)*)?$/,
       /^pypy(?:\d+(?:\.\d+)*)?$/,
+      // `uv run` runs the shebang's own file as a Python script. The
+      // launcher's other subcommands run something else, so the word after it
+      // is part of the claim.
+      ["uv", "run"],
     ],
     sharedExtensions: [],
   },
 
-  parseDocument: (text) => pythonDocument(text),
+  prepare: () => prepareGrammar(pythonGrammar),
 
-  highlightLines: (text) => pythonHighlightLines(text),
+  parseDocument: (text) => parseDocument(pythonGrammar, text),
+
+  highlightLines: (text) => highlightLines(pythonGrammar, text),
 
   highlightFullFileOnDiffEdit: true,
 
-  createHighlighter: (text) => createPythonHighlighter(text),
+  createHighlighter: (text) => createHighlighter(pythonGrammar, text),
 
-  hunkStructure: () => [],
+  hunkStructure: (ctx) => remapStructure(ctx),
 };

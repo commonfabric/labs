@@ -143,6 +143,31 @@ export function listScopes(
     total.revisions += row.revisions;
     totals.set(row.scope, total);
   }
+  return sortedScopes(totals);
+}
+
+/**
+ * The scopes {@link listScopes} would report, from rows a caller already
+ * grouped by scope — the shape `visibleEntityRowsByScope` returns. A caller
+ * that needs both the scopes and their rows takes them from one pass this way,
+ * rather than walking the branch's revisions a second time, and the two cannot
+ * disagree about which scopes exist.
+ */
+export function scopesOfRows(
+  rowsByScope: ReadonlyMap<string, readonly { readonly revisions: number }[]>,
+): Scope[] {
+  const totals = new Map<string, { entities: number; revisions: number }>();
+  for (const [scope, rows] of rowsByScope) {
+    let revisions = 0;
+    for (const row of rows) revisions += row.revisions;
+    totals.set(scope, { entities: rows.length, revisions });
+  }
+  return sortedScopes(totals);
+}
+
+function sortedScopes(
+  totals: ReadonlyMap<string, { entities: number; revisions: number }>,
+): Scope[] {
   return [...totals.entries()]
     .map(([scope, total]) => ({ ...parseScope(scope), ...total }))
     .sort((a, b) =>

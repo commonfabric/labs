@@ -73,6 +73,24 @@ const rootSource = (version: string) =>
   ].join("\n");
 
 const ROOT_V1 = rootSource("v1");
+
+/**
+ * A home that owns a journal, and, `withChatManager`, a child piece the way
+ * home.tsx holds its chat manager: a same-file pattern owning its own list,
+ * linked from the root's `chatManager` field.
+ */
+const fieldSource = (withChatManager: boolean) =>
+  [
+    "import { pattern, Writable } from 'commonfabric';",
+    "const Manager = pattern<Record<string, never>>(() => ({",
+    "  rooms: new Writable<string[]>([]).for('rooms'),",
+    "}));",
+    "export default pattern<void>(() => ({",
+    "  journal: new Writable<string[]>([]).for('journal'),",
+    ...(withChatManager ? ["  chatManager: Manager({}),"] : []),
+    "}));",
+    "",
+  ].join("\n");
 const ROOT_V2 = rootSource("v2");
 
 const SEEDED_FAVORITES = [{ id: "fav:notes", spaceName: "Work" }];
@@ -152,7 +170,7 @@ describe("home golden replay (durable home state survives an in-place roll-forwa
     // `isHomeSpace` on inside the controller (ensureDefaultPattern + the update
     // gate) so the home branch — cause "home-pattern", provenance HOME_PATTERN_PATH
     // — is exercised.
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
       spaceDid: signer.did(),
     });
@@ -235,5 +253,29 @@ describe("home golden replay (durable home state survives an in-place roll-forwa
     expect(summary).toBe("v2:" + SEEDED_COUNTS);
 
     cancelSink();
+  });
+
+  it("leaves a field a newer home adds unset until the home is opened, and sets it then", async () => {
+    // A home set up before its source gained `chatManager`, the field
+    // `#chatManager` reads. Nothing updates a piece nobody opens, so serving
+    // the newer source changes nothing until the home is opened.
+    stub.setSource(fieldSource(false));
+    await controller.ensureDefaultPattern();
+    const rooms = () =>
+      runtime.getHomeSpaceCell().key("defaultPattern").key("chatManager")
+        .key("rooms");
+    const roomsNow = async () => {
+      await rooms().pull();
+      return rooms().get();
+    };
+    expect(await roomsNow()).toBeUndefined();
+
+    stub.setSource(fieldSource(true));
+    await runtime.idle();
+    expect(await roomsNow()).toBeUndefined();
+
+    await controller.ensureDefaultPattern();
+    await runtime.idle();
+    expect(await roomsNow()).toEqual([]);
   });
 });

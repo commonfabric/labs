@@ -1,14 +1,21 @@
-export { decomposeSchema, recomposeSchema } from "./schema-decompose.ts";
+export {
+  decomposeSchema,
+  recomposeSchema,
+  SchemaNotDecomposableError,
+} from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
 export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 export { Runtime } from "./runtime.ts";
+export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
   fabricAuthorityMatchesSpaceHost,
   type FabricSpaceHostOptions,
   isLoopbackHostname,
   normalizeSpaceHost,
   spaceHostFromFabricAuthority,
+  type SpaceHostRefusalReason,
+  type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "./space-host.ts";
 export type {
@@ -56,7 +63,7 @@ export type {
 } from "./unsafe-host-trust.ts";
 export * from "./interface.ts";
 export { raw } from "./module.ts";
-export type { Cell, Stream } from "./cell.ts";
+export type { Cell, ProjectedRead, SinkConsumedLabel, Stream } from "./cell.ts";
 // The seam's vocabulary, which describes a document's shape and is read by
 // hosts. Its write authorization is deliberately not here: it rides the
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
@@ -88,13 +95,19 @@ export type {
 } from "./scheduler.ts";
 export type {
   ChangeGroup,
+  CommitError,
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
   IOperationStorageCapability,
+  IPresenceStorageCapability,
   MemorySpace,
   TransactionCommitOptions,
+  TransactionCommitReceipt,
 } from "./storage/interface.ts";
-export { hasOperationStorageCapability } from "./storage/interface.ts";
+export {
+  hasOperationStorageCapability,
+  hasPresenceStorageCapability,
+} from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
 export type {
   EntityIdListOptions,
@@ -108,11 +121,19 @@ export {
 } from "./storage/transaction-summary.ts";
 export {
   type CellLinkInput,
+  cellRuntime,
+  cellTx,
   convertCellsToLinks,
   encodeSqliteParams,
+  exportCell,
+  hostValueOf,
   isCell,
   isReadableCell,
   isStream,
+  readProjected,
+  sendEvent,
+  setCell,
+  sinkProjected,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -164,6 +185,7 @@ export {
 } from "./link-resolution.ts";
 export {
   areLinksSame,
+  getDerivedInternalCellLink,
   getMetaLink,
   isCellLink as isLink,
   isWriteRedirectLink,
@@ -183,6 +205,7 @@ export {
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
   resolveSpaceRootPattern,
+  SpaceNotFoundError,
   type SpaceRootCreationHooks,
   spaceRootPatternConfig,
 } from "./ensure-space-root.ts";
@@ -414,3 +437,5 @@ export {
   renderCellReference,
   renderReferenceContext,
 } from "./cell-reference.ts";
+
+export { scopeCallerEventId } from "./scheduler/event-identity.ts";

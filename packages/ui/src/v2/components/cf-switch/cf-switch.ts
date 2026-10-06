@@ -190,10 +190,6 @@ export class CFSwitch extends BaseElement {
     return this._checkedCellController.getValue();
   }
 
-  private setChecked(newValue: boolean): void {
-    this._checkedCellController.setValue(newValue);
-  }
-
   override connectedCallback() {
     if (!this.hasAttribute("role")) {
       this.setAttribute("role", "switch");
@@ -286,16 +282,15 @@ export class CFSwitch extends BaseElement {
       return;
     }
 
-    const oldChecked = this.getChecked();
-
-    // Toggle checked state via cell controller
+    // Toggle checked state via cell controller, which computes it from what
+    // the cell holds, asking the worker first where it has read nothing.
     if (this._checkedCellController.hasCell()) {
-      this.setChecked(!oldChecked);
+      void this._checkedCellController.toggle();
       return;
     }
 
     // For plain boolean usage (no Cell), update the property directly
-    this.checked = !oldChecked;
+    this.checked = !this.getChecked();
     this.emit("cf-change", { checked: this.checked });
   }
 

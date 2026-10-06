@@ -42,7 +42,7 @@ describe("Cell array element conversion", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -65,7 +65,7 @@ describe("Cell array element conversion", () => {
     refCell.setRaw([{ foo: 1 }, { foo: 2 }, { foo: 3 }]);
 
     // Commit transaction to persist data
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     tx = runtime.edit();
@@ -144,13 +144,13 @@ describe("plain-schema array traversal", () => {
 
   async function seed(id: string, value: unknown): Promise<void> {
     runtime.getCell(space, id, undefined, tx).set(value);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
   }
 
   async function seedRaw(id: string, value: FabricValue): Promise<void> {
     runtime.getCell(space, id, undefined, tx).setRawUntyped(value);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
   }
 
@@ -404,7 +404,7 @@ describe("plain-schema array traversal", () => {
     const nativeTrackReadPaths = tx.trackReadPaths!.bind(tx);
     tx.trackReadPaths = (address, paths, options) => {
       if (address.id.startsWith(`data:${DATA_URI_MEDIA_TYPE}`)) {
-        trackedDataPaths.push(...paths.map((path) => [...path]));
+        for (const path of paths) trackedDataPaths.push([...path]);
       }
       return nativeTrackReadPaths(address, paths, options);
     };
@@ -424,7 +424,7 @@ describe("plain-schema array traversal", () => {
     runtime.getCell(space, "linked-string-array", undefined, tx).setRawUntyped(
       [[linkedString.getAsLink()]],
     );
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const cell = runtime.getCell<string[][]>(
@@ -493,7 +493,7 @@ describe("plain-schema array traversal", () => {
     runtime.getCell(space, "missing-item-array", undefined, tx).setRawUntyped(
       [missing.getAsLink()],
     );
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const cell = runtime.getCell<Record<string, never>[]>(
@@ -541,7 +541,7 @@ describe("plain-schema array traversal", () => {
       undefined,
       tx,
     ).setRawUntyped([missing.getAsLink(), present.getAsLink()]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const schema = {
@@ -737,7 +737,7 @@ describe("elementById on tuple (prefixItems) arrays", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

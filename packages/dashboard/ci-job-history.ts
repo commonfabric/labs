@@ -5,6 +5,7 @@
  * scripts/ci-gantt.ts.
  */
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   type CachedCiGanttJob,
   type CachedCiRun,
@@ -24,6 +25,7 @@ import {
   github,
   performanceGithub,
   sparkline,
+  STALE_RUNS_ERROR,
 } from "./lib.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import {
@@ -515,8 +517,7 @@ function successfulMainWorkflowRuns(
   for (const run of runs) {
     const at = runTime(run);
     if (
-      run.status !== "completed" || run.conclusion !== "success" ||
-      run.event !== "push" ||
+      !isSuccessfulPush(run) ||
       (run.head_branch !== undefined && run.head_branch !== null &&
         run.head_branch !== "main") ||
       !Number.isFinite(at) || at < cutoff || at > now
@@ -527,6 +528,28 @@ function successfulMainWorkflowRuns(
     }
   }
   return [...eligible.values()];
+}
+
+// Whether `run` is a push that succeeded.
+function isSuccessfulPush(run: WorkflowRun): boolean {
+  return run.status === "completed" && run.conclusion === "success" &&
+    run.event === "push";
+}
+
+// One page of a workflow's runs, whatever they ran for, newest first. GitHub
+// serves this listing current. A listing narrowed by branch, event, or status
+// is served from an index that can be days behind it.
+async function fetchUnfilteredWorkflowRuns(
+  token: string,
+  source: CiHistorySource,
+  request: GitHubRequest,
+  page = 1,
+): Promise<WorkflowRun[]> {
+  const response = await request<{ workflow_runs?: WorkflowRun[] }>(
+    `repos/${source.repo}/actions/workflows/${source.workflow}/runs?per_page=100&page=${page}`,
+    token,
+  );
+  return (response.workflow_runs ?? []).map(projectWorkflowRun);
 }
 
 async function fetchWorkflowRuns(
@@ -586,15 +609,29 @@ async function fetchWorkflowRuns(
       }
       const response = await requestPage(page);
       const batch = (response.workflow_runs ?? []).map(projectWorkflowRun);
-      runs.push(...batch);
+      for (const run of batch) runs.push(run);
       if (batch.length < 100) break;
     }
     return runs;
   };
 
-  const runs = await searchRange(cutoff - DAY_MS, now);
+  const searched = await searchRange(cutoff - DAY_MS, now);
+  const newest = await fetchUnfilteredWorkflowRuns(token, source, request);
+  // The search has to reach the oldest successful first attempt of a main push
+  // in the window on the newest page, read after it, so that no run falls
+  // between the two. A search that does not was served from a moment before
+  // that run. A later attempt is not held to this, since the search can know
+  // the run by the attempt before it until its index catches up.
+  const recent = newest.filter((run) =>
+    isSuccessfulPush(run) && run.head_branch === "main" &&
+    runTime(run) >= cutoff
+  );
+  const joint = recent.findLast((run) => run.run_attempt === 1);
+  if (joint && !searched.some((run) => run.id === joint.id)) {
+    throw new Error(STALE_RUNS_ERROR);
+  }
   const unique = new Map<number, WorkflowRun>();
-  for (const run of runs) {
+  for (const run of [...searched, ...recent]) {
     const current = unique.get(run.id);
     if (!current || run.run_attempt > current.run_attempt) {
       unique.set(run.id, run);
@@ -603,31 +640,33 @@ async function fetchWorkflowRuns(
   return [...unique.values()];
 }
 
+// Up to GANTT_MAX_RUNS of a workflow's newest runs in the history window, or of
+// its pushes to main. Main's pushes are picked out of the unfiltered listing
+// here, since GitHub serves that listing current. A run that pages repeat as
+// runs land is kept once, at its latest attempt.
 async function fetchRecentWorkflowRuns(
   token: string,
   source: CiHistorySource,
   mainOnly: boolean,
   request: GitHubRequest,
+  now: number,
 ): Promise<WorkflowRun[]> {
-  const runs: WorkflowRun[] = [];
-  for (let page = 1; runs.length < GANTT_MAX_RUNS; page++) {
-    const params = new URLSearchParams({
-      per_page: "100",
-      page: String(page),
-    });
-    if (mainOnly) {
-      params.set("branch", "main");
-      params.set("event", "push");
+  const cutoff = now - CI_HISTORY_DAYS * DAY_MS;
+  const runs = new Map<number, WorkflowRun>();
+  for (let page = 1; runs.size < GANTT_MAX_RUNS; page++) {
+    const batch = await fetchUnfilteredWorkflowRuns(token, source, request, page);
+    for (const run of batch) {
+      if (
+        runTime(run) < cutoff ||
+        (mainOnly && (run.event !== "push" || run.head_branch !== "main"))
+      ) continue;
+      const kept = runs.get(run.id);
+      if (!kept || run.run_attempt > kept.run_attempt) runs.set(run.id, run);
     }
-    const response = await request<{ workflow_runs?: WorkflowRun[] }>(
-      `repos/${source.repo}/actions/workflows/${source.workflow}/runs?${params}`,
-      token,
-    );
-    const batch = (response.workflow_runs ?? []).map(projectWorkflowRun);
-    runs.push(...batch);
-    if (batch.length < 100) break;
+    const last = batch.at(-1);
+    if (batch.length < 100 || !last || runTime(last) < cutoff) break;
   }
-  return runs.slice(0, GANTT_MAX_RUNS);
+  return [...runs.values()].slice(0, GANTT_MAX_RUNS);
 }
 
 interface TimedApiJob {
@@ -693,7 +732,7 @@ async function fetchJobPage(
       token,
     );
     const batch = response.jobs ?? [];
-    jobs.push(...batch);
+    for (const job of batch) jobs.push(job);
     if (batch.length < JOBS_PER_PAGE) break;
   }
   return jobs;
@@ -743,8 +782,8 @@ async function fetchRunJobs(
     const value = timedJob(job);
     return value ? [value] : [];
   });
-  const start = timed.length ? Math.min(...timed.map((job) => job.start)) : 0;
-  const end = timed.length ? Math.max(...timed.map((job) => job.end)) : 0;
+  const start = timed.length ? minOf(timed.map((job) => job.start)) : 0;
+  const end = timed.length ? maxOf(timed.map((job) => job.end)) : 0;
   return {
     jobs: timed.map((job) => job.timing),
     overallSeconds: start && end > start ? (end - start) / 1_000 : 0,
@@ -853,8 +892,8 @@ export function buildCiJobHistory(
     failedRunCount,
     failedRunTimes,
     stale: samples.length === 0 && failedRunCount > 0,
-    axisStart: axis?.start ?? (times.length ? Math.min(...times) : 0),
-    axisEnd: axis?.end ?? (times.length ? Math.max(...times) : 0),
+    axisStart: axis?.start ?? (times.length ? minOf(times) : 0),
+    axisEnd: axis?.end ?? (times.length ? maxOf(times) : 0),
     overall: overallPoints.length
       ? {
         kind: "overall",
@@ -1991,7 +2030,13 @@ export class CiJobHistoryCollector {
         this.#recentWorkflowRequests,
         key,
         (request) =>
-          fetchRecentWorkflowRuns(token, source, options.mainOnly, request)
+          fetchRecentWorkflowRuns(
+            token,
+            source,
+            options.mainOnly,
+            request,
+            now,
+          )
             .then(
               (runs) => {
                 this.#recentWorkflowRuns.set(key, {

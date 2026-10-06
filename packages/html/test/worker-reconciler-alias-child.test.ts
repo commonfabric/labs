@@ -25,7 +25,9 @@ import type { WorkerRenderNode, WorkerVNode } from "../src/worker/types.ts";
 function createOpsCollector() {
   const allOps: VDomOp[] = [];
   return {
-    onOps: (ops: VDomOp[]) => allOps.push(...ops),
+    onOps: (ops: VDomOp[]) => {
+      for (const op of ops) allOps.push(op);
+    },
     getOps: () => allOps,
     clear: () => {
       allOps.length = 0;
@@ -132,5 +134,5 @@ Deno.test("worker reconciler - $alias records in child position", async (t) => {
     },
   );
 
-  await dummyTx.commit();
+  await dummyTx.commit().settled;
 });

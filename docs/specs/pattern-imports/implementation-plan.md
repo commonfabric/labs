@@ -117,7 +117,7 @@ Reload paths:
 - **pin** — the trailing `@<hash>` selected-module identity on a mutable ref.
 - **hash** — 43 base64url chars (`[A-Za-z0-9_-]`, case-SENSITIVE, no
   padding), the unprefixed output of `hashStringOf`/`hashOf`
-  (`packages/data-model/src/value-hash.ts`). NOT hex — e.g.
+  (`packages/data-model/src/value-hash/impl.ts`). NOT hex — e.g.
   `Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c`. Never lowercase or
   otherwise normalize a hash.
 - **terminal identity** — the selected-module identity after pointer and
@@ -228,7 +228,7 @@ Parsing algorithm — implement exactly this order:
 
 `HASH_RE`: **base64url, exactly 43 chars, case-sensitive**:
 `/^[A-Za-z0-9_-]{43}$/`. This is the unprefixed `hashStringOf` output
-(SHA-256 → 43 unpadded base64url chars; `hashStringOf` in `value-hash.ts`) —
+(SHA-256 → 43 unpadded base64url chars; `hashStringOf` in `value-hash/impl.ts`) —
 NOT hex.
 Add two canary unit tests pinning the real formats so a future hash-encoding
 change fails here first:
@@ -1044,15 +1044,13 @@ Algorithm (spec § Resolution rule — implement hops exactly):
 No cycle guard needed (≤3 hops, no recursion).
 
 Tests (`packages/runner/test/fabric-ref-resolution.test.ts`): build, in an
-in-process runtime: a fake piece cell carrying `meta("pattern")` /
-`meta("patternIdentity")` (use the real setters — `setPatternCell` in
-`packages/runner/src/result-utils.ts` writes `meta("pattern")`, and
-`Runner.#applySetupState` writes `meta("patternIdentity")` — and mirror them);
-slug → piece; slug → plain data cell (error + chain); missing slug; `of:`
-directly to a piece cell. Add a direct `pattern:` subpath test that proves the scope
-guard runs before the otherwise-terminal identity is returned. Add a CLI
-pin/update regression that resolves a valid slug but rejects its subpath rather
-than writing the slug target's entry identity.
+in-process runtime: a fake piece cell carrying `meta("patternIdentity")` (use
+the real setter — `Runner.#applySetupState` writes `meta("patternIdentity")` —
+and mirror it); slug → piece; slug → plain data cell (error + chain); missing
+slug; `of:` directly to a piece cell. Add a direct `pattern:` subpath test that
+proves the scope guard runs before the otherwise-terminal identity is returned.
+Add a CLI pin/update regression that resolves a valid slug but rejects its
+subpath rather than writing the slug target's entry identity.
 
 ### M2.3 Pin rewriting (byte-precise source surgery)
 

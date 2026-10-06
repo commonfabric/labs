@@ -70,11 +70,10 @@ function mapOne(
   if (isCellRef(value)) {
     return cellRefToSigilLink(value);
   } else if (isSigilLink(value)) {
-    // A RAW sigil link in an inbound value bypasses the CellRef branch above
-    // (hand-crafted JSON, or a CellHandle serialized into CustomEvent.detail
-    // via toJSON). Its label view is a main-thread display artifact like a
-    // ref's (inv-12 Stage 0) — drop it so it never becomes a link-write
-    // policy input.
+    // A raw sigil link in an inbound value is not a `CellRef`, so it does not
+    // reach `cellRefToSigilLink()` above. Its label view comes from the main
+    // thread, as a ref's does. We drop the view. Left on the link, it could be
+    // recorded in a `link-write` policy input when the link is written.
     //
     // `stripSigilCfcLabelViews()` reports `unknown`, being general over what it
     // walks. Narrowed here by what it does: it removes a property from each
@@ -97,9 +96,9 @@ function mapOne(
     // construction: no flag gates it. What keeps it unreachable is the
     // refusal at the other end of the same crossing -- `CellHandle.serialize()`
     // in `../cell-handle.ts` refuses a `FabricInstance` before the value is
-    // sent, so neither caller here can be handed one. The transport itself no
-    // longer helps: the envelope's encoding carries an instance across with
-    // its class, where structured cloning used to strip it to `{}`.
+    // sent, so neither caller here can be handed one. The transport does not
+    // stop an instance: the envelope's encoding carries one across with its
+    // class.
     //
     // The two refusals are a matched pair and move together, along with
     // `convertCellsToLinks()`'s in `@commonfabric/runner`, which is the same
@@ -172,13 +171,15 @@ export function assertFabricLoggerFlags(
 }
 
 export function cellRefToSigilLink(cell: CellRef): SigilLink {
-  // A `cfcLabelView` on an inbound CellRef is deliberately NOT forwarded
-  // (inv-12 Stage 0 / SC-25): it round-tripped through the main thread
-  // (CellHandle.deserialize keeps the view on the ref) and is
-  // main-thread-influenceable — an untrusted display artifact. Forwarding it
-  // onto the written sigil link previously made it a link-write policy input
-  // that prepareBoundaryCommit persisted as link-origin labels; the worker
-  // re-derives those from its own stored source metadata instead.
+  // A `cfcLabelView` on an inbound `CellRef` is not forwarded onto the link.
+  // The view has been through the main thread, where
+  // `CellHandle.deserialize()` keeps it on the ref, so the main thread can
+  // alter it. On a written sigil link, the view could be recorded in a
+  // `link-write` policy input, and `prepareBoundaryCommit()` persists the
+  // entries of a recorded view as link-origin labels. Without the view,
+  // `prepareBoundaryCommit()` still derives link-origin labels from the
+  // source's stored metadata.
+  // `docs/specs/cfc-label-metadata-confidentiality.md` §3 has the design.
   return linkRefFrom<CfcCellLinkRefPayload>({
     id: cell.id,
     space: cell.space,
@@ -215,10 +216,10 @@ export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
   }
   const cfcLabelView = cfcLabelViewForCell(cell);
   if (cfcLabelView !== undefined) {
-    // Ref-attached views are main-thread display copies like the in-value
-    // sigil views: redact Caveat.source before they cross (inv-12 Stage 0).
-    // The worker never re-imports them (see getCell / cellRefToSigilLink),
-    // so the redacted copy cannot round-trip into label state.
+    // A view attached to a ref is a copy for the main thread to display, so
+    // we redact `Caveat.source` from it before it crosses. `getCell()` and
+    // `cellRefToSigilLink()` both drop a view from an inbound ref, so the
+    // redacted copy does not come back through either as label state.
     cellRef.cfcLabelView = redactCaveatSourcesForDisplay(cfcLabelView);
   }
   return cellRef;
@@ -235,13 +236,12 @@ export function getCell(runtime: Runtime, ref: CellRef): Cell<unknown> {
   // the schema to `schema`, and cell refs already contain all this
   // information. Maybe the upstream function should change.
   //
-  // `ref.cfcLabelView` is deliberately NOT seeded into the worker cell
-  // (inv-12 Stage 0 / SC-25): an inbound view is a main-thread display
-  // artifact, not worker label state. The worker derives label views from
-  // its own stored metadata (`cfcLabelViewForCell`); outbound refs still
-  // carry a view for the client's display. Stripped from the ref object
-  // itself because getCellFromLink also reads the property off
-  // normalized-link-shaped inputs.
+  // `ref.cfcLabelView` is not seeded into the worker cell. An inbound view
+  // comes from the main thread, which displays it, and is not worker label
+  // state. `createCellRef()` attaches a view to an outbound ref for that
+  // display. We strip the view from the ref object itself, because
+  // `getCellFromLink()` reads the property off an input shaped like a
+  // normalized link.
   if (ref.cfcLabelView === undefined) {
     return runtime.getCellFromLink(ref);
   }

@@ -2,6 +2,7 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { exportCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { listResultSchema } from "../src/builtins/list-result-schema.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -115,11 +116,11 @@ describe("listResultSchema", () => {
       resultCell,
     );
 
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
 
     return [mappedRef, filteredRef, flattenedRef].map((ref) =>
-      ref.export().schema
+      exportCell(ref).schema
     );
   };
 

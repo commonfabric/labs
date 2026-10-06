@@ -618,7 +618,7 @@ describe("runPattern", () => {
       { input: source.key("value").getAsWriteRedirectLink() },
       resultCell,
     );
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     let sourceDataReads = 0;
     const countSourceRead = (
@@ -803,7 +803,7 @@ describe("runPattern", () => {
       tx1,
     );
     inputCell.set({ input: 10, output: 0 });
-    await tx1.commit();
+    await tx1.commit().settled;
 
     const resultCell = runtime.getCell(
       space,
@@ -829,7 +829,7 @@ describe("runPattern", () => {
 
     const tx2 = runtime.edit();
     inputCell.withTx(tx2).send({ input: 10, output: 40 });
-    await tx2.commit();
+    await tx2.commit().settled;
 
     resultValue = await result.pull();
     expect(resultValue).toEqual({ output: 40 });
@@ -868,7 +868,7 @@ describe("runPattern", () => {
     );
 
     // Commit the initial values before running the pattern
-    await tx.commit();
+    await tx.commit().settled;
 
     const result = runTrusted(
       runtime,
@@ -883,7 +883,7 @@ describe("runPattern", () => {
 
     const tx2 = runtime.edit();
     inputCell.withTx(tx2).send({ input: 20, output: 20 });
-    await tx2.commit();
+    await tx2.commit().settled;
 
     inputCellValue = await inputCell.pull();
     expect(inputCellValue).toMatchObject({ input: 20, output: 40 });
@@ -893,7 +893,7 @@ describe("runPattern", () => {
 
     const tx3 = runtime.edit();
     inputCell.withTx(tx3).send({ input: 40, output: 40 });
-    await tx3.commit();
+    await tx3.commit().settled;
 
     inputCellValue = await inputCell.pull();
     expect(inputCellValue).toMatchObject({ input: 40, output: 40 });
@@ -1031,7 +1031,10 @@ describe("runPattern", () => {
                     ? values.reduce((a, b) => a + b, 0) / values.length
                     : 0;
                 case "max":
-                  return Math.max(...values);
+                  return values.reduce(
+                    (most, value) => Math.max(most, value),
+                    -Infinity,
+                  );
                 default:
                   return 0;
               }
@@ -1155,7 +1158,7 @@ describe("runPattern", () => {
     // Now change the name
     const tx = runtime.edit();
     resultCell.withTx(tx).update({ [NAME]: "my counter" });
-    await tx.commit();
+    await tx.commit().settled;
 
     // Second run with same pattern but different argument
     runTrusted(runtime, undefined, pattern, { value: 2 }, resultCell);
@@ -2236,7 +2239,7 @@ describe("setup/start", () => {
     serving.installSealDestination({
       seal: (tx: IExtendedStorageTransaction) => {
         sealed.push(tx);
-        return tx.commit();
+        return tx.commit().settled;
       },
     });
 
@@ -2291,22 +2294,32 @@ describe("setup/start", () => {
     // Installed from the synchronization the call performs before it opens
     // its transaction, which is the window the entry check cannot see.
     const sealed: IExtendedStorageTransaction[] = [];
-    const mutableCell = resultCell as unknown as {
-      sync: typeof resultCell.sync;
-    };
-    const originalSync = resultCell.sync.bind(resultCell);
-    mutableCell.sync = (async (...args: Parameters<typeof resultCell.sync>) => {
-      const synced = await originalSync(...args);
-      if (!serving.sealDestinationInstalled) {
-        serving.installSealDestination({
-          seal: (tx: IExtendedStorageTransaction) => {
-            sealed.push(tx);
-            return tx.commit();
-          },
-        });
-      }
-      return synced;
-    }) as typeof resultCell.sync;
+    const resultId = resultCell.getAsNormalizedFullLink().id;
+    const storageManager = serving.storageManager;
+    const originalSyncCell = storageManager.syncCell;
+    using _sync = stub(
+      storageManager,
+      "syncCell",
+      async function <T>(cell: Cell<T>, ...rest: unknown[]) {
+        const synced: Cell<T> = await Reflect.apply(
+          originalSyncCell,
+          storageManager,
+          [cell, ...rest],
+        );
+        if (
+          cell.getAsNormalizedFullLink().id === resultId &&
+          !serving.sealDestinationInstalled
+        ) {
+          serving.installSealDestination({
+            seal: (tx: IExtendedStorageTransaction) => {
+              sealed.push(tx);
+              return tx.commit().settled;
+            },
+          });
+        }
+        return synced;
+      },
+    );
 
     try {
       await expect(serving.runSyncedWithCommit(
@@ -2320,7 +2333,6 @@ describe("setup/start", () => {
       )).rejects.toThrow(SEALING_RECEIPT_REFUSAL);
       expect(sealed).toEqual([]);
     } finally {
-      mutableCell.sync = originalSync;
       serving.clearSealDestination();
       await serving.dispose();
       await servingStorage.close();
@@ -2349,7 +2361,7 @@ describe("setup/start", () => {
       serving.installSealDestination({
         seal: (tx: IExtendedStorageTransaction) => {
           sealed.push(tx);
-          return tx.commit();
+          return tx.commit().settled;
         },
       });
 
@@ -2413,7 +2425,7 @@ describe("setup/start", () => {
         // what the serving loop's direct commit does.
         seal: (tx: IExtendedStorageTransaction) => {
           sealed.push(tx);
-          return tx.tx.commit();
+          return tx.tx.commit().settled;
         },
       }, {
         runStamper: (tx, info) => {
@@ -2577,7 +2589,7 @@ describe("setup/start", () => {
         },
       )).rejects.toThrow("requires an unbound result cell");
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
     }
   });
 
@@ -3043,7 +3055,7 @@ describe("setup/start", () => {
       argumentCell.getAsWriteRedirectLink(),
       rawMetaWriteAuthorization,
     );
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await runtime.idle();
 
     const guard = await runtime.runner.syncStoredSetupArgument(resultCell);
@@ -3115,7 +3127,7 @@ describe("setup/start", () => {
       argumentCell.getAsWriteRedirectLink(),
       rawMetaWriteAuthorization,
     );
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await runtime.idle();
 
     const originalSyncCell = runtime.storageManager.syncCell;
@@ -3172,7 +3184,7 @@ describe("setup/start", () => {
       tx,
     );
     inputCell.set({ input: 3, output: 0 });
-    await tx.commit();
+    await tx.commit().settled;
 
     const resultCell = runtime.getCell(space, "setup with cell arg");
     setupTrusted(runtime, undefined, pattern, inputCell, resultCell);
@@ -3182,7 +3194,7 @@ describe("setup/start", () => {
 
     const tx2 = runtime.edit();
     inputCell.withTx(tx2).send({ input: 4, output: 0 });
-    await tx2.commit();
+    await tx2.commit().settled;
     cellValue = await resultCell.pull();
     expect(cellValue).toEqual({ output: 8 });
   });
@@ -3238,7 +3250,7 @@ describe("setup/start", () => {
       );
       expect(runtime.runner.cancels.size).toBe(1);
     } finally {
-      await boundTx.commit();
+      await boundTx.commit().settled;
     }
   });
 
@@ -3303,7 +3315,7 @@ describe("runner utils", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

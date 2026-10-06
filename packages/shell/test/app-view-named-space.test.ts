@@ -62,13 +62,48 @@ function installBrowserGlobals(): () => void {
   };
 }
 
-describe("XAppView named-space preparation", () => {
-  it("prepares the named space before root and selected pattern tasks", async () => {
+describe("XAppView named-space loading", () => {
+  it("renders the selected nested view rather than its document root", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XBodyView } = await import("../src/views/BodyView.ts");
+      const nested = { target: "nested view" };
+      const root = {
+        key: (key: string) => {
+          expect(key).toBe("detail");
+          return nested;
+        },
+      };
+      const body = new XBodyView();
+      body.activePattern = {
+        id: () => "of:fid1:root",
+        cell: () => root,
+      } as never;
+      (body as unknown as { piecePath: string[] }).piecePath = ["detail"];
+      const contains = (value: unknown, wanted: unknown): boolean => {
+        if (value === wanted) return true;
+        if (Array.isArray(value)) {
+          return value.some((child) => contains(child, wanted));
+        }
+        if (value && typeof value === "object" && "values" in value) {
+          return contains(value.values, wanted);
+        }
+        return false;
+      };
+      const rendered = body.render();
+      expect(contains(rendered, nested)).toBe(true);
+      expect(contains(rendered, root)).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("loads a named view's root from the space it was given", async () => {
     const restore = installBrowserGlobals();
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
       const space = "did:key:z6Mk-shell-app-view-named" as DID;
-      const names: string[] = [];
+      const requested: DID[] = [];
       const root = { id: () => "root" };
       const view = new XAppView();
       view.app = {
@@ -77,11 +112,10 @@ describe("XAppView named-space preparation", () => {
       view.space = space;
       view.rt = {
         signal: new AbortController().signal,
-        resolveSpaceName: (name: string) => {
-          names.push(name);
-          return Promise.resolve(space);
+        getSpaceRootPattern: (asked: DID) => {
+          requested.push(asked);
+          return Promise.resolve(root);
         },
-        getSpaceRootPattern: () => Promise.resolve(root),
       } as never;
 
       view._spaceRootPattern.run();
@@ -90,7 +124,7 @@ describe("XAppView named-space preparation", () => {
       await view._selectedPattern.taskComplete;
 
       expect(view._spaceRootPattern.value).toBe(root);
-      expect(names).toEqual(["notebook", "notebook"]);
+      expect(requested).toEqual([space]);
     } finally {
       restore();
     }
@@ -101,7 +135,7 @@ describe("XAppView named-space preparation", () => {
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
       const space = "did:key:z6Mk-shell-app-view-second-space" as DID;
-      const names: string[] = [];
+      const requested: DID[] = [];
       const root = { id: () => "root" };
       const view = new XAppView();
       // RootView hands the view and its space over together, so a view that
@@ -112,11 +146,10 @@ describe("XAppView named-space preparation", () => {
       view.space = undefined;
       view.rt = {
         signal: new AbortController().signal,
-        resolveSpaceName: (name: string) => {
-          names.push(name);
-          return Promise.resolve(space);
+        getSpaceRootPattern: (asked: DID) => {
+          requested.push(asked);
+          return Promise.resolve(root);
         },
-        getSpaceRootPattern: () => Promise.resolve(root),
       } as never;
 
       view._spaceRootPattern.run();
@@ -124,16 +157,16 @@ describe("XAppView named-space preparation", () => {
       view._selectedPattern.run();
       await view._selectedPattern.taskComplete;
 
-      // No space, so no load and nothing to disagree about.
+      // No space, so no load.
       expect(view._spaceRootPattern.value).toBeUndefined();
-      expect(names).toEqual([]);
+      expect(requested).toEqual([]);
 
-      // Once the name resolves, the pair agrees and the root pattern loads.
+      // Once the name resolves, the root pattern loads from that space.
       view.space = space;
       view._spaceRootPattern.run();
       await view._spaceRootPattern.taskComplete;
       expect(view._spaceRootPattern.value).toBe(root);
-      expect(names).toEqual(["atlas"]);
+      expect(requested).toEqual([space]);
     } finally {
       restore();
     }
@@ -152,7 +185,6 @@ describe("XAppView named-space preparation", () => {
       view.space = space;
       view.rt = {
         signal: new AbortController().signal,
-        resolveSpaceName: () => Promise.resolve(space),
         getSpaceRootPattern: () => {
           rootRequests++;
           return Promise.reject(new Error("space root must stay untouched"));
@@ -167,19 +199,5 @@ describe("XAppView named-space preparation", () => {
     } finally {
       restore();
     }
-  });
-
-  it("reports a name that resolves to a space other than the one given", async () => {
-    const { prepareNamedSpace } = await import("../src/lib/named-space.ts");
-    const atlas = "did:key:z6Mk-shell-named-space-atlas" as DID;
-    const notebook = "did:key:z6Mk-shell-named-space-notebook" as DID;
-
-    await expect(
-      prepareNamedSpace(
-        { view: { spaceName: "atlas" } } as never,
-        { resolveSpaceName: () => Promise.resolve(atlas) },
-        notebook,
-      ),
-    ).rejects.toThrow("resolved inconsistently");
   });
 });

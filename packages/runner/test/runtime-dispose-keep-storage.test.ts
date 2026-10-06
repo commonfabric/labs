@@ -47,7 +47,7 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { Runtime } from "../src/runtime.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -206,19 +206,12 @@ describe("runtime.dispose({ closeStorage })", () => {
   const write = async (runtime: Runtime, cause: string, value: number) => {
     const tx = runtime.edit();
     runtime.getCell<{ value: number }>(space, cause, SCHEMA, tx).set({ value });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
   };
 
   beforeEach(() => {
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
     held = CountingStorageManager.over(server);
     witness = CountingStorageManager.over(server);
     witnessRuntime = new Runtime({

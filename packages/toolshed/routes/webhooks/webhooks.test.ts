@@ -5,6 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
   type Cell,
+  cellRuntime,
   type IExtendedStorageTransaction,
   Runtime,
 } from "@commonfabric/runner";
@@ -218,7 +219,7 @@ describe("Webhook Utilities", () => {
       stage: (tx: IExtendedStorageTransaction) => void,
     ): Promise<number> => {
       let staged = 0;
-      const { error } = await cell.runtime.editWithRetry((tx) => {
+      const { error } = await cellRuntime(cell).editWithRetry((tx) => {
         staged += 1;
         stage(tx);
       });
@@ -279,13 +280,13 @@ describe("Webhook Utilities", () => {
       const index = await openIndex();
       await commit(index, (tx) => addToIndex(index, tx, "wh_a"));
 
-      const tx = index.runtime.edit();
+      const tx = cellRuntime(index).edit();
       addToIndex(index, tx, "wh_a");
       const reads = [
         ...(tx.getReadActivities?.() ?? tx.tx.getReadActivities?.() ?? []),
       ];
       expect(reads.map((read) => read.id)).toContain(entityId);
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 });

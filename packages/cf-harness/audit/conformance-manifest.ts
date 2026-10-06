@@ -139,7 +139,7 @@ export const CFC_HARNESS_OBLIGATIONS: readonly ConformanceObligation[] = [
       "how direct-command evidence is kept unforgeable by application code, model output, sandboxed tools, and free-form documents",
     status: "mechanized",
     account:
-      "Four mechanisms, each of which breaks something if removed: the binding is never a field of a tool input schema, a skill's prompt role is pinned to `context` at the type level, what crosses into the sandbox is a `PromptSlotInfluence` atom rather than a `PromptSlotBound` one, and the runner strips a pattern-authored `PromptSlotBound` from a declared label. All four are held by the type system and by package tests, so no audit check reads them.",
+      "Four mechanisms, each of which breaks something if removed: the binding is never a field of a tool input schema, a skill's prompt role is pinned to `context` at the type level, what the invocation context records is a `PromptSlotInfluence` integrity atom rather than a `PromptSlotBound` one, and the runner strips a pattern-authored `PromptSlotBound` from a declared label. All four are held by the type system and by package tests, so no audit check reads them.",
     evidence: [
       "src/contracts/skill.ts",
       "src/contracts/cfc-invocation-context.ts",
@@ -204,10 +204,15 @@ export const CFC_HARNESS_OBLIGATIONS: readonly ConformanceObligation[] = [
     id: "H8",
     obligation:
       "how subagent ceilings and observation policies are applied before inherited handles are resolved",
-    status: "absent",
+    status: "mechanized",
     account:
-      "A child profile binds tools, host tools, a model override, native model tools, skills, allowed scripts, a script target, a turn budget and a return contract. It binds no confidentiality ceiling and attenuates no principal. What is built is capability attenuation, which is a different property: a child inheriting a handle to a cell the parent could read can read it, whatever tools it was given.",
-    evidence: ["src/contracts/subagent.ts"],
+      "A child shares its parent's fabric session and resolved observation ceiling. The delegation manifest records inheritance without revealing label atoms. Cell and transaction reads withhold a referenced payload outside that ceiling before it reaches the child; AUD-23 compares the parent and child runtime records. An absent ceiling inherits the owner's view.",
+    evidence: [
+      "src/contracts/subagent.ts",
+      "src/prompt-loop.ts",
+      "../runner/src/cfc/read-ceiling.ts",
+      "test/prompt-loop-subagent-handles.test.ts",
+    ],
     coveredBy: ["AUD-23"],
     issue: "CT-2217",
   },

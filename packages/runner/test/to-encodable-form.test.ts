@@ -12,11 +12,6 @@
  * rather than copied into something that would look inert on the far side, and
  * a `FabricInstance` is refused rather than flattened into its parts for the
  * same reason.
- *
- * Serializing a module asks a narrower question, about what its encodable form
- * is allowed to carry: a source fallback that survives a runtime unable to
- * resolve the implementation reference, and never the implementation behind a
- * module that is not JavaScript.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -24,7 +19,6 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   FabricBytes,
   FabricEpochNsec,
@@ -32,14 +26,12 @@ import {
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
 import {
-  moduleToEncodableForm,
+  moduleWithAliasBindings,
   withAliasBindings,
 } from "../src/builder/to-encodable-form.ts";
-import { popFrame, pushFrame } from "../src/builder/pattern.ts";
-import { getVerifiedProvenance } from "../src/harness/verified-provenance.ts";
+import type { Module } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { createCell } from "../src/cell.ts";
-import { Engine } from "../src/harness/engine.ts";
+import { createCell, exportCell } from "../src/cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -84,7 +76,7 @@ describe("to-encodable-form", () => {
         ],
       };
 
-      const result = withAliasBindings(tree as any) as any;
+      const result = withAliasBindings(tree) as any;
 
       // All 5 children should have the full style object
       for (let i = 0; i < 5; i++) {
@@ -100,7 +92,7 @@ describe("to-encodable-form", () => {
       const circular: any = { name: "root", child: {} };
       circular.child.parent = circular; // true circular reference
 
-      const result = withAliasBindings(circular as any) as any;
+      const result = withAliasBindings(circular) as any;
 
       // The root should serialize, but the circular back-reference should be {}
       expect(result.name).toEqual("root");
@@ -117,7 +109,7 @@ describe("to-encodable-form", () => {
         ],
       };
 
-      const result = withAliasBindings(tree as any) as any;
+      const result = withAliasBindings(tree) as any;
 
       expect(result.items[0].meta).toEqual({ author: "test", version: 1 });
       expect(result.items[1].meta).toEqual({ author: "test", version: 1 });
@@ -135,9 +127,9 @@ describe("to-encodable-form", () => {
       });
 
       const result = withAliasBindings(
-        cellWithFalseSchema as any,
+        cellWithFalseSchema,
         (cell) => {
-          const { schema, scope } = cell.export();
+          const { schema, scope } = exportCell(cell);
           return {
             "$alias": {
               partialCause: "placeholder", // we have no way to represent an alias binding to this fake cell
@@ -170,7 +162,7 @@ describe("to-encodable-form", () => {
       // pass through unchanged.
       const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
 
-      const result = withAliasBindings({ payload: bytes } as any) as any;
+      const result = withAliasBindings({ payload: bytes }) as any;
 
       expect(result.payload).toBe(bytes);
     });
@@ -181,15 +173,15 @@ describe("to-encodable-form", () => {
       // plain object and so passes `isValidFabricValue()`. That is the hazard:
       // not a lost value, but a legal one meaning something else, stored with
       // no trace of what it was. A `Date` goes the same way, to `{}`.
-      const fromBytes = withAliasBindings(new Uint8Array([7, 9]) as any) as any;
+      const fromBytes = withAliasBindings(new Uint8Array([7, 9])) as any;
       expect(fromBytes).toBeInstanceOf(FabricBytes);
       expect([...fromBytes.slice()]).toEqual([7, 9]);
 
-      const fromDate = withAliasBindings(new Date(0) as any) as any;
+      const fromDate = withAliasBindings(new Date(0)) as any;
       expect(fromDate).toBeInstanceOf(FabricEpochNsec);
 
       const nested = withAliasBindings(
-        { v: new Uint8Array([4, 5]) } as any,
+        { v: new Uint8Array([4, 5]) },
       ) as any;
       expect(nested.v).toBeInstanceOf(FabricBytes);
       expect([...nested.v.slice()]).toEqual([4, 5]);
@@ -201,11 +193,11 @@ describe("to-encodable-form", () => {
       // enumerable own-props as `{}`, so it refuses instead -- the same
       // disposition the sibling binding walk uses.
       const err = FabricError.fromNativeError(new Error("boom"));
-      expect(() => withAliasBindings(err as any)).toThrow("FabricError");
-      expect(() => withAliasBindings({ e: err } as any)).toThrow("FabricError");
+      expect(() => withAliasBindings(err)).toThrow("FabricError");
+      expect(() => withAliasBindings({ e: err })).toThrow("FabricError");
 
       // ...including one the conversion itself mints, from a JS `Error`.
-      expect(() => withAliasBindings({ e: new Error("x") } as any)).toThrow(
+      expect(() => withAliasBindings({ e: new Error("x") })).toThrow(
         "FabricError",
       );
     });
@@ -224,7 +216,7 @@ describe("to-encodable-form", () => {
       };
       tree.self = tree;
 
-      const out = withAliasBindings(tree as any) as any;
+      const out = withAliasBindings(tree) as any;
 
       // the native converted...
       expect(out.blob).toBeInstanceOf(FabricBytes);
@@ -245,7 +237,7 @@ describe("to-encodable-form", () => {
       // `isValidFabricValue()` while meaning something else, with nothing
       // downstream able to notice. They must be refused here.
       const sym = Symbol("s");
-      expect(() => withAliasBindings({ a: 1, [sym]: "x" } as any)).toThrow(
+      expect(() => withAliasBindings({ a: 1, [sym]: "x" })).toThrow(
         "Not representable",
       );
       expect(() =>
@@ -254,16 +246,16 @@ describe("to-encodable-form", () => {
           get live() {
             return 42;
           },
-        } as any)
+        })
       ).toThrow("Not representable");
       expect(() =>
         withAliasBindings(
-          Object.assign(Object.create(null), { a: 1 }) as any,
+          Object.assign(Object.create(null), { a: 1 }),
         )
       ).toThrow("Not representable");
 
       // ...while an ordinary inert plain object still walks through untouched.
-      expect(withAliasBindings({ a: 1 } as any)).toEqual({ a: 1 });
+      expect(withAliasBindings({ a: 1 })).toEqual({ a: 1 });
     });
 
     it("throws given an array that is not inert, rather than laundering it", () => {
@@ -279,203 +271,133 @@ describe("to-encodable-form", () => {
       // shared with the plain-object refusal, so it would still pass if one of
       // these were classified as an object instead -- which is exactly the
       // regression that would make the reported reason wrong.
-      expect(() =>
-        withAliasBindings(Object.assign([1, 2], { extra: "x" }) as any)
-      ).toThrow("array that is not an inert array");
+      expect(() => withAliasBindings(Object.assign([1, 2], { extra: "x" })))
+        .toThrow("array that is not an inert array");
       const accessorIndexed = [1, 2];
       Object.defineProperty(accessorIndexed, 0, {
         get: () => 42,
         enumerable: true,
         configurable: true,
       });
-      expect(() => withAliasBindings(accessorIndexed as any)).toThrow(
+      expect(() => withAliasBindings(accessorIndexed)).toThrow(
         "array that is not an inert array",
       );
       class Subclassed extends Array {}
-      expect(() => withAliasBindings(Subclassed.from([1, 2]) as any)).toThrow(
+      expect(() => withAliasBindings(Subclassed.from([1, 2]))).toThrow(
         "array that is not an inert array",
       );
-      expect(() =>
-        withAliasBindings(Object.setPrototypeOf([1, 2], null) as any)
-      ).toThrow("array that is not an inert array");
+      expect(() => withAliasBindings(Object.setPrototypeOf([1, 2], null)))
+        .toThrow("array that is not an inert array");
 
       // ...while an ordinary inert array still walks through untouched.
-      expect(withAliasBindings([1, 2] as any)).toEqual([1, 2]);
+      expect(withAliasBindings([1, 2])).toEqual([1, 2]);
+    });
+
+    it("refuses a function that is not a builder artifact, at the top and nested", () => {
+      // The only function an execution graph holds is a builder artifact; a
+      // module's own functions are bound through the module instead.
+      expect(() => withAliasBindings(() => 1)).toThrow(
+        "not a builder artifact",
+      );
+      expect(() => withAliasBindings({ f: () => 1 })).toThrow(
+        "not a builder artifact",
+      );
+    });
+
+    it("returns a builder artifact function as itself, at the top and nested", () => {
+      const artifact = Object.assign(() => {}, {
+        toEncodableForm: () => ({ type: "javascript" }),
+      });
+
+      expect(withAliasBindings(artifact)).toBe(artifact);
+      expect((withAliasBindings({ a: artifact }) as any).a).toBe(artifact);
+    });
+
+    it("binds a graph node's module through the module's members", () => {
+      // The module's `implementation` is a plain function, which the walk
+      // refuses anywhere but in a module; reaching it here without a refusal
+      // is what shows the node's `module` went through the module binding.
+      const implementation = () => 1;
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{
+          module: { type: "javascript", implementation },
+          inputs: { x: 1 },
+          outputs: {},
+        }],
+      };
+
+      const out = withAliasBindings(graph) as any;
+      expect(out.nodes[0].module.implementation).toBe(implementation);
+      expect(out.nodes[0].module.type).toBe("javascript");
+      expect(out.nodes[0].inputs).toEqual({ x: 1 });
+    });
+
+    it("refuses a graph node's module that is not an inert plain object, rather than rebuilding it", () => {
+      // Rebuilt member by member, a getter would run and be stored as a data
+      // property. The node's `module` goes to the module binding only once it
+      // is known to be inert; anything else is walked as a value, which
+      // refuses it.
+      let reads = 0;
+      const module = {
+        type: "javascript",
+        get live() {
+          reads++;
+          return 1;
+        },
+      };
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{ module, inputs: {}, outputs: {} }],
+      };
+
+      expect(() => withAliasBindings(graph)).toThrow("Not representable");
+      expect(reads).toBe(0);
     });
 
     it("leaves ordinary containers alone", () => {
       // The conversion above must not reach an inert plain object or an array;
       // those are already `FabricValue`s and are walked, not converted.
-      const obj = withAliasBindings({ a: 1, b: "x" } as any) as any;
+      const obj = withAliasBindings({ a: 1, b: "x" }) as any;
       expect(obj).toEqual({ a: 1, b: "x" });
       expect(obj.constructor).toBe(Object);
 
-      const arr = withAliasBindings([1, "x"] as any) as any;
+      const arr = withAliasBindings([1, "x"]) as any;
       expect(arr).toEqual([1, "x"]);
       expect(Array.isArray(arr)).toBe(true);
     });
   });
-});
 
-describe("moduleToEncodableForm", () => {
-  let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  describe("moduleWithAliasBindings", () => {
+    it("keeps a module's function members as themselves and binds the rest", () => {
+      // `bound` is a member the walk visibly changes: binding an alias
+      // record raises its `defer`, where a member merely copied would not.
 
-  beforeEach(() => {
-    storageManager = StorageManager.emulate({ as: signer });
-    runtime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager,
+      const implementation = () => 1;
+      const toJSON = () => ({});
+      const module: Module & { toJSON: () => unknown; bound: unknown } = {
+        type: "javascript",
+        implementation,
+        toJSON,
+        argumentSchema: { type: "object" },
+        bound: { $alias: { cell: "argument", path: ["a"] } },
+      };
+
+      const out = moduleWithAliasBindings(module) as Module & {
+        toJSON?: unknown;
+        bound?: unknown;
+      };
+
+      expect(out).not.toBe(module);
+      expect(out.implementation).toBe(implementation);
+      expect(out.toJSON).toBe(toJSON);
+      expect(out.type).toBe("javascript");
+      expect(out.argumentSchema).toEqual({ type: "object" });
+      expect(out.bound).toEqual({
+        $alias: { cell: "argument", path: ["a"], defer: 1 },
+      });
     });
-  });
-
-  afterEach(async () => {
-    await runtime?.dispose();
-    await storageManager?.close();
-  });
-
-  it("serializes unblessed javascript modules with executable source fallback", () => {
-    const implementation = Object.assign(
-      (value: number) => value * 2,
-      {
-        preview: "(value) => value * 2",
-        src: "main.tsx:1:1",
-      },
-    );
-    const serialized = moduleToEncodableForm({
-      type: "javascript",
-      implementation,
-    } as any);
-
-    expect(serialized).toMatchObject({
-      type: "javascript",
-      implementation: Function.prototype.toString.call(implementation),
-      preview: "(value) => value * 2",
-      location: "main.tsx:1:1",
-    });
-  });
-
-  it("serializes non-javascript function-backed modules without leaking implementations", () => {
-    const implementation = Object.assign(
-      () => "ok",
-      {
-        preview: "() => 'ok'",
-        src: "main.tsx:2:1",
-      },
-    );
-    const serialized = moduleToEncodableForm({
-      type: "raw",
-      implementation,
-    } as any);
-
-    expect(serialized).toMatchObject({
-      type: "raw",
-      preview: "() => 'ok'",
-      location: "main.tsx:2:1",
-    });
-    expect("implementation" in serialized).toBe(false);
-  });
-
-  it("keeps the fallback body when the registering runtime can't resolve the $implRef (standalone-engine registration)", async () => {
-    const compileEngine = new Engine(runtime);
-    const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
-      /\/$/,
-      "",
-    );
-    const sourcePath = new URL(
-      "../../patterns/factory-outputs/parking-coordinator/main.test.tsx",
-      import.meta.url,
-    ).pathname;
-    const program = await resolveLocalProgram(
-      (resolver) => compileEngine.resolve(resolver),
-      { main: sourcePath, root: repoRoot },
-    );
-    const { main } = await compileEngine.compileAndEvaluateModules(program);
-    const pattern = main?.default as any;
-
-    const seen = new Set<unknown>();
-    let targetModule: any;
-    const visit = (value: unknown) => {
-      if (
-        !value ||
-        (typeof value !== "object" && typeof value !== "function") ||
-        seen.has(value)
-      ) {
-        return;
-      }
-      seen.add(value);
-      if (
-        !targetModule &&
-        typeof (value as { type?: unknown }).type === "string" &&
-        (value as { type?: string }).type === "javascript" &&
-        typeof (value as { implementation?: unknown }).implementation ===
-          "function"
-      ) {
-        const implementation =
-          (value as { implementation: (...args: unknown[]) => unknown })
-            .implementation;
-        const implementationSource =
-          (implementation as { preview?: string }).preview ??
-            implementation.toString();
-        if (
-          implementationSource.includes(
-            "formatDateShort(dateStr).shortName",
-          )
-        ) {
-          targetModule = value;
-          return;
-        }
-      }
-      for (const key of Reflect.ownKeys(value as object)) {
-        const descriptor = Object.getOwnPropertyDescriptor(
-          value as object,
-          key,
-        );
-        if (descriptor && "value" in descriptor) {
-          visit(descriptor.value);
-        }
-      }
-    };
-    visit(pattern);
-
-    expect(targetModule).toBeDefined();
-
-    // The implementation became verified during the STANDALONE Engine's
-    // evaluation, so it carries process-global content-addressed provenance
-    // (Engine.#recordModuleProvenance) and `moduleToEncodableForm` writes a `$implRef`.
-    // But this pattern was registered WITHOUT going through
-    // `compilePattern`/`registerEvaluatedModules` on THIS runtime, so its
-    // engine's implementation index never saw the artifact and cannot resolve
-    // that `$implRef` on reload (the cross-engine path the deleted
-    // `associatePattern` bridge used to serve). The serializer must therefore
-    // KEEP the stringified body as the fallback — otherwise reload would miss
-    // the index, miss the registry, and throw.
-    expect(getVerifiedProvenance(targetModule.implementation)).toBeDefined();
-    expect(
-      runtime.patternManager.artifactFromIdentitySync(
-        getVerifiedProvenance(targetModule.implementation)!.identity,
-        getVerifiedProvenance(targetModule.implementation)!.symbol!,
-      ),
-    ).toBeUndefined();
-    expect(
-      runtime.harness.getVerifiedImplementation?.(
-        getVerifiedProvenance(targetModule.implementation)!.identity,
-        getVerifiedProvenance(targetModule.implementation)!.symbol!,
-      ),
-    ).toBeUndefined();
-
-    const frame = pushFrame({ runtime });
-    let serialized: ReturnType<typeof moduleToEncodableForm>;
-    try {
-      serialized = moduleToEncodableForm(targetModule);
-    } finally {
-      popFrame(frame);
-    }
-    expect(serialized).toMatchObject({ type: "javascript" });
-    expect("implementationRef" in serialized).toBe(false);
-    expect(serialized).toHaveProperty("$implRef");
-    // Body KEPT: this runtime cannot resolve the $implRef, so the fallback is
-    // required for a successful reload.
-    expect("implementation" in serialized).toBe(true);
   });
 });

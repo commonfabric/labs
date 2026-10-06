@@ -46,9 +46,9 @@ describe("piece slugs", () => {
       apiUrl: new URL(import.meta.url),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "piece-slugs-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -833,7 +833,7 @@ describe("piece slugs", () => {
           base: cellOf(holderRuntime, slugCellId).withTx(seed),
         }),
       );
-      await seed.commit({ resolveAt: "verdict" });
+      await seed.commit({ holdSyncedUntilCovered: false }).verdict;
       await holderRuntime.storageManager.synced();
       await cellOf(takerRuntime, slugCellId).sync();
       await cellOf(takerRuntime, slugCellId).pull();
@@ -848,7 +848,7 @@ describe("piece slugs", () => {
           base: cellOf(holderRuntime, slugCellId).withTx(rebind),
         }),
       );
-      await rebind.commit({ resolveAt: "verdict" });
+      await rebind.commit({ holdSyncedUntilCovered: false }).verdict;
       await holderRuntime.storageManager.synced();
     });
 
@@ -872,7 +872,8 @@ describe("piece slugs", () => {
       if (readName) cellOf(takerRuntime, slugCellId).withTx(tx).getRaw();
       cellOf(takerRuntime, slugIndexIdForSpace(space)).withTx(tx)
         .key("contested").set(true);
-      const { error } = await tx.commit({ resolveAt: "verdict" });
+      const { error } = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       return error;
     }
 

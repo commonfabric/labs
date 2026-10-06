@@ -1,3 +1,4 @@
+import type { FabricValue } from "@commonfabric/data-model";
 import { parsePointer } from "@commonfabric/memory/v2/path";
 
 import type { SpaceDb } from "./db.ts";
@@ -136,7 +137,7 @@ const boundedLimit = (value: number | undefined, fallback: number): number => {
   return value;
 };
 
-const decode = (value: string): unknown => {
+const decode = (value: string): FabricValue => {
   try {
     return decodeStored(value);
   } catch (error) {
@@ -147,7 +148,7 @@ const decode = (value: string): unknown => {
   }
 };
 
-const valuesMatch = (left: unknown, right: unknown): boolean => {
+const valuesMatch = (left: FabricValue, right: FabricValue): boolean => {
   const leftHash = hashEntityValue(left);
   const rightHash = hashEntityValue(right);
   return "hash" in leftHash && "hash" in rightHash &&

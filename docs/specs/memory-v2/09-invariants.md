@@ -138,8 +138,9 @@ is sound only because the runner never emits indexed-array structural ops —
 guarded by `assertNoIndexedArrayStructuralOps`).
 
 Layer: `patchOverlapsRead`, `patchOverlapsNonRecursiveRead`,
-`touchedLeafPathsForPatch`, `touchedPathsForPatch` (engine); read tagging and
-exclusion at the client boundary (`reactivity-log.ts`,
+`touchedLeafPathsForPatch`, `touchedPathsForPatch` (engine), and the
+`TouchedPathIndex` from which `findConflictSeq` decides the first two;
+read tagging and exclusion at the client boundary (`reactivity-log.ts`,
 `SpaceReplica.#buildReads()`).
 
 Soundness direction: toward precision only from above; never below exact.
@@ -147,7 +148,26 @@ Soundness direction: toward precision only from above; never below exact.
 Checked by: the differential harness (engine-accept must imply
 naive-accept, where the naive validator implements exact overlap); the
 generator test asserting the runner's array-op discipline
-(`packages/runner/test/memory-v2-native-commit.test.ts`).
+(`packages/runner/test/memory-v2-native-commit.test.ts`); the tests holding
+`TouchedPathIndex` to `isPrefixPath` and `pathsOverlap`, and the engine's
+check to `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`
+(`packages/memory/test/v2/TouchedPathIndex.test.ts` and
+`packages/memory/test/v2/engine-conflicts.test.ts` respectively).
+
+Known deviations: **Topic 544** on the team's Topics board
+(`of:fid1:mccA4KBv8PYXLwRiqvDu51Bcm1CP57iy9z0Aosa7Y64`), a shallow read that
+misses a key re-created by a writer with an older base. Whether a patch changes
+a container's key set is recorded by its writer, from the writer's base (`add`
+rather than `replace`, `createsKey` on a mergeable op), and the shallow matcher
+injects the container's path only for a patch recorded that way. A writer whose
+base still holds a key since removed durably, and that does not read the key,
+writes it back as a `replace` or an unflagged mergeable op; the engine creates
+the key, and a shallow read of the container taken after the removal is
+accepted (`08-conflict-granularity.md` §2). The engine test "accepts a shallow
+read of a container whose key a writer with an older base re-created" in
+`packages/memory/test/v2/engine-conflicts.test.ts` records the accept. The
+deviation retires when the engine records, at apply time, whether an op created
+a key.
 
 ### INV-3 — Dependency completeness and staleness-basis selection
 
@@ -432,6 +452,15 @@ retain at least one concrete OWNER") restated as a checkable entry, because it
 is the invariant a client is most likely to violate without knowing the rule
 exists.
 
+The generic invitation service commits its private admission records and unique
+redemption receipts in the same engine transaction as an ACL-only system commit.
+That internal operation reads current authority under the SQLite write lock and
+publishes cache and watch changes only after durable commit. Its only public
+document operation remains the whole-document ACL `set` described here. Private
+invitation metadata is not part of `ClientCommit` and cannot be submitted through
+`session.transact`. See the
+[invitation service contract](../../../packages/toolshed/README.md#space-invitations).
+
 The clauses are checked in this order, each rejecting with a `ProtocolError`
 carrying a distinct message (so a message identifies the clause):
 
@@ -451,6 +480,21 @@ also runs *before* the OWNER capability check on the same commit, so a
 malformed ACL write reports `ProtocolError` even from a principal that has no
 OWNER capability at all.
 
+The capability check that follows requires OWNER for an ACL mutation, with one
+exception: a member may remove its own entry. A session principal without OWNER
+is admitted for a mutation whose document is exactly the stored ACL document
+less that principal's own entry, every other entry and every other document
+field as stored. Nothing else passes under it: not an added entry, not a change
+to another entry's level, not a promotion, not a removal of anyone else's
+entry. It is refused when the stored list has a `"*"` entry, under which the
+principal would keep what that entry grants, and when the stored list has no
+entry for the principal. The exception is computed from the server's own
+state, never from anything the client supplies, and holds in `observe` and
+`enforce` alike; a refused one is an `AuthorizationError`, like any other
+shortfall of OWNER. A space's last concrete OWNER cannot leave this way, since
+the result must keep a concrete OWNER; it holds OWNER, so it may instead make
+another member OWNER, and then leave, through the ordinary check.
+
 On the whole-document clause specifically, one mechanical observation is
 available and no stated rationale is: the validity clause inspects
 `operation.value?.value` — the document the operation itself carries — and of
@@ -463,17 +507,34 @@ separately stated motivation, and no spec gives one. Anyone proposing to relax
 it owes the argument #4670 did not record.
 
 Layer: server admission (`#validateAclCommit` in
-`packages/memory/v2/server.ts`); client emission (`ACLManager` in
-`packages/runner/src/acl-manager.ts`, which satisfies the rule by addressing
-the whole document at path `[]` — a write through the ordinary value surface
-decomposes into per-key `op: "patch"` details and is refused).
+`packages/memory/v2/server.ts`); client emission (`writeAcl()` in
+`packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
+`grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
+satisfies the rule by addressing the whole document at path `[]` — a write
+through the ordinary value surface decomposes into per-key `op: "patch"`
+details and is refused). The self-removal exception to the capability check
+is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
+the client that sends one.
+
+The served plane has no writer of the ACL document, and refuses one outright,
+in every mode, `off` included. A serving wave commits engine-direct, so
+`#validateAclCommit` never sees its commits, and neither its `derived` lease
+admission nor its foreign batches' delegated admission checks this rule or
+the acting user's level. So the wave's seal refuses a run that writes
+`of:<space>` of any space, failing that run alone
+(`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
+refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
+and the wave sink refuses a foreign batch carrying one
+(`packages/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
+the run is in
+[`serving-loop.md` §3d](../server-side-execution/serving-loop.md#3d-transactions-the-action-tx-seals-into-the-wave).
 
 Soundness direction: none — an exact admission predicate, with a real cost on
 each side. Over-rejection is not merely a retry: a client that cannot produce
 the accepted shape has no route to change the ACL at all, which is what
 happened while `ACLManager` wrote through the value surface — every
-post-genesis grant and revoke failed, and the wildcard a named space is born
-with could not be removed. Over-acceptance lets the ACL document reach a state
+post-genesis grant and revoke failed, and the wildcard a legacy named space
+carries could not be removed. Over-acceptance lets the ACL document reach a state
 no admission check ever validated.
 
 Checked by: example-based server tests only — no oracle, TLA+, or differential
@@ -482,9 +543,18 @@ preserve a concrete owner" (rejects `delete`, `patch`, `scope: "user"`, and
 empty / wildcard-only-owner / downgraded-owner / invalid-capability values) and
 "ACL mutations are default-branch ACL-only commits" (rejects a non-default
 branch and a mixed ACL+data commit, asserting the data operation did not land).
+The self-removal exception: "a principal without `OWNER` removing its own
+entry" in the same file (admits a READ or WRITE member's own removal, in
+`observe` too; refuses one that also removes, changes or adds another entry,
+adds a document field, keeps its own entry at another level, removes someone
+else's entry, or is sent under a `"*"` entry).
 Client side, `packages/runner/test/memory-v2-acl-mutation.test.ts` asserts the
 emitted operation *shape and count* against a real server, not just the
-resulting value.
+resulting value. Served plane,
+`packages/runner/test/executor-acl-document-write.test.ts` drives a served
+handler's cell-shaped and whole-document writes under `off` and `enforce`,
+and `packages/runner/test/executor-wave.test.ts` hands the engine and the
+sink batches built directly, past the seal.
 
 ### INV-13 — ACL genesis precedence and authority
 
@@ -503,6 +573,15 @@ is derived rather than granted. Both clauses reject with an
 ordinary writes` for the precedence clause, and `Only the space identity or a
 service DID may initialize <space>` for the authority clause. Like INV-12 this
 is enforced in `observe` as well as `enforce`, for the reason quoted there.
+
+The space DID's authority is exactly this one commit. Genesis also passes the
+ordinary capability check, which requires OWNER for a commit that touches the
+ACL document, and the server grants the space DID OWNER only while the space has
+no ACL document and is at server sequence 0. Once genesis lands, the space DID
+holds what the ACL grants it and nothing more, so it cannot repair a malformed
+ACL or claim a populated space afterwards. A space created under
+[random space identities](../random-space-identities.md) signs its genesis with
+a key generated for that one commit, which no one holds afterwards.
 
 The precedence clause binds only at server sequence 0. A *populated* space that
 never had an ACL is not forced through genesis; it falls under the temporary

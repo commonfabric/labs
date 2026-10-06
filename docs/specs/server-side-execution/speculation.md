@@ -446,8 +446,9 @@ on the next cover). The elision posture above is unchanged: no rewrite
 means the doc's seq stays BELOW the floor, and the predicate is never
 consulted. **A content-addressed doc the store holds witnesses at ANY cover seq
 (#6304, 2026-08-25): its stored envelope is immutable — admission
-refuses a `cid:` delete or patch outright, and a `cid:` set unless
-the whole stored envelope, metadata included, is value-equal;
+refuses every operation but `set` against a `cid:` id outright, and a
+`cid:` set unless the whole stored envelope, metadata included, is
+value-equal;
 identical rewrites are elided — so its cover never advances and the
 floor comparison can never pass for it. The witness rests on that
 commit-boundary immutability: a metadata-write carve-out for `cid:`

@@ -69,6 +69,7 @@ import {
   takeInvalidCauses,
 } from "./invalidation.ts";
 import type { NodeRegistry } from "./node-record.ts";
+import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import { txToReactivityLog } from "./reactivity.ts";
 import { RetryImmediately } from "./retry-immediately.ts";
 import { type ActionTimingState, recordActionTime } from "./timing.ts";
@@ -168,7 +169,7 @@ export function startReactiveActionCommit(state: {
   readonly tx: IExtendedStorageTransaction;
 }, options: {
   readonly beforeCommit?: () => void;
-} = {}): ReturnType<IExtendedStorageTransaction["commit"]> {
+} = {}): ReturnType<IExtendedStorageTransaction["commit"]>["settled"] {
   logger.timeStart("scheduler", "run", "commit");
   try {
     state.runtime.prepareTxForCommit(state.tx);
@@ -188,7 +189,7 @@ export function startReactiveActionCommit(state: {
     }
   }
   options.beforeCommit?.();
-  const commitPromise = state.tx.commit();
+  const commitPromise = state.tx.commit().settled;
   logger.timeEnd("scheduler", "run", "commit");
   return commitPromise;
 }
@@ -206,7 +207,9 @@ export function watchReactiveActionCommit(state: {
   readonly retries: WeakMap<Action, number>;
   readonly offBudgetRetries: WeakMap<Action, number>;
   readonly pending: Set<Action>;
-  readonly commitPromise: ReturnType<IExtendedStorageTransaction["commit"]>;
+  readonly commitPromise: ReturnType<
+    IExtendedStorageTransaction["commit"]
+  >["settled"];
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (
     action: Action,
@@ -653,6 +656,7 @@ export async function runSchedulerAction(
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
     tx.tx.validateReactiveReads = true;
+    tx.tx.derivedWrites = true;
     // Server-execution v2 stage F (serving-loop.md §3d): a serving
     // runtime's installed stamper attaches the wave run context here —
     // the reactive-action choke point — so every scheduler-driven
@@ -1207,8 +1211,8 @@ function finalizeReactiveActionCommit(
   // `runtime.settled()` waits for the post-commit outbox flush (the sqlite
   // query RPC + writeback; also the barrier that guarantees a
   // fire-and-forget builtin's flush has registered its own network/LLM
-  // work). The effect layer, not the commit promise: effects run at the
-  // verdict, while the promise additionally waits for the subscribed view
+  // work). Effects run at the verdict; `commit().settled` additionally
+  // waits for the subscribed view
   // to cover the write — an incoming-frame wait quiescence must not depend
   // on. Registered before this run's running promise resolves, so a reader
   // observes the settled result rather than racing the flush. `idle()`
@@ -1238,11 +1242,12 @@ function finalizeReactiveActionCommit(
             args.retryRegistration.token &&
           (state.nodes.isEffect(args.action) ||
             state.nodes.isComputation(args.action)))),
-    awaitRetryReadiness: (error) =>
-      state.runtime.awaitCommitRetryReadiness(
+    awaitRetryReadiness: async (error) => {
+      await state.runtime.awaitCommitRetryReadiness(
         error,
         state.runtime.writeTeardownSignal,
-      ),
+      );
+    },
     action: args.action,
     tx: args.tx,
     log: committedLog,
@@ -1297,13 +1302,21 @@ function finalizeReactiveActionCommit(
     reportTerminalRejection: (error) => state.handleError(error, args.action),
   };
   const handled = watchReactiveActionCommit(commitState);
-  // The barrier entry commit() registered settles with the commit promise,
+  // The barrier entry `commit()` registered settles with `receipt.settled`,
   // but the disposition above — a conflict's catch-up-then-requeue in
   // particular — runs afterwards. Register the handled chain too, so
   // idleWithPendingCommits cannot release in the window between a
   // rejection settling and its retry being requeued (the event path in
   // events.ts registers the same way).
-  state.runtime.storageManager.trackPendingCommit(handled);
+  state.runtime.storageManager.trackPendingCommit(handled, () => {
+    const allSpaces = new Set(committedLog.writes.map((write) => write.space));
+    const spaces = diagnosticPrefix(allSpaces);
+    return {
+      kind: "action-disposition",
+      spaces,
+      spacesOmitted: allSpaces.size - spaces.length,
+    };
+  });
 
   logger.debug("schedule-run-complete", () => [
     `[RUN] Action completed: ${args.actionId}`,
@@ -1366,8 +1379,7 @@ function finalizeReactiveActionCommit(
     if (
       node.registrationToken !== registrationToken ||
       outcome.error?.readDependencyWithdrawn !== true ||
-      (outcome.error as { waveWithdrawalCause?: string } | undefined)
-          ?.waveWithdrawalCause !== "contribution-dropped" ||
+      outcome.error?.waveWithdrawalCause !== "contribution-dropped" ||
       (!state.nodes.isEffect(args.action) &&
         !state.nodes.isComputation(args.action))
     ) return;

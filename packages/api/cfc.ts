@@ -9,7 +9,18 @@
 import { deepFreeze } from "@commonfabric/data-model";
 
 export type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: Meta;
+  readonly __ct_cfc__?: CfcStamp<T, Meta>;
+};
+
+/**
+ * What a CFC carrier records: the policy's metadata, and the payload it was
+ * written around. TypeScript merges the carrier into whatever the value is
+ * merged into, by an intersection, a spread or a mapped type, and the payload
+ * it records says which part of the merged value the policy names.
+ */
+export type CfcStamp<T, Meta> = {
+  readonly meta?: Meta;
+  readonly of?: T;
 };
 
 export type CfcJsonValue =
@@ -138,6 +149,34 @@ export const CFC_COMPILED_BY_ATOM_PREFIX = "cf-compiled-by:" as const;
  * builtin-authored writes (see prefix doc above).
  */
 export const CFC_COMPILED_BY_ATOM = "cf-compiled-by:cf-compiler" as const;
+
+/**
+ * An external account identifier Loom observed after its connector
+ * authenticated as the profile owner. Loom's verifier writes these assertions
+ * into the owner's home space, and People merges on them, so a self-asserted
+ * one would merge two people on the asserter's word. A system atom (see
+ * {@link CFC_SYSTEM_STRING_ATOMS}); stored assertions carry this exact
+ * literal, so it keeps its spelling.
+ */
+export const CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM =
+  "loom-verified-external-identity" as const;
+
+/**
+ * System integrity atoms: string-shaped atoms that name a fact only a trusted
+ * system writer may assert. Like the compiler attestation above, prepare's
+ * `gateRuntimeMintedIntegrity` strips them from any write not authored by a
+ * trusted builtin, so a pattern-authored or unattributed write schema that
+ * names one persists without it, and a `requiredIntegrity` floor naming it
+ * refuses the value.
+ *
+ * Host code can attribute its transaction to a builtin, so this restricts
+ * minting to trusted code rather than to one verifier; binding the atom to a
+ * verifier key is the hardening that follows once host writes stop being
+ * trusted by default.
+ */
+export const CFC_SYSTEM_STRING_ATOMS = [
+  CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM,
+] as const satisfies readonly string[];
 
 export const CFC_CONCEPT_KIND = {
   PromptInfluence: "https://commonfabric.org/cfc/concepts/prompt-influence",
@@ -295,11 +334,23 @@ export type CfcThisPolicySubjectPattern = CfcAtomObject & {
   readonly thisPolicyField: "subject";
 };
 
+/**
+ * The content identity of the module defining the selected policy, bound at
+ * evaluation time. A rule uses it to name a function of its own module in a
+ * `TransformedBy` identity pattern without spelling the module's hash.
+ */
+export type CfcThisPolicyModuleIdentityPattern = CfcAtomObject & {
+  readonly thisPolicyField: "moduleIdentity";
+};
+
 export type CfcThisPolicyPattern = CfcAtomObject & {
   readonly thisPolicy: true;
 
   /** Non-enumerable authoring affordance; lowers to `thisPolicyField`. */
   readonly subject: CfcThisPolicySubjectPattern;
+
+  /** Non-enumerable authoring affordance; lowers to `thisPolicyField`. */
+  readonly moduleIdentity: CfcThisPolicyModuleIdentityPattern;
 };
 
 export type CfcPatternString =
@@ -367,12 +418,25 @@ const thisPolicySubject = deepFreeze(
     thisPolicyField: "subject",
   } as const,
 );
+const thisPolicyModuleIdentity = deepFreeze(
+  {
+    thisPolicyField: "moduleIdentity",
+  } as const,
+);
 const thisPolicyValue = { thisPolicy: true } as CfcThisPolicyPattern;
-Object.defineProperty(thisPolicyValue, "subject", {
-  value: thisPolicySubject,
-  enumerable: false,
-  configurable: false,
-  writable: false,
+Object.defineProperties(thisPolicyValue, {
+  subject: {
+    value: thisPolicySubject,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  },
+  moduleIdentity: {
+    value: thisPolicyModuleIdentity,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  },
 });
 
 /** The policy selected by a module-policy reference at evaluation time. */
@@ -813,6 +877,7 @@ export const CFC_CANONICAL_ALIAS_NAMES = [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -865,6 +930,11 @@ export type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, {
 /** Runtime-resolved placeholder for the principal executing the pattern. */
 export type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
 
+/**
+ * `T`, labeled `represents-principal` the principal each write acts for, as a
+ * profile's fields are. The position must name its writer, as for
+ * `AuthoredByCurrentUser`.
+ */
 export type RepresentsCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{
     readonly kind: "represents-principal";
@@ -872,6 +942,17 @@ export type RepresentsCurrentUser<T> = Cfc<T, {
   }];
 }>;
 
+/**
+ * `T`, labeled `authored-by` the principal each write acts for: the runtime
+ * resolves the subject, and refuses one a pattern supplies. The position must
+ * name its writer, through `WriteAuthorizedBy`, `TrustedActionWrite` or
+ * `WritePolicyAnyOf`, and refuses a write by any other. A new value of the
+ * type that a handler run creates is labeled for that run's principal too. The
+ * label is authority, not intent: it shows that a run acting for the principal
+ * wrote or created the value, not that they asked for it. Where the position
+ * also requires a gesture, as `TrustedActionWrite` does, a write to it came
+ * under one.
+ */
 export type AuthoredByCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{
     readonly kind: "authored-by";
@@ -958,6 +1039,20 @@ export type TrustedActionWrite<
   Action extends string,
   Pattern extends string,
 > = TrustedActionWriteWithIntegrity<T, Binding, Action, Pattern, [Pattern]>;
+
+/**
+ * `T`, writable through any one of `Policies`, each a complete writer policy:
+ * a `WriteAuthorizedBy`, `TrustedActionWrite`, or
+ * `TrustedActionWriteWithIntegrity` over `unknown`. A write is admitted when
+ * one policy admits it whole — its writer, and the reviewed gesture that
+ * policy names if it names one — so one writer's gesture never admits
+ * another writer. The set is fixed once stored: a later schema can neither add
+ * nor drop a policy, nor change one.
+ */
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [unknown, ...unknown[]],
+> = Cfc<T, { readonly writePolicyAnyOf: Policies }>;
 
 export type TrustedActionUiContract<
   T,

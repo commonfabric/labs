@@ -74,6 +74,11 @@ export class FabricSet extends FabricNativeWrapper<Set<FabricValue>> {
     return new Set(this.#set);
   }
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #codec = Object.freeze(
     new (class FabricSetCodec extends BaseNonterminalCodec {
       /** Constructs an instance. */

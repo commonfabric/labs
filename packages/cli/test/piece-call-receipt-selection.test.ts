@@ -27,6 +27,7 @@ import {
   parseSelectionProjection,
   parseSelectProjection,
 } from "../lib/cell-selection.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /** Cells seeded on one replica and inspected from another. */
 interface Fixture {
@@ -75,7 +76,7 @@ async function withReceipt(
     const tx = writer.edit();
     const fixture = seed(writer, signer.did(), tx);
     writer.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await writerStorage.synced();
     const link = fixture.receipt.getAsNormalizedFullLink();
     const resolution = {
@@ -104,6 +105,7 @@ async function withReceipt(
     await check(
       (deps = {}) =>
         executeResolvedCallable(resolution, {}, {
+          sendEvent: sendThroughStandIn,
           invocation: { id: "inv:receipt", session: "ses:receipt" },
           ...deps,
         }),

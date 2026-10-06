@@ -1,9 +1,20 @@
 {
   "name": "@commonfabric/api",
   "tasks": {
-    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
-    // The baseline profile keeps the TypeScript wrapper and path mappings covered.
-    "test": "deno test --no-check --allow-read test/**/*.test.ts && deno run -A perf/run-tsc.ts --project perf/tsconfig.baseline.json --pretty false",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test check-profiling-harness",
+    // No path: the walk is what finds every test file, and two of this
+    // package's sit beside the sources they exercise rather than under
+    // `test/`, which a glob naming that directory passed over. --no-check:
+    // this package is type-checked by `deno task check` (tasks/check.sh).
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --no-check --allow-read",
+    // Compiles the type-profiling harness's empty control case with the pinned
+    // `tsc`, which is how a harness nothing else runs stays usable: it fails
+    // when that pin is missing from the lockfile or the cache, or when the API
+    // imports a workspace module the hand-kept `paths` map in
+    // `perf/tsconfig.base.json` does not resolve. It measures nothing, and it
+    // compiles under Node16 resolution rather than Deno's, which is why
+    // `deno task check` passing says nothing about it.
+    "check-profiling-harness": "deno run -A perf/run-tsc.ts --project perf/tsconfig.baseline.json --pretty false",
     "profile-types": "deno run -A perf/run-benchmarks.ts"
   },
   "imports": {

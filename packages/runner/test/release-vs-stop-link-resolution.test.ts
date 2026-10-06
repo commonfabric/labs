@@ -13,7 +13,9 @@
  */
 
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
+import type { Cell } from "../src/cell.ts";
 import {
   createSchedulerTestRuntime,
   disposeSchedulerTestRuntime,
@@ -61,7 +63,7 @@ Deno.test("releasing a target before link resolution preserves the held start", 
     // reaches the registration instead of declining.
     runtime.run(tx, compiled, { value: input }, target);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     expect(runtime.runner.cancels.size).toBe(1);
 
@@ -71,17 +73,25 @@ Deno.test("releasing a target before link resolution preserves the held start", 
     );
     const syncStarted = Promise.withResolvers<void>();
     const releaseSync = Promise.withResolvers<void>();
-    const targetLink = target.getAsLink();
-    let resolved = false;
-    link.getRaw = (() =>
-      resolved ? targetLink : undefined) as typeof link.getRaw;
-    link.sync = (() => {
-      syncStarted.resolve();
-      return releaseSync.promise.then(() => {
-        resolved = true;
-        return link;
-      });
-    }) as typeof link.sync;
+    // The alias's sync is held until the release below has run, and it then
+    // settles with the alias pointing at the target.
+    const linkId = link.getAsNormalizedFullLink().id;
+    const storageManager = runtime.storageManager;
+    const originalSyncCell = storageManager.syncCell;
+    using _sync = stub(
+      storageManager,
+      "syncCell",
+      function <T>(cell: Cell<T>, ...rest: unknown[]): Promise<Cell<T>> {
+        if (cell.getAsNormalizedFullLink().id !== linkId) {
+          return Reflect.apply(originalSyncCell, storageManager, [
+            cell,
+            ...rest,
+          ]);
+        }
+        syncStarted.resolve();
+        return releaseSync.promise.then(() => cell);
+      },
+    );
 
     const lifecycleState = runtime.runner.accessForTestingOnly;
     const start = runtime.start(link);
@@ -93,6 +103,9 @@ Deno.test("releasing a target before link resolution preserves the held start", 
     expect(
       [...lifecycleState.activeStartAttempts][0]?.preResolutionStopKeys.size,
     ).toBe(0);
+    const pointing = runtime.edit();
+    link.withTx(pointing).setRaw(target.getAsLink());
+    expect((await pointing.commit().settled).error).toBeUndefined();
     releaseSync.resolve();
 
     expect(await start).toBe(true);

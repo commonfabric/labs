@@ -37,9 +37,9 @@ describe("piece-controller", () => {
         apiUrl: new URL("http://localhost:9999"),
         storageManager: storage,
       });
-      session = await createSession({
+      session = createSession({
         identity: signer,
-        spaceName: crypto.randomUUID(),
+        spaceDid: await runtime.createSpace(),
       });
       pieces = new PiecesController(session, runtime);
       await pieces.synced();
@@ -154,7 +154,7 @@ describe("piece-controller", () => {
         tx,
       );
       other.set({ n: 42 });
-      await tx.commit();
+      await tx.commit().settled;
       const piece = await create({
         myName: other.key("n").getAsLink(),
         title: "before",

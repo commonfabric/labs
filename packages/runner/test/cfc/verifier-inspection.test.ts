@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
@@ -92,7 +93,7 @@ describe("prepareBoundaryCommit()", () => {
           value: { entry: { old: "a", new: "b" } },
           cfc: metadata,
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         try {
           const targets = ["first", "second"].map((name) =>
@@ -100,7 +101,14 @@ describe("prepareBoundaryCommit()", () => {
               .getAsNormalizedFullLink()
           );
           for (const target of targets) {
-            tx.writeValueOrThrow({ ...target, path: ["value", "field"] }, "v");
+            tx.writeValueOrThrow(
+              { ...target, path: ["field"] },
+              linkRefFrom({
+                space: source.space,
+                id: source.id,
+                path: ["entry"],
+              }),
+            );
             tx.recordCfcWritePolicyInput({
               kind: "link-write",
               target: { ...target, path: ["field"] },

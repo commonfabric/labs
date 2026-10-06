@@ -6,16 +6,20 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 
+import type { IFCLabel } from "@commonfabric/runner/cfc";
+
+import type { HarnessCommandResultProvenance } from "./client-command.ts";
 import type { HarnessSkillAcquisition } from "./skill.ts";
 
 /** Discriminator value of a {@link HarnessHandleTable}. */
 export const HARNESS_HANDLE_TABLE_TYPE = "cf-harness.handle-table";
 
 /**
- * Referent category of a handle. Only cell addresses are representable; the
- * token grammar reserves a distinct `cfh:v:` prefix so a value kind can be
- * added without re-reading existing tokens.
+ * Referent category of an address-table entry. Non-cell document referents
+ * live in {@link HarnessHandleTable.referents} under the distinct `cfh:v:`
+ * token prefix rather than widening this address-only entry shape.
  */
 export type HarnessHandleKind = "address";
 
@@ -53,6 +57,111 @@ export const HANDLE_TOKEN_PATTERN = new RegExp(
   `cfh:a:[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}`,
   "g",
 );
+
+/** Prefix of every referent-handle token (`cfh:v:<suffix>`). */
+export const REFERENT_HANDLE_TOKEN_PREFIX = "cfh:v:";
+
+/** Matches referent-handle tokens in free text, as the address pattern does. */
+export const REFERENT_TOKEN_PATTERN = new RegExp(
+  `cfh:v:[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}`,
+  "g",
+);
+
+/** Matches a token of either kind in free text. */
+export const ANY_HANDLE_TOKEN_PATTERN = new RegExp(
+  `cfh:[av]:[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}`,
+  "g",
+);
+
+/**
+ * A referent a run holds that is not a cell: content a tool observed — a Loom
+ * row — or the findings a research call admitted, with the label it was
+ * admitted under. The token stands for it in model-visible text. A result
+ * that names a document referent's token gets a document minted from this
+ * record and a link to it; a research referent is a projection of the run's
+ * own work, and no document is minted from it.
+ *
+ * A document's content reaches a model-visible surface nowhere through this
+ * entry: the model saw it when the tool returned it, and `describe_handle`
+ * reports the label's atom types alone. A research referent is the one whose
+ * content `describe_handle` does return, under this same label, which is how
+ * a run — or a child handed the token — reads what research found instead of
+ * researching again. A return referent is a string a child's structured
+ * return sealed: the parent holds it to pass on — to another child, or to a
+ * tool field that takes a handle — and never reads it, so `describe_handle`
+ * reports its label's atom types alone, as for a document. The kinds are told
+ * apart by `kind`, and each has the label sources that can apply to it and no
+ * other.
+ */
+export type HarnessHandleReferent =
+  | (HarnessHandleReferentBase & {
+    /** Content a tool observed. */
+    kind: "document";
+
+    /**
+     * Where the label came from: the row's own `ifc`; the label of the query,
+     * assigned because the row carried none; or the label a command's result
+     * was held under, whether a Weaver or the host answered it. A `command`
+     * label is metadata the result carries with it: what a model may do with
+     * the result under that label is decided by the read policy, not by the
+     * label source.
+     */
+    labelSource: "row" | "query" | "command";
+
+    /**
+     * Which command produced the result, as whom, and against which loom
+     * and version. Present exactly when `labelSource` is `command`.
+     */
+    provenance?: HarnessCommandResultProvenance;
+  })
+  | (HarnessHandleReferentBase & {
+    /** An admitted research kit. */
+    kind: "research";
+
+    /** The label research derived for its kit. */
+    labelSource: "research";
+  })
+  | (HarnessHandleReferentBase & {
+    /** A string a child's structured return sealed. */
+    kind: "return";
+
+    /** The model-context label of the child that returned it. */
+    labelSource: "child";
+  });
+
+/** What every referent carries whatever its kind. */
+interface HarnessHandleReferentBase {
+  /** The full token, prefix included (`cfh:v:<suffix>`). */
+  token: string;
+
+  /** The tool that observed the referent. */
+  source: string;
+
+  /**
+   * The content, JSON: as the model that holds the token saw it, for a
+   * document or research; as the child that returned it wrote it, for a
+   * return.
+   */
+  value: FabricValue;
+
+  /** The label the content was admitted under. */
+  label: IFCLabel;
+}
+
+/**
+ * A referent as handed to minting: everything but the token, per kind. Spelled
+ * distributively so a draft is a document draft or a research draft, and a
+ * label source of the wrong kind is refused where the draft is written.
+ */
+export type HarnessHandleReferentDraft = HarnessHandleReferent extends infer R
+  ? R extends HarnessHandleReferent ? Omit<R, "token"> : never
+  : never;
+
+/** A document referent as a tool hands it to the run: content and label. */
+export type HarnessDocumentReferentDraft = Omit<
+  Extract<HarnessHandleReferent, { kind: "document" }>,
+  "token" | "kind"
+>;
 
 /**
  * One handle: a token and the address it stands for.
@@ -121,15 +230,28 @@ export interface HarnessHandleEntry {
 }
 
 /**
- * The session-local handle table. `salt` is the owning run's id, fixed at
- * creation, so token derivation is deterministic within a run and disjoint
- * across runs. The version stays `1` across the optional
+ * The session-local handle table. `salt` is the id of the run that created
+ * the table, fixed for the table's life: every token minted into it derives
+ * from that salt, so derivation is deterministic within the table and
+ * disjoint across tables. A table outlives the run that created it where a
+ * session carries it on — an interactive session's next turn is a fresh run
+ * that starts from the table the session kept, still under its first salt —
+ * so the salt names the table's origin, not the run that holds it now. Two
+ * tables merge only when their salts agree, which is what says both grew
+ * from one table. The version stays `1` across the optional
  * {@link HarnessHandleEntry.schema}: an entry without one is well-formed, so
- * a table persisted before schemas were captured loads unchanged.
+ * a table persisted before schemas were captured loads unchanged. The same
+ * holds for {@link HarnessHandleTable.referents}.
  */
 export interface HarnessHandleTable {
   type: typeof HARNESS_HANDLE_TABLE_TYPE;
   version: 1;
   salt: string;
   entries: HarnessHandleEntry[];
+
+  /**
+   * The non-cell referents the run holds. Optional for the reason `schema`
+   * is: a table persisted without any is well-formed.
+   */
+  referents?: HarnessHandleReferent[];
 }

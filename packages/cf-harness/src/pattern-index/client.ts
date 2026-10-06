@@ -1,9 +1,10 @@
 /**
  * The typed client for the deployed pattern index: a small JSON-over-HTTP
  * surface for searching published patterns, reading one back, recording what
- * a run did with it, and publishing a new one. Pattern calls are POSTs to
- * `{baseUrl}/{function}` signed with the CF1 first-party scheme. Public health
- * and enrollment observations use GET; enrollment names the same principal.
+ * a run did with it, publishing a new one, and retracting an owned generation.
+ * Pattern calls are POSTs to `{baseUrl}/{function}` signed with the CF1
+ * first-party scheme. Public health and enrollment observations use GET;
+ * enrollment names the same principal.
  *
  * Everything here runs on the trusted host side. A pattern's source reaches
  * this module, the `run_pattern` compile path, and the private research loop.
@@ -135,6 +136,12 @@ export interface PatternIndexListedPattern {
   /** Event type to how many times it was recorded against this pattern. */
   events: Readonly<Record<string, number>>;
 
+  /**
+   * Event type to author DID to count, for this generation's own events.
+   * Absent on indexes that return totals without author attribution.
+   */
+  eventAuthors?: Readonly<Record<string, Readonly<Record<string, number>>>>;
+
   score: number;
 
   /** Combined evidence, absent on index deployments without inheritance. */
@@ -161,7 +168,10 @@ export interface PatternIndexListEventsRequest {
 /** One recorded event of the calling identity's own stream. */
 export interface PatternIndexEvent {
   patternId: string;
+
+  /** Author DID established by the request's authenticated signer. */
   did: string;
+
   eventType: string;
 
   /** `null` for an event the index holds no timestamp for. */
@@ -187,14 +197,38 @@ export type PatternIndexEventType =
   | "thumbs_up"
   | "thumbs_down";
 
+/** Signed event payload; the client supplies the author from its identity. */
 export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
+
+  /** Author DID, which the index must verify against the CF1 signer. */
+  did: string;
+
   note?: string;
 }
 
 export interface PatternIndexRecordEventResponse {
   ok: boolean;
+}
+
+/** An owner's request to retire a generation in favor of its direct successor. */
+export interface PatternIndexRetractRequest {
+  patternId: string;
+  successorPatternId: string;
+  reason: string;
+}
+
+/** The index's durable retirement receipt; source and events remain readable. */
+export interface PatternIndexRetractResponse {
+  patternId: string;
+  status: "retracted";
+  successorPatternId: string;
+  retractionReason: string;
+  retractedBy: string;
+  retractedAt: string;
+  discoverable: false;
+  changed: boolean;
 }
 
 export interface PatternIndexPublishRequest {
@@ -445,8 +479,8 @@ export class PatternIndexClient {
 
   /**
    * Every pattern the index holds, scored, for an operator reading the index
-   * as a whole. The aggregate is public — a count and a weight per pattern —
-   * so this says what is indexed and how it ranks without naming who did what.
+   * as a whole. Counts, weights and available author counts are public;
+   * individual event notes remain in the caller's own event stream.
    */
   listPatterns(): Promise<PatternIndexListPatternsResponse> {
     return this.#call<PatternIndexListPatternsResponse>("listPatterns", {});
@@ -468,13 +502,26 @@ export class PatternIndexClient {
     });
   }
 
+  /** Records an event authored by this client's authenticated identity. */
   recordEvent(
-    request: PatternIndexRecordEventRequest,
+    request: Omit<PatternIndexRecordEventRequest, "did">,
   ): Promise<PatternIndexRecordEventResponse> {
     return this.#call<PatternIndexRecordEventResponse>("recordEvent", {
       patternId: request.patternId,
       eventType: request.eventType,
+      did: this.did,
       ...(request.note !== undefined ? { note: request.note } : {}),
+    });
+  }
+
+  /** Retracts a generation as this client's signer; the index checks ownership. */
+  retractPattern(
+    request: PatternIndexRetractRequest,
+  ): Promise<PatternIndexRetractResponse> {
+    return this.#call<PatternIndexRetractResponse>("retractPattern", {
+      patternId: request.patternId,
+      successorPatternId: request.successorPatternId,
+      reason: request.reason,
     });
   }
 

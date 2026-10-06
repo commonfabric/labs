@@ -14,13 +14,16 @@ import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
 } from "../src/handle-table.ts";
 import {
   type HandleValueResolutionContext,
   resolveHandleValue,
+  resolveReturnReferent,
 } from "../src/tools/handle-values.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 
@@ -42,9 +45,9 @@ describe("handle-values", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `handle-values-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
@@ -150,8 +153,7 @@ describe("handle-values", () => {
         ref,
         "browser valueHandle",
       );
-      expect(resolution.error).toBeUndefined();
-      expect(resolution.value).toBe("Ada Lovelace");
+      expect(resolution).toEqual({ value: "Ada Lovelace" });
     });
 
     it("returns the string behind an unswapped handle token", async () => {
@@ -167,6 +169,111 @@ describe("handle-values", () => {
         "browser valueHandle",
       );
       expect(resolution.value).toBe("Ada Lovelace");
+    });
+
+    it("returns the string a child's return sealed, from a referent token", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("handle-values-run"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "https://shop.example/item/7",
+          label: {},
+          labelSource: "child",
+        },
+      );
+
+      const resolution = resolveReturnReferent(
+        {},
+        minted.token,
+        "browser urlHandle",
+      );
+      const held = resolveReturnReferent(
+        { handleTable: minted.table },
+        minted.token,
+        "browser urlHandle",
+      );
+
+      expect(resolution.error).toBe(
+        "browser urlHandle does not name a handle this run holds",
+      );
+      expect(held).toEqual({
+        value: "https://shop.example/item/7",
+        label: {},
+      });
+    });
+
+    it("returns an error for a returned value labeled above the run's read ceiling, and the value for one within it", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("handle-values-run"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "the owner's address",
+          label: { confidentiality: ["did:key:zOwner"] },
+          labelSource: "child",
+        },
+      );
+      const resolve = (ceiling: readonly string[]) =>
+        resolveReturnReferent(
+          { handleTable: minted.table, cfcReadMaxConfidentiality: ceiling },
+          minted.token,
+          "browser valueHandle",
+        );
+
+      expect(resolve(["did:key:zFacet"]).error).toBe(
+        "browser valueHandle names a value labeled above this run's read ceiling",
+      );
+      expect(resolve(["did:key:zOwner"])).toEqual({
+        value: "the owner's address",
+        label: { confidentiality: ["did:key:zOwner"] },
+      });
+    });
+
+    it("returns an error for a referent token naming something other than a return", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("handle-values-run"),
+        {
+          kind: "document",
+          source: "loom_search",
+          value: "a row",
+          label: {},
+          labelSource: "row",
+        },
+      );
+
+      const resolution = resolveReturnReferent(
+        { handleTable: minted.table },
+        minted.token,
+        "browser valueHandle",
+      );
+
+      expect(resolution.error).toBe(
+        "browser valueHandle can only take a referent a child's return sealed; this one holds a document",
+      );
+    });
+
+    it("returns an error for a referent token where only an address may resolve", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("handle-values-run"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "a returned string",
+          label: {},
+          labelSource: "child",
+        },
+      );
+
+      const resolution = await resolveHandleValue(
+        { handleTable: minted.table },
+        minted.token,
+        "skillHandle",
+      );
+
+      expect(resolution).toEqual({
+        error: "skillHandle takes an address handle (cfh:a:), not a referent",
+      });
     });
 
     it("returns an error for a token the run's handle table does not hold", async () => {
@@ -330,7 +437,7 @@ describe("handle-values", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { get: () => unknown }).get = () => {
           readFailures += 1;
           throw new Error("required value did not materialize");
@@ -365,7 +472,7 @@ describe("handle-values", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () => {
           syncFailures += 1;
           return Promise.reject(new Error("storage unavailable"));

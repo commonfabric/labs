@@ -1,5 +1,5 @@
 /** Measures prepared-digest work over frozen transaction records. */
-import { getFrozenObjectHashCacheHits } from "@commonfabric/data-model";
+import { getFrozenObjectHashCacheHitsForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { Identity } from "@commonfabric/identity";
 
 import { preparedDigestFor } from "../src/cfc/canonical.ts";
@@ -75,7 +75,7 @@ for (const writes of [5, 50, 200]) {
               ? access.preparedDigest()
               : preparedDigestFor(input);
             if (phase === "one-write") write(tx, writes, bytes);
-            const hitsBefore = getFrozenObjectHashCacheHits();
+            const hitsBefore = getFrozenObjectHashCacheHitsForTestingOnly();
             let recheck: string | undefined;
             b.start();
             const digest = input === undefined
@@ -88,7 +88,8 @@ for (const writes of [5, 50, 200]) {
             if (recheck !== undefined && recheck !== digest) {
               throw new Error("Recheck changed the digest");
             }
-            const hits = getFrozenObjectHashCacheHits() - hitsBefore;
+            const hits = getFrozenObjectHashCacheHitsForTestingOnly() -
+              hitsBefore;
             if (!digest || (phase === "one-write" && digest === first)) {
               throw new Error("Digest did not bind the added write");
             }

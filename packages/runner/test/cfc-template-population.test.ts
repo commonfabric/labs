@@ -97,7 +97,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -153,7 +153,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       path: [],
     });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return listId;
   };
 
@@ -167,7 +167,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
     observe(tx);
     const join = deriveFlowJoin(tx).confidentiality;
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return join;
   };
 
@@ -317,7 +317,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       path: [],
     });
     restamp.prepareCfc();
-    expect((await restamp.commit()).ok).toBeDefined();
+    expect((await restamp.commit().settled).ok).toBeDefined();
     expect(templateConf()).toEqual([
       "bob-criteria",
       "bob-criteria",
@@ -337,7 +337,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       path: [],
     });
     transient.prepareCfc();
-    expect((await transient.commit()).ok).toBeDefined();
+    expect((await transient.commit().settled).ok).toBeDefined();
     expect(templateConf()).toEqual([
       "bob-criteria",
       "bob-criteria",
@@ -370,7 +370,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       path: [],
     });
     restamp.prepareCfc();
-    expect((await restamp.commit()).ok).toBeDefined();
+    expect((await restamp.commit().settled).ok).toBeDefined();
     expect(
       entriesOf(listId)
         .filter((e) => e.path.length === 1)
@@ -399,7 +399,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       { replaced: true },
     );
     cover.prepareCfc();
-    expect((await cover.commit()).ok).toBeDefined();
+    expect((await cover.commit().settled).ok).toBeDefined();
 
     const after = entriesOf(listId);
     expect(after.some((e) => e.path.includes("*"))).toBe(false);
@@ -438,7 +438,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       rt.getCell(space, "tp-el-sw-2", undefined, slotWrite) as never,
     );
     slotWrite.prepareCfc();
-    expect((await slotWrite.commit()).ok).toBeDefined();
+    expect((await slotWrite.commit().settled).ok).toBeDefined();
 
     const templates = entriesOf(listId).filter(
       (e) => e.origin === "structure" && e.path.length === 1,
@@ -481,7 +481,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       (w) => w.address.id === listId && w.address.path[0] === "cfc",
     );
     expect(wroteCfc).toBe(false);
-    expect((await again.commit()).ok).toBeDefined();
+    expect((await again.commit().settled).ok).toBeDefined();
     expect(JSON.stringify(entriesOf(listId))).toEqual(before);
   });
 
@@ -518,7 +518,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       path: [],
     });
     reconcile.prepareCfc();
-    expect((await reconcile.commit()).ok).toBeDefined();
+    expect((await reconcile.commit().settled).ok).toBeDefined();
 
     const templateConf = entriesOf(listId)
       .filter((e) => e.origin === "structure" && e.path.length === 1)
@@ -608,7 +608,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
         labelMap: { version: 1, entries },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -650,7 +650,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     }, tx);
     list.set(members);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return list.getAsNormalizedFullLink().id;
   };
 
@@ -664,7 +664,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     observe(tx);
     const join = deriveFlowJoin(tx).confidentiality;
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return join;
   };
 
@@ -781,12 +781,12 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     expect(unmarked).toContainEqual("memb-secret");
   });
 
-  it("a dereference trace covers a slot probe under either marking", async () => {
-    // The dereference trace is the whole of the standalone/machinery
-    // boundary (CFC §4.6.3), so it decides alone: a probe the trace covers
-    // consumes nothing at the slot, neither the pointer label nor the
-    // membership template, whether or not it carries `machineryRead`. The
-    // follow's taint arrives through the reads of the target.
+  it("consumes the membership template at a followed slot, unless the probe is machinery", async () => {
+    // A dereference retains the restrictions of the reference it follows
+    // (CFC §4.6.3, §8.2.4): the probe of the followed slot consumes what a
+    // standalone probe of it does, the pointer label and the membership
+    // template. A probe carrying `machineryRead` consumes nothing, traced or
+    // not.
 
     const rt = makeRuntime();
     const elId = await seedDoc(rt, "gp-el-tc", { n: 4 }, [
@@ -808,7 +808,9 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
       });
     };
 
-    expect(await flowJoinOf(rt, tracedProbe)).toEqual([]);
+    const followed = await flowJoinOf(rt, tracedProbe);
+    expect(followed).toContainEqual("memb-secret");
+    expect(followed).toContainEqual("el-label");
     expect(
       await flowJoinOf(
         rt,
@@ -902,7 +904,7 @@ describe("CFC template population (Stage A): class-split resolution", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -933,7 +935,7 @@ describe("CFC template population (Stage A): class-split resolution", () => {
     observe(tx);
     const join = deriveFlowJoin(tx).confidentiality;
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return join;
   };
 
@@ -1114,7 +1116,7 @@ describe("CFC template population (Stage A): class-split resolution", () => {
     const cell = rt.getCell(space, "tp-declared-star", guarded.schema, tx);
     cell.set({ items: [{ n: 1 }] });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const id = cell.getAsNormalizedFullLink().id;
 
     const declared = entriesOf(id).filter((e) => e.origin === "declared");
@@ -1176,7 +1178,7 @@ describe("CFC template population (Stage A): record-only additionalProperties wa
     const cell = rt.getCell(space, cause, interned.schema, tx);
     cell.set(value as never);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return cell.getAsNormalizedFullLink().id;
   };
 
@@ -1314,7 +1316,7 @@ describe("CFC template population (Stage A): cross-space label protection", () =
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Declared container in the local space whose membership J consumed
       // the foreign read.
@@ -1340,7 +1342,7 @@ describe("CFC template population (Stage A): cross-space label protection", () =
         path: [],
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const replica = storageManager.open(space).replica as unknown as {
         getDocument(id: string): {

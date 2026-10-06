@@ -1,4 +1,4 @@
-import type { CellKind, LinkScope } from "@commonfabric/api";
+import type { CellKind, FabricValue, LinkScope } from "@commonfabric/api";
 import { fabricAwareEqual, taggedHashStringOf } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -7,6 +7,8 @@ import {
   applyPieceSourceTransition,
   Cell,
   type CellPath,
+  cellRuntime,
+  cellTx,
   cellWithScopedLinkRequiredsRelaxed,
   ContextualFlowControl,
   deepEqual,
@@ -51,6 +53,7 @@ import {
   sanitizeSchemaForLinks,
   schemaAcceptsOpaqueCellValue,
   schemaPathSelection,
+  setCell,
   setPieceReconciliation,
 } from "@commonfabric/runner";
 import { storedArgumentRefusalDetail } from "@commonfabric/runner/shared";
@@ -58,6 +61,7 @@ import {
   cfcSchemaResolvedRoot,
   loadStoredCfcEnvelope,
   type MergeCfcSchemaEnvelopeOptions,
+  releaseMergeOptions,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
   storedCfcEnvelopeMergeIssue,
@@ -101,7 +105,7 @@ interface PieceCellIo {
   get(path?: CellPath): Promise<unknown>;
   set(value: unknown, path?: CellPath): Promise<void>;
   edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }>;
   getCell(path?: CellPath): Promise<Cell<unknown>>;
@@ -124,7 +128,7 @@ async function snapshotCloneData(
   const initialManifest = cloneInternalManifest(piece);
   for (const entry of initialManifest) {
     if (entry.kind === "computed") continue;
-    const internal = piece.runtime.getCellFromLink(
+    const internal = cellRuntime(piece).getCellFromLink(
       parseLinkOrThrow(entry.link, piece),
     );
     if (!isStream(internal)) {
@@ -132,7 +136,7 @@ async function snapshotCloneData(
     }
   }
 
-  const tx = piece.runtime.edit();
+  const tx = cellRuntime(piece).edit();
   let commitStarted = false;
   try {
     const txPiece = piece.withTx(tx);
@@ -161,7 +165,7 @@ async function snapshotCloneData(
     for (const entry of manifest) {
       if (entry.kind === "computed") continue;
       const link = parseLinkOrThrow(entry.link, txPiece);
-      const internal = piece.runtime.getCellFromLink(link, undefined, tx);
+      const internal = cellRuntime(piece).getCellFromLink(link, undefined, tx);
       if (isStream(internal)) continue;
       internals.push({
         partialCause: entry.partialCause,
@@ -177,9 +181,9 @@ async function snapshotCloneData(
     }
 
     pinCloneSnapshotCells(tx, snapshotCells.values());
-    piece.runtime.prepareTxForCommit(tx);
+    cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw commitFailure(error);
     return { input, internals };
   } catch (error) {
@@ -193,7 +197,7 @@ async function restoreCloneInternals(
   piece: Cell<unknown>,
   snapshots: readonly CloneInternalSnapshot[],
 ): Promise<void> {
-  const tx = piece.runtime.edit();
+  const tx = cellRuntime(piece).edit();
   let commitStarted = false;
   try {
     const txPiece = piece.withTx(tx);
@@ -207,17 +211,19 @@ async function restoreCloneInternals(
         throw new Error("cloned piece is missing a source data cell");
       }
       const link = parseLinkOrThrow(entry.link, txPiece);
-      piece.runtime.getCellFromLink(link, undefined, tx).set(snapshot.value);
+      cellRuntime(piece).getCellFromLink(link, undefined, tx).set(
+        snapshot.value,
+      );
     }
-    piece.runtime.prepareTxForCommit(tx);
+    cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw commitFailure(error);
   } catch (error) {
     if (!commitStarted) tx.abort(error);
     throw error;
   }
-  await piece.runtime.idle();
+  await cellRuntime(piece).idle();
 }
 
 type PiecePropIoType = "result" | "input";
@@ -789,11 +795,13 @@ export function linkPathContracts(
         if (applicable.length === 0) {
           applicable.push(schema.additionalProperties ?? true);
         }
-        next.push(...applicable.map((child) => ({
-          schema: child,
-          root: root,
-          mayBeMissing,
-        })));
+        for (const child of applicable) {
+          next.push({
+            schema: child,
+            root: root,
+            mayBeMissing,
+          });
+        }
         continue;
       }
       if (arrayShaped) {
@@ -1041,7 +1049,7 @@ export function currentValuePathContracts(
       const baseArrayShaped = base.type === "array" ||
         base.items !== undefined || base.prefixItems !== undefined;
       if (baseObjectShaped || baseArrayShaped) {
-        contracts.push(...currentValuePathContracts(
+        const baseContracts = currentValuePathContracts(
           {
             ...contract,
             schema: base,
@@ -1051,7 +1059,8 @@ export function currentValuePathContracts(
           currentValue,
           candidateValue,
           active,
-        ));
+        );
+        for (const baseContract of baseContracts) contracts.push(baseContract);
       } else if (
         Object.keys(base).some((key) =>
           !LINK_PATH_NEUTRAL_ANCESTOR_KEYS.has(key)
@@ -1100,13 +1109,16 @@ export function currentValuePathContracts(
           ]),
         ];
         for (const branch of selected) {
-          contracts.push(...currentValuePathContracts(
+          const pathContracts = currentValuePathContracts(
             branchContract(branch),
             segment,
             currentValue,
             candidateValue,
             active,
-          ));
+          );
+          for (const pathContract of pathContracts) {
+            contracts.push(pathContract);
+          }
         }
       }
       if (Array.isArray(schema.allOf)) {
@@ -1116,13 +1128,16 @@ export function currentValuePathContracts(
               "current producer value does not satisfy an allOf write contract",
             );
           }
-          contracts.push(...currentValuePathContracts(
+          const pathContracts = currentValuePathContracts(
             branchContract(branch),
             segment,
             currentValue,
             candidateValue,
             active,
-          ));
+          );
+          for (const pathContract of pathContracts) {
+            contracts.push(pathContract);
+          }
         }
       }
       if (contracts.length === 0) throw originalError;
@@ -1579,7 +1594,7 @@ export function durableSourceContract(
     const scopedRoot = pieces.runtime.getCellFromLink(
       { ...rawSourceLink, path: [], schema: undefined },
       undefined,
-      linkedCell.tx,
+      cellTx(linkedCell),
     );
     const hasScopedMeta = scopedRoot.getMetaRaw("schema") !== undefined ||
       scopedRoot.getMetaRaw("result") !== undefined;
@@ -1589,7 +1604,7 @@ export function durableSourceContract(
   const sourceRoot = pieces.runtime.getCellFromLink(
     { ...sourceLink, path: [], schema: undefined },
     undefined,
-    linkedCell.tx,
+    cellTx(linkedCell),
   );
 
   const resultSchema = readResultSchemaMeta(sourceRoot);
@@ -1615,15 +1630,16 @@ export function durableSourceContract(
   const ownerResult = pieces.runtime.getCellFromLink(
     { ...resultLink, schema: undefined },
     undefined,
-    linkedCell.tx,
+    cellTx(linkedCell),
   );
   const relativePath = (
     producerLink: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
+    matchScope: LinkScope | undefined = sourceLink.scope,
   ): (string | number)[] | undefined => {
     if (
       producerLink.space !== sourceLink.space ||
       producerLink.id !== sourceLink.id ||
-      (producerLink.scope ?? "space") !== (sourceLink.scope ?? "space") ||
+      (producerLink.scope ?? "space") !== (matchScope ?? "space") ||
       producerLink.path.length > sourceLink.path.length ||
       producerLink.path.some((segment, index) =>
         segment !== sourceLink.path[index]
@@ -1647,7 +1663,7 @@ export function durableSourceContract(
         validationCell: pieces.runtime.getCellFromLink(
           { ...argumentLink, schema: undefined },
           undefined,
-          linkedCell.tx,
+          cellTx(linkedCell),
         ),
         validationPath: path,
       });
@@ -1670,7 +1686,7 @@ export function durableSourceContract(
         const internalLink = pieces.runtime.getCellFromLink(
           parsedInternalLink,
           parsedInternalLink.schema,
-          linkedCell.tx,
+          cellTx(linkedCell),
         ).getAsNormalizedFullLink();
         const path = relativePath(internalLink);
         if (path === undefined) continue;
@@ -1684,7 +1700,7 @@ export function durableSourceContract(
             validationCell: pieces.runtime.getCellFromLink(
               { ...internalLink, schema: undefined },
               undefined,
-              linkedCell.tx,
+              cellTx(linkedCell),
             ),
             validationPath: path,
           });
@@ -1717,9 +1733,14 @@ export function durableSourceContract(
           const target = pieces.runtime.getCellFromLink(
             parsed,
             parsed.schema,
-            linkedCell.tx,
+            cellTx(linkedCell),
           ).getAsNormalizedFullLink();
-          const suffix = relativePath(target);
+          // A projection is matched at the instance the link names. A result
+          // alias reading a scoped input addresses the input's base slot and
+          // reaches the scoped value through its redirect, so it is not
+          // collected for a scoped source; the argument contract above
+          // governs that value.
+          const suffix = relativePath(target, rawSourceLink.scope);
           if (suffix !== undefined) {
             projected.push({
               root: ownerSchema,
@@ -1758,7 +1779,7 @@ export function durableSourceContract(
     const unique = new Map(
       projected.map((entry) => [JSON.stringify(entry.path), entry]),
     );
-    schemas.push(...unique.values());
+    for (const schema of unique.values()) schemas.push(schema);
   }
   return schemas.length === 0 ? undefined : { schemas };
 }
@@ -1791,11 +1812,12 @@ function suppliedLinks(
 
   const links: SuppliedLink[] = [];
   for (const key of Object.keys(value)) {
-    links.push(...suppliedLinks(
+    const nestedLinks = suppliedLinks(
       (value as Record<string, unknown>)[key],
       [...path, key],
       seen,
-    ));
+    );
+    for (const link of nestedLinks) links.push(link);
   }
   seen.delete(value);
   return links;
@@ -2002,7 +2024,7 @@ function resolveDurableSource(
   const linkedCell = pieces.runtime.getCellFromLink(
     { ...link, schema: undefined },
     undefined,
-    linkBase.tx,
+    cellTx(linkBase),
   );
   // A direct Cell view can be narrowed with asSchema() just as easily as a
   // serialized alias can carry a narrowed schema. Neither is a future-value
@@ -2040,7 +2062,7 @@ function resolveDurableSource(
       const root = pieces.runtime.getCellFromLink(
         { ...sourceLink, path: [], schema: undefined, scope },
         undefined,
-        linkedCell.tx,
+        cellTx(linkedCell),
       );
       if (
         root.getMetaRaw("result") !== undefined ||
@@ -2609,7 +2631,7 @@ export function localizeWritableDestinationContracts(
   let contracts: PathSchemaContract[] = [{ schema: root, root }];
   let approximatedCorrelatedPath = false;
   const rawRoot = rootCell.getRawUntyped({ lastNode: "top" });
-  const materializedRoot = destination.validationCell.withTx(rootCell.tx)
+  const materializedRoot = destination.validationCell.withTx(cellTx(rootCell))
     .asSchema(root).get();
   const stagedMaterializedRoot = replaceMaterializedCellValueAtPath(
     materializedRoot,
@@ -2717,7 +2739,7 @@ function rawValueAtPath(
 
 /** @internal Exported for focused projection-presence tests. */
 export function rawResolvedValueAtPath(
-  tx: NonNullable<Cell<unknown>["tx"]>,
+  tx: IExtendedStorageTransaction,
   resolved: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
 ): { present: boolean; value: unknown } {
   // Read the document envelope, not only its Cell value. A metadata-only
@@ -2801,7 +2823,7 @@ export function omitMissingProjectionAliases(
     const resolvedSchemaView = isCell(schemaView) && !isStream(schemaView)
       ? schemaView.get()
       : schemaView;
-    const tx = cell.tx;
+    const tx = cellTx(cell);
     if (tx === undefined) {
       throw new Error("projection alias reconciliation requires a transaction");
     }
@@ -3175,7 +3197,7 @@ class PiecePropIo implements PieceCellIo {
    * read, the way a write's caller verifies the write.
    */
   async edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }> {
     const pieces = this.#cc.pieces();
@@ -3214,7 +3236,9 @@ class PiecePropIo implements PieceCellIo {
       // Build the path with transaction context
       const txCell = targetCell.withTx(tx).key(...(path ?? []));
 
-      const decision = produce(txCell.getRaw({ lastNode: "value" }));
+      const decision = produce(
+        txCell.getRawUntyped({ lastNode: "value" }),
+      );
       if (decision === undefined) return { wrote: false };
       const value = decision.value;
 
@@ -3360,7 +3384,8 @@ class PiecePropIo implements PieceCellIo {
           pieces.runtime.getCellFromLink(rawTarget, undefined, tx)
             .setRawUntyped(undefined);
         } else {
-          txCell.set(
+          setCell(
+            txCell,
             nextValue,
             undefined,
             isStream(txCell) &&
@@ -4071,6 +4096,33 @@ export class PieceController<T = unknown> {
   }
 
   /**
+   * The piece's current pattern where it loads, and its stored pattern pointer
+   * alone where it does not, with what the load threw as `failure`.
+   *
+   * A source change names its predecessor by the pointer and compares a
+   * candidate with the loaded pattern, so a pattern that does not load costs
+   * that comparison and nothing else. Whether a change may go ahead without
+   * the comparison is the caller's to decide.
+   *
+   * @throws Error when the piece carries no pattern pointer, which leaves a
+   * change nothing to name as its predecessor.
+   */
+  async #loadCurrentPatternOrPointer(
+    options: { projectResult?: boolean; repairCache?: boolean } = {},
+  ): Promise<
+    & { ref: { identity: string; symbol: string } }
+    & ({ pattern: Pattern } | { pattern: undefined; failure: unknown })
+  > {
+    try {
+      return await this.#loadCurrentPattern(options);
+    } catch (failure) {
+      const ref = this.#patternPointer();
+      if (ref === undefined) throw failure;
+      return { pattern: undefined, ref, failure };
+    }
+  }
+
+  /**
    * The pattern's authored source program, recovered from the content-addressed
    * `pattern:<identity>` source-doc closure in the piece's space. Replaces the
    * deleted meta cell's `program`. `main` is the executable entry filename;
@@ -4216,8 +4268,28 @@ export class PieceController<T = unknown> {
     if (!isPieceSourceAction(action)) {
       throw new Error("unsupported piece source action");
     }
-    const { pattern: previousPattern, ref: previousRef } = await this
-      .#loadCurrentPattern();
+    // A piece whose current pattern does not load is the piece a change of
+    // source rescues: a stored identity only a retired bundle could resolve
+    // strands it otherwise. The pointer still names the predecessor, which is
+    // all a transition records of it, and all a detach needs. What an action
+    // that adopts a candidate loses is the comparison of that candidate with
+    // what the piece ran. The review below reports the loss as an
+    // incompatibility, so such a change applies only once confirmed.
+    const previous = await this.#loadCurrentPatternOrPointer();
+    const previousRef = previous.ref;
+    // Why the load failed is in no review, since a review has to read the
+    // same on the call that confirms it. A confirmation repeats a load that
+    // was already reported, so only the reviewing call logs it.
+    if (
+      previous.pattern === undefined && options.confirmedChange === undefined
+    ) {
+      pieceUpdateLogger.warn("change-source-current-unloadable", () => [
+        "the current pattern failed to load; reviewing the source change",
+        `against the stored identity ref ${previousRef.identity}#` +
+        `${previousRef.symbol} alone (${this.#cell.space})`,
+        previous.failure,
+      ]);
+    }
     const expected = getPieceSourceSnapshot(
       this.#cell,
       this.#pieces.runtime.runner.sessionPatternPointerFor(this.#cell),
@@ -4331,7 +4403,7 @@ export class PieceController<T = unknown> {
       candidate = loaded;
       prepared = confirmed;
       const currentReview = await pieceSourceCompatibilityReview(
-        previousPattern,
+        previous,
         candidate,
         this.#cell,
         this.#pieces,
@@ -4363,10 +4435,18 @@ export class PieceController<T = unknown> {
         acceptedReview = confirmed.review;
       }
     } else {
+      // A piece with no source history and no origin predates both, and its
+      // space may hold no source for what it runs. It takes the transition's
+      // displaced-identity arm, as it does under `setPattern`. A piece that
+      // recorded how it got its pattern keeps its claim to a restorable
+      // current source, so the baseline still refuses one that has none.
       const baseline = await preparePieceSourceTransitionBaseline(
         this.#pieces.runtime,
         this.#cell,
         expected,
+        expected.revisionId === null && expected.origin === null
+          ? { allowUnavailable: true }
+          : {},
       );
       let program: RuntimeProgram;
       let origin: string | null;
@@ -4477,7 +4557,7 @@ export class PieceController<T = unknown> {
         ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
       };
       const review = await pieceSourceCompatibilityReview(
-        previousPattern,
+        previous,
         candidate,
         this.#cell,
         this.#pieces,
@@ -4550,7 +4630,7 @@ export class PieceController<T = unknown> {
                     argumentCell,
                     argumentSchema,
                     this.#pieces,
-                    previousPattern.argumentSchema,
+                    previous.pattern?.argumentSchema,
                   );
                 } catch (error) {
                   const message = error instanceof Error
@@ -4614,7 +4694,7 @@ export class PieceController<T = unknown> {
       }
       if (isOverridableArgumentCompatibilityError(error)) {
         const review = await pieceSourceCompatibilityReview(
-          previousPattern,
+          previous,
           candidate,
           this.#cell,
           this.#pieces,
@@ -4649,8 +4729,8 @@ export class PieceController<T = unknown> {
   async checkPattern(
     program: RuntimeProgram,
   ): Promise<PatternCompatibilityReport> {
-    const { pattern: previousPattern } = await this
-      .#loadCurrentPattern({ repairCache: false });
+    const previous = await this
+      .#loadCurrentPatternOrPointer({ repairCache: false });
     const candidate = await this.#pieces.runtime.patternManager.compilePattern(
       program,
       { space: this.#pieces.getSpace(), persist: false },
@@ -4661,7 +4741,7 @@ export class PieceController<T = unknown> {
       throw new Error("the candidate source has no pattern identity");
     }
     const review = await pieceSourceCompatibilityReview(
-      previousPattern,
+      previous,
       candidate,
       this.#cell,
       this.#pieces,
@@ -4768,27 +4848,25 @@ export class PieceController<T = unknown> {
         // retained baseline: the stored ref serves only as the concurrency
         // guard and the candidate's predecessor entry, both of which name an
         // identity without loading it.
-        let previousPattern: Pattern | undefined;
-        let previousRef: { identity: string; symbol: string };
+        //
         // A served update repairs no cache: a write the load would seal
         // into the serving wave is not one the update's own commit
         // should rest on or answer for.
-        const repairCache = options?.served === undefined;
-        try {
-          ({ pattern: previousPattern, ref: previousRef } = await this
-            .#loadCurrentPattern({ repairCache }));
-        } catch (error) {
-          if (!options?.dangerouslyAllowIncompatibleSchema) throw error;
-          await this.#cell.sync();
-          const storedRef = getPatternIdentityRef(this.#cell);
-          if (!storedRef) throw error;
+        const previous = await this.#loadCurrentPatternOrPointer({
+          repairCache: options?.served === undefined,
+        });
+        const previousPattern = previous.pattern;
+        const previousRef = previous.ref;
+        if (previous.pattern === undefined) {
+          if (!options?.dangerouslyAllowIncompatibleSchema) {
+            throw previous.failure;
+          }
           pieceUpdateLogger.warn("set-pattern-current-unloadable", () => [
             "the current pattern failed to load; replacing source from the",
-            `stored identity ref ${storedRef.identity}#${storedRef.symbol}`,
+            `stored identity ref ${previousRef.identity}#${previousRef.symbol}`,
             `under dangerouslyAllowIncompatibleSchema (${this.#cell.space})`,
-            error,
+            previous.failure,
           ]);
-          previousRef = storedRef;
         }
         const expected = getPieceSourceSnapshot(
           this.#cell,
@@ -5118,7 +5196,7 @@ function assertPieceSourceRetainedLinksCompatible(
   argumentCell: Cell<unknown>,
   candidateSchema: JSONSchema,
   pieces: PiecesController,
-  priorArgumentSchema: JSONSchema,
+  priorArgumentSchema: JSONSchema | undefined,
 ): void {
   try {
     assertSuppliedLinkSchemasCompatible(
@@ -5144,7 +5222,7 @@ function pieceSourceArgumentEvidence(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): string {
-  const raw = argumentCell.getRaw();
+  const raw = argumentCell.getRawUntyped();
   const links = suppliedLinks(raw).map((suppliedLink) => {
     let linkBase = argumentCell;
     for (const segment of suppliedLink.path) {
@@ -5155,7 +5233,7 @@ function pieceSourceArgumentEvidence(
       const linkedCell = pieces.runtime.getCellFromLink(
         { ...link, schema: undefined },
         undefined,
-        linkBase.tx,
+        cellTx(linkBase),
       );
       const contract = durableSourceContract(linkedCell, pieces);
       return {
@@ -5190,17 +5268,37 @@ function pieceSourceArgumentEvidence(
   return taggedHashStringOf({ raw, links });
 }
 
+/**
+ * Every reason `candidate` cannot replace what `piece` runs, with the evidence
+ * the stored argument was judged on.
+ *
+ * `previous.pattern` is `undefined` for a piece whose current pattern does not
+ * load. Nothing can then say whether the candidate keeps the contract the piece
+ * ran under, which is itself an incompatibility: the review reports it under
+ * `schema`, naming the pattern by `previous.ref`, and judges retained links
+ * against the candidate alone. The stored argument and the CFC envelopes are
+ * judged as they always are, since neither consults the current pattern.
+ */
 async function pieceSourceCompatibilityReview(
-  previousPattern: Pattern,
+  previous: {
+    pattern: Pattern | undefined;
+    ref: { identity: string; symbol: string };
+  },
   candidate: Pattern,
   piece: Cell<unknown>,
   pieces: PiecesController,
 ): Promise<NonNullable<PreparedPieceSourceChange["review"]>> {
   const issues: PieceSourceCompatibilityIssues = {};
-  try {
-    assertPatternSchemasBackwardCompatible(previousPattern, candidate);
-  } catch (error) {
-    issues.schema = error instanceof Error ? error.message : String(error);
+  if (previous.pattern === undefined) {
+    issues.schema = `the piece's current pattern ` +
+      `\`${previous.ref.identity}#${previous.ref.symbol}\` cannot be loaded, ` +
+      `so the candidate cannot be compared with it`;
+  } else {
+    try {
+      assertPatternSchemasBackwardCompatible(previous.pattern, candidate);
+    } catch (error) {
+      issues.schema = error instanceof Error ? error.message : String(error);
+    }
   }
 
   const argumentCell = pieces.getArgument(piece);
@@ -5223,7 +5321,7 @@ async function pieceSourceCompatibilityReview(
       argumentCell,
       candidate.argumentSchema,
       pieces,
-      previousPattern.argumentSchema,
+      previous.pattern?.argumentSchema,
     );
   } catch (error) {
     issues.retainedLinks = error instanceof Error
@@ -5288,6 +5386,12 @@ function pieceSourceCfcEnvelopeIssue(
 ): string | undefined {
   // `readTx()` cannot write, so the two dry runs stay dry runs.
   const tx = pieces.runtime.readTx();
+  // The modules the release would install, as setup names them.
+  const patternManager = pieces.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(candidate);
+  const programModules = entry === undefined
+    ? []
+    : patternManager.programModuleIdentities(entry.identity) ?? [];
   const issues = [
     pieceDocumentCfcEnvelopeIssue(
       "argument",
@@ -5295,6 +5399,7 @@ function pieceSourceCfcEnvelopeIssue(
       candidate.argumentSchema,
       {},
       tx,
+      programModules,
     ),
     // Setup writes the result projection, and with it the schema input the
     // commit merges, only where the candidate's projection differs from the
@@ -5308,6 +5413,7 @@ function pieceSourceCfcEnvelopeIssue(
         candidate.resultSchema,
         { generatedOutputPaths: [[]] },
         tx,
+        programModules,
       )
       : undefined,
   ].filter((issue): issue is string => issue !== undefined);
@@ -5325,6 +5431,7 @@ function pieceDocumentCfcEnvelopeIssue(
   candidateSchema: JSONSchema,
   options: MergeCfcSchemaEnvelopeOptions,
   tx: IExtendedStorageTransaction,
+  programModules: Iterable<string>,
 ): string | undefined {
   const link = cell.getAsNormalizedFullLink();
   const stored = loadStoredCfcEnvelope(tx, {
@@ -5347,10 +5454,20 @@ function pieceDocumentCfcEnvelopeIssue(
       `document could not be read (${stored.reason}); applying a source ` +
       `would be rejected over the same failure`;
   }
+  // The update the check gates is a release of the piece, which merges with
+  // the release's options (see `releaseMergeOptions`).
   const issue = storedCfcEnvelopeMergeIssue(
     stored.schema,
     candidateSchema,
-    options,
+    {
+      ...options,
+      ...releaseMergeOptions(
+        tx,
+        { space: link.space, id: link.id, scope: link.scope },
+        stored.schema,
+        programModules,
+      ),
+    },
   );
   if (issue === undefined) return undefined;
   return issue.migration

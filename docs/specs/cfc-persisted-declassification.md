@@ -214,6 +214,62 @@ shipped in #4649 (single-use consumption receipts — see the build-order
 entry above; receipt consulted-state rides the same `consultedGrants`
 binding). Item 4 remains open._
 
+### 3.1 Reviewed snapshot copies
+
+The native `cf-share-snapshot` surface implements a bounded route-3 operation:
+it displays an exact JSON snapshot and runtime-verified audience, then creates a
+new copy after a trusted host confirmation. The host-only runner module
+`cfc/share-snapshot.ts` issues one-use consent objects; authored pattern imports
+and streams cannot issue them. The source value and its labels stay unchanged.
+This operation does not create a standing `ShareGrant` or complete item 4 above.
+
+The copy may widen only a direct `User(actor)` clause owned by the authenticated
+confirming principal. Every other source clause must already contain the
+requested audience as a literal atom or alternative and remains in the copy's
+label. The copy also carries an alternative admitting the actor or requested
+audience. The audience comes from the destination cell's resolved space or its
+persisted principal attestation, never a caller-supplied DID or schema claim.
+
+Commit checks the reviewed value, resolved addresses, audience, and acting
+principal again. Reads that established those facts are compared in the write
+transaction and retain optimistic conflict checks. The immutable copy and an
+actor-private audit receipt are written in the destination space in the same
+transaction. The receipt retains any other source clauses and records the source
+identifier, snapshot digest, audience, and host event identifier. Source integrity
+endorsements are not transferred to the copy.
+
+The renderer and runtime transport are trusted. The operation requires an
+authenticated actor. When the host declares a runtime read ceiling, the source
+must fit it. Otherwise, the source must fit the actor's own `User` ceiling
+before the worker returns a preview. The recipient's access does not authorize
+showing the actor a preview.
+This reduced-evidence operation
+does not establish the full hostile-host intent chain in §4. Its in-memory
+one-use consent does not provide durable retry recovery. It releases only the
+reviewed snapshot, with no release authority over later source changes or other
+values. See [host embedding](../features/host-embedding.md) and the
+[`cf-share-snapshot` component](../common/components/COMPONENTS.md#cf-share-snapshot)
+for the host and pattern interfaces.
+
+### 3.2 Sealed custody copies
+
+A second route-3 host operation copies a reviewed value into the custody of a
+trusted-declassifier policy rather than to a reader: `cfc/custody-seal.ts`,
+specified in [sealed custody](cfc-custody-seal.md). It releases nothing itself.
+The copy's audience is the policy's release rules, which a rule can bind to the
+seal through the input witness on `TransformedBy`.
+
+### 3.3 Reviewed intents
+
+A third host operation records a release outside the fabric rather than
+copying a value inside it: `cfc/reviewed-intent.ts`, specified in
+[reviewed intents](cfc-reviewed-intent.md). After a trusted gesture on the
+host's surface, it writes a record, under a builtin identity, of exactly the
+parameters and destinations the actor reviewed, which the
+application acting on the actor's behalf verifies before it acts. It releases
+nothing itself; the application's send is the release, and the §6 egress
+record is what remembers it.
+
 ## 4. The rewrite event (specify now, build later)
 
 When a widening must survive without evaluation (§2.4), route 2 proper: an

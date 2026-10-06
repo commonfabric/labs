@@ -1,6 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { spy } from "@std/testing/mock";
+import { FakeTime } from "@std/testing/time";
 import {
   ConsoleLive,
   consoleLiveAddress,
@@ -25,24 +27,13 @@ import {
   HARNESS_CHAT_EVENT_TYPE,
   HARNESS_CHAT_PROTOCOL_VERSION,
 } from "../../../src/contracts/interactive-chat.ts";
+import { CfHarnessEngine } from "../../../src/engine.ts";
+import { HarnessInteractiveChatService } from "../../../src/interactive-chat-service.ts";
+import { CfHarnessPromptLoop } from "../../../src/prompt-loop.ts";
+import { directPromptSlotBindingFor } from "../../support/prompt-slot-binding.ts";
+import { templateText } from "./template-text.ts";
 
 describe("console/src/live-view", () => {
-  const templateText = (value: unknown): string => {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "string" || typeof value === "number") {
-      return String(value);
-    }
-    if (Array.isArray(value)) return value.map(templateText).join("");
-    if (typeof value !== "object") return "";
-    const template = value as {
-      strings?: readonly string[];
-      values?: readonly unknown[];
-    };
-    return (template.strings ?? []).map((part, index) =>
-      part + templateText(template.values?.[index])
-    ).join("");
-  };
-
   /** The log a page reads, numbered in the order the events were emitted. */
   const log = (
     ...events: readonly (
@@ -341,7 +332,95 @@ describe("console/src/live-view", () => {
       );
     });
 
-    it("returns the piece links a completed turn handed back", () => {
+    it("returns a completed turn's answer in place of the block it streamed as, when the turn named no piece", () => {
+      const entries = consoleLiveEntries(log(
+        { kind: "assistant_completed", text: "Bought cfh:v:22222." },
+        {
+          kind: "turn_completed",
+          turnId: "turn-1",
+          finalText: "Bought cfh:v:22222.",
+          result: {
+            outcome: "completed" as const,
+            sessionId: "session-1",
+            continuable: true,
+            looms: [],
+            pieces: [],
+            spaceName: "s",
+            finalText: "Bought **cfh:v:22222**.",
+            revealed: { "cfh:v:22222": "https://shop.example/item/7" },
+          },
+        },
+      ));
+
+      expect(entries).toEqual([{
+        kind: "ended",
+        key: "2",
+        turnId: "turn-1",
+        status: "completed",
+        outcome: "completed",
+        answer: "Bought **cfh:v:22222**.",
+        revealed: { "cfh:v:22222": "https://shop.example/item/7" },
+        pieces: [],
+        spaceName: "s",
+      }]);
+    });
+
+    it("keeps the block a turn streamed when its answer came from finish_task", () => {
+      const entries = consoleLiveEntries(log(
+        { kind: "assistant_completed", text: "Checking the forecast." },
+        {
+          kind: "turn_completed",
+          turnId: "turn-1",
+          finalText: "It is sunny.",
+          outcome: "completed",
+          answer: "It is sunny.",
+          result: {
+            ...EMPTY_RESULT,
+            outcome: "completed" as const,
+            answer: "It is sunny.",
+            finalText: "It is sunny.",
+          },
+        },
+      ));
+
+      expect(entries.map((entry) => entry.kind)).toEqual([
+        "assistant",
+        "ended",
+      ]);
+      expect(entries[0].kind === "assistant" && entries[0].text).toBe(
+        "Checking the forecast.",
+      );
+      expect(entries[1].kind === "ended" && entries[1].text).toBe(
+        "It is sunny.",
+      );
+    });
+
+    it("returns a model's reasoning as a thought under the subagent it came from", () => {
+      const subagent = {
+        parentToolCallId: "call-1",
+        profile: "browser" as const,
+        childRunId: "turn-1.subagent.1",
+      };
+      const entries = consoleLiveEntries(log(
+        { kind: "assistant_reasoning", text: "**Planning** the search." },
+        { kind: "assistant_reasoning", text: "Open the form first.", subagent },
+      ));
+
+      expect(entries).toEqual([{
+        kind: "thought",
+        key: "1",
+        turnId: "turn-1",
+        text: "**Planning** the search.",
+      }, {
+        kind: "thought",
+        key: "2",
+        turnId: "turn-1",
+        text: "Open the form first.",
+        subagent: { parentToolCallId: "call-1", profile: "browser" },
+      }]);
+    });
+
+    it("returns the piece links a completed turn handed back, with its final text as the answer", () => {
       const entries = consoleLiveEntries(log({
         kind: "turn_completed",
         turnId: "turn-1",
@@ -357,14 +436,13 @@ describe("console/src/live-view", () => {
         },
       }));
 
-      // The final text is the turn's last assistant message, which the feed
-      // already carries, so the closing block is the links and nothing else.
       expect(entries[0]).toEqual({
         kind: "ended",
         key: "1",
         turnId: "turn-1",
         status: "completed",
         outcome: "completed",
+        answer: "built it",
         pieces: [{ slug: "reading-list", url: "http://localhost:8000/s/r" }],
         spaceName: "s",
       });
@@ -1159,6 +1237,193 @@ describe("console/src/live-view", () => {
       return view;
     };
 
+    for (
+      const ending of [
+        "completed",
+        "failed",
+        "canceled",
+        "delivery_failed",
+      ] as const
+    ) {
+      const description = ending === "delivery_failed"
+        ? "preserves completed research when event delivery fails"
+        : `shows opening research until it is ${ending}`;
+      it(description, async () => {
+        using time = new FakeTime("2026-01-01T00:00:00.000Z");
+        const { view, stop } = paneAt("/live/session-1");
+        using updates = spy(view, "requestUpdate");
+        const researching = Promise.withResolvers<void>();
+        const finishResearch = Promise.withResolvers<void>();
+        const modelRuns: string[] = [];
+        const deliveryFailure = new Error("live event delivery failed");
+        const deliveryErrors: unknown[] = [];
+        const engine = new CfHarnessEngine({
+          runId: "turn-1",
+          model: "gpt-test",
+          sandboxRuntime: {
+            describe: () => ({
+              kind: "docker-runsc-cfc",
+              defaultWorkingDirectory: "/workspace",
+              cfc: {
+                runtimeRequested: true,
+                workspaceMountPath: "/workspace",
+              },
+            }),
+            resolvePath: (path) => path,
+            isPathWithinWorkspace: () => true,
+            isPathWithinAllowedRoots: () => true,
+            defaultWorkingDirectory: () => "/workspace",
+            run: () => Promise.reject(new Error("unexpected sandbox command")),
+            runShell: () =>
+              Promise.reject(new Error("unexpected sandbox command")),
+          },
+        });
+        const service = new HarnessInteractiveChatService({
+          basePromptLoopOptions: {
+            engine,
+            modelClient: {
+              providerId: "test",
+              complete: async (request) => {
+                modelRuns.push(request.runId);
+                if (request.runId.includes(":research:")) {
+                  researching.resolve();
+                  await finishResearch.promise;
+                  if (ending === "failed") {
+                    throw new Error("research unavailable");
+                  }
+                  return {
+                    assistant: {
+                      role: "assistant",
+                      content: JSON.stringify({
+                        status: "incomplete",
+                        summary: "More evidence is needed.",
+                        inputs: [],
+                        selectedPatternIds: [],
+                        leads: [],
+                        questions: [],
+                        rules: [],
+                        sourceIds: [],
+                        missing: ["the counter contract"],
+                      }),
+                    },
+                  };
+                }
+                return { assistant: { role: "assistant", content: "Done." } };
+              },
+            },
+          },
+          createPromptLoop: (options) => new CfHarnessPromptLoop(options),
+          onEvent: (envelope) => {
+            const event = envelope.event;
+            if (event.kind !== "turn_completed") {
+              FakeEventSource.opened.at(-1)!.deliver({ ...envelope, event });
+            }
+            if (
+              ending === "delivery_failed" && event.kind === "tool_completed" &&
+              event.status === "completed"
+            ) throw deliveryFailure;
+          },
+          onEventDeliveryError: (_event, error) => {
+            deliveryErrors.push(error);
+          },
+        });
+        try {
+          await service.startSession("start", {
+            sessionId: "session-1",
+            workspace: { hostPath: "/workspace" },
+            policy: {
+              type: "cf-harness.chat-policy",
+              toolMode: "workspace-write",
+              allowedToolIds: ["research"],
+              allowedSubagentProfiles: [],
+              promptSlot: directPromptSlotBindingFor("live-opening-research"),
+            },
+          });
+          await service.startTurn("task", {
+            sessionId: "session-1",
+            turnId: "turn-1",
+            input: { text: "Build a counter." },
+          });
+          await Promise.race([
+            researching.promise,
+            service.waitForTurn("session-1", "turn-1").then(() => {
+              throw new Error(
+                `turn ended before the research model ran: ${
+                  JSON.stringify(service.events("session-1").at(-1)?.event)
+                }`,
+              );
+            }),
+          ]);
+          expect(modelRuns).toHaveLength(1);
+          expect(templateText(view.view())).toContain(
+            "Orienting: working out what is already available",
+          );
+          expect(toolEntry(view.entries, "opening-research:turn-1").status)
+            .toBe(
+              "running",
+            );
+          view.readerScrolled(new FakeFeed(1000, 200, 300));
+          view.commit();
+          const pendingUpdates = updates.calls.length;
+          time.tick(2000);
+          expect(updates.calls.length).toBeGreaterThan(pendingUpdates);
+          expect(templateText(view.view())).toContain("2s elapsed");
+
+          view.disconnectedCallback();
+          const disconnectedUpdates = updates.calls.length;
+          time.tick(1000);
+          expect(updates.calls).toHaveLength(disconnectedUpdates);
+          // The headless pane skips DOM commits; a committed pane has no
+          // pending render when it is attached again.
+          view.isUpdatePending = false;
+          view.connectedCallback();
+          expect(view.isUpdatePending).toBe(true);
+          view.commit();
+          if (ending === "canceled") {
+            await service.cancelTurn(
+              "cancel",
+              "session-1",
+              "turn-1",
+              "user_requested",
+            );
+          }
+          finishResearch.resolve();
+          await service.waitForTurn("session-1", "turn-1");
+          if (ending === "delivery_failed") {
+            expect(engine.getRunState().openingResearch).toMatchObject({
+              status: "completed",
+              outputId: expect.any(String),
+              handoffMessage: expect.any(String),
+            });
+            expect(modelRuns).toHaveLength(1);
+            expect(service.events("session-1").at(-1)?.event).toMatchObject({
+              kind: "turn_failed",
+              error: { message: deliveryFailure.message },
+            });
+          }
+          expect(deliveryErrors).toEqual(
+            ending === "delivery_failed" ? [deliveryFailure] : [],
+          );
+          expect(toolEntry(view.entries, "opening-research:turn-1").status)
+            .toBe(
+              ending === "delivery_failed" ? "completed" : ending,
+            );
+          view.commit();
+          const completedUpdates = updates.calls.length;
+          time.tick(3000);
+          expect(updates.calls).toHaveLength(completedUpdates);
+          expect(templateText(view.view())).toContain("3s elapsed");
+          expect(
+            view.entries.filter((entry) => entry.kind === "tool"),
+          ).toHaveLength(1);
+        } finally {
+          finishResearch.resolve();
+          await service.waitForTurn("session-1", "turn-1");
+          stop();
+        }
+      });
+    }
+
     it("scrolls a feed that is following the tail to the newest step", () => {
       const feed = new FakeFeed(1000, 700, 300);
       paneShowing(feed).commit();
@@ -1386,6 +1651,79 @@ describe("console/src/live-view", () => {
       });
     }
 
+    it("renders a finish_task answer as a completed terminal", () => {
+      const answer = "It is 24°C and sunny in Brisbane.";
+      const disposition = { outcome: "completed" as const, answer };
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log({
+        kind: "turn_completed",
+        turnId: "turn-1",
+        ...disposition,
+        result: { ...EMPTY_RESULT, ...disposition, finalText: answer },
+      }));
+      expect(templateText(view.view())).toContain(answer);
+      expect(consoleLiveState(view.entries)).toBe("done");
+    });
+
+    it("renders a completed turn's answer as Markdown, each revealed referent as its string", () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log({
+        kind: "turn_completed",
+        turnId: "turn-1",
+        result: {
+          ...EMPTY_RESULT,
+          outcome: "completed" as const,
+          finalText: "Bought **cfh:v:22222**.",
+          revealed: { "cfh:v:22222": "the blue one" },
+        },
+      }));
+
+      const rendered = templateText(view.view());
+      expect(rendered).toContain('class="live-final live-answer"');
+      expect(rendered).toContain(
+        '<strong><bdi class="live-found" title=the blue one><span class="live-found-badge">found</span>the blue one</bdi></strong>',
+      );
+    });
+
+    it("renders a thought as plain text set apart from what the model said", () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log({
+        kind: "assistant_reasoning",
+        text: "**Planning** [the search](https://elsewhere.example/).",
+      }));
+
+      const rendered = templateText(view.view());
+      expect(rendered).toContain('class="live-entry thought');
+      expect(rendered).toContain(
+        "**Planning** [the search](https://elsewhere.example/).",
+      );
+      expect(rendered).not.toContain("<strong>");
+      expect(rendered).not.toContain("<a");
+    });
+
+    it("renders a question naming a return referent with the string it stands for", () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log({
+        kind: "turn_completed",
+        turnId: "turn-1",
+        outcome: "question",
+        question: { text: "Buy cfh:v:22222?" },
+        result: {
+          ...EMPTY_RESULT,
+          outcome: "question" as const,
+          question: { text: "Buy cfh:v:22222?" },
+          finalText: "Buy cfh:v:22222?",
+          revealed: { "cfh:v:22222": "the blue one" },
+        },
+      }));
+
+      const rendered = templateText(view.view());
+      expect(rendered).toContain(
+        'Buy <bdi class="live-found" title=the blue one><span class="live-found-badge">found</span>the blue one</bdi>?',
+      );
+      expect(rendered).not.toContain("cfh:v:22222");
+    });
+
     it("renders a turn line, prose, a subagent and the piece link it ended with", () => {
       const view = new TestConsoleLive();
       view.entries = consoleLiveEntries(log(
@@ -1501,15 +1839,29 @@ describe("console/src/live-view", () => {
 
     it("renders the error a failed turn ended with", () => {
       const view = new TestConsoleLive();
-      view.entries = consoleLiveEntries(log({
-        kind: "turn_failed",
-        turnId: "turn-1",
-        error: { code: "internal_error", message: "the sandbox is down" },
-      }));
+      view.entries = consoleLiveEntries(log(
+        {
+          kind: "tool_started",
+          tool: {
+            toolCallId: "opening-research:turn-1",
+            toolId: "research",
+            title: "Orienting: working out what is already available",
+          },
+        },
+        {
+          kind: "turn_failed",
+          turnId: "turn-1",
+          error: { code: "internal_error", message: "the sandbox is down" },
+        },
+      ));
 
       const text = templateText(view.view());
       expect(text).toContain("failed");
       expect(text).toContain("the sandbox is down");
+      expect(text).toContain("0s elapsed");
+      expect(toolEntry(view.entries, "opening-research:turn-1").status).toBe(
+        "failed",
+      );
     });
 
     it("renders the verdict a subagent finished on", () => {

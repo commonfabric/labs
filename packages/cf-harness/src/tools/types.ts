@@ -1,4 +1,6 @@
+import type { JSONSchema } from "@commonfabric/api";
 import type {
+  CfcConfClause,
   CfcEnforcementMode,
   CfcLabelView,
   IFCLabel,
@@ -19,23 +21,41 @@ import type {
   HarnessSkillScriptExecutionTarget,
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
+import type { HarnessBrowserHost } from "../contracts/browser-host.ts";
+import type { HarnessClientActionRequester } from "../client-actions/coordinator.ts";
+import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
-import type { HarnessResearchRunSummary } from "../contracts/research.ts";
+import type {
+  HarnessResearchHandleValue,
+  HarnessResearchRunSummary,
+} from "../contracts/research.ts";
 import type { HarnessPatternRef } from "../contracts/pattern-refs.ts";
 import type { HarnessInputCell } from "../contracts/input-cells.ts";
+import type { HarnessWellKnownGrant } from "../contracts/well-known-grants.ts";
 import type { HarnessResearchRunner } from "../research/runner.ts";
-import type { HarnessHandleTable } from "../contracts/handle-table.ts";
+import type {
+  HarnessDocumentReferentDraft,
+  HarnessHandleTable,
+} from "../contracts/handle-table.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
 import type { openProbeRuntime } from "../pattern-index/probe-runtime.ts";
 import type { PatternIndexClient } from "../pattern-index/client.ts";
 import type { PatternIndexLedger } from "../pattern-index/ledger.ts";
 import type { SkillsShAcquisitionClient } from "../skills-sh/acquisition.ts";
 import type { SkillsShSearchClient } from "../skills-sh/search-client.ts";
-import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import type {
+  HarnessToolDescriptor,
+  HarnessToolEffectClass,
+} from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
+import type { HarnessLoomCommandsConfig } from "../loom-commands.ts";
+import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
-import type { SandboxRuntime } from "../sandbox/types.ts";
+import type {
+  SandboxRuntime,
+  SandboxRuntimeDescription,
+} from "../sandbox/types.ts";
 
 export interface HarnessToolContext {
   runId: string;
@@ -46,6 +66,14 @@ export interface HarnessToolContext {
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
+
+  /**
+   * The browser host attached to the run, when one is: the `browser` tool
+   * executes every action in its session rather than through the Browser
+   * Access lease, and a value a handle resolves to reaches a page as a handle
+   * value, which the host keeps out of later observations.
+   */
+  browserHost?: HarnessBrowserHost;
 
   /**
    * Origins a value materialized from a handle may be sent to. Absent or
@@ -63,6 +91,14 @@ export interface HarnessToolContext {
    * addresses by the prompt loop; restricted tokens remain opaque.
    */
   handleTable?: HarnessHandleTable;
+
+  /**
+   * The references granted to the run, each already a general handle in
+   * {@link handleTable}. A grant pairs its token with a name a model may be
+   * handed, which is what lets a tool say which handle is which without
+   * describing every one.
+   */
+  wellKnownGrants?: readonly HarnessWellKnownGrant[];
 
   /**
    * The run's trusted Fabric session, lazy and cached by the engine.
@@ -116,11 +152,21 @@ export interface HarnessToolContext {
   /** Existing CFC label on a research task and its accumulated model context. */
   researchTaskCfcLabel?: IFCLabel;
 
+  /**
+   * The label of this tool call's input: the prompt slot's influence joined
+   * with everything the run's model context has observed, which is what a
+   * model-authored argument can carry. Absent when neither carries a label.
+   */
+  toolInputCfcLabel?: IFCLabel;
+
   /** Pattern attachments resolved by the host before the first model turn. */
   patternRefs?: readonly HarnessPatternRef[];
 
   /** Explicit input-cell attachments established for the calling run. */
   inputCells?: readonly HarnessInputCell[];
+
+  /** Retains a successful naming receipt for the next session turn. */
+  recordAssignedPiece?(piece: HarnessAssignedPiece): void;
 
   /** Adds one admitted kit and its trusted records to durable run state. */
   recordResearchRun?(run: HarnessResearchRunSummary): void | Promise<void>;
@@ -187,16 +233,67 @@ export interface HarnessToolContext {
 
   /**
    * The prompt loop's run-level abort signal, when the invocation came
-   * through the loop. The only cancellation source a tool may honor — no
-   * tool-side timeout supplements it. Tools are free to ignore it.
+   * through the loop. The only cancellation source a tool may honor, with
+   * one exception: `weaver_action` waits on a person and is bounded by the
+   * host's idle timeout as well. Tools are free to ignore it.
    */
   signal?: AbortSignal;
+
+  /**
+   * The host's door for asking the person's client to act and waiting for
+   * the answer. Absent unless the host opted this run in, and always absent
+   * from a subagent.
+   */
+  requestClientActions?: HarnessClientActionRequester;
 
   sandbox: SandboxRuntime;
   hostProcessRunner: ProcessRunner;
 
   /** Host-owned Loom command routing, absent when the run has no grant. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Host-owned Loom retrieval routing, absent when the run has no grant. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /** Host-owned command broker routing, absent when the run has no grant. */
+  loomCommands?: HarnessLoomCommandsConfig;
+
+  /**
+   * Registers content a tool observed as a referent the run holds, and
+   * returns its token. Absent outside a run that keeps a handle table.
+   */
+  mintReferentHandle?(referent: HarnessDocumentReferentDraft): Promise<string>;
+
+  /**
+   * Registers an admitted research kit's content as the research referent
+   * the run holds, under the kit's label, and returns its token. The research
+   * tool's admission is its caller. Absent outside a run that keeps a handle
+   * table.
+   */
+  mintResearchHandle?(
+    value: HarnessResearchHandleValue,
+    label: IFCLabel,
+  ): Promise<string>;
+
+  /**
+   * Where the run's structured result goes, absent when the run was
+   * configured with no schema. `record` writes a validated value where the
+   * file-based path leaves one, and reports whether it replaced an earlier
+   * one.
+   */
+  structuredResult?: {
+    schema: JSONSchema;
+    record(value: unknown): Promise<{ replaced: boolean }>;
+  };
+
+  /**
+   * The run's observation ceiling: the fabric session's read ceiling, met
+   * with the run manifest's where one names any. A tool that admits values
+   * from outside the fabric — Loom rows — measures their labels against it
+   * before they enter model context. Absent is no ceiling, which admits
+   * every readable label.
+   */
+  cfcReadMaxConfidentiality?: readonly CfcConfClause[];
   currentDir: string;
   workspaceHostPath?: string;
   resolvePath(path: string): string;
@@ -271,8 +368,38 @@ export interface HarnessToolContext {
   }): Promise<HarnessCfcInvocationContext>;
 }
 
+/** What about a run decides the descriptor a tool offers it. */
+export interface HarnessToolRun {
+  cfcEnforcementMode: CfcEnforcementMode;
+
+  /** Whether a browser host carries out the run's browser actions. */
+  browserHost?: boolean;
+}
+
 export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
   descriptor: HarnessToolDescriptor;
+
+  /**
+   * The descriptor a run on this sandbox runtime offers the model, for a
+   * tool whose inputs depend on what the runtime can do in this run. A tool
+   * without it offers `descriptor` to every run. Everything that is not the
+   * model's view of the tool (its id, its effect class) is read from
+   * `descriptor`.
+   */
+  descriptorForRuntime?(
+    runtime: SandboxRuntimeDescription,
+    run: HarnessToolRun,
+  ): HarnessToolDescriptor;
+
+  /**
+   * The effect class of one call, for a tool whose effect depends on its
+   * input. Policy gates and records the call under this class instead of
+   * `descriptor.effectClass`, so a call that reaches outside the run is
+   * authorized as one even when the tool's ordinary calls are reads. A tool
+   * without it has the descriptor's class for every call.
+   */
+  effectClassOf?(input: Record<string, unknown>): HarnessToolEffectClass;
+
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }
 

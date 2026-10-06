@@ -10,10 +10,13 @@ What the failure probe contains, and where each piece lives:
 - **The wait's own report** (`describeConditionWaitFailure`, in
   [`utils.ts`](../../../packages/integration/utils.ts)) — the source the page
   ran, the arguments it was given one to a line, the last throw the predicate
-  itself made, and the page it ran out against: document URL and title,
-  response status, the view and identity `globalThis.app` holds, and the
-  browser console tail. Every `waitForCondition` renders this, in every suite;
-  the rest of this list is what the patterns suite adds on top of it.
+  itself made, and the page it ran out against: document URL and title, response
+  status, the view and identity `globalThis.app` holds, the messages the runtime
+  worker has logged at `warn` or `error` with their counts, and the browser
+  console tail. The worker's own console does not reach the page, so those
+  counts are the report's view of the worker. Every `waitForCondition` renders
+  this, in every suite; the rest of this list is what the patterns suite adds on
+  top of it.
 - **Fill phase ledger** (`__cfFillDiag`, in
   [`cfc-browser-helpers.ts`](../../../packages/patterns/integration/cfc-browser-helpers.ts))
   — per-selector progress through the fill (settled → found → visible → filled
@@ -40,9 +43,11 @@ Everything above is the test process's account. The server's own is the
 Toolshed log, and which half of the machinery ran the suite decides where it
 comes from. A lane (`tasks/ci-lane.ts`) opens the server as a capability and
 prints the end of that capability's log on its own output when the lane
-fails; the work directory it was written in goes when the lane ends, so
-nothing else would keep it. The workflow jobs that predate the lanes upload
-the same file as an artifact instead, named for the job that wrote it.
+fails. A lane whose tests or capabilities failed inside a job keeps the work
+directory the log was written in, under the job's temporary directory
+(`RUNNER_TEMP`), where a workflow step can upload it. In every other case
+the directory goes when the lane ends. The workflow jobs that predate the
+lanes upload the same file as an artifact, named for the job that wrote it.
 
 Local full-stack repro for CI-only integration failures (see
 [LOCAL_DEV_SERVERS](../LOCAL_DEV_SERVERS.md) for the dev-server details):

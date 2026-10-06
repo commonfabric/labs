@@ -7,6 +7,8 @@ import { backgroundLogFile, backgroundLogStream } from "@/background.ts";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 const SENSITIVE_HEADERS = new Set([
+  "cf-request-auth",
+  "cf-request-proof",
   "authorization",
   "cookie",
   "proxy-authorization",

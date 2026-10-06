@@ -194,7 +194,7 @@ export function createLiftAppliedInputSchema(
     context,
     captureNameMap,
   );
-  typeElements.push(...captureTypeElements);
+  for (const typeElement of captureTypeElements) typeElements.push(typeElement);
 
   // Create object type literal
   return createRegisteredTypeLiteral(
@@ -257,7 +257,7 @@ export function createHandlerEventSchema(
   // to `unknown` if conversion fails.
   return typeToTypeNodeWithRegistry(
     type,
-    { checker, factory, sourceFile: context.sourceFile },
+    { checker, factory, sourceFile: context.sourceFile, state: context.state },
     typeRegistry,
   );
 }

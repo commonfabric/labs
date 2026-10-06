@@ -8,7 +8,7 @@ import {
   AGENT_CONNECTOR_WRITER_ID,
   agentOwnerSchema,
 } from "@commonfabric/agents-connector/fabric-graph";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   type IExtendedStorageTransaction,
@@ -32,11 +32,13 @@ import {
   SharedServerStorageManager,
   sourceDescriptor,
 } from "./debug_view_support.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
+import { createTransactionCommitReceipt } from "../../../../runner/src/storage/commit-receipt.ts";
 
 Deno.test("debug deployment replaces a view when its pattern identity changes", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-pattern-replacement-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -119,9 +121,9 @@ Deno.test("debug deployment replaces a view when its pattern identity changes", 
 });
 
 Deno.test("debug deployment starts and restarts its registered view", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-start-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -172,9 +174,9 @@ Deno.test("debug deployment starts and restarts its registered view", async () =
 });
 
 Deno.test("debug deployment removes a view that fails to start", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-start-failure-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -216,9 +218,9 @@ Deno.test("debug deployment removes a view that fails to start", async () => {
 });
 
 Deno.test("debug deployment preserves a view when its replacement fails", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-replacement-start-failure-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -280,9 +282,9 @@ Deno.test("debug deployment preserves a view when its replacement fails", async 
 });
 
 Deno.test("debug deployment rolls back an aborted registration", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-aborted-registration-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -368,15 +370,16 @@ Deno.test("debug deployment rolls back an aborted registration", async () => {
               : commitCount === 1);
           if (shouldIntercept) {
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              const result = await originalCommit();
-              if (options.abortAfterCommit) {
-                controller.abort(new Error("debug deployment cancelled"));
-              }
-              return result;
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                const result = await originalCommit().settled;
+                if (options.abortAfterCommit) {
+                  controller.abort(new Error("debug deployment cancelled"));
+                }
+                return result;
+              })());
           }
           return result;
         }, maxRetries);
@@ -466,8 +469,8 @@ Deno.test("debug deployment rolls back an aborted registration", async () => {
 
 Deno.test("debug deployment rejects stale registration across runtimes", async () => {
   const server = newSharedServer();
-  const spaceName = `debug-registration-race-${crypto.randomUUID()}`;
-  const readerSession = await createSession({ identity, spaceName });
+  const spaceDid = (await Identity.generate()).did();
+  const readerSession = createSession({ identity, spaceDid });
   const readerStorage = SharedServerStorageManager.connectTo(server, {
     as: readerSession.as,
   });
@@ -491,7 +494,7 @@ Deno.test("debug deployment rejects stale registration across runtimes", async (
     );
     await readerStorage.synced();
 
-    const writerSession = await createSession({ identity, spaceName });
+    const writerSession = createSession({ identity, spaceDid });
     const writerStorage = SharedServerStorageManager.connectTo(server, {
       as: writerSession.as,
     });
@@ -533,11 +536,12 @@ Deno.test("debug deployment rejects stale registration across runtimes", async (
           if (interceptRegistrationCommit && !intercepted) {
             intercepted = true;
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              return await originalCommit();
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                return await originalCommit().settled;
+              })());
           }
           return result;
         }, maxRetries)) as typeof readerRuntime.editWithRetry;
@@ -555,7 +559,7 @@ Deno.test("debug deployment rejects stale registration across runtimes", async (
         );
         await commitEntered.promise;
         const competingResult = await writerRuntime.editWithRetry((tx) => {
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: AGENT_CONNECTOR_WRITER_ID,
           });

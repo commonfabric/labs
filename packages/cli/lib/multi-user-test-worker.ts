@@ -39,8 +39,10 @@ import {
   Identity,
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
+import type { DID } from "@commonfabric/identity/did";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
+  ACLManager,
   type Cell,
   type ConsoleHandler,
   ConsoleMethod,
@@ -55,8 +57,10 @@ import {
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
 import { defer } from "@commonfabric/utils/defer";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 
 import { assertionOutcome } from "./assert-record.ts";
+import { printCfcDenials } from "./cfc-denials.ts";
 import {
   flushDefaultModuleByteCache,
   getDefaultModuleByteCache,
@@ -67,6 +71,7 @@ import {
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
+import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 export interface WorkerRequest {
@@ -78,6 +83,14 @@ export interface WorkerRequest {
 export type WorkerResponse =
   | { id: number; ok: unknown }
   | { id: number; error: string };
+
+/**
+ * The message a participant worker posts once, before any response, naming
+ * its lifetime lock for `terminateWorker()` to wait on.
+ */
+export interface WorkerLifetimeNotice {
+  lifetimeLock: string | undefined;
+}
 
 export type StepKind =
   | "action"
@@ -341,9 +354,9 @@ const handlers: Record<
         "Initialization `identity`",
       ),
     );
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: args.spaceName as string,
+      spaceDid: args.spaceDid as DID,
     });
     const space = session.space;
     // The Deno storage cache opens SQLite as it loads, so it waits for the
@@ -354,11 +367,21 @@ const handlers: Record<
     );
     storageManager = StorageManager.open({
       as: session.as,
-      spaceIdentity: session.spaceIdentity,
       // Host only — the storage path (/api/storage/memory) is joined
       // internally (see createStorageAddressResolver).
       memoryHost: new URL(args.apiUrl as string),
     });
+    patternCoverage = typeof args.patternCoverageDir === "string"
+      ? new PatternCoverageCollector()
+      : undefined;
+    patternCoveragePath = typeof args.patternCoverageDir === "string"
+      ? patternCoverageOutputPath(
+        args.patternCoverageDir,
+        args.testPath as string,
+        args.participant as string,
+      )
+      : undefined;
+    patternCoverageRoot = typeof args.root === "string" ? args.root : undefined;
     // `runtimePresets.patternTest` carries the shared first-party posture
     // (CT-1814) and the same env-honored experimental flags as the
     // single-user runner (this worker previously ignored EXPERIMENTAL_*, so
@@ -369,12 +392,25 @@ const handlers: Record<
       experimental: experimentalOptionsFromEnv(Deno.env.get),
       errorHandlers: [(error: Error) => runtimeErrors.push(String(error))],
       moduleByteCache: getDefaultModuleByteCache(),
+      // The collector is the runtime's, which makes every compile an
+      // instrumented one and names the instrumented variant wherever the
+      // runtime reads or writes a compiled closure. Replicating a pattern
+      // instantiated with `inSpace()` reads the participant's closure that
+      // way, so the variant it asks for is the one the compile below wrote.
+      ...(patternCoverage !== undefined ? { patternCoverage } : {}),
       ...(flowLabels !== undefined ? { cfcFlowLabels: flowLabels } : {}),
       ...(requestedMode !== undefined
         ? { cfcEnforcementMode: requestedMode }
         : {}),
     }));
     if (args.noIdempotencyCheck !== true) runtime.enableIdempotencyCheck();
+    if (args.cfcDenials === true) {
+      // This worker runs one participant for its whole life, so nothing stops
+      // the printing.
+      printCfcDenials((line) =>
+        console.log(`    [${String(args.participant)}] ${line}`)
+      );
+    }
     // Channel 1: capture pattern-code console.error / console.warn calls.
     runtime.scheduler.onConsole(
       (({ method, args }) => {
@@ -397,17 +433,6 @@ const handlers: Record<
     // splits verified-load/source-map state and breaks CFC verified-binding
     // identities under enforcement.
     engine = runtime.harness;
-    patternCoverage = typeof args.patternCoverageDir === "string"
-      ? new PatternCoverageCollector()
-      : undefined;
-    patternCoveragePath = typeof args.patternCoverageDir === "string"
-      ? patternCoverageOutputPath(
-        args.patternCoverageDir,
-        args.testPath as string,
-        args.participant as string,
-      )
-      : undefined;
-    patternCoverageRoot = typeof args.root === "string" ? args.root : undefined;
 
     const program = await resolveLocalProgram((r) => engine!.resolve(r), {
       main: args.testPath as string,
@@ -419,9 +444,13 @@ const handlers: Record<
     // `compileAndRegisterModules` seals compile + evaluate + register (see
     // test-runner.ts): map/filter/flatMap ops resolve via their content-addressed
     // canonical artifact instead of the defer-corrupted embedded graph (CT-1811).
+    // The closure is written into the shared space, for the same reason
+    // test-runner.ts writes it: a pattern instantiated with `inSpace()` is
+    // replicated from it.
     const evalResult = await runtime.patternManager.compileAndRegisterModules(
       program,
-      { patternCoverage },
+      undefined,
+      { space },
     );
     const { main } = evalResult;
     // Channel 2: snapshot logger counts AFTER compile, before the run phase.
@@ -455,6 +484,12 @@ const handlers: Record<
       markersCells.set(name, cell);
     }
 
+    // Load the space's access list before any pattern runs, so that
+    // `spaceAccess()` in a computed reads the list on its first run. A run
+    // before the list arrives returns `undefined`, and an assertion, which is
+    // read once, can read that value before the list's arrival replaces it.
+    await new ACLManager(rt(), space).get();
+
     // Minimal wish("#default") environment, seeded once by the first worker.
     if (args.seedDefaults === true) {
       const setupTx = rt().edit();
@@ -472,7 +507,7 @@ const handlers: Record<
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       rt().prepareTxForCommit?.(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await rt().idle();
     }
 
@@ -491,7 +526,7 @@ const handlers: Record<
       await setupCell.sync();
       rt().run(tx, descriptor.setup, {}, setupCell);
       rt().prepareTxForCommit?.(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await settle();
     }
 
@@ -509,7 +544,7 @@ const handlers: Record<
       resultCell,
     );
     rt().prepareTxForCommit?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
     if (args.continuousUI === true) {
       continuousUiCancel = await mountTestVDOM(
         resultCell.key("$UI") as Cell<unknown>,
@@ -608,14 +643,7 @@ const handlers: Record<
     const tx = rt().edit();
     markersCellFor(selfParticipant!).withTx(tx).key(marker as string).set(true);
     rt().prepareTxForCommit?.(tx);
-    // A dropped marker is a wait that never ends, so the commit's verdict is
-    // read rather than assumed.
-    const result = await tx.commit();
-    if (result.error) {
-      throw new Error(
-        `Announcing marker "${marker}" failed: ${result.error.message}`,
-      );
-    }
+    await waitForMarkerCommit(marker as string, tx.commit());
     await settle();
     return {};
   },
@@ -690,7 +718,16 @@ const handlers: Record<
   },
 };
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+// Every response follows the lifetime notice, so the orchestrator holds the
+// lock's name before any reply can lead it to terminate this worker.
+const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
+  (self as unknown as Worker).postMessage(
+    { lifetimeLock } satisfies WorkerLifetimeNotice,
+  )
+);
+
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+  await announced;
   const { id, cmd, args } = event.data;
   const handler = handlers[cmd];
   const respond = (response: WorkerResponse) =>

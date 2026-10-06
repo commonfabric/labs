@@ -68,6 +68,16 @@ describe("console/src/cell-chip", () => {
       expect(view.integrity).toEqual(["verified"]);
     });
 
+    it("keeps the integrity a call recorded apart from its confidentiality", () => {
+      const view = cellLabelView({
+        confidentiality: ["prompt"],
+        integrity: ["PromptSlotInfluence"],
+      });
+      expect(view.onCall).toEqual(["prompt"]);
+      expect(view.onCallIntegrity).toEqual(["PromptSlotInfluence"]);
+      expect(view.integrity).toEqual([]);
+    });
+
     it("reads a cell the run holds no labels record for as unrecorded", () => {
       expect(cellLabelView({ confidentiality: ["prompt"] }).recorded).toBe(
         false,
@@ -173,6 +183,11 @@ describe("console/src/cell-chip", () => {
 
     it("wears the labelled state for an atom a call recorded", () => {
       expect(cellChipClasses({ confidentiality: ["prompt"] }))
+        .toBe("cell labelled");
+    });
+
+    it("wears the labelled state for an integrity atom a call recorded", () => {
+      expect(cellChipClasses({ integrity: ["PromptSlotInfluence"] }))
         .toBe("cell labelled");
     });
 

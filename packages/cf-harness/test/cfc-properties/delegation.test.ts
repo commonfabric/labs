@@ -188,7 +188,10 @@ const runDelegationEpisode = async (
             : `cf get ${bound.token}`,
         }),
         assistantText("Child done."),
-        assistantText("Parent done."),
+        assistantToolCall("call-finish", "finish_task", {
+          outcome: "gave-up",
+          message: "This inspection did not produce a user-facing piece.",
+        }),
       ]),
     });
 
@@ -197,6 +200,7 @@ const runDelegationEpisode = async (
       promptSlotBinding: directPromptSlotBinding,
     });
     await engine.persistRunState();
+    expect(result.taskOutcome?.outcome).toBe("gave-up");
 
     const dispatched = sandbox.shellRequests.find((request) =>
       request.command.includes("cf get ")

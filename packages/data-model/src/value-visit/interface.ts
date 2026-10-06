@@ -2,17 +2,13 @@
  * Types and constants for the visitor engine.
  */
 
-import { type Primitive } from "@commonfabric/utils/types";
-
-import { type PrimitiveValueTag } from "@/types";
+import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricPrimitive,
-  FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
 
@@ -32,36 +28,77 @@ export type MainResultForm<ResultType> = {
 };
 
 /**
+ * A `mapTo` form. `value` is a value in the domain of `ResultType` which is to
+ * be substituted in place of the visited value in the structural-map result.
+ * The visitor engine places `value` as given, frozen or not, whether or not the
+ * operation freezes the structure it builds: it is the visitor's statement of
+ * what it wants in that position.
+ *
+ * In a plain visit there is no structural-map result to place `value` in. A
+ * `mapTo` which `visitValue()` returns for the top-level value ends the visit
+ * with `value` as its result, as a `mainResult` would, and one which
+ * `visitValue()` or `visitCycle()` returns for any other value is ignored. A
+ * `visiting*()` method's `mapTo` still keeps its position from being visited;
+ * see `VisitingResult`.
+ */
+export type MapToForm<ResultType> = {
+  readonly type: "mapTo";
+  readonly value: ResultType;
+};
+
+/**
+ * A `mapToEntry` form. This is analogous to `MapToForm` in every way except
+ * that a string `key` is additionally included.
+ *
+ * In a structural-map operation, `key` is held to the rules a visited key's
+ * result is: it must be a key which is safe to set on a plain object, and it
+ * may not be a key already mapped in the same result. A plain visit places no
+ * key, and checks none.
+ */
+export type MapToEntryForm<ResultType> = {
+  readonly type: "mapTo";
+  readonly key: string;
+  readonly value: ResultType;
+};
+
+/**
+ * An `omit` form. This is used by a `visiting*()` method to indicate to the
+ * engine that the array element or plain object entry about to be visited is to
+ * be omitted from the mapped result. In the case of an array, this leaves a hole
+ * (as opposed to "compacting" the array).
+ */
+export type OmitForm = {
+  readonly type: "omit";
+};
+
+/**
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
- * contained by the container which is being recursed into. The two `boolean`
- * properties indicate whether the container's keys and/or values are to be
- * recursed over. `doKeys` is ignored in a context where there is no key.
+ * contained by the container which is being recursed into. Each of the
+ * container's values is visited, unless a `visiting*()` method settles or omits
+ * its position instead. `doKeys` indicates whether its keys are visited too,
+ * and is ignored in a context where there is no key.
  *
  * If a visitor returns an instance of this type which (implicitly) references a
- * non-container, that situation is detected at runtime and results in a
- * `throw`n error.
+ * non-container, that situation is detected by the visitor engine at runtime
+ * and results in a `throw`n error.
  *
- * **Note:** The visit calls per-mapping are specifically in key-then-value
+ * **Note:** The visit calls per keyed item are specifically in key-then-value
  * order, and if the result of visiting a key is a `mainResult`, then that ends
  * the iteration before the corresponding value is visited.
- *
- * **Note:** It is technically possible to define a no-op instance of this type,
- * which is the equivalent to returning `undefined`. This is pointless, but it
- * is not prevented.
  */
 export type RecurseForm = {
   readonly type: "recurse";
   readonly doKeys: boolean;
-  readonly doValues: boolean;
 };
 
 /**
  * A `replace` form. `value` is a value that is to be used in place of the value
  * originally received by the visitor method which returns this. This tells the
- * visitor engine to redo visitor dispatch with the replacement (as if the
- * replacement were the value in the same position as the original).
+ * visitor engine to redo a visit on the replacement, as if the replacement were
+ * the value in the same position as the original: by calling `visitValue()`, or
+ * `visitCycle()` if the replacement is a container already being visited.
  */
 export type ReplaceForm<PlusType> = {
   readonly type: "replace";
@@ -69,11 +106,29 @@ export type ReplaceForm<PlusType> = {
 };
 
 /**
- * A `visitSubtype` form. This is returned by visitor methods which cover
- * multiple possible subtype dispatches. By returning this form, a visitor
- * indicates that the engine should in fact do a subtype-based dispatch.
+ * A `replaceEntry` form. This is analogous to `ReplaceForm` in every way except
+ * that a string `key` is additionally included.
+ *
+ * `key` is visited only when the `recurse` that caused the iteration asked for
+ * keys to be visited, and is otherwise taken as the entry's final key. Either
+ * way, in a structural-map operation the final key is held to the rules a
+ * `MapToEntryForm`'s `key` is.
  */
-export type VisitSubtypeForm = { readonly type: "visitSubtype" };
+export type ReplaceEntryForm<PlusType> = {
+  readonly type: "replace";
+  readonly key: string;
+  readonly value: FabricValuePlus<PlusType>;
+};
+
+/**
+ * Standard instance of `OmitForm`.
+ *
+ * The `DO_` prefix is intended to make it clear at use sites that it is telling
+ * the visitor engine to "do" something.
+ */
+export const DO_OMIT: OmitForm = Object.freeze(
+  { type: "omit" } as const,
+);
 
 /**
  * Standard instance of `RecurseForm` for recursing over keys and values. This
@@ -83,18 +138,7 @@ export type VisitSubtypeForm = { readonly type: "visitSubtype" };
  * the visitor engine to "do" something.
  */
 export const DO_RECURSE_KEYS_VALUES: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: true, doValues: true } as const,
-);
-
-/**
- * Standard instance of `RecurseForm` for recursing over keys only. This is only
- * meaningful for recursing over mappings.
- *
- * The `DO_` prefix is intended to make it clear at use sites that it is telling
- * the visitor engine to "do" something.
- */
-export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: true, doValues: false } as const,
+  { type: "recurse", doKeys: true } as const,
 );
 
 /**
@@ -105,69 +149,102 @@ export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
  * the visitor engine to "do" something.
  */
 export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
-  { type: "recurse", doKeys: false, doValues: true } as const,
-);
-
-/**
- * Standard instance of `VisitSubtypeForm`.
- *
- * The `DO_` prefix is intended to make it clear at use sites that it is telling
- * the visitor engine to "do" something.
- */
-export const DO_VISIT_SUBTYPE: VisitSubtypeForm = Object.freeze(
-  { type: "visitSubtype" } as const,
+  { type: "recurse", doKeys: false } as const,
 );
 
 //
-// `visit*()` method result union types
+// Visitor method result union types
 //
 
 /**
- * Baseline possible results from arbitrary `visit*()` calls, defining the
- * result cases common to all of these methods.
+ * Baseline possible results from most `ValueVisitor` and `DefaultValueVisitor`
+ * methods, defining the result cases common to all of these methods.
  *
- * See the included result types for details on what they mean. As for
- * `undefined`, if a visitor returns it in the context of this type, it means
- * that the visit of the given value was completed; the visitor engine will not
- * process it further, and there is no specific value to return from (this part
- * of) the visit.
+ * A `mainResult` means the same wherever it is returned; see `MainResultForm`.
+ * What `undefined` means differs from one method to another, and each result
+ * type which includes this one says what it means there.
  */
-export type BaselineVisitResult<ResultType = FabricValue> =
+export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
   | undefined;
 
 /**
- * Possible results from a `visit*()` method which accepts leaf (non-dispatched)
- * values. This includes the `recurse` form, which is only valid to return when
- * the value being visited is in fact a container; this constraint is checked at
- * runtime and results in a `throw`n error when violated.
- *
- * About the name: This is a "leaf" in the sense of visitor dispatch -- there is
- * not a more-specific subtype-based visitor method to call -- but that said,
- * the value being visited itself might or might not be a leaf in the sense of
- * the graph structure of the value.
- *
- * See the included result types for details on what they mean.
+ * Possible results from `mapped*()` calls (container iteration post-visit
+ * methods). `undefined` continues the iteration.
  */
-export type LeafVisitorResult<PlusType = never, ResultType = FabricValue> =
-  | BaselineVisitResult<ResultType>
+export type MappedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
+
+/**
+ * Possible results from `visitValue()`, `visitCycle()`, or one of the methods
+ * that `DefaultValueVisitor.visitValue()` can call (directly or indirectly).
+ *
+ * See the included result types for details on what they mean. What
+ * `undefined` means depends on the visited value:
+ *
+ * * For a non-container, `undefined` means that the visit of the value was
+ *   completed. In a structural-map operation, the value maps to itself.
+ * * For a container, `undefined` means exactly the same as a `replace` whose
+ *   replacement is `undefined`: the visitor engine goes on to visit `undefined`
+ *   in the container's place, and the visitor may handle that visit or not. A
+ *   visitor which wants to finish with a container without that further visit
+ *   returns a `mapTo` instead. Beneath the top level of a plain visit a `mapTo`
+ *   is ignored, and in a structural-map operation it supplies the container's
+ *   result directly.
+ */
+export type VisitResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToForm<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from a visitor method which covers two or more subtypes of
- * value that the visitor engine can dispatch to. Such a method is also allowed
- * to take a non-dispatch action, and so all of the `LeafVisitorResults` are
- * included as options with this type.
+ * Possible results from `visitingFabricArrayElement()`, and the forms the other
+ * `visiting*()` result types are described in terms of.
  *
- * See the included result types for details on what they mean.
+ * A `mapTo` settles the sub-value's position without visiting it: in a
+ * structural-map operation its `value` is placed there as given, and in a plain
+ * visit the position is simply not visited. A `replace` visits its `value` in
+ * place of the sub-value, exactly as if `visitValue()` had returned that
+ * `replace`. Either way, in a structural-map operation the position is then
+ * reported to the matching `mapped*()` method, as any other is, unless the
+ * visit of a replacement ended the walk with a `mainResult`. An `omit` leaves
+ * the position out of a structural-map operation's result without visiting it,
+ * and is reported to no `mapped*()` method, there being no result to report; in
+ * a plain visit the position is simply not visited. `undefined` visits the
+ * sub-value itself.
  */
-export type DispatchingVisitorResult<
-  PlusType = never,
-  ResultType = FabricValue,
-> =
-  | LeafVisitorResult<PlusType, ResultType>
-  | VisitSubtypeForm;
+export type VisitingResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToForm<ResultType>
+  | OmitForm
+  | ReplaceForm<PlusType>;
+
+/**
+ * Possible results from `visitingFabricArrayGap()`. `undefined` continues the
+ * iteration.
+ */
+export type VisitingGapResult<PlusType, ResultType> =
+  BaselineVisitorMethodResult<ResultType>;
+
+/**
+ * Possible results from `visitingFabricInstanceState()`. See `VisitingResult`
+ * for additional details about the forms it covers.
+ */
+export type VisitingStateResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToForm<ResultType>
+  | ReplaceForm<PlusType>;
+
+/**
+ * Possible results from `visitingFabricPlainObjectEntry()`. See
+ * `VisitingResult` for additional details about the forms it covers;
+ * `MapToEntryForm` parallels `MapToForm`.
+ */
+export type VisitingEntryResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToEntryForm<ResultType>
+  | OmitForm
+  | ReplaceEntryForm<PlusType>;
 
 //
 // Visitor interface
@@ -188,140 +265,185 @@ export type DispatchingVisitorResult<
  * `PlusType` type parameter is available to selectively include another type
  * (possibly itself compound) as an additional option.
  */
-export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
+export interface ValueVisitor<
+  PlusType = never,
+  ResultType = FabricValuePlus<PlusType>,
+> {
+  /**
+   * Indicates whether the complete domain of a visitor -- that is, the type
+   * `FabricValuePlus<PlusType>` -- is to be treated as always assignable to the
+   * `ResultType` defined by the visitor. This is called at some point before
+   * the would-be first call to `isResultType()` (generally, at most once per
+   * visitor engine instantiation), to determine whether or not the visitor
+   * engine ever needs to use `isResultType()`.
+   */
+  isDomainAssignableToResultType(): boolean;
+
   /**
    * Indicates whether or not the given value is compatible with the `PlusType`
    * type defined by the visitor. This is a type predicate for `PlusType`. The
-   * visitor engine consults it only for a value whose shape is not a fabric
-   * one -- a function, or an object which is neither an array, a plain object,
-   * nor a `FabricSpecialObject` -- and its answer decides whether such a value
-   * goes to `visitPlusType()` or is `throw`n as being outside the visitor's
-   * domain. A value with a fabric shape is never put to it, so a predicate
+   * visitor engine consults it only for a value which cannot be a
+   * `FabricValue` -- a function, a unique (uninterned) symbol, or an object
+   * which is neither an array, a plain object, nor a `FabricSpecialObject` --
+   * and its result decides whether such a value is tagged `PlusType` or
+   * `null`. A value with a fabric shape is never put to it, so a predicate
    * which would accept, say, a plain object never sees one.
    */
   isPlusType(value: unknown): value is PlusType;
 
   /**
-   * Visits a value which is already in the process of being visited. The
-   * visitor engine calls this method _before_ calling `visitValue()` when the
-   * value to be visited is already in the middle of being visited as a
-   * container.
+   * Indicates whether or not the given value is compatible with the
+   * `ResultType` defined by the visitor. This is a type predicate for
+   * `ResultType`. The visitor engine consults it only when it cannot otherwise
+   * determine membership of a value in `ResultType`.
+   *
+   * **Note:** When `isDomainAssignableToResultType()` returns `true` for a
+   * visitor, the engine will not call this method.
+   */
+  isResultType(
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): value is ResultType;
+
+  /**
+   * Indicates that an array element was just mapped. This method is called as a
+   * result of the visitor returning a `recurse` result for a visited array
+   * while doing a structural-map operation, and it is called _after_ the
+   * element's position is resolved: by a visit of the element or of a
+   * replacement for it, or by `visitingFabricArrayElement()` settling it.
+   *
+   * `value` is the element as it stands in `array`, even where its visit
+   * returned a `replace`, and `resultValue` is what it mapped to.
+   */
+  mappedFabricArrayElement(
+    array: FabricArrayPlus<PlusType>,
+    index: number,
+    value: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /**
+   * Indicates that the instance state of a `FabricInstance` was just mapped.
+   * This method is called as a result of the visitor returning a `recurse`
+   * result for a visited `FabricInstance` while doing a structural-map
+   * operation, and it is called _after_ the instance's state is resolved: by a
+   * visit of the state or of a replacement for it, or by
+   * `visitingFabricInstanceState()` settling it.
+   *
+   * `state` is the state as the instance's codec encoded it, and `resultState`
+   * is what it mapped to.
+   */
+  mappedFabricInstanceState(
+    instance: FabricInstancePlus<PlusType>,
+    state: FabricValuePlus<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /**
+   * Indicates that `FabricPlainObject` entry was just mapped. This method is
+   * called as a result of the visitor returning a `recurse` result for a
+   * visited `FabricPlainObject` while doing a structural-map operation, and it
+   * is called _after_ the entry is resolved: by visits of its key and/or value
+   * or of a replacement entry's, or by `visitingFabricPlainObjectEntry()`
+   * settling it.
+   *
+   * `key` and `value` are the entry as it stands in `container`, and
+   * `resultKey` and `resultValue` are the entry's final key and mapped value,
+   * whether visits or a `visiting*()` result settled them. Where keys are not
+   * visited and that result named no key, `resultKey` is `key`.
+   */
+  mappedFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<PlusType>,
+    key: string,
+    value: FabricValuePlus<PlusType>,
+    resultKey: string,
+    resultValue: FabricValuePlus<ResultType>,
+  ): MappedResult<ResultType>;
+
+  /**
+   * Visits a container value which is already in the process of being visited.
+   * The visitor engine calls this method _instead of_ calling `visitValue()`
+   * when the value to be visited is already in the middle of being visited. If
+   * the visitor returns `recurse`, then the visitor engine will recurse into it
+   * just as with a non-cyclic value. Likewise, any other return value is
+   * treated equivalently to `visitValue()`. A visitor which wants to _defer_ to
+   * `visitValue()` can just call that method.
    */
   visitCycle(
     /** Value to visit. */
-    value: FabricValuePlus<PlusType>,
+    value: FabricContainerValuePlus<PlusType>,
+    /** Tag of `value`. */
+    tag: FabricContainerValueTag,
     /** Depth at which `value` was originally encountered. */
     originalDepth: number,
     /** Depth of the current visit. */
     thisDepth: number,
-  ): LeafVisitorResult<PlusType, ResultType>;
+  ): VisitResult<PlusType, ResultType>;
 
   /**
-   * Visits the given `FabricArray`.
-   */
-  visitFabricArray(
-    value: FabricArrayPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given `FabricInstance`.
-   */
-  visitFabricInstance(
-    value: FabricInstancePlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given `FabricPlainObject`.
-   */
-  visitFabricPlainObject(
-    value: FabricPlainObjectPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given `FabricContainerValue`. If this returns type
-   * `visitSubtype`, then the visitor system will call one of
-   * `visitFabricArray()`, `visitFabricInstance()`, or
-   * `visitFabricPlainObject()`.
-   */
-  visitFabricContainer(
-    value: FabricContainerValuePlus<PlusType>,
-  ): DispatchingVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits a value determined to be the `PlusType` by virtue of the visitor
-   * engine having called `isPlusType()` on it and gotten a truthy return value.
-   */
-  visitPlusType(
-    value: PlusType,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given primitive value, which can be either a native JavaScript
-   * primitive or a `FabricPrimitive`.
-   */
-  visitPrimitive(
-    value: Primitive | FabricPrimitive,
-    tag: PrimitiveValueTag,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given arbitrary value. If this returns type `visitSubtype`, then
-   * the visitor system will call one of `visitFabricContainer()`,
-   * `visitPlusType()`, or `visitPrimitive()`.
+   * Visits the given arbitrary value. The visitor engine calls this method for
+   * every value it encounters, other than a container which is already in the
+   * middle of being visited (for which, see `visitCycle()`). `tag` is the tag
+   * of `value`, or `null` if `value` has no fabric shape and `isPlusType()` did
+   * not claim it.
    */
   visitValue(
     value: FabricValuePlus<PlusType>,
-  ): DispatchingVisitorResult<PlusType, ResultType>;
+    tag: FabricValuePlusTag | null,
+  ): VisitResult<PlusType, ResultType>;
 
   /**
-   * Indicates that an array element was just visited. This method is called as
-   * a result of the visitor returning a `recurse` result for a visited array
-   * and is called _after_ the element itself was directly visited.
+   * Indicates that an array element is about to be visited. This method is
+   * called as a result of the visitor returning a `recurse` result for a
+   * visited array, and it is called _just before_ the element itself is
+   * visited, a visit its result may settle or redirect; see `VisitingResult`.
    */
-  visitedFabricArrayElement(
+  visitingFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /**
-   * Indicates that an array gap (one or more holes) was just nominally visited.
-   * This method is called as a result of the visitor returning a `recurse`
-   * result for a visited array and is called during iteration as gaps are
-   * encountered. The sequencing of this call is meant to mirror
-   * `visitedFabricArrayElement()`, but since there is nothing to recurse on
+   * Indicates that an array gap (one or more holes) is about to be nominally
+   * visited. This method is called as a result of the visitor returning a
+   * `recurse` result for a visited array, and it is called during iteration as
+   * gaps are encountered. The sequencing of this call is meant to mirror
+   * `visitingFabricArrayElement()`, but since there is nothing to recurse on
    * (it's a gap, not any actual values), there is no regular `visitValue()`
-   * call which immediately precedes it (hence the visit was "nominal"). `start`
-   * is the start index of the gap (integer `>= 0`), and `count` is the number
-   * of holes in the gap (integer `>= 1`). This method is called as a result of
-   * the visitor returning a `recurse` result for a visited array.
+   * call which immediately follows it, nor is there a post-visit `mapped*()`
+   * call (hence the visit was "nominal"). `start` is the start index of the gap
+   * (integer `>= 0`), and `count` is the number of holes in the gap (integer
+   * `>= 1`).
    */
-  visitedFabricArrayGap(
+  visitingFabricArrayGap(
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitingGapResult<PlusType, ResultType>;
 
   /**
-   * Indicates that the instance state of a `FabricInstance` was just visited.
-   * This method is called as a result of the visitor returning a `recurse`
-   * result for a visited `FabricInstance` and is called _after_ the instance's
-   * state was directly visited.
+   * Indicates that the instance state of a `FabricInstance` is about to be
+   * visited. This method is called as a result of the visitor returning a
+   * `recurse` result for a visited `FabricInstance`, and it is called _just
+   * before_ the instance state itself is visited, a visit its result may settle
+   * or redirect; see `VisitingResult`.
    */
-  visitedFabricInstance(
+  visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitingStateResult<PlusType, ResultType>;
 
   /**
-   * Indicates that `FabricPlainObject` entry was just visited. This method is
-   * called as a result of the visitor returning a `recurse` result for a
-   * visited `FabricPlainObject` and is called _after_ the entry's key and/or
-   * value were directly visited.
+   * Indicates that `FabricPlainObject` entry is about to be visited. This
+   * method is called as a result of the visitor returning a `recurse` result
+   * for a visited `FabricPlainObject`, and it is called _just before_ the key
+   * and/or value of the entry are visited (as indicated by the `recurse` result
+   * that caused iteration to happen), a visit its result may settle or
+   * redirect; see `VisitingEntryResult`.
    */
-  visitedFabricPlainObjectEntry(
+  visitingFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
-    key: FabricValuePlus<PlusType>,
+    key: string,
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitingEntryResult<PlusType, ResultType>;
 }

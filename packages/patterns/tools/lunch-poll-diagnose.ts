@@ -520,7 +520,9 @@ function diagnosticsSummary(
 }
 
 const maxOf = (values: readonly number[]): number =>
-  values.length === 0 ? 0 : Math.max(...values);
+  values.length === 0
+    ? 0
+    : values.reduce((most, value) => Math.max(most, value), -Infinity);
 
 /**
  * An authored source location, as the module identity carries it:
@@ -751,8 +753,8 @@ async function optionIds(session: MultiRuntimeSession): Promise<string[]> {
   );
 }
 
-async function createHarness(config: CaseConfig): Promise<MultiRuntimeHarness> {
-  const harness = await MultiRuntimeHarness.create({
+function createHarness(config: CaseConfig): Promise<MultiRuntimeHarness> {
+  return MultiRuntimeHarness.create({
     programPath: `${LUNCH_POLL_DIR}/${matrixProgram}`,
     rootPath: ROOT_PATH,
     diagnostics: true,
@@ -760,10 +762,7 @@ async function createHarness(config: CaseConfig): Promise<MultiRuntimeHarness> {
       { length: config.userCount },
       (_entry, index) => `user-${index + 1}`,
     ),
-    spaceName:
-      `lunch-poll-diagnostics-${config.userCount}u-${config.optionCount}o-${crypto.randomUUID()}`,
   });
-  return harness;
 }
 
 /**

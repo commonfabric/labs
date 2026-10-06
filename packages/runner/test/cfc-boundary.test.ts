@@ -13,7 +13,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
-import { createCell } from "../src/cell.ts";
+import { cellTx, createCell } from "../src/cell.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -62,6 +62,10 @@ import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-boundary-tests");
 
@@ -116,18 +120,16 @@ class SharedV2StorageManager extends V2Storage.StorageManager {
 }
 
 describe("CFC canonicalization helpers", () => {
-  it("strips the value wrapper and sorts metadata entries canonically", () => {
+  it("sorts metadata entries canonically and keeps a leading `value` segment", () => {
     const metadata = canonicalizeCfcMetadata({
       version: 1,
       schemaHash: "abc",
       labelMap: {
         version: 1,
         entries: [
-          { path: ["value", "b"], label: { confidentiality: ["secret"] } },
-          {
-            path: ["value", "a"],
-            label: { confidentiality: ["confidential"] },
-          },
+          { path: ["value", "a"], label: { confidentiality: ["secret"] } },
+          { path: ["b"], label: { confidentiality: ["secret"] } },
+          { path: ["a"], label: { confidentiality: ["confidential"] } },
         ],
       },
     });
@@ -135,8 +137,9 @@ describe("CFC canonicalization helpers", () => {
     expect(metadata.labelMap.entries.map((entry) => entry.path)).toEqual([
       ["a"],
       ["b"],
+      ["value", "a"],
     ]);
-    expect(logicalPathToPointer(["value", "a"])).toBe("/a");
+    expect(logicalPathToPointer(["value", "a"])).toBe("/value/a");
   });
 
   it("canonicalizes write-policy input deterministically", () => {
@@ -146,7 +149,7 @@ describe("CFC canonicalization helpers", () => {
         space: signer.did(),
         scope: "space",
         id: "of:target",
-        path: ["value", "items"],
+        path: ["items"],
       },
       claim: "projection",
       sources: [
@@ -154,13 +157,13 @@ describe("CFC canonicalization helpers", () => {
           space: signer.did(),
           scope: "space",
           id: "of:b",
-          path: ["value", "items", "1"],
+          path: ["items", "1"],
         },
         {
           space: signer.did(),
           scope: "space",
           id: "of:a",
-          path: ["value", "items", "0"],
+          path: ["items", "0"],
         },
       ],
     });
@@ -180,12 +183,12 @@ describe("CFC canonicalization helpers", () => {
         space: signer.did(),
         scope: "space",
         id: "of:doc",
-        path: ["value", "z"],
+        path: ["z"],
       }, {
         space: signer.did(),
         scope: "space",
         id: "of:doc",
-        path: ["value", "a"],
+        path: ["a"],
       }],
       attemptedWrites: [],
       writes: [],
@@ -221,8 +224,8 @@ describe("CFC canonicalization helpers", () => {
       ["a"],
       ["z"],
     ]);
-    // Sorted by journalIndex (temporal order), paths verbatim (raw, no
-    // leading-"value" strip) — the §6 order binding, not an address sort.
+    // Sorted by journalIndex (temporal order), with paths kept as recorded, in
+    // document form — the §6 order binding, not an address sort.
     expect(
       input.writeAttemptLog.map((attempt) => ({
         path: attempt.path,
@@ -302,13 +305,13 @@ describe("CFC canonicalization helpers", () => {
         space: signer.did(),
         scope: "space",
         id: "of:target",
-        path: ["value", "bookmark"],
+        path: ["bookmark"],
       },
       source: {
         space: signer.did(),
         scope: "space",
         id: "of:source",
-        path: ["value", "title"],
+        path: ["title"],
       },
     });
 
@@ -654,7 +657,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity",
       );
@@ -710,7 +713,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "missing trusted-event policy input",
       );
@@ -801,9 +804,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       tx.recordCfcWritePolicyInput(
         setupProjectionMarker(projectedLink, sourceId(runtime)),
+        runtimeWritePolicyAuthorization,
       );
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return { projectedLink, redirect };
     };
 
@@ -836,9 +840,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         replay(runtime, tx, projectedLink, redirect);
         tx.recordCfcWritePolicyInput(
           setupProjectionMarker(projectedLink, sourceId(runtime)),
+          runtimeWritePolicyAuthorization,
         );
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       } finally {
         await runtime.dispose({ closeStorage: false });
         await storageManager.close();
@@ -861,9 +866,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         diffAndUpdate(runtime, tx, projectedLink, {}, projectedLink);
         tx.recordCfcWritePolicyInput(
           setupProjectionMarker(projectedLink, sourceId(runtime)),
+          runtimeWritePolicyAuthorization,
         );
         tx.prepareCfc();
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "missing trusted-event policy input",
         );
       } finally {
@@ -881,9 +887,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         replay(runtime, tx, projectedLink, redirect);
         tx.recordCfcWritePolicyInput(
           setupProjectionMarker(projectedLink, "of:elsewhere" as URI),
+          runtimeWritePolicyAuthorization,
         );
         tx.prepareCfc();
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "missing trusted-event policy input",
         );
       } finally {
@@ -1010,7 +1017,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ argument: { savedTitle: "" } });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -1055,7 +1062,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ argument: { savedTitle: "not default" } });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "missing trusted-event policy input",
       );
@@ -1124,7 +1131,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ argument: { savedBytes: new Uint8Array([4, 5, 6]) } });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "missing trusted-event policy input",
       );
@@ -1145,7 +1152,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       tx.setCfcEnforcementMode("enforce-explicit");
       refuseAtCommitBoundary(tx, signer.did(), "the ladder rejects it");
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "unprivileged write to protected runtime surface",
       );
@@ -1173,7 +1180,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         path: [],
       }, { ok: true });
 
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(tx.getCfcState().prepare.status).toBe("prepared");
     } finally {
       await runtime.dispose();
@@ -1202,7 +1209,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ secret: "seed" });
       runtime.prepareTxForCommit(seed);
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.readTx();
       const readCell = runtime.getCell(
@@ -1222,7 +1229,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       expect(readCell.get()).toEqual({ secret: "seed" });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(tx.getCfcState().prepare.status).toBe("unprepared");
     } finally {
@@ -1243,7 +1250,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         path: [],
       }, { ok: true });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(tx.getCfcState().prepare.status).toBe("unprepared");
     } finally {
@@ -1264,7 +1271,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         path: [],
       }, { ok: true });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(tx.getCfcState().prepare.status).toBe("prepared");
     } finally {
@@ -1280,7 +1287,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       tx.setCfcEnforcementMode("enforce-strict");
       refuseAtCommitBoundary(tx, signer.did(), "the ladder rejects it");
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "unprivileged write to protected runtime surface",
       );
@@ -1375,9 +1382,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           space: signer.did(),
           id: "of:cfc-repeat-dereference",
           scope: "space" as const,
-          // Recorded raw; the repeat below arrives already canonicalized, and
-          // the two are the same dereference.
-          path: ["value", "slot"],
+          path: ["slot"],
         },
         target: {
           space: signer.did(),
@@ -1404,10 +1409,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
   });
 
   it("invalidates prepared state on a dereference under a payload field named `value`", async () => {
-    // `["value","value","slot"]` is the payload path `value.slot`, a
-    // different dereference from `["value","slot"]`'s payload `slot`. Reading
-    // the second must still invalidate, or the guard would mistake it for a
-    // repeat of the first and hold a decision the digest no longer covers.
+    // A dereference trace names its source by logical path, so
+    // `["value","slot"]` is the payload path `value.slot`, a different
+    // dereference from `["slot"]`. Reading the second must still invalidate, or
+    // the guard would mistake it for a repeat of the first and hold a decision
+    // the digest no longer covers.
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
@@ -1431,7 +1437,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           space: signer.did(),
           id: "of:cfc-payload-value-field",
           scope: "space",
-          path: ["value", "slot"],
+          path: ["slot"],
         },
         target,
         kind: "value",
@@ -1444,7 +1450,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           space: signer.did(),
           id: "of:cfc-payload-value-field",
           scope: "space",
-          path: ["value", "value", "slot"],
+          path: ["value", "slot"],
         },
         target,
         kind: "value",
@@ -1479,18 +1485,18 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ secret: "value" });
 
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "snapshot-a",
         actingPrincipal: signer.did(),
       });
       tx.prepareCfc();
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "snapshot-b",
         actingPrincipal: signer.did(),
       });
 
       expect(tx.getCfcState().prepare.status).toBe("invalidated");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "relevant transaction was not prepared",
       );
@@ -1522,18 +1528,18 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ secret: "value" });
 
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "builtin:a",
       });
       tx.prepareCfc();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "builtin:b",
       });
 
       expect(tx.getCfcState().prepare.status).toBe("invalidated");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "relevant transaction was not prepared",
       );
@@ -1566,7 +1572,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ count: 1 });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -1637,7 +1643,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         path: [],
       }, { ok: true });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(flushed).toEqual(["effect-1"]);
 
@@ -1654,7 +1660,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           flushed.push("effect-2");
         },
       });
-      const rejectedResult = await rejected.commit();
+      const rejectedResult = await rejected.commit().settled;
       expect(isCfcEnforcementRejection(rejectedResult.error)).toBe(true);
       expect(flushed).toEqual(["effect-1"]);
 
@@ -1676,10 +1682,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
 
       let thrown: unknown;
       let throwingResult:
-        | Awaited<ReturnType<typeof throwing.commit>>
+        | Awaited<ReturnType<typeof throwing.commit>["settled"]>
         | undefined;
       try {
-        throwingResult = await throwing.commit();
+        throwingResult = await throwing.commit().settled;
       } catch (error) {
         thrown = error;
       }
@@ -1784,7 +1790,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -1816,7 +1822,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ value: "result" });
 
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -1860,7 +1866,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
 
       const tx = runtime.edit();
@@ -1920,7 +1926,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       );
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
 
       const metadataTx = runtime.edit();
@@ -1954,7 +1960,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(digestInput.consumedReads).toEqual([]);
       expect(metadataTx.getCfcState().relevant).toBe(false);
 
-      const result = await metadataTx.commit();
+      const result = await metadataTx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -2018,7 +2024,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       );
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
 
       const tx = runtime.edit();
@@ -2094,7 +2100,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
 
       const tx = runtime.edit();
@@ -2156,7 +2162,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -2176,7 +2182,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       tx.markCfcRelevant("stored-sibling-write");
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -2206,7 +2212,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       seededCell.set({ secret: "same" });
       seed.prepareCfc();
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
       const seededId = parseLink(seededCell.getAsLink()).id!;
 
@@ -2267,7 +2273,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       seededCell.set({ value: "same" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -2288,7 +2294,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ value: "same" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted builtin identity",
       );
@@ -2327,7 +2333,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set([1, 2, 3]);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const link = cell.getAsNormalizedFullLink();
       const verify = runtime.edit();
@@ -2364,7 +2370,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ secret: "hello" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       const persistedId = parseLink(cell.getAsLink()).id!;
 
@@ -2440,7 +2446,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ first: "one", second: "two" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
@@ -2519,9 +2525,9 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cellB.set({ name: "Bob" });
       txB.prepareCfc();
-      expect((await txB.commit()).ok).toBeDefined();
+      expect((await txB.commit().settled).ok).toBeDefined();
 
-      const resultA = await txA.commit();
+      const resultA = await txA.commit().settled;
       expect(resultA.ok).toBeDefined();
     } finally {
       await runtimeA.dispose();
@@ -2558,7 +2564,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       scopedCell.set({ secret: "hello" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       const persistedId = parseLink(scopedCell.getAsLink()).id!;
 
@@ -2597,6 +2603,254 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("persists a narrowed write's CFC metadata on the scoped instance it lands in", async () => {
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const tx = runtime.edit();
+      tx.setCfcEnforcementMode("enforce-explicit");
+      // Written through the space instance: `notes` narrows into the user
+      // instance, and the space slot keeps a redirect to it.
+      const cell = runtime.getCell(
+        signer.did(),
+        "cfc-scoped-narrowed-write",
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            notes: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          },
+        },
+        tx,
+      );
+      cell.set({ title: "t", notes: "hello" });
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      const id = parseLink(cell.getAsLink()).id!;
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string, scope?: "space" | "user" | "session"): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: unknown[] } };
+        } | undefined;
+      };
+      const scopedPersisted = replica.getDocument(id, "user");
+      const spacePersisted = replica.getDocument(id, "space");
+      const declared = {
+        path: ["notes"],
+        label: { confidentiality: ["secret"], integrity: ["trusted"] },
+        origin: "declared",
+      };
+
+      expect(scopedPersisted?.value).toEqual({ notes: "hello" });
+      expect(scopedPersisted?.cfc?.labelMap?.entries).toEqual([declared]);
+      // The space slot keeps the label its own input declares, beside the
+      // redirect's link entry.
+      expect(spacePersisted?.cfc?.labelMap?.entries).toContainEqual(declared);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("commits an element narrowed into a scoped instance again once that instance holds the array", async () => {
+    // The first write creates the user instance's array; its envelope spells
+    // the array as one, so the next write's input, at the array the
+    // instance now holds, merges with it.
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const schema = {
+        type: "object",
+        properties: {
+          list: {
+            type: "array",
+            items: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+      let id = "";
+      for (const list of [["a"], ["a", "b"]]) {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-explicit");
+        const cell = runtime.getCell(
+          signer.did(),
+          "cfc-scoped-narrowed-elements",
+          schema,
+          tx,
+        );
+        cell.set({ list });
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+        id = parseLink(cell.getAsLink()).id!;
+      }
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string, scope?: "space" | "user" | "session"): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: unknown[] } };
+        } | undefined;
+      };
+      const scopedPersisted = replica.getDocument(id, "user");
+      expect(scopedPersisted?.value).toEqual({ list: ["a", "b"] });
+      expect(scopedPersisted?.cfc?.labelMap?.entries).toEqual([{
+        path: ["list", "*"],
+        label: { confidentiality: ["secret"] },
+        origin: "declared",
+      }]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  describe("an item write under a missing container the stored envelope describes as an object", () => {
+    // The envelope declares `list` by its members, with no `type`, and `list`
+    // is missing. A write at `list/0` is answered by the declaration of
+    // member `0`, as for any object, whatever the storage write creates for
+    // the missing container.
+    const member = {
+      type: "string",
+      ifc: { confidentiality: ["secret"] },
+    } as const satisfies JSONSchema;
+    const containers: Record<string, JSONSchema> = {
+      "properties": { properties: { "0": member } },
+      "additionalProperties": { additionalProperties: member },
+      "a reference to its properties": { $ref: "#/$defs/Members" },
+    };
+
+    const refusalOfItemWrite = async (
+      container: JSONSchema,
+      itemSchema: JSONSchema,
+      item: string | number,
+    ): Promise<string | undefined> => {
+      // The runtime's default posture: the characterization posture this
+      // suite's other cases use turns the merge's checks off.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const seed = runtime.edit();
+        const doc = runtime.getCell(
+          signer.did(),
+          "cfc-missing-member-container",
+          {
+            type: "object",
+            properties: {
+              // A labeled sibling, so the document stores an envelope.
+              title: { type: "string", ifc: { confidentiality: ["title"] } },
+              list: container,
+            },
+            $defs: { Members: { properties: { "0": member } } },
+          },
+          seed,
+        );
+        doc.set({ title: "t" });
+        expect((await seed.commit().settled).error).toBeUndefined();
+
+        const tx = runtime.edit();
+        runtime.getCellFromLink(
+          { ...doc.getAsNormalizedFullLink(), path: ["list", "0"] },
+          itemSchema,
+          tx,
+        ).set(item);
+        return (await tx.commit().settled).error?.message;
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    for (const [shape, container] of Object.entries(containers)) {
+      it(`keeps a member's confidentiality (${shape})`, async () => {
+        expect(
+          await refusalOfItemWrite(container, {
+            type: "string",
+            ifc: { confidentiality: ["other"] },
+          }, "x"),
+        ).toMatch(/confidentiality cannot be weakened at \/list\/0/);
+      });
+
+      it(`keeps a member's type (${shape})`, async () => {
+        expect(
+          await refusalOfItemWrite(container, {
+            type: "number",
+            ifc: { confidentiality: ["secret"] },
+          }, 1),
+        ).toMatch(/type changed incompatibly at \/list\/0/);
+      });
+    }
+  });
+
+  it("lifts an item write to a missing container the stored envelope gives only annotations", async () => {
+    // `list` is declared by its label, a description and a default alone,
+    // which constrain no shape, so the storage write's array answers: the
+    // first item write's input lands at the array, and the next item write,
+    // at the array the document then holds, merges with it.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const seed = runtime.edit();
+      const doc = runtime.getCell(
+        signer.did(),
+        "cfc-missing-annotated-container",
+        {
+          type: "object",
+          properties: {
+            // A labeled sibling, so the document stores an envelope.
+            title: { type: "string", ifc: { confidentiality: ["title"] } },
+            list: {
+              description: "labeled, shapeless",
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+        },
+        seed,
+      );
+      doc.set({ title: "t" });
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const item = {
+        type: "string",
+        ifc: { confidentiality: ["secret"] },
+      } as const satisfies JSONSchema;
+      for (const [index, value] of [["0", "a"], ["1", "b"]]) {
+        const tx = runtime.edit();
+        runtime.getCellFromLink(
+          { ...doc.getAsNormalizedFullLink(), path: ["list", index] },
+          item,
+          tx,
+        ).set(value);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: { path: string[] }[] } };
+        } | undefined;
+      };
+      const persisted = replica.getDocument(parseLink(doc.getAsLink()).id!);
+      expect(persisted?.value).toEqual({ title: "t", list: ["a", "b"] });
+      expect(persisted?.cfc?.labelMap?.entries.map((entry) => entry.path))
+        .toContainEqual(["list", "*"]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("persists CFC metadata for stored link writes without link schema", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
@@ -2619,7 +2873,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "shared notes" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -2637,7 +2891,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set(linkedSource);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -2702,7 +2956,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set(source);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -2751,7 +3005,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "plain source" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -2774,7 +3028,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set(link);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -2789,15 +3043,36 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(stored.value?.["/"][LINK_V1_TAG]).not.toHaveProperty(
         "cfcLabelView",
       );
+      const referenceIntegrity = {
+        type: "https://commonfabric.org/cfc/atom/LinkReference",
+        source: {
+          space: signer.did(),
+          id: source.getAsNormalizedFullLink().id,
+          path: [],
+        },
+        target: {
+          space: signer.did(),
+          id: target.getAsNormalizedFullLink().id,
+          path: [],
+        },
+      };
       expect(stored.cfc?.labelMap?.entries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             path: [],
-            label: { integrity: ["selected-by-alice"] },
+            label: {
+              integrity: expect.arrayContaining([
+                referenceIntegrity,
+                "selected-by-alice",
+              ]),
+            },
           }),
           expect.objectContaining({
             path: ["title"],
-            label: { confidentiality: ["selected-title"] },
+            label: {
+              confidentiality: ["selected-title"],
+              integrity: [referenceIntegrity],
+            },
           }),
         ]),
       );
@@ -2830,7 +3105,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "redirect source" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -2848,7 +3123,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set(linkedSource.getAsWriteRedirectLink() as never);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -2903,7 +3178,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "source" });
       sourceSeed.prepareCfc();
-      expect((await sourceSeed.commit()).ok).toBeDefined();
+      expect((await sourceSeed.commit().settled).ok).toBeDefined();
 
       const targetSeed = runtime.edit();
       targetSeed.setCfcEnforcementMode("enforce-explicit");
@@ -2923,7 +3198,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set({ guarded: "old" });
       targetSeed.prepareCfc();
-      expect((await targetSeed.commit()).ok).toBeDefined();
+      expect((await targetSeed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -2947,7 +3222,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       linkedTarget.key("linked").set(linkedSource as never);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "missing schema write-policy input",
       );
@@ -2982,7 +3257,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       unlabeledSeed.set({ title: "unlabeled" });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -3000,7 +3275,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       linkedTarget.set(unlabeledSource);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "missing link source metadata",
       );
@@ -3031,7 +3306,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set({ existing: true });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const sameTxSource = runtime.getCell(
@@ -3070,7 +3345,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         }],
       }, runtimeWritePolicyAuthorization);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       // The persisted link label carries the location's confidentiality.
@@ -3117,7 +3392,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       target.set({ existing: true });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -3142,7 +3417,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       linkedTarget.set(piece);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
       const verify = runtime.edit();
@@ -3156,6 +3431,63 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       expect(rootEntry?.label.confidentiality).toEqual(["card-space"]);
       verify.abort?.();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("allows link writes that strengthen a stored confidentiality declaration", async () => {
+    const { runtime, storageManager } = createRuntime("enforce-explicit");
+    const targetSchema = (confidentiality: string[]): JSONSchema => ({
+      type: "object",
+      properties: {
+        linked: { type: "string", ifc: { confidentiality } },
+      },
+      required: ["linked"],
+    });
+    try {
+      const seed = runtime.edit();
+      const source = runtime.getCell(signer.did(), "strengthening source", {
+        type: "string",
+        ifc: { confidentiality: ["source-reader"] },
+      }, seed);
+      source.set("linked content");
+      const target = runtime.getCell(
+        signer.did(),
+        "strengthening target",
+        targetSchema(["source-reader"]),
+        seed,
+      );
+      target.set({ linked: "initial content" });
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      const strengthened = target.withTx(tx).asSchema(
+        targetSchema(["source-reader", "additional-reader"]),
+      );
+      strengthened.set({ linked: source.withTx(tx) } as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      const verify = runtime.edit();
+      try {
+        expect(target.withTx(verify).key("linked").get()).toBe(
+          "linked content",
+        );
+        const metadata = readStoredCfcMetadata(
+          verify,
+          toMemorySpaceAddress(target.getAsNormalizedFullLink()),
+        );
+        const declared = metadata?.labelMap.entries.find((entry) =>
+          entry.path.join("/") === "linked" && entry.origin === "declared"
+        );
+        expect(declared?.label.confidentiality).toEqual([
+          "source-reader",
+          "additional-reader",
+        ]);
+      } finally {
+        verify.abort();
+      }
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3184,7 +3516,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "guarded" });
       sourceSeed.prepareCfc();
-      expect((await sourceSeed.commit()).ok).toBeDefined();
+      expect((await sourceSeed.commit().settled).ok).toBeDefined();
 
       const targetSeed = runtime.edit();
       const target = runtime.getCell(
@@ -3230,29 +3562,39 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, {
         value: guardedSchema.schema,
       });
-      expect((await targetSeed.commit()).ok).toBeDefined();
+      expect((await targetSeed.commit().settled).ok).toBeDefined();
 
-      const tx = runtime.edit();
-      tx.setCfcEnforcementMode("enforce-explicit");
-      const linkedSource = runtime.getCell(
-        signer.did(),
-        "cfc-link-write-guard-source",
-        undefined,
-        tx,
-      );
-      const guardedTarget = runtime.getCell(
-        signer.did(),
-        "cfc-link-write-guard-target",
-        undefined,
-        tx,
-      );
-      guardedTarget.key("linked").set(linkedSource as never);
+      for (
+        const schema of [
+          undefined,
+          {
+            type: "object",
+            properties: { linked: { type: "object" } },
+          } as const,
+        ]
+      ) {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-explicit");
+        const linkedSource = runtime.getCell(
+          signer.did(),
+          "cfc-link-write-guard-source",
+          undefined,
+          tx,
+        );
+        const guardedTarget = runtime.getCell(
+          signer.did(),
+          "cfc-link-write-guard-target",
+          schema,
+          tx,
+        );
+        guardedTarget.key("linked").set(linkedSource as never);
 
-      tx.prepareCfc();
-      const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "writeAuthorizedBy requires a trusted builtin identity at /linked",
-      );
+        tx.prepareCfc();
+        const result = await tx.commit().settled;
+        expect(result.error?.message).toContain(
+          "writeAuthorizedBy requires a trusted builtin identity at /linked",
+        );
+      }
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3281,7 +3623,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "array guarded" });
       sourceSeed.prepareCfc();
-      expect((await sourceSeed.commit()).ok).toBeDefined();
+      expect((await sourceSeed.commit().settled).ok).toBeDefined();
 
       const targetSeed = runtime.edit();
       const target = runtime.getCell(
@@ -3330,7 +3672,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, {
         value: guardedSchema.schema,
       });
-      expect((await targetSeed.commit()).ok).toBeDefined();
+      expect((await targetSeed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -3349,7 +3691,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       guardedTarget.key("items").key("0").set(linkedSource as never);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted builtin identity at /items/*",
       );
@@ -3384,7 +3726,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ items: [{ title: "unresolved" }] });
       tx.prepareCfc();
 
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3427,7 +3769,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ items: [{ title: "resolved" }] });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted builtin identity at /items/*",
       );
@@ -3437,7 +3779,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("does not apply wildcard policy entries when item value shape mismatches", async () => {
+  it("applies a wildcard writer claim to an item whatever shape its value takes", async () => {
+    // Only a claim inside an `anyOf` or `oneOf` branch is selected by the
+    // value's shape; this one governs every item, so writing a value of
+    // another type there is a write the named writer must make.
+
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
@@ -3465,7 +3811,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ items: ["not an object"] });
 
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      const result = await tx.commit().settled;
+      expect(isCfcEnforcementRejection(result.error)).toBe(true);
+      expect(String((result.error as Error).message)).toContain(
+        "writeAuthorizedBy",
+      );
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3497,7 +3847,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ items: [] });
 
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -3571,7 +3921,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, {
         value: guardedSchema.schema,
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const update = runtime.edit();
       update.setCfcEnforcementMode("enforce-explicit");
@@ -3583,7 +3933,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       targetWithSchema.key("title").set("updated");
       update.prepareCfc();
-      expect((await update.commit()).ok).toBeDefined();
+      expect((await update.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -3625,7 +3975,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       source.set({ title: "linked" });
       sourceSeed.prepareCfc();
-      expect((await sourceSeed.commit()).ok).toBeDefined();
+      expect((await sourceSeed.commit().settled).ok).toBeDefined();
 
       const linkTx = runtime.edit();
       linkTx.setCfcEnforcementMode("enforce-explicit");
@@ -3644,7 +3994,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       target.set({ title: "draft" });
       target.key("linked").set(linkedSource as never);
       linkTx.prepareCfc();
-      expect((await linkTx.commit()).ok).toBeDefined();
+      expect((await linkTx.commit().settled).ok).toBeDefined();
 
       const update = runtime.edit();
       update.setCfcEnforcementMode("enforce-explicit");
@@ -3664,7 +4014,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       targetWithSchema.key("title").set("updated");
       update.prepareCfc();
-      expect((await update.commit()).ok).toBeDefined();
+      expect((await update.commit().settled).ok).toBeDefined();
 
       const verify = runtime.edit();
       const stored = verify.readOrThrow({
@@ -3792,7 +4142,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         }],
       });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const rootId = parseLink(cell.getAsLink()).id!;
@@ -3903,20 +4253,20 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         for (const rootId of ["generated-output-control", "generated-output"]) {
           const seed = write(rootId, false);
           seed.prepareCfc();
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
         }
       }
 
       const strictUpdate = write("generated-output-control", true);
       strictUpdate.prepareCfc();
-      const strictResult = await strictUpdate.commit();
+      const strictResult = await strictUpdate.commit().settled;
       expect(strictResult.error?.message).toContain(
         "required field generated needs a default",
       );
 
       const outputUpdate = write("generated-output", true, "output");
       outputUpdate.prepareCfc();
-      expect((await outputUpdate.commit()).ok).toBeDefined();
+      expect((await outputUpdate.commit().settled).ok).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3992,7 +4342,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         }],
       });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const rootId = parseLink(cell.getAsLink()).id!;
@@ -4131,7 +4481,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       seed.setCfcEnforcementMode("enforce-explicit");
       cell.withTx(seed).set({ messages: [] });
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -4143,7 +4493,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         },
       });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const rootId = parseLink(cell.getAsLink()).id!;
@@ -4211,7 +4561,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
 
       const tx = runtime.edit();
@@ -4246,7 +4596,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set("visible");
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(output.getAsLink()).id!;
@@ -4308,7 +4658,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       firstCell.set({ secret: "hello" });
       firstTx.prepareCfc();
-      const firstResult = await firstTx.commit();
+      const firstResult = await firstTx.commit().settled;
       expect(firstResult.ok).toBeDefined();
 
       const replica = storageManager.open(signer.did()).replica as unknown as {
@@ -4344,7 +4694,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       secondCell.set({ secret: "hello", title: "updated" });
       secondTx.prepareCfc();
-      const secondResult = await secondTx.commit();
+      const secondResult = await secondTx.commit().settled;
       expect(secondResult.ok).toBeDefined();
 
       const after = replica.getDocument(persistedId);
@@ -4447,7 +4797,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, {
         value: existingSchemaAndHash.schema,
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const stageSchemaAndHash = internSchema(
         {
@@ -4480,7 +4830,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(update.getCfcState().diagnostics).not.toContain(
         `missing trusted-event policy input for ${documentId} at /argument/savedTitle`,
       );
-      const result = await update.commit();
+      const result = await update.commit().settled;
       expect(result.ok).toBeDefined();
 
       const replica = storageManager.open(signer.did()).replica as unknown as {
@@ -4553,7 +4903,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       firstCell.set({ secret: "hello" });
       firstTx.prepareCfc();
-      const firstResult = await firstTx.commit();
+      const firstResult = await firstTx.commit().settled;
       expect(firstResult.ok).toBeDefined();
 
       const persistedId = parseLink(firstCell.getAsLink()).id!;
@@ -4588,7 +4938,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         );
         secondCell.set({ secret: "hello", title: "restarted" });
         secondTx.prepareCfc();
-        const secondResult = await secondTx.commit();
+        const secondResult = await secondTx.commit().settled;
         expect(secondResult.ok).toBeDefined();
 
         const replica = storageManager.open(signer.did())
@@ -4648,7 +4998,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       firstCell.set({ secret: "hello" });
       firstTx.prepareCfc();
-      const firstResult = await firstTx.commit();
+      const firstResult = await firstTx.commit().settled;
       expect(firstResult.ok).toBeDefined();
       await storageManager1.synced();
     } finally {
@@ -4685,7 +5035,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       secondTx.setCfcEnforcementMode("enforce-explicit");
       secondCell.withTx(secondTx).set({ secret: "hello", title: "synced" });
       secondTx.prepareCfc();
-      const secondResult = await secondTx.commit();
+      const secondResult = await secondTx.commit().settled;
       expect(secondResult.error).toBeUndefined();
       expect(secondResult.ok).toBeDefined();
     } finally {
@@ -4737,7 +5087,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       firstCell.set({ secret: "hello" });
       firstTx.prepareCfc();
-      const firstResult = await firstTx.commit();
+      const firstResult = await firstTx.commit().settled;
       expect(firstResult.error).toBeUndefined();
       expect(firstResult.ok).toBeDefined();
       await storageManager1.synced();
@@ -4782,7 +5132,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         title: "synced",
       });
       secondTx.prepareCfc();
-      const secondResult = await secondTx.commit();
+      const secondResult = await secondTx.commit().settled;
       expect(secondResult.error).toBeUndefined();
       expect(secondResult.ok).toBeDefined();
     } finally {
@@ -4832,7 +5182,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       // time, so the bad state a later write would trip over cannot land.
       // (The runner-side load guard keeps its own coverage in
       // cfc-cid-schema-verify.test.ts.)
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.error?.message).toContain(
         "neither included in the commit nor stored in the space",
       );
@@ -4878,7 +5228,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      const seedResult = await seed.commit();
+      const seedResult = await seed.commit().settled;
       expect(seedResult.ok).toBeDefined();
 
       const tx = runtime.edit();
@@ -4914,7 +5264,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ value: "result" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("requiredIntegrity");
     } finally {
       await runtime.dispose();
@@ -4945,7 +5295,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ public: "ok" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -5015,7 +5365,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, {
         value: { public: "before", guarded: "old" },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -5042,7 +5392,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ public: "after" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("requiredIntegrity");
     } finally {
       await runtime.dispose();
@@ -5111,7 +5461,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, {
         value: { guarded: "stale" },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -5138,7 +5488,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ guarded: null });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("requiredIntegrity");
     } finally {
       await runtime.dispose();
@@ -5214,7 +5564,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -5261,7 +5611,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ value: "result" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("requiredIntegrity");
     } finally {
       await runtime.dispose();
@@ -5305,7 +5655,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -5341,7 +5691,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ value: "result" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("maxConfidentiality");
     } finally {
       await runtime.dispose();
@@ -5385,7 +5735,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -5421,7 +5771,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ value: "result" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("maxConfidentiality");
     } finally {
       await runtime.dispose();
@@ -5465,7 +5815,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       targetCell.set({ bar: "seed" });
       setResultCell(targetCell, sourceCell);
       setupTx.prepareCfc();
-      expect((await setupTx.commit()).ok).toBeDefined();
+      expect((await setupTx.commit().settled).ok).toBeDefined();
 
       const tx1 = runtime.edit();
       tx1.setCfcEnforcementMode("enforce-explicit");
@@ -5527,7 +5877,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("persists only concrete evidence and addIntegrity in output metadata", async () => {
+  it("persists only concrete evidence and `addIntegrity` in output metadata, each in its own component", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -5566,7 +5916,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
@@ -5605,7 +5955,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       output.set({ value: "result" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const replica = storageManager.open(signer.did()).replica as unknown as {
@@ -5624,16 +5974,18 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         } | undefined;
       };
       const persisted = replica.getDocument(parseLink(output.getAsLink()).id!);
-      expect(persisted?.cfc?.labelMap?.entries).toContainEqual({
-        path: ["value"],
-        label: {
-          integrity: [
-            "target-integrity",
-            "derived-integrity",
-          ],
+      expect(persisted?.cfc?.labelMap?.entries).toEqual([
+        {
+          path: ["value"],
+          label: { integrity: ["target-integrity"] },
+          origin: "declared",
         },
-        origin: "declared",
-      });
+        {
+          path: ["value"],
+          label: { integrity: ["derived-integrity"] },
+          origin: "minted",
+        },
+      ]);
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -5654,7 +6006,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       }, { secret: "value" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -5684,7 +6036,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       runtime.run(tx, pattern, {}, resultCell);
 
       runtime.prepareTxForCommit(tx);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -5716,7 +6068,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: "secret" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted builtin identity",
       );
@@ -5732,7 +6084,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       runtime.moduleRegistry.addModuleByRef(
         "trusted-handler",
         raw((inputsCell) => {
-          const tx = inputsCell.tx;
+          const tx = cellTx(inputsCell);
           if (!tx) {
             throw new Error("missing tx");
           }
@@ -5771,7 +6123,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
 
       runtime.prepareTxForCommit(tx);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -5784,11 +6136,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-1",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/main.tsx",
@@ -5820,7 +6172,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: "authorized" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -5833,11 +6185,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-profile",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -5901,7 +6253,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const verify = runtime.edit();
@@ -5933,11 +6285,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-message",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6001,7 +6353,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const verify = runtime.edit();
@@ -6033,7 +6385,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-missing-write",
         actingPrincipal: signer.did(),
       });
@@ -6065,7 +6417,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: "hello" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "current-principal integrity requires writeAuthorizedBy",
       );
@@ -6080,10 +6432,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot(
+      setCfcTrustSnapshot(
+        tx,
         {
           actingPrincipal: signer.did(),
-        } as unknown as Parameters<typeof tx.setCfcTrustSnapshot>[0],
+        } as unknown as Parameters<typeof setCfcTrustSnapshot>[1],
       );
 
       const cell = runtime.getCell(
@@ -6119,7 +6472,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: "hello" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "current-principal integrity requires a trust snapshot id",
       );
@@ -6134,7 +6487,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-missing-acting-principal",
       });
 
@@ -6171,7 +6524,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: "hello" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "current-principal integrity requires an acting principal",
       );
@@ -6181,16 +6534,16 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("rejects current-principal integrity without trusted UI provenance", async () => {
+  it("admits current-principal integrity from its declared writer with no `uiContract`, and labels the value with the acting principal", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
-        id: "trust-snapshot-current-missing-ui",
+      setCfcTrustSnapshot(tx, {
+        id: "trust-snapshot-current-writer-only",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6199,7 +6552,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
 
       const cell = runtime.getCell(
         signer.did(),
-        "cfc-current-principal-missing-ui",
+        "cfc-current-principal-writer-only",
         {
           type: "object",
           properties: {
@@ -6224,12 +6577,30 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         tx,
       );
       cell.set({ value: "hello" });
+      const target = cell.getAsNormalizedFullLink();
 
       tx.prepareCfc();
-      const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "current-principal integrity requires uiContract",
-      );
+      const result = await tx.commit().settled;
+      expect(result.error).toBeUndefined();
+
+      const verify = runtime.edit();
+      const stored = verify.readOrThrow({
+        space: signer.did(),
+        scope: "space",
+        id: target.id,
+        path: [],
+      }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
+      expect(stored.cfc?.labelMap?.entries).toContainEqual({
+        path: ["value"],
+        label: {
+          integrity: [{
+            kind: "authored-by",
+            subject: signer.did(),
+          }],
+        },
+        origin: "declared",
+      });
+      verify.abort();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -6241,11 +6612,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-current-literal-did",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/trusted.tsx",
@@ -6307,7 +6678,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "current-principal integrity subject must be runtime resolved",
       );
@@ -6322,11 +6693,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
-      tx.setCfcTrustSnapshot({
+      setCfcTrustSnapshot(tx, {
         id: "trust-snapshot-1",
         actingPrincipal: signer.did(),
       });
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: "module-hash-1",
         sourceFile: "/main.tsx",
@@ -6359,7 +6730,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: "rejected" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("writeAuthorizedBy failed");
     } finally {
       await runtime.dispose();
@@ -6389,7 +6760,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ value: "observed" });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(tx.getCfcState().diagnostics).toContain(
         "unsupported trust-sensitive claim opaque at /value",
@@ -6430,7 +6801,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       );
       cell.set({ value: "observed" });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(tx.getCfcState().diagnostics).toContain(
         "malformed projection claim at /value",
@@ -6471,7 +6842,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       cell.set({ value: ["observed"] });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "unsupported trust-sensitive claim collection",
       );

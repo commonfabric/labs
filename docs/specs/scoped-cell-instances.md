@@ -318,10 +318,30 @@ type JSONSchemaObj = {
 };
 ```
 
+A slot declares its scope on its own schema: the outermost `asCell` entry's
+`scope` where it has one, otherwise the top-level `scope`. A slot whose schema
+is a `$ref` is read with the reference resolved, whether it is a local
+`#/$defs/<name>` or a content-addressed `cid:` one, so a type whose every
+position is per-user — a recursive one names its own definition — declares
+that once on the definition. Resolution merges the keywords written beside the
+`$ref` over the definition's one keyword at a time, as it does for every
+reference the runtime follows, and the precedence above then applies to the
+result: a `scope` beside the `$ref` replaces the definition's `scope`, while an
+`asCell` entry scope on the definition still comes first. A scope inside an
+`anyOf`/`oneOf` branch is not a declaration: the branches are alternatives for
+one slot, and which of them a value takes is not known where the declaration is
+read.
+
 `scope: "space"`, `scope: "user"`, and `scope: "session"` set the narrowest
 link scope that reads are allowed to follow. If the schema declares
 `scope: "user"`, then space and user links may be followed, but session links
 are treated as unavailable.
+
+A cap governs every link a read follows on its way to a value, not only the
+first one it meets. A link's own stored schema describes its target and
+replaces the schema the read carries, so a chain of such links would otherwise
+lift the declaration one hop after it was made. The cap the read arrived with
+travels with it, and a declaration met along the way can only narrow it.
 
 `scope: "any"` disables that follow restriction for reads. The returned value's
 effective scope is the narrowest scope actually encountered while following
@@ -354,6 +374,28 @@ or projected with `key()`. A stored value or reference retains its own scope;
 a reference to a missing target is still an existing reference. An unresolved
 or scope-blocked ancestor cannot authorize creation of a scoped default.
 
+A pattern-owned cell narrower than its result starts from its declared default
+for each actor instance. The setup that first declares the cell commits its
+manifest and default together. On a later independently owned start, an accepted
+manifest authorizes filling an absent actor instance in a separate transaction
+for that cell, before execution. Reading another private argument or another
+actor's cell during setup must not taint this constant default. The default
+does carry the label on its owning piece's root, which the filling transaction
+reads on its own, and no label of the piece's fields. The current
+pattern pointer, manifest declaration, and absence remain commit dependencies;
+existing values and ordinary CFC label and write-authority checks still apply.
+Dependency synchronization alone never initializes a default. A speculative
+start keeps its initialization in the speculative transaction and cannot vouch
+for durable initialization on a later authored start. A caller-owned
+setup keeps initialization in the caller's commit, including its abort. A run
+whose preparation sees a superseded declaration, or that continues after
+dependency loading rejects, initializes within the commit that accepts its
+requested setup, under the same CFC checks. Neither case vouches for completed
+preparation in the naming cache. A cold start by a non-serving client with a
+confirmed READ-only space membership can resume persisted output without
+writing the viewer's absent scoped defaults. Their schema defaults remain
+readable; an explicit write still requires write access.
+
 Pattern argument setup materializes missing declared scoped properties even
 when the caller supplies the argument object through a Cell reference. The
 redirect stays at the input slot so existing child bindings follow subsequent
@@ -361,6 +403,32 @@ explicit rebinding. Existing values and references remain authoritative,
 including a reference to the same input field at a narrower scope. The reads
 that authorize initialization remain commit dependencies, so a concurrent
 explicit write cannot be overwritten silently.
+
+A pattern binding addresses an argument slot at the argument cell's own scope,
+whether the slot's scope is declared on the value (`Writable<PerUser<T>>`
+emits `scope: "user"` beside `asCell: ["cell"]`) or on the cell wrapper
+(`PerUser<Writable<T>>` emits `asCell: [{ kind: "cell", scope: "user" }]`).
+The declared scope travels in the binding's schema and is realized when the
+binding is read or written, as for any other schema-scoped slot. The base slot
+is the one place that holds both kinds of content: a reference the caller
+passed in is stored there unchanged, and a plain value is narrowed into the
+scoped instance with a redirect left in the base slot. A binding that addressed
+the scoped instance directly would find a passed reference missing.
+
+A binding to a path below a scoped slot carries that slot's scope as well. The
+serialized binding holds only the leaf's schema, so when the leaf declares no
+scope of its own, the narrowest scope declared along the path is written onto
+the leaf schema, and a link stored at the scoped slot is held to it.
+
+The two spellings differ in what they constrain. A scope on the cell wrapper
+caps which link the handle may follow: a passed reference to a narrower cell is
+not followed. A scope on the value scopes the slot's own content: a plain
+value written into the slot narrows into the scoped instance. It does not cap
+the handle, so a passed reference to a narrower cell is followed. A handle
+minted by following a passed reference addresses the referenced cell and does
+not carry the slot's value scope, so a write through it lands in that cell's
+own instance. When the slot receives a reference to an existing cell, such as a
+record handle, use the cell-wrapper spelling.
 
 With server execution enabled, an automatically created space-to-user link for
 `PerSession` storage carries `scopeInitialization: "session"` in its link
@@ -589,6 +657,22 @@ irrespective of this feature.
 The serialized declared scope (`space`, `user`, `session`, `inherit`, or `any`
 in schema positions) is distinct from `scope_key`. Declared scope is authoring
 and traversal metadata. `scope_key` is the runtime storage address dimension.
+
+Each instance stores its own CFC envelope beside its value. A write that
+narrows a slot's content into a scoped instance records the slot's schema
+policy input at that instance, so its envelope carries the labels the slot's
+schema declares and the write's per-path flow stamps. The flow stamp of a
+whole value a writer set is not recorded there. The broader slot keeps the
+label its own schema declares, beside the redirect.
+
+The cell label views and the runtime read ceiling read a scoped instance's
+labels as its own envelope joined with the confidentiality that a value read
+of each broader instance of the same id consumes: the space instance's for a
+user instance, the user and space instances' for a session instance. Entries
+labeling the pointer the broader slot holds are left out, and integrity comes
+from the instance's own envelope alone. Other readers, among them the flow
+join, the labels a schema read carries across links, dereference traces and
+label introspection, read the instance's own envelope only.
 
 ## Migration And Compatibility
 

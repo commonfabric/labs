@@ -211,7 +211,6 @@ Deno.test("github users: transitional overlap counts once and draws retained his
       ctx({ GH_TOKEN: "token" }),
     );
 
-    assertEquals(view.label, "github users");
     assertEquals(view.status, "good");
     assertEquals(view.value, "13");
     assertEquals(view.duration, 2 * DAY);

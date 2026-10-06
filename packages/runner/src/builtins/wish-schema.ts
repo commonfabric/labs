@@ -5,26 +5,29 @@ import {
 } from "@commonfabric/data-model-schema";
 import { LRUCache } from "@commonfabric/utils/cache";
 import { type JSONSchema, UI } from "../builder/types.ts";
+import { snapshotQueryResult } from "../query-result-proxy.ts";
 import { isCellScope } from "../scope.ts";
 
-// asCell-wrapped schemas keyed by content hash. `hashSchema()` is one
-// unavoidable walk (through the query-result proxy when the input is one) and
-// is the cache key: it is `FabricValue`-aware, so schemas that differ only in
-// non-JSON `FabricValue` content (e.g. a `FabricBytes` default) get distinct
-// keys — a `JSON.stringify()` key would collide them. The clone-and-intern
-// repeats for the same content on every wish send, so cache it.
+// asCell-wrapped schemas keyed by content hash. `hashSchema()` is the cache
+// key: it is `FabricValue`-aware, so schemas that differ only in non-JSON
+// `FabricValue` content (e.g. a `FabricBytes` default) get distinct keys — a
+// `JSON.stringify()` key would collide them. The clone-and-intern repeats for
+// the same content on every wish send, so cache it.
 const schemaAsCellCache = new LRUCache<string, JSONSchema>({ capacity: 256 });
 
 function schemaAsCell(schema: unknown): JSONSchema {
   if (schema === false) return false;
   if (schema && typeof schema === "object") {
-    const objectSchema = schema as Exclude<JSONSchema, boolean>;
-    const key = hashSchema(schema as JSONSchema);
+    // A requested schema arrives as a query-result view of the wish's input.
+    // One walk detaches it, keeping `FabricValue` leaves that a JSON
+    // round-trip would mangle, and the hash and the clone both read the copy.
+    const objectSchema = snapshotQueryResult(schema) as Exclude<
+      JSONSchema,
+      boolean
+    >;
+    const key = hashSchema(objectSchema);
     let result = schemaAsCellCache.get(key);
     if (result === undefined) {
-      // `schema` may be a query-result proxy, so deep-frozen-clone rather than
-      // freeze in place; the clone de-proxies and preserves `FabricValue`
-      // leaves that a JSON round-trip would mangle.
       result = deepFrozenCloneAndInternSchema({
         ...objectSchema,
         asCell: objectSchema.asCell ?? ["cell"],

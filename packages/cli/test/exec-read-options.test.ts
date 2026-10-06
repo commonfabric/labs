@@ -19,7 +19,8 @@ import {
   type CellSelection,
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
-import { cf, relevantStderr } from "./utils.ts";
+import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 /**
  * `cf exec`'s read options and the shape it emits.
@@ -121,7 +122,7 @@ describe("cf exec read options", () => {
         [CF_RUNTIME_ERROR_LOG]: [] as Array<{ message: string }>,
         storageManager: { synced: () => Promise.resolve() },
         edit: () => ({
-          commit: () => Promise.resolve(),
+          commit: () => createTransactionCommitReceipt(Promise.resolve()),
           status: () => ({ status: "done", journal: { novelty: () => [] } }),
         }),
         prepareTxForCommit: () => {},
@@ -268,6 +269,7 @@ describe("cf exec read options", () => {
       filePath,
       ["invoke"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir: join(tmpDir, "state"),
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(pieces as any),
@@ -306,6 +308,7 @@ describe("cf exec read options", () => {
       filePath,
       ["invoke"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir: join(tmpDir, "state"),
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(pieces as any),

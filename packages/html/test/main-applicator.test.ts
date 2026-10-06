@@ -8,7 +8,7 @@
 // `assertExists` stays where `expect()` has no equal: it asserts neither
 // `null` nor `undefined` in one call, and narrows the value's type for the
 // lines that follow. `toBeDefined()` does neither.
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assertExists } from "@std/assert";
 import { expect } from "@std/expect";
 
@@ -18,6 +18,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import { DomApplicator } from "../src/main/applicator.ts";
 import type { DomEventMessage } from "../src/main/events.ts";
 import { getPieceBoundary } from "../src/main/space-context.ts";
+import type { SetPropHandler } from "../src/render-utils.ts";
 import type { VDomBatch } from "../src/vdom-ops.ts";
 
 // Mock RuntimeClient for testing
@@ -26,28 +27,139 @@ const createMockRuntimeClient = () => {
     request: () => Promise.resolve({}),
     subscribe: () => Promise.resolve(),
     unsubscribe: () => Promise.resolve(),
+    peersOf: () => [],
   };
   return {
     [$conn]: () => conn,
     getConnection: () => ({
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
+      peersOf: () => [],
     }),
   } as any;
 };
 
+/** Stand-in for `MutationRecord`. */
+interface MockMutationRecord {
+  /** Name of the attribute written, or `null` when children were replaced. */
+  attributeName: string | null;
+}
+
+/**
+ * Defines `property` on `prototype` in the way a browser defines a property
+ * that reads and writes the attribute `attribute`.
+ */
+function reflect(prototype: object, property: string, attribute: string) {
+  Object.defineProperty(prototype, property, {
+    get(this: Element) {
+      return this.getAttribute(attribute) ?? "";
+    },
+    set(this: Element, value: unknown) {
+      this.setAttribute(attribute, String(value));
+    },
+  });
+}
+
+/** Stand-in for `HTMLElement.prototype`. */
+const mockElementPrototype = {};
+reflect(mockElementPrototype, "title", "title");
+reflect(mockElementPrototype, "className", "class");
+Object.defineProperty(mockElementPrototype, "textContent", {
+  get(this: { text?: string }) {
+    return this.text ?? "";
+  },
+  set(
+    this: { text?: string; mutationRecords: Set<MockMutationRecord[]> },
+    value: unknown,
+  ) {
+    this.text = String(value);
+    for (const records of this.mutationRecords) {
+      records.push({ attributeName: null });
+    }
+  },
+});
+
+/**
+ * Stand-in for `HTMLInputElement.prototype`. On a checkbox, `.value` reads and
+ * writes the `value` attribute, and is `on` when the attribute is absent. On a
+ * text input, `.value` holds the typed text, and the `value` attribute gives
+ * only its starting value.
+ */
+const mockInputPrototype = Object.create(mockElementPrototype);
+reflect(mockInputPrototype, "placeholder", "placeholder");
+Object.defineProperty(mockInputPrototype, "value", {
+  get(this: Element & { typedValue?: string }) {
+    return this.getAttribute("type") === "checkbox"
+      ? this.getAttribute("value") ?? "on"
+      : this.typedValue ?? this.getAttribute("value") ?? "";
+  },
+  set(this: Element & { typedValue?: string }, value: unknown) {
+    if (this.getAttribute("type") === "checkbox") {
+      this.setAttribute("value", String(value));
+    } else {
+      this.typedValue = String(value);
+    }
+  },
+});
+
+/**
+ * Prototype of the mock `cf-input` custom element. It defines its own
+ * `placeholder` property, as a Lit component does.
+ */
+const mockCfInputPrototype = Object.create(mockElementPrototype);
+Object.defineProperty(mockCfInputPrototype, "placeholder", {
+  get(this: { placeholderValue?: unknown }) {
+    return this.placeholderValue;
+  },
+  set(this: { placeholderValue?: unknown }, value: unknown) {
+    this.placeholderValue = value;
+  },
+});
+
+/**
+ * Stand-in for `MutationObserver`, recording attribute writes and replaced
+ * children. A record of replaced children has no `attributeName`.
+ */
+class MockMutationObserver {
+  readonly #records: MockMutationRecord[] = [];
+  readonly #targets = new Set<any>();
+
+  observe(target: any): void {
+    target.mutationRecords.add(this.#records);
+    this.#targets.add(target);
+  }
+
+  takeRecords(): MockMutationRecord[] {
+    return this.#records.splice(0);
+  }
+
+  disconnect(): void {
+    for (const target of this.#targets) {
+      target.mutationRecords.delete(this.#records);
+    }
+  }
+}
+
 // Create a minimal DOM environment for testing
 // Note: This doesn't fully replicate HTMLElement behavior
-function createMockDocument() {
+//
+// With `upgrade` false, the document behaves like one that
+// `createHTMLDocument()` returns. An element with a custom element's name stays
+// a plain element there, without the custom element class's properties.
+function createMockDocument({ upgrade = true } = {}) {
   let idCounter = 0;
 
   const createElement = (tagName: string) => {
     const attributes = new Map<string, string>();
     const eventListeners = new Map<string, ((event: unknown) => void)[]>();
     const childNodes: any[] = [];
+    const mutationRecords = new Set<MockMutationRecord[]>();
 
     const element: Record<string, any> = {
+      ownerDocument: doc,
+      mutationRecords,
       tagName: tagName.toUpperCase(),
+      localName: tagName,
       _id: `mock-${idCounter++}`,
       nodeType: 1, // ELEMENT_NODE
       parentNode: null,
@@ -69,6 +181,9 @@ function createMockDocument() {
 
       setAttribute(name: string, value: string) {
         attributes.set(name, value);
+        for (const records of mutationRecords) {
+          records.push({ attributeName: name });
+        }
       },
       getAttribute(name: string) {
         return attributes.get(name) ?? null;
@@ -76,8 +191,18 @@ function createMockDocument() {
       hasAttribute(name: string) {
         return attributes.has(name);
       },
+      innerHTML: "",
+      getAttributeNames() {
+        return [...attributes.keys()];
+      },
+      get attributes() {
+        return [...attributes].map(([name, value]) => ({ name, value }));
+      },
       removeAttribute(name: string) {
-        attributes.delete(name);
+        if (!attributes.delete(name)) return;
+        for (const records of mutationRecords) {
+          records.push({ attributeName: name });
+        }
       },
       appendChild(child: any) {
         // Remove from current position if already a child (handles move)
@@ -139,6 +264,15 @@ function createMockDocument() {
       },
     };
 
+    Object.setPrototypeOf(
+      element,
+      tagName === "input"
+        ? mockInputPrototype
+        : tagName === "cf-input" && upgrade
+        ? mockCfInputPrototype
+        : mockElementPrototype,
+    );
+
     return element;
   };
 
@@ -151,15 +285,241 @@ function createMockDocument() {
     };
   };
 
-  return {
+  const importNode = (node: Element) => {
+    const copy = createElement(node.localName);
+    for (const name of node.getAttributeNames()) {
+      copy.setAttribute(name, node.getAttribute(name));
+    }
+    return copy;
+  };
+
+  const doc = {
     createElement,
     createTextNode,
-  } as unknown as Document;
+    importNode,
+    implementation: {
+      createHTMLDocument: () => createMockDocument({ upgrade: false }),
+    },
+  };
+  return doc as unknown as Document;
 }
+
+/**
+ * A `setProp` for the applicator that sets a `data-*` key as an attribute, so
+ * that the element's `dataset` holds it, and any other key as a property.
+ */
+const setDataKeysAsAttributes: SetPropHandler = (target, key, value) => {
+  if (
+    key.startsWith("data-") &&
+    isObjectOrArray(target) &&
+    "setAttribute" in target &&
+    typeof target.setAttribute === "function"
+  ) {
+    target.setAttribute(key, String(value));
+    return;
+  }
+  (target as Record<string, unknown>)[key] = value;
+};
 
 describe("DomApplicator", () => {
   describe("instance members", () => {
     describe("applyBatch()", () => {
+      it("removes an ARIA attribute when its property is dropped", () => {
+        const doc = createMockDocument();
+        const applicator = new DomApplicator({
+          document: doc,
+          onEvent: () => {},
+        });
+        applicator.applyBatch({
+          batchId: 1,
+          ops: [{ op: "create-element", nodeId: 1, tagName: "button" }],
+        });
+        const element = applicator.getNode(1) as Element;
+        element.setAttribute("aria-label", "Edit name");
+        applicator.applyBatch({
+          batchId: 2,
+          ops: [{ op: "remove-prop", nodeId: 1, key: "aria-label" }],
+        });
+        expect(element.hasAttribute("aria-label")).toBe(false);
+      });
+      describe("property removal", () => {
+        const observerDescriptor = Object.getOwnPropertyDescriptor(
+          globalThis,
+          "MutationObserver",
+        );
+
+        beforeEach(() => {
+          Object.defineProperty(globalThis, "MutationObserver", {
+            configurable: true,
+            value: MockMutationObserver,
+          });
+        });
+
+        afterEach(() => {
+          if (observerDescriptor) {
+            Object.defineProperty(
+              globalThis,
+              "MutationObserver",
+              observerDescriptor,
+            );
+          } else {
+            Reflect.deleteProperty(globalThis, "MutationObserver");
+          }
+        });
+
+        function removeAfterSetting(
+          tagName: string,
+          attributes: Record<string, string>,
+          props: Record<string, string>,
+          removedKey: string,
+        ): any {
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            onEvent: () => {},
+            onError: (error) => {
+              throw error;
+            },
+          });
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [{ op: "create-element", nodeId: 1, tagName }],
+          });
+          const element = applicator.getNode(1) as any;
+          for (const [name, value] of Object.entries(attributes)) {
+            element.setAttribute(name, value);
+          }
+          applicator.applyBatch({
+            batchId: 2,
+            ops: Object.entries(props).map(([key, value]) => ({
+              op: "set-prop" as const,
+              nodeId: 1,
+              key,
+              value,
+            })),
+          });
+          applicator.applyBatch({
+            batchId: 3,
+            ops: [{ op: "remove-prop", nodeId: 1, key: removedKey }],
+          });
+          return element;
+        }
+
+        it("removes the attribute that a built-in element's property writes", () => {
+          const reflected: Record<string, string> = {
+            title: "title",
+            placeholder: "placeholder",
+            className: "class",
+          };
+          for (const [key, attribute] of Object.entries(reflected)) {
+            const element = removeAfterSetting("input", {}, {
+              title: "Hint",
+              placeholder: "Name",
+              className: "wide",
+            }, key);
+            expect(element[key]).toBe("");
+            expect(element.getAttributeNames().sort()).toStrictEqual(
+              Object.values(reflected).filter((name) => name !== attribute)
+                .sort(),
+            );
+          }
+        });
+
+        it("removes the attribute a property wrote when the value is already the default", () => {
+          const element = removeAfterSetting(
+            "input",
+            {},
+            { title: "", className: "wide" },
+            "title",
+          );
+          expect(element.getAttributeNames()).toStrictEqual(["class"]);
+        });
+
+        it("returns a property that writes no attribute to a new element's value", () => {
+          const element = removeAfterSetting(
+            "input",
+            { type: "text" },
+            { value: "typed" },
+            "value",
+          );
+          expect(element.value).toBe("");
+          expect(element.getAttributeNames()).toStrictEqual(["type"]);
+        });
+
+        it("clears the children that a property wrote", () => {
+          const element = removeAfterSetting(
+            "div",
+            { title: "Hint" },
+            { textContent: "text" },
+            "textContent",
+          );
+          expect(element.textContent).toBe("");
+          expect(element.getAttributeNames()).toStrictEqual(["title"]);
+        });
+
+        it("returns a property that writes no attribute to the default the element's attributes give", () => {
+          const element = removeAfterSetting(
+            "input",
+            { type: "text", value: "default" },
+            { value: "typed" },
+            "value",
+          );
+          expect(element.value).toBe("default");
+          expect(element.getAttributeNames().sort()).toStrictEqual([
+            "type",
+            "value",
+          ]);
+        });
+
+        it("removes the attribute a property writes only on some kinds of element", () => {
+          const element = removeAfterSetting(
+            "input",
+            { type: "checkbox" },
+            { value: "yes", title: "Agree" },
+            "value",
+          );
+          expect(element.value).toBe("on");
+          expect(element.getAttributeNames().sort()).toStrictEqual([
+            "title",
+            "type",
+          ]);
+        });
+
+        it("removes the attribute written by a property a custom element inherits", () => {
+          const element = removeAfterSetting(
+            "cf-input",
+            {},
+            { title: "Hint", placeholder: "Name" },
+            "title",
+          );
+          expect(element.title).toBe("");
+          expect(element.getAttributeNames()).toStrictEqual([]);
+          expect(element.placeholder).toBe("Name");
+        });
+
+        it("sets a property a custom element defines to `undefined`", () => {
+          const element = removeAfterSetting(
+            "cf-input",
+            {},
+            { placeholder: "Name", title: "Hint" },
+            "placeholder",
+          );
+          expect(element.placeholder).toBeUndefined();
+          expect(element.getAttributeNames()).toStrictEqual(["title"]);
+        });
+
+        it("sets an element's own property to `undefined`", () => {
+          const element = removeAfterSetting(
+            "div",
+            { title: "Hint" },
+            { note: "kept by the element" },
+            "note",
+          );
+          expect(Object.hasOwn(element, "note")).toBe(true);
+          expect(element.note).toBeUndefined();
+          expect(element.getAttributeNames()).toStrictEqual(["title"]);
+        });
+      });
+
       describe("create elements", () => {
         it("creates an element from create-element op", () => {
           const doc = createMockDocument();
@@ -672,18 +1032,7 @@ describe("DomApplicator", () => {
             document: doc,
             runtimeClient: createMockRuntimeClient(),
             onEvent: (msg) => events.push(msg),
-            setProp: (target, key, value) => {
-              if (
-                key.startsWith("data-") &&
-                isObjectOrArray(target) &&
-                "setAttribute" in target &&
-                typeof target.setAttribute === "function"
-              ) {
-                target.setAttribute(key, String(value));
-                return;
-              }
-              (target as Record<string, unknown>)[key] = value;
-            },
+            setProp: setDataKeysAsAttributes,
           });
 
           applicator.applyBatch({
@@ -715,18 +1064,7 @@ describe("DomApplicator", () => {
             document: doc,
             runtimeClient: createMockRuntimeClient(),
             onEvent: (msg) => events.push(msg),
-            setProp: (target, key, value) => {
-              if (
-                key.startsWith("data-") &&
-                isObjectOrArray(target) &&
-                "setAttribute" in target &&
-                typeof target.setAttribute === "function"
-              ) {
-                target.setAttribute(key, String(value));
-                return;
-              }
-              (target as Record<string, unknown>)[key] = value;
-            },
+            setProp: setDataKeysAsAttributes,
           });
 
           applicator.applyBatch({
@@ -775,6 +1113,243 @@ describe("DomApplicator", () => {
                 uiAction: "SubmitDirectCommand",
               },
             },
+          });
+        });
+
+        describe("UI provenance of a trusted click on a trusted surface", () => {
+          // A trusted surface vouches for a gesture to the handlers bound on
+          // it or inside it, and to no others. The tree below wraps the
+          // surface in an element of its own with a handler of its own, as a
+          // pattern rendering a trusted surface can, and a click is
+          // dispatched the way a browser dispatches one: to the target and
+          // then to each ancestor in turn.
+          //
+          //   1 div                                      handler 1
+          //     2 section data-ui-pattern,
+          //               data-ui-event-integrity        handler 2
+          //       3 cf-button data-ui-action             handler 3
+          //       4 cf-submit-input data-ui-action       handler 4
+          //
+          // A wrapper may also copy the surface's markers onto its own
+          // element: node 1 then carries `data-ui-pattern`,
+          // `data-ui-event-integrity` and `data-ui-action` with the surface's
+          // values.
+
+          const SURFACE = "TrustedSaveSurface";
+          const ACTION = "TrustedSaveTitle";
+
+          /**
+           * Renders the tree above, each node with a click handler whose id is
+           * the node's own, and node 1 with the surface's markers copied onto
+           * it when `forgedWrapper` is set. Returns the applicator with a
+           * function returning the provenance of the event that reached a
+           * handler, or `undefined` if none did.
+           */
+          const renderWrappedSurface = ({ forgedWrapper = false } = {}) => {
+            const events: DomEventMessage[] = [];
+            const applicator = new DomApplicator({
+              document: createMockDocument(),
+              runtimeClient: createMockRuntimeClient(),
+              onEvent: (msg) => events.push(msg),
+              setProp: setDataKeysAsAttributes,
+            });
+            const forgedMarkers = forgedWrapper
+              ? ([
+                ["data-ui-pattern", SURFACE],
+                ["data-ui-event-integrity", SURFACE],
+                ["data-ui-action", ACTION],
+              ] as const).map(([key, value]) => ({
+                op: "set-prop" as const,
+                nodeId: 1,
+                key,
+                value,
+              }))
+              : [];
+            applicator.applyBatch({
+              batchId: 1,
+              ops: [
+                { op: "create-element", nodeId: 1, tagName: "div" },
+                ...forgedMarkers,
+                { op: "create-element", nodeId: 2, tagName: "section" },
+                {
+                  op: "set-prop",
+                  nodeId: 2,
+                  key: "data-ui-pattern",
+                  value: SURFACE,
+                },
+                {
+                  op: "set-prop",
+                  nodeId: 2,
+                  key: "data-ui-event-integrity",
+                  value: SURFACE,
+                },
+                { op: "create-element", nodeId: 3, tagName: "cf-button" },
+                {
+                  op: "set-prop",
+                  nodeId: 3,
+                  key: "data-ui-action",
+                  value: ACTION,
+                },
+                {
+                  op: "create-element",
+                  nodeId: 4,
+                  tagName: "cf-submit-input",
+                },
+                {
+                  op: "set-prop",
+                  nodeId: 4,
+                  key: "data-ui-action",
+                  value: ACTION,
+                },
+                { op: "insert-child", parentId: 1, childId: 2, beforeId: null },
+                { op: "insert-child", parentId: 2, childId: 3, beforeId: null },
+                { op: "insert-child", parentId: 2, childId: 4, beforeId: null },
+                ...[1, 2, 3, 4].map((nodeId) => ({
+                  op: "set-event" as const,
+                  nodeId,
+                  eventType: "click",
+                  handlerId: nodeId,
+                })),
+              ],
+            });
+            const provenanceFor = (handlerId: number) =>
+              events.find((message) => message.handlerId === handlerId)?.event
+                .provenance;
+            return { applicator, provenanceFor };
+          };
+
+          /**
+           * Dispatches a trusted click to `target` and then to each of its
+           * ancestors. With `withComposedPath`, the event's `composedPath()`
+           * returns `shadowPath` -- the nodes of a component's shadow tree
+           * that the click landed on before reaching its host -- followed by
+           * `target` and its ancestors, as a browser's does.
+           */
+          const clickBubbling = (
+            target: any,
+            { withComposedPath = true, shadowPath = [] as unknown[] } = {},
+          ) => {
+            const ancestors: any[] = [];
+            for (let node = target; node; node = node.parentNode) {
+              ancestors.push(node);
+            }
+            const event = {
+              type: "click",
+              target,
+              isTrusted: true,
+              ...(withComposedPath
+                ? { composedPath: () => [...shadowPath, ...ancestors] }
+                : {}),
+            };
+            for (const node of ancestors) {
+              node.dispatchEvent(event);
+            }
+          };
+
+          for (const withComposedPath of [true, false]) {
+            const how = withComposedPath
+              ? "with a composed path"
+              : "without a composed path";
+
+            describe(how, () => {
+              it("gives a listener on an ancestor outside the surface no UI provenance", () => {
+                const { applicator, provenanceFor } = renderWrappedSurface();
+
+                clickBubbling(applicator.getNode(3), { withComposedPath });
+
+                expect(provenanceFor(1)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                });
+              });
+
+              it("gives a listener on the control the surface's provenance and the control's action", () => {
+                const { applicator, provenanceFor } = renderWrappedSurface();
+
+                clickBubbling(applicator.getNode(3), { withComposedPath });
+
+                expect(provenanceFor(3)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                  ui: {
+                    pattern: SURFACE,
+                    eventIntegrity: [SURFACE],
+                    uiContractDataset: { uiAction: ACTION },
+                  },
+                });
+              });
+
+              it("gives a listener on a wrapper carrying the surface's markers no UI provenance from a click inside the surface", () => {
+                // Read from the wrapper's own element, the markers would
+                // match a contract naming the surface. The click landed in
+                // the real surface below the wrapper, and vouches for no
+                // handler above it.
+
+                const { applicator, provenanceFor } = renderWrappedSurface({
+                  forgedWrapper: true,
+                });
+
+                clickBubbling(applicator.getNode(3), { withComposedPath });
+
+                expect(provenanceFor(1)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                });
+                expect(provenanceFor(3)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                  ui: {
+                    pattern: SURFACE,
+                    eventIntegrity: [SURFACE],
+                    uiContractDataset: { uiAction: ACTION },
+                  },
+                });
+              });
+            });
+          }
+
+          it("gives a listener on the surface element the surface's pattern and labels, and not the action of the control clicked inside it", () => {
+            // `data-ui-action` names the control a handler is bound to. A
+            // listener higher up, delegating for the controls below it, does
+            // not take theirs.
+
+            const { applicator, provenanceFor } = renderWrappedSurface();
+
+            clickBubbling(applicator.getNode(3));
+
+            expect(provenanceFor(2)).toStrictEqual({
+              origin: "dom",
+              trusted: true,
+              ui: { pattern: SURFACE, eventIntegrity: [SURFACE] },
+            });
+          });
+
+          it("gives a listener on a shadow host inside the surface the surface's provenance, and one outside the surface none", () => {
+            // A click on `cf-submit-input`'s submit button lands in its
+            // shadow tree, and reaches the pattern's listener on the host
+            // retargeted to the host.
+
+            const { applicator, provenanceFor } = renderWrappedSurface();
+            const shadowButton = { dataset: { cfButton: "" } };
+            const shadowRoot = {};
+
+            clickBubbling(applicator.getNode(4), {
+              shadowPath: [shadowButton, shadowRoot],
+            });
+
+            expect(provenanceFor(4)).toStrictEqual({
+              origin: "dom",
+              trusted: true,
+              ui: {
+                pattern: SURFACE,
+                eventIntegrity: [SURFACE],
+                uiContractDataset: { uiAction: ACTION },
+              },
+            });
+            expect(provenanceFor(1)).toStrictEqual({
+              origin: "dom",
+              trusted: true,
+            });
           });
         });
 

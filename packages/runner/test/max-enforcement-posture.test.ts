@@ -100,7 +100,7 @@ const seedSource = async (
     id: `cid:${SOURCE_SCHEMA.taggedHashString}`,
     path: [],
   }, { value: SOURCE_SCHEMA.schema });
-  expect((await tx.commit()).error).toBeUndefined();
+  expect((await tx.commit().settled).error).toBeUndefined();
   return source;
 };
 
@@ -209,7 +209,7 @@ describe("max-enforcement CFC posture as one system", () => {
         .filter(([, governance]) => "ungated" in governance)
         .map(([sink]) => sink);
       expect(ungated.sort()).toEqual(
-        ["generateObject", "generateText", "llm", "llmDialog"],
+        ["generateObject", "generateText", "llm", "llmDialog", "sqliteQuery"],
       );
     });
 
@@ -291,7 +291,7 @@ describe("max-enforcement CFC posture as one system", () => {
           () => {},
         );
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeDefined();
         expect(String((result.error as Error).message)).toContain(
           "exceeds ceiling for fetchJson",

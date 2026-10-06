@@ -9,7 +9,7 @@ import {
   serializePatternGraph,
   withAliasBindings,
 } from "../src/builder/to-encodable-form.ts";
-import type { FactoryInput, Pattern } from "../src/builder/types.ts";
+import type { Pattern } from "../src/builder/types.ts";
 import {
   resolveOpPattern,
   resolveStoredPattern,
@@ -146,7 +146,7 @@ describe("refs-only pattern JSON at the boundary", () => {
     // The fixture mirrors that shape rather than being a real pattern: a
     // hand-built one cannot exhibit a bug it has no shape for, so this pins
     // the property and `scripts/ab-harness.ts` measures it against a real
-    // pattern, where the same graph carried 7691 functions across 16 paths.
+    // pattern.
     const fake = {
       argumentSchema: true,
       resultSchema: true,
@@ -195,7 +195,7 @@ describe("refs-only pattern JSON at the boundary", () => {
     expect(Array.isArray((internal as { nodes: unknown }).nodes)).toBe(true);
 
     const viaLegacyAliases = withAliasBindings(
-      compiled as unknown as FactoryInput<unknown>,
+      compiled,
     ) as Record<string, unknown>;
     expect("$patternRef" in viaLegacyAliases).toBe(false);
     expect(Array.isArray(viaLegacyAliases.nodes)).toBe(true);
@@ -260,7 +260,7 @@ describe("resolveOpPattern", () => {
   it("passes a plain stored graph through (no-entry-ref writer)", () => {
     // The stored-keyless remnant path (see stored-pattern-rehydration.test.ts
     // for the end-to-end contract; live keyless ops are minted identities at
-    // instantiation instead — CT-1812).
+    // instantiation instead).
     const graph = { nodes: [], result: {} } as never;
     expect(resolveOpPattern({} as never, graph, "map")).toBe(graph);
   });

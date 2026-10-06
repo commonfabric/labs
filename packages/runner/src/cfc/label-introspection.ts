@@ -1,4 +1,8 @@
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import {
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
@@ -10,7 +14,6 @@ import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
   cfcEntryHasDerivedContainment,
-  isLabelMetadataTemplateEntry,
   labelMetadataFieldIsProtected,
   resolveLabelMetadataTemplateConfidentiality,
 } from "./label-metadata-population.ts";
@@ -68,7 +71,7 @@ import type { CfcMetadata, LabelMapEntry } from "./types.ts";
 export type ConfLabelQuery = {
   atomType?: string;
   caveatKind?: string;
-  source?: unknown;
+  source?: FabricValue;
   resourceClass?: string;
   policyName?: string;
   originUri?: string;
@@ -147,16 +150,17 @@ export type ConfLabelQueryEvaluation = {
 /**
  * Parse the application-facing payload pointer of §4.6.4.1 into the canonical
  * entry path. `/body` addresses the payload label stored at the `/value/body`
- * envelope entry, whose labelMap path is the canonical (value-stripped)
- * `["body"]`; an explicit `/value` prefix is accepted as the envelope
- * spelling of the same path (mirroring `canonicalizeLogicalPath`).
+ * envelope entry, whose labelMap path is the logical `["body"]`. An explicit
+ * `/value` prefix is accepted as the envelope spelling of the same path, so
+ * `/value/body` names payload `body` as well. A payload field literally named
+ * `value` or `cfc` at the root is reached through that envelope spelling:
+ * `/value/value/x` names payload `value.x`, and `/value/cfc` names payload
+ * `cfc`.
  *
  * Returns `undefined` — the caller collapses to `notAvailable` — for the
  * envelope metadata subtree (`/cfc/...`): labels attached to label metadata
  * are runtime-enforced metadata, not introspectable payload (the §4.6.4.1
- * first-layer rule). A payload field literally named `cfc` at the root is
- * consequently not addressable through this API; the collision with the
- * metadata sibling fails closed.
+ * first-layer rule).
  */
 export const parseConfLabelTargetPath = (
   pointer: string,
@@ -167,11 +171,12 @@ export const parseConfLabelTargetPath = (
   } catch {
     return undefined;
   }
-  const canonical = canonicalizeLogicalPath(segments);
-  if (canonical[0] === "cfc") {
+  if (segments[0] === "cfc") {
     return undefined;
   }
-  return canonical;
+  return canonicalizeLogicalPath(
+    segments[0] === "value" ? segments.slice(1) : segments,
+  );
 };
 
 // The §4.6.4.2 population rule: persisted templates as the carrier, the
@@ -191,8 +196,8 @@ type FieldObservation = readonly unknown[] | undefined;
  * 1. Containment gate first (spec §4.6.4.2, merged via specs#14): only
  *    derived-containment entries (`derived`/`structure` — the §8.9.2
  *    conservative join) have observable source-bearing fields at all.
- *    Declared/authored, link, external-ingest and legacy entries stay
- *    fail-closed UNOBSERVABLE — and a persisted template at the same path
+ *    Declared/authored, link, minted, external-ingest and legacy entries
+ *    stay fail-closed UNOBSERVABLE — and a persisted template at the same path
  *    never re-opens them: the per-path metadata addressing conflates the
  *    entries stored at one payload path, so a template minted for a derived
  *    sibling must not leak an observation label onto a declared entry's
@@ -208,14 +213,14 @@ type FieldObservation = readonly unknown[] | undefined;
  */
 const protectedFieldObservationLabel = (
   entry: LabelMapEntry,
-  entries: readonly LabelMapEntry[],
+  templates: readonly LabelMapEntry[],
   concretePath: readonly string[],
 ): FieldObservation => {
   if (!cfcEntryHasDerivedContainment(entry)) {
     return undefined;
   }
   const template = resolveLabelMetadataTemplateConfidentiality(
-    entries,
+    templates,
     concretePath,
   );
   if (template !== undefined) {
@@ -246,11 +251,11 @@ const fieldObservationLabel = (
   entry: LabelMapEntry,
   atom: unknown,
   field: string,
-  entries: readonly LabelMapEntry[],
+  templates: readonly LabelMapEntry[],
   concretePath: readonly string[],
 ): FieldObservation =>
   labelMetadataFieldIsProtected(atom, field)
-    ? protectedFieldObservationLabel(entry, entries, concretePath)
+    ? protectedFieldObservationLabel(entry, templates, concretePath)
     : [];
 
 /**
@@ -279,7 +284,7 @@ const fieldObservationLabel = (
 const atomProjectionLabel = (
   entry: LabelMapEntry,
   atom: unknown,
-  entries: readonly LabelMapEntry[],
+  templates: readonly LabelMapEntry[],
   alternativePath: readonly string[],
 ): FieldObservation => {
   const consumed: unknown[] = [];
@@ -299,9 +304,9 @@ const atomProjectionLabel = (
     if (isCfcFieldCommitment(value)) {
       // A bare commitment marker outside a classified field position (it
       // would have been consumed AS the field value below): protected.
-      const label = protectedFieldObservationLabel(entry, entries, valuePath);
+      const label = protectedFieldObservationLabel(entry, templates, valuePath);
       if (label === undefined) return false;
-      consumed.push(...label);
+      for (const atom of label) consumed.push(atom);
       return true;
     }
     // A record carrying a string `type` or `kind` is an atom for
@@ -321,14 +326,14 @@ const atomProjectionLabel = (
         entry,
         context,
         key,
-        entries,
+        templates,
         fieldPath,
       );
       if (observation === undefined) {
         return false;
       }
       if (observation.length > 0) {
-        consumed.push(...observation);
+        for (const atom of observation) consumed.push(atom);
         continue;
       }
       // Public field: recurse so a nested atom inside it (a `Caveat.by`
@@ -347,11 +352,11 @@ const atomProjectionLabel = (
   }
   if (consumed.length > 0) {
     const template = resolveLabelMetadataTemplateConfidentiality(
-      entries,
+      templates,
       alternativePath,
     );
     if (template !== undefined) {
-      consumed.push(...template);
+      for (const atom of template) consumed.push(atom);
     }
   }
   return consumed;
@@ -435,6 +440,9 @@ export const evaluateConfLabelQuery = (
     .map((key) => ({ ...QUERY_PREDICATES[key], expected: query[key] }));
   const pointer = encodePointer(targetPath);
   const entries = metadata.labelMap.entries;
+  // The label-metadata templates, which a decoded envelope keeps apart from
+  // its payload entries; they label observations of the metadata only.
+  const templates = metadata.labelMap.documentEntries ?? [];
   // The concrete metadata subtree of this target (§4.6.4.1 addressing):
   // consultation paths extend it with the stored clause/alternative indices,
   // and template resolution reads at those concrete paths.
@@ -454,7 +462,7 @@ export const evaluateConfLabelQuery = (
     if (atoms.length === 0) {
       return;
     }
-    consumed.push(...atoms);
+    for (const atom of atoms) consumed.push(atom);
     consumedObservations.push({
       path,
       confidentiality: uniqueCfcAtoms([...atoms]),
@@ -463,13 +471,6 @@ export const evaluateConfLabelQuery = (
   const atoms: LabelAtomProjection[] = [];
   let clauseIndex = 0;
   for (const entry of entries) {
-    // Label-metadata population templates are the OBSERVATION-LABEL carrier
-    // for the payload label, not payload clauses: they never enumerate as
-    // atoms (a `*`-bearing target path could otherwise wildcard-match their
-    // `cfc`-prefixed entry paths).
-    if (isLabelMetadataTemplateEntry(entry)) {
-      continue;
-    }
     if (!entryPathMatchesTarget(entry, targetPath)) {
       continue;
     }
@@ -527,7 +528,7 @@ export const evaluateConfLabelQuery = (
             entry,
             atom,
             field,
-            entries,
+            templates,
             fieldPath,
           );
           if (observation === undefined) {
@@ -550,7 +551,7 @@ export const evaluateConfLabelQuery = (
           consumeAt(fieldPath, observation);
           if (
             !commitmentAwareEquals(
-              (atom as Record<string, unknown>)[field],
+              isFabricPlainObject(atom) ? atom[field] : undefined,
               expected,
             )
           ) {
@@ -564,7 +565,7 @@ export const evaluateConfLabelQuery = (
         const projection = atomProjectionLabel(
           entry,
           atom,
-          entries,
+          templates,
           alternativePath,
         );
         if (projection === undefined) {
@@ -656,17 +657,12 @@ export const inspectStoredConfLabel = (
     // Unobservable target — same constant as missing metadata below.
     return CONF_LABEL_NOT_AVAILABLE;
   }
+  // A target's link path is a payload path, so a target cell at a payload
+  // field named `cfc` names that field, never the envelope's `cfc` member.
   const payloadPath = [
     ...canonicalizeLogicalPath(target.path),
     ...parsed,
   ];
-  if (payloadPath[0] === "cfc") {
-    // The RESOLVED target path lands in the envelope metadata subtree: the
-    // §4.6.4.1 first-layer rule refuses labels-of-labels however addressed —
-    // `parseConfLabelTargetPath` catches the query pointer; this catches a
-    // target cell whose own path collides with the metadata sibling.
-    return CONF_LABEL_NOT_AVAILABLE;
-  }
   const { result, consumedConfidentiality, consumedObservations } =
     evaluateConfLabelQuery(
       metadata,

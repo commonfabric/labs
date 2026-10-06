@@ -1,3 +1,17 @@
+/**
+ * Own-write echo, end to end over a LIVE in-process server: a session's own
+ * accepted patch-produced heads ride its covering frame as full post-apply
+ * documents. The risk this suite pins is DOUBLE-APPLY — the echoed base swap
+ * must not compose with a still-standing pending overlay — and the
+ * notification contract: an echo fully shadowed by the write it confirms must
+ * not re-notify the writer.
+ *
+ * Fan-out is gated manually and flushed explicitly, so which commits share a
+ * fan-out batch — and therefore whether the dirty-origin survives as this
+ * session's own — is deterministic, immune to any clock advancing a held
+ * timer.
+ */
+
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -6,18 +20,6 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-
-// Own-write echo (CT-1965), end to end over a LIVE in-process server: a
-// session's own accepted patch-produced heads ride its covering frame as full
-// post-apply documents. The risk this suite pins is DOUBLE-APPLY — the echoed
-// base swap must not compose with a still-standing pending overlay — and the
-// notification contract: an echo fully shadowed by the write it confirms must
-// not re-notify the writer.
-//
-// Fan-out is gated manually and flushed explicitly, so which commits share a
-// fan-out batch — and therefore whether the dirty-origin survives as this
-// session's own — is deterministic, immune to any clock advancing a held
-// timer.
 
 const signer = await Identity.fromPassphrase("own-write-echo-live");
 const space = signer.did();
@@ -66,7 +68,7 @@ describe("own-write echo (live)", () => {
         tx0,
       );
       seedCell.set(["seed"]);
-      await tx0.commit({ resolveAt: "verdict" });
+      await tx0.commit({ holdSyncedUntilCovered: false }).verdict;
       await server.flushSessions([space]);
       await clock.settle();
       await rt.storageManager.synced();
@@ -85,7 +87,7 @@ describe("own-write echo (live)", () => {
       const txA = rt.edit();
       rt.getCell<string[]>(space, "echo-once-list", stringListSchema, txA)
         .push("A");
-      await txA.commit({ resolveAt: "verdict" });
+      await txA.commit({ holdSyncedUntilCovered: false }).verdict;
       // Let the optimistic notification land before baselining the count —
       // it rides a scheduler turn, not the commit await.
       await rt.idle();
@@ -126,7 +128,7 @@ describe("own-write echo (live)", () => {
       const tx0 = rt1.edit();
       rt1.getCell<string[]>(space, "echo-merge-list", stringListSchema, tx0)
         .set(["seed"]);
-      await tx0.commit({ resolveAt: "verdict" });
+      await tx0.commit({ holdSyncedUntilCovered: false }).verdict;
       await server.flushSessions([space]);
       await clock.settle();
       await rt1.storageManager.synced();
@@ -145,7 +147,7 @@ describe("own-write echo (live)", () => {
       const txA = rt1.edit();
       rt1.getCell<string[]>(space, "echo-merge-list", stringListSchema, txA)
         .push("A");
-      await txA.commit({ resolveAt: "verdict" });
+      await txA.commit({ holdSyncedUntilCovered: false }).verdict;
       // The premise itself, asserted: the manual gate held "A" back. A
       // server whose option forwarding broke (any timed cadence) delivers
       // here and fails this, not just the merge assertions below.
@@ -154,7 +156,7 @@ describe("own-write echo (live)", () => {
       const txB = rt2.edit();
       rt2.getCell<string[]>(space, "echo-merge-list", stringListSchema, txB)
         .push("B");
-      await txB.commit({ resolveAt: "verdict" });
+      await txB.commit({ holdSyncedUntilCovered: false }).verdict;
 
       await server.flushSessions([space]);
       await clock.settle();

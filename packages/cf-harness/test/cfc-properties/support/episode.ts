@@ -211,9 +211,9 @@ export const createLabeledFabric = async (
     cfcFlowLabels: "persist",
   });
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: signer,
-      spaceName: `cfc-property-${cfcEnforcementMode}-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate()).did(),
     }),
     runtime,
   );
@@ -264,7 +264,7 @@ export const seedLabeledSecret = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return createLLMFriendlyLink(sourceCell.getAsNormalizedFullLink(), space);
 };
 

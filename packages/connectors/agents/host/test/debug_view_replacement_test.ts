@@ -10,7 +10,7 @@ import {
   agentOwnerSchema,
   cellHasOwnerConfidentiality,
 } from "@commonfabric/agents-connector/fabric-graph";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -26,11 +26,12 @@ import {
   SharedServerStorageManager,
   sourceDescriptor,
 } from "./debug_view_support.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug replacement stops every superseded local runner", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-stop-failures-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -53,7 +54,7 @@ Deno.test("debug replacement stops every superseded local runner", async () => {
     );
     await registration.sync();
     const addRetiredResult = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "commonfabric.agents-connector",
       });
@@ -123,8 +124,8 @@ Deno.test("debug replacement stops every superseded local runner", async () => {
 
 Deno.test("debug replacement preserves a piece owned by another runtime", async () => {
   const server = newSharedServer();
-  const spaceName = `debug-cross-runtime-replacement-${crypto.randomUUID()}`;
-  const firstSession = await createSession({ identity, spaceName });
+  const spaceDid = (await Identity.generate()).did();
+  const firstSession = createSession({ identity, spaceDid });
   const firstStorage = SharedServerStorageManager.connectTo(server, {
     as: firstSession.as,
   });
@@ -147,7 +148,7 @@ Deno.test("debug replacement preserves a piece owned by another runtime", async 
     );
     await firstStorage.synced();
 
-    const secondSession = await createSession({ identity, spaceName });
+    const secondSession = createSession({ identity, spaceDid });
     const secondStorage = SharedServerStorageManager.connectTo(server, {
       as: secondSession.as,
     });

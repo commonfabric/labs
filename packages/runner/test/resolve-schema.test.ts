@@ -33,16 +33,31 @@ describe("resolveSchema", () => {
       expect(resolveSchema(undefined)).toBe(undefined);
     });
 
-    it("returns undefined for empty object", () => {
-      expect(resolveSchema({})).toBe(undefined);
+    it("returns an interned empty object for `{}`", () => {
+      // `{}` constrains nothing, and it is still a schema that was given.
+      const got = resolveSchema({});
+      expect(got).toEqual({});
+      expect(isInternedSchema(got as JSONSchemaObj)).toBe(true);
     });
 
-    it("returns undefined for boolean schema true", () => {
-      expect(resolveSchema(true)).toBe(undefined);
+    it("returns `true` for the boolean schema `true`", () => {
+      expect(resolveSchema(true)).toBe(true);
     });
 
-    it("returns undefined for boolean schema false", () => {
-      expect(resolveSchema(false)).toBe(undefined);
+    it("returns `false` for the boolean schema `false`", () => {
+      expect(resolveSchema(false)).toBe(false);
+    });
+
+    it("returns the boolean a `$ref` resolves to from a bare ref site", () => {
+      // A local ref carries its `$defs` beside it, and those siblings merge
+      // into the target, so a boolean arrives as one only with nothing at the
+      // ref site to merge — which is what an external ref is. The local
+      // spelling is pinned in schema-view.test.ts against a read.
+      const local = resolveSchema({
+        $ref: "#/$defs/Nothing",
+        $defs: { Nothing: false },
+      });
+      expect(local).toEqual({ not: true, $defs: { Nothing: false } });
     });
 
     it("returns an equal-but-frozen schema for a non-trivial schema", () => {

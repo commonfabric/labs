@@ -53,7 +53,7 @@ describe("scoped-default-writable", () => {
       );
       const seed = runtime.edit();
       raw.withTx(seed).set({});
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const shaped = raw.asSchema(countSchema(scope));
       const whole = shaped.get().count!;
@@ -71,7 +71,7 @@ describe("scoped-default-writable", () => {
 
       const write = runtime.edit();
       projected.withTx(write).set(7);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       expect(runtime.getCellFromLink(address).get()).toBe(7);
       expect(shaped.key("count").get()!.get()).toBe(7);
       expect(raw.key("count").getRaw()).toBeUndefined();
@@ -84,7 +84,7 @@ describe("scoped-default-writable", () => {
       );
       const seed = runtime.edit();
       raw.withTx(seed).set({ count: 4 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const shaped = raw.asSchema(countSchema(scope));
       const projected = shaped.key("count").get()!;
@@ -97,7 +97,7 @@ describe("scoped-default-writable", () => {
       expect(projected.get()).toBe(4);
       const write = runtime.edit();
       projected.withTx(write).set(8);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       expect(raw.key("count").get()).toBe(8);
       expect(
         runtime.getCellFromLink({
@@ -115,7 +115,7 @@ describe("scoped-default-writable", () => {
       );
       const seed = runtime.edit();
       raw.withTx(seed).set({ count: undefined });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       expect(Object.hasOwn(raw.get(), "count")).toBe(true);
 
       const shaped = raw.asSchema(countSchema(scope));
@@ -125,7 +125,7 @@ describe("scoped-default-writable", () => {
       expect(projected.get()).toBe(0);
       const write = runtime.edit();
       projected.withTx(write).set(8);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       expect(raw.key("count").get()).toBe(8);
       expect(
         runtime.getCell(
@@ -146,7 +146,7 @@ describe("scoped-default-writable", () => {
       );
       const seed = runtime.edit();
       raw.withTx(seed).set({});
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const holder = runtime.edit();
       const projected = raw.withTx(holder).asSchema(countSchema(scope))
         .key("count").get()!;
@@ -227,7 +227,7 @@ describe("scoped-default-writable", () => {
             ? target.getAsWriteRedirectLink()
             : target.getAsLink(),
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const projected = raw.asSchema(countSchema(scope)).key("count").get()!;
         expect(projected.getAsNormalizedFullLink()).toMatchObject({
@@ -237,7 +237,7 @@ describe("scoped-default-writable", () => {
         });
         const write = runtime.edit();
         projected.withTx(write).set(9);
-        expect((await write.commit()).error).toBeUndefined();
+        expect((await write.commit().settled).error).toBeUndefined();
         expect(target.get()).toBe(9);
         expect(parseLink(raw.key("count").getRaw(), raw.key("count")))
           .toMatchObject({
@@ -265,7 +265,7 @@ describe("scoped-default-writable", () => {
       const seed = runtime.edit();
       target.withTx(seed).set({});
       raw.withTx(seed).set(target);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const projected = raw.asSchema(countSchema(scope)).key("count").get()!;
       expect(projected.getAsNormalizedFullLink()).toMatchObject({
@@ -275,7 +275,7 @@ describe("scoped-default-writable", () => {
       });
       const write = runtime.edit();
       projected.withTx(write).set(6);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       expect(
         runtime.getCellFromLink({
           ...target.getAsNormalizedFullLink(),
@@ -292,7 +292,7 @@ describe("scoped-default-writable", () => {
     const raw = runtime.getCell<Record<string, unknown>>(space, "pending-link");
     const seed = runtime.edit();
     raw.withTx(seed).set(target);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const projected = raw.asSchema(countSchema("user")).key("count").get()!;
     expect(projected.getAsNormalizedFullLink()).toMatchObject({
@@ -311,7 +311,7 @@ describe("scoped-default-writable", () => {
     const seed = runtime.edit();
     target.withTx(seed).set({});
     raw.withTx(seed).set(target);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const projected = raw.asSchema(countSchema("user")).key("count").get()!;
     expect(projected.getAsNormalizedFullLink().id.startsWith("data:")).toBe(
@@ -325,7 +325,7 @@ describe("scoped-default-writable", () => {
     const raw = runtime.getCell<Record<string, unknown>>(space, "arriving");
     const seed = runtime.edit();
     raw.withTx(seed).set({});
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const scopes: CellScope[] = [];
     const cancel = raw.asSchema(countSchema("user")).key("count").sink(
@@ -338,7 +338,7 @@ describe("scoped-default-writable", () => {
       expect(scopes.at(-1)).toBe("user");
       const write = runtime.edit();
       raw.withTx(write).key("count").set(3);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(scopes.at(-1)).toBe("space");
     } finally {
@@ -351,7 +351,7 @@ describe("scoped-default-writable", () => {
       const raw = runtime.getCell<Record<string, unknown>>(space, "concurrent");
       const seed = runtime.edit();
       raw.withTx(seed).set({ count: 4 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const holder = runtime.edit();
       const projected: Cell<number> = raw.withTx(holder)

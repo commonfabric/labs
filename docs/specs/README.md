@@ -18,6 +18,8 @@ decision is reversed or superseded).
 
 ## Index
 
+- [Protected initialization](cfc-protected-initialization.md) — transaction-scoped initialization of protected cells, new defaulted fields, and references a collection builtin hands a sub-pattern
+
 ### Addressing and navigation
 
 - [Random space identities](random-space-identities.md) (proposed; active
@@ -67,6 +69,13 @@ decision is reversed or superseded).
 
 ### Contextual flow control and security
 
+Contextual Flow Control is specified in `commonfabric/specs` under `cfc/`. The
+documents here describe how this runtime arranges what that specification
+requires, and
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+is the procedure for changing either. The change list below is closed to new
+entries; a new gap is filed as a specs pull request.
+
 - [CFC commit preparation](cfc-commit-preparation.md)
 - [Content-addressed CFC labels](content-addressed-cfc-labels.md)
 - [CFC enforcement mode matrix](cfc-enforcement-matrix.md)
@@ -77,11 +86,14 @@ decision is reversed or superseded).
 - [Label-metadata confidentiality](cfc-label-metadata-confidentiality.md)
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
+- [Sealed custody](cfc-custody-seal.md)
+- [Reviewed intents](cfc-reviewed-intent.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)
 - [The stored CFC envelope](cfc-stored-envelope.md)
 - [Template population](cfc-template-population.md)
+- [Input-witnessed `TransformedBy`](cfc-transformed-by-input-witnesses.md)
 - [Value-level provenance](cfc-value-level-provenance.md)
 - [Per-write read-prefix provenance](cfc-write-prefix-provenance.md)
 - [Write-destination reads](cfc-write-destination-reads.md)
@@ -92,3 +104,10 @@ decision is reversed or superseded).
 
 - [Shared profile space](shared-profile-space.md)
 - [Shared-profile participant rosters](shared-profile-rosters.md)
+
+### Chat
+
+- [FabriChat](fabrichat/README.md) (implemented, with the departures its
+  README lists): a room per conversation, a
+  per-user manager, and placements and adapters that show rooms in other
+  spaces

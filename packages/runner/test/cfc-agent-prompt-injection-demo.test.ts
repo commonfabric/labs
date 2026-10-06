@@ -19,6 +19,7 @@ import { createLLMFriendlyLink } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { waitForLlmMessages } from "./support/llm-result.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase(
   "cfc agent prompt injection demo drive",
@@ -168,7 +169,7 @@ async function setupDemoAgent(
   // §2): the legit recipient reaches sendMail as a link to THIS cell, never
   // as model-emitted text.
   const seedTx = runtime.edit();
-  seedTx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(seedTx, {
     kind: "builtin",
     builtinId: AGENT_KERNEL_NAME,
   });
@@ -189,7 +190,7 @@ async function setupDemoAgent(
   );
   recipientCell.set(USER_EMAIL_RECIPIENT);
   seedTx.prepareCfc();
-  expect((await seedTx.commit()).ok).toBeDefined();
+  expect((await seedTx.commit().settled).ok).toBeDefined();
   await runtime.idle();
   const linkPath = createLLMFriendlyLink(
     recipientCell.getAsNormalizedFullLink(),
@@ -357,7 +358,7 @@ async function setupDemoAgent(
   );
   const result = runtime.run(tx, testPattern, {}, resultCell);
   runtime.prepareTxForCommit(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   const dispose = async () => {

@@ -10,11 +10,13 @@ import {
   parseCheckArgs,
   readRecords,
   report,
+  USAGE,
   UsageError,
   workflowRecords,
 } from "./check-test-topology.ts";
 import { AliasResolver } from "@commonfabric/test-support/records";
 import type { Suite } from "./test-topology/suite.ts";
+import { loadTopology } from "./test-topology.ts";
 
 /** A suite holding exactly what a case describes. */
 function suite(partial: Partial<Suite> & { id: string }): Suite {
@@ -23,6 +25,7 @@ function suite(partial: Partial<Suite> & { id: string }): Suite {
     needs: ["deno"],
     units: [],
     unavailable: [],
+    whole: [],
     locate: () => undefined,
     command: () => Promise.resolve([]),
     ...partial,
@@ -52,6 +55,22 @@ describe("the tree half of the drift guard", () => {
       suite({ id: "workspace-unit", units: ["packages/bakery"] }),
     ];
     expect(checkTree(suites, ["packages/bakery/glaze.test.ts"])).toEqual([]);
+  });
+
+  it("reads no unit of a suite that maps changes itself as a directory", () => {
+    // A type-check scope named after the top-level directory it checks
+    // runs none of the tests in that directory.
+    const suites = [
+      suite({
+        id: "typecheck",
+        units: ["tasks"],
+        unitsForChange: () => ["tasks"],
+      }),
+    ];
+    const findings = checkTree(suites, ["tasks/glaze.test.ts"]);
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "tasks/glaze.test.ts is claimed by no suite",
+    ]);
   });
 
   it("lets a default suite and a variant suite claim one file", () => {
@@ -198,6 +217,95 @@ describe("the store half of the drift guard", () => {
     expect(findings[0]!.message).toContain("never recorded");
   });
 
+  it("names the job and the file a failing identity came from", () => {
+    // The identity says what disagreed. Acting on it means finding the
+    // thing that wrote it, and a reader has neither the artifact nor the
+    // source unless the finding carries them.
+    const findings = checkStore([bakery], [{
+      test: { k: "unit", s: "bakery", n: "icing > sets" },
+      file: "packages/bakery/icing.test.ts",
+      commit: HERE,
+      from: "test-records-test-3-a1",
+    }], HERE);
+    expect(
+      findings.filter((finding) => finding.fails).map((finding) =>
+        finding.message
+      ),
+    ).toEqual([
+      'no suite claims the recorded identity ["unit","bakery","icing > ' +
+      'sets"], recorded by test-records-test-3-a1 from ' +
+      "packages/bakery/icing.test.ts",
+    ]);
+  });
+
+  it("says a test naming no file may share its name with another", () => {
+    // Two files in one run registering one name leave its records naming
+    // neither file, and a suite of files cannot then find it.
+    const findings = checkStore([bakery], [{
+      test: { k: "unit", s: "bakery", n: "icing > sets" },
+      commit: HERE,
+      from: "test-records-test-3-a1",
+    }], HERE);
+    expect(
+      findings.filter((finding) => finding.fails).map((finding) =>
+        finding.message
+      ),
+    ).toEqual([
+      'no suite claims the recorded identity ["unit","bakery","icing > ' +
+      'sets"], recorded by test-records-test-3-a1. It names no file, which ' +
+      "is what a test comes to when two files in one run register tests of " +
+      "its name, among other ways",
+    ]);
+  });
+
+  it("says what it knows when a failing identity names less", () => {
+    // A record read from a path given directly carries no artifact, and
+    // one a suite locates by name carries no file. The finding says
+    // whichever it has and reads as a sentence either way.
+    const gates = suite({
+      id: "repo-gates",
+      recordSurfaces: [{ kind: "gate", scope: "repo" }],
+      units: ["deno-fmt"],
+    });
+    const findings = checkStore([gates], [{
+      test: { k: "gate", s: "repo", n: "a gate nobody declares" },
+      commit: HERE,
+      from: "test-records-check-a1",
+    }], HERE);
+    expect(
+      findings.filter((finding) => finding.fails).map((finding) =>
+        finding.message
+      ),
+    ).toEqual([
+      'no suite claims the recorded identity ["gate","repo","a gate nobody ' +
+      'declares"], recorded by test-records-check-a1',
+    ]);
+  });
+
+  it("names which artifact carried a commit that is not this tree's", () => {
+    // Two artifacts of one download are two jobs. Which of them is from
+    // another build is what somebody has to go and look at.
+    const findings = checkStore([bakery], [
+      {
+        test: { k: "unit", s: "bakery", n: "glaze > sets" },
+        file: "packages/bakery/test/glaze.test.ts",
+        commit: HERE,
+        from: "test-records-test-1-a1",
+      },
+      {
+        test: { k: "unit", s: "bakery", n: "glaze > clears" },
+        commit: "9a8b7c6d",
+        from: "test-records-test-2-a1",
+      },
+      { test: { k: "unit", s: "bakery", n: "glaze > melts" }, from: "stray" },
+    ], HERE);
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "the records name 9a8b7c6d (test-records-test-2-a1), no commit at " +
+      `all from stray and this tree is ${HERE}: the store half judges a ` +
+      "tree by the records that tree produced",
+    ]);
+  });
+
   it("refuses records from another commit rather than judging them", () => {
     // The change between the two commits deleted the test, so this tree
     // has no unit for an identity that run recorded. Reading the two as
@@ -249,7 +357,7 @@ describe("the store half of the drift guard", () => {
 });
 
 describe("what the tree half looks at", () => {
-  /** A tree holding the files a case names. */
+  /** A repository holding the files a case names. */
   async function tree(files: readonly string[]): Promise<string> {
     const root = await Deno.makeTempDir({ prefix: "surfaces-" });
     for (const file of files) {
@@ -257,6 +365,10 @@ describe("what the tree half looks at", () => {
       await Deno.mkdir(at.slice(0, at.lastIndexOf("/")), { recursive: true });
       await Deno.writeTextFile(at, "");
     }
+    const init = await new Deno.Command("git", {
+      args: ["-C", root, "init", "--quiet"],
+    }).output();
+    expect(init.code).toBe(0);
     return root;
   }
 
@@ -294,15 +406,20 @@ describe("what the tree half looks at", () => {
     }
   });
 
-  it("never descends into the directories the walk is told to skip", async () => {
-    // These hold test files; what keeps them out is their names.
+  it("finds a test anywhere in the repository and nowhere it ignores", async () => {
     const root = await tree([
+      ".claude/scripts/hook.test.ts",
+      ".claude/worktrees/copy/packages/oven/test/c.test.ts",
       "packages/oven/node_modules/dep/a.test.ts",
-      "packages/oven/dist/b.test.ts",
       "packages/oven/test/c.test.ts",
     ]);
     try {
+      await Deno.writeTextFile(
+        `${root}/.gitignore`,
+        ".claude/worktrees/\nnode_modules/\n",
+      );
       expect(await candidateSurfaces(root)).toEqual([
+        ".claude/scripts/hook.test.ts",
         "packages/oven/test/c.test.ts",
       ]);
     } finally {
@@ -318,6 +435,42 @@ describe("what the tree half looks at", () => {
     });
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("no longer holds it");
+  });
+
+  it("accepts everything under a listed directory, and nothing beside it", () => {
+    const findings = checkTree(
+      [],
+      [
+        "oven/fixtures/a.test.tsx",
+        "oven/fixtures/deep/b.test.tsx",
+        "oven/c.test.ts",
+      ],
+      { fixtures: [{ path: "oven/fixtures/", reason: "a test drives them" }] },
+    );
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "oven/c.test.ts is claimed by no suite",
+    ]);
+  });
+
+  it("holds a listed directory to still holding something", () => {
+    const findings = checkTree([], ["oven/c.test.ts"], {
+      fixtures: [{ path: "oven/fixtures/", reason: "a test drives them" }],
+    });
+    expect(findings.map((finding) => finding.message)).toContain(
+      "oven/fixtures/ is listed as a fixture and the tree no longer holds it",
+    );
+  });
+
+  it("holds a listed directory to holding nothing a suite claims", () => {
+    const claimed = suite({
+      id: "workspace-unit",
+      units: ["oven/fixtures/a.test.ts"],
+    });
+    const findings = checkTree([claimed], ["oven/fixtures/a.test.ts"], {
+      fixtures: [{ path: "oven/fixtures/", reason: "a test drives them" }],
+    });
+    expect(findings.map((finding) => finding.fails)).toEqual([true]);
+    expect(findings[0]!.message).toContain("still listed as a fixture");
   });
 
   it("holds a listed fixture to still being unclaimed", () => {
@@ -346,33 +499,36 @@ describe("the workflow half of the drift guard", () => {
     return { test: { k, s, n }, where: ".github/workflows/deno.yml" };
   }
 
-  it("passes a step exactly one suite claims", () => {
-    const findings = checkWorkflows([gates], [
-      step("gate", "repo", "check-icing"),
-    ]);
-    expect(findings).toEqual([]);
+  it("finds no step recording by hand in this repository's workflows", async () => {
+    // The lanes run every test and gate the topology declares, so the
+    // workflows this repository ships record nothing of their own.
+    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+    const suites = await loadTopology(root);
+    expect(checkWorkflows(suites, await workflowRecords(root))).toEqual([]);
   });
 
   it("fails a step no suite claims", () => {
-    // A gate wired into a job and into no suite runs while its step
-    // stands and stops when a lane takes over the job.
+    // A gate wired into a job and into no suite is one no lane will run.
     const findings = checkWorkflows([gates], [
       step("gate", "repo", "check-glaze"),
     ]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain(
-      'no suite claims ["gate","repo","check-glaze"], which ' +
-        ".github/workflows/deno.yml records",
+      '.github/workflows/deno.yml records ["gate","repo","check-glaze"] ' +
+        "by hand, and no suite claims it",
     );
   });
 
-  it("fails a step two suites claim", () => {
-    const findings = checkWorkflows(
-      [gates, { ...gates, id: "repo-gates" }],
-      [step("gate", "repo", "check-icing")],
-    );
+  it("fails a step a suite already runs in the lanes", () => {
+    // The lanes run the gate already, so the step would record it twice
+    // against one commit.
+    const findings = checkWorkflows([gates], [
+      step("gate", "repo", "check-icing"),
+    ]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
-    expect(findings[0]!.message).toContain("both claim");
+    expect(findings[0]!.message).toContain(
+      "which repo-checks already runs in the lanes",
+    );
   });
 
   it("counts one identity once, however many steps write it", () => {
@@ -765,6 +921,225 @@ describe("what the guard declines to fail on", () => {
   });
 });
 
+describe("reading a run's gathered artifacts", () => {
+  /** One downloaded artifact: what a job gathered, and what it knew. */
+  async function artifact(
+    root: string,
+    name: string,
+    facts: unknown,
+    names: readonly string[],
+  ): Promise<void> {
+    const dir = `${root}/${name}`;
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(
+      `${dir}/records.ndjson`,
+      names.map((n) =>
+        JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "oven", n },
+          outcome: "pass",
+          durationMs: 1,
+        })
+      ).join("\n") + "\n",
+    );
+    if (facts !== undefined) {
+      await Deno.writeTextFile(`${dir}/job.json`, JSON.stringify(facts));
+    }
+  }
+
+  it("reports every unclaimed identity of a run holding half a million records", async () => {
+    // A lane's artifact holds a record for every test the lane ran, and
+    // a mapping gone wrong leaves each of those unclaimed. Both are more
+    // than one function call can take as arguments.
+    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+    const dir = await Deno.makeTempDir({ prefix: "large-" });
+    const count = 500_000;
+    try {
+      await artifact(
+        dir,
+        "test-records-lane",
+        { job: "Lane", commit: "c0ffee" },
+        Array.from({ length: count }, (_, at) => `bakes ${at}`),
+      );
+      const { findings } = await check({
+        root,
+        store: { records: [dir], commit: "c0ffee" },
+      });
+      const unclaimed = findings.filter((finding) =>
+        finding.fails && finding.message.startsWith("no suite claims")
+      );
+      expect(unclaimed.length).toBe(count);
+      expect(unclaimed.at(-1)?.message).toContain(`"bakes ${count - 1}"`);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("holds a gathered artifact's records to the commit its job named", async () => {
+    // A gathered artifact carries a run's records without the context a
+    // report opens with, and the commit the store half holds a tree to is
+    // beside them in the facts the job wrote.
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      await artifact(root, "test-records-test-1", {
+        job: "Test (1/8)",
+        commit: "c0ffee",
+      }, ["bakes"]);
+      const records = await readRecords([root], new AliasResolver([]));
+      expect(records.map((record) => record.commit)).toEqual(["c0ffee"]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("gives each artifact the commit its own facts name", async () => {
+    // Two artifacts of one download are two jobs, and nothing says they
+    // were the same run. The store half is what refuses a mixture.
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      await artifact(root, "a", { job: "A", commit: "aaa" }, ["one"]);
+      await artifact(root, "b", { job: "B", commit: "bbb" }, ["two"]);
+      const records = await readRecords([root], new AliasResolver([]));
+      expect(
+        records.map((record) => [record.test.n, record.commit]).sort(),
+      ).toEqual([["one", "aaa"], ["two", "bbb"]]);
+      // The artifact each came from travels with it, because a failing
+      // identity is one somebody has to go and find.
+      expect(records.map((record) => record.from).sort()).toEqual(["a", "b"]);
+      // A file named directly is named as itself: there is no artifact
+      // around it to point at, and its directory is not one.
+      const named = await readRecords(
+        [`${root}/a/records.ndjson`],
+        new AliasResolver([]),
+      );
+      expect(named.map((record) => record.from)).toEqual([
+        `${root}/a/records.ndjson`,
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("leaves records nameless where the facts beside them name nothing", async () => {
+    // Facts without a commit, and no facts at all, are both a file that
+    // cannot say which tree produced it. The store half refuses those
+    // rather than reading them as this tree's.
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      await artifact(root, "no-commit", { job: "A" }, ["one"]);
+      await artifact(root, "no-facts", undefined, ["two"]);
+      await artifact(root, "blank", { job: "C", commit: "" }, ["three"]);
+      const records = await readRecords([root], new AliasResolver([]));
+      expect(records.map((record) => record.commit)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("walks a directory of them, however deep each one sits", async () => {
+    // A run that produced a single artifact arrives flattened into the
+    // directory above, and one that produced many arrives as a directory
+    // apiece. One name covers both.
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      await artifact(root, "nested/deep", { job: "A", commit: "aaa" }, ["one"]);
+      await artifact(root, ".", { job: "B", commit: "bbb" }, ["two"]);
+      const records = await readRecords([root], new AliasResolver([]));
+      expect(records.map((record) => record.test.n).sort()).toEqual([
+        "one",
+        "two",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("fails a path holding nothing beside one that holds records", async () => {
+    // Each named path is a part of the run. One that arrived cannot
+    // answer for one that did not, so summing them and asking whether
+    // anything came back would validate a corpus only partly read.
+    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+    const dir = await Deno.makeTempDir({ prefix: "partial-" });
+    try {
+      await Deno.mkdir(`${dir}/present`);
+      await Deno.writeTextFile(
+        `${dir}/present/records.ndjson`,
+        JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "oven", n: "bakes" },
+          outcome: "pass",
+          durationMs: 1,
+        }) + "\n",
+      );
+      const missing = `${dir}/never-downloaded`;
+      const { findings } = await check({
+        root,
+        store: { records: [`${dir}/present`, missing], commit: "c0ffee" },
+      });
+      expect(
+        findings.filter((finding) => finding.fails).map((finding) =>
+          finding.message
+        ),
+      ).toEqual([
+        `${missing} hold no records, so the store half read nothing of ` +
+        "what they were to carry",
+      ]);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("fails when the store half is asked for and finds no records", async () => {
+    // A download that matched nothing, or a path misspelled, leaves the
+    // guard with nothing to judge. It says so once: reporting every unit
+    // the topology holds as never recorded would bury that line in
+    // thousands of its own making.
+    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+    const empty = await Deno.makeTempDir({ prefix: "no-records-" });
+    const missing = `${empty}/never-downloaded`;
+    try {
+      for (const at of [empty, missing]) {
+        const { findings } = await check({
+          root,
+          store: { records: [at], commit: "c0ffee" },
+        });
+        expect(
+          findings.filter((finding) => finding.fails).map((finding) =>
+            finding.message
+          ),
+        ).toEqual([
+          `${at} hold no records, so the store half read nothing of what ` +
+          "they were to carry",
+        ]);
+        expect(
+          findings.filter((finding) =>
+            finding.message.includes("never recorded")
+          ),
+        ).toEqual([]);
+      }
+    } finally {
+      await Deno.remove(empty);
+    }
+  });
+
+  it("finds nothing under a path that holds no records or is not there", async () => {
+    const root = await Deno.makeTempDir({ prefix: "empty-artifacts-" });
+    try {
+      expect(await readRecords([root], new AliasResolver([]))).toEqual([]);
+      expect(
+        await readRecords([`${root}/never-downloaded`], new AliasResolver([])),
+      )
+        .toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 /** One run's records: a context naming the commit, and one record. */
 function recordsAt(commit: string): string {
   return [
@@ -834,6 +1209,24 @@ describe("running the check and saying what it found", () => {
     expect(() => parseCheckArgs(["--commit"], "/repo")).toThrow(UsageError);
     expect(() => parseCheckArgs(["--commit", "--records", "a"], "/repo"))
       .toThrow(UsageError);
+  });
+
+  it("says a record path may be a directory, wherever it says it", () => {
+    // What `--records` takes is the contract a caller reads, and the
+    // only place it is written down is this task's own text. Pinning the
+    // wording is what stops it describing the argument it used to take.
+    // The refusal and the usage text are read one after the other and
+    // pinned one at a time, so neither can answer for the other.
+    let refusal = "";
+    try {
+      parseCheckArgs(["--commit", "abc", "--records"], "/repo");
+    } catch (error) {
+      refusal = (error as UsageError).message;
+    }
+    expect(refusal).toBe("--records takes a file or a directory of them");
+    expect(USAGE).toContain("--records <path>...");
+    expect(USAGE).not.toContain("--records <file>...");
+    expect(USAGE).toContain("a file of records or a directory of them");
   });
 
   it("refuses a flag given twice or with nothing after it", () => {
@@ -971,23 +1364,5 @@ describe("running the check and saying what it found", () => {
     const { findings, suites } = await check({ root });
     expect(findings.filter((finding) => finding.fails)).toEqual([]);
     expect(suites).toBeGreaterThan(0);
-  });
-});
-
-describe("walking a tree that cannot be read", () => {
-  it("raises rather than checking against a shorter list", async () => {
-    // A directory that cannot be read is not a directory that holds
-    // nothing. Treating the two alike would let the guard report success
-    // over whatever it managed to reach.
-    const root = await Deno.makeTempDir({ prefix: "obstructed-" });
-    await Deno.writeTextFile(`${root}/packages`, "not a directory");
-    await expect(candidateSurfaces(root)).rejects.toThrow();
-    await Deno.remove(root, { recursive: true });
-  });
-
-  it("finds nothing in a tree that holds none of its roots", async () => {
-    const root = await Deno.makeTempDir({ prefix: "bare-" });
-    expect(await candidateSurfaces(root)).toEqual([]);
-    await Deno.remove(root, { recursive: true });
   });
 });

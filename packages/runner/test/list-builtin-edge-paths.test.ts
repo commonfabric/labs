@@ -75,7 +75,7 @@ describe("list builtin edge paths", () => {
       return { ok: undefined, error: undefined };
     }
     runtime.prepareTxForCommit(tx);
-    return await tx.commit();
+    return await tx.commit().settled;
   }
 
   afterEach(async () => {
@@ -368,8 +368,8 @@ class LoopbackStorageManager extends StorageManagerV2 {
   private constructor(options: Options, server: MemoryV2Server.Server) {
     super(options, new LoopbackSessionFactory(() => server));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
@@ -433,7 +433,7 @@ describe("resume owned-cell walk: scoped sub-pattern", () => {
       tx0,
     );
     const h1 = rt1.run(tx0, compiled1, { seed: 4 }, rc1);
-    await tx0.commit();
+    await tx0.commit().settled;
     for (let k = 0; k < 10; k++) {
       await h1.pull();
       await rt1.idle();
@@ -456,7 +456,7 @@ describe("resume owned-cell walk: scoped sub-pattern", () => {
         compiled1.resultSchema,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const started = await rt2.start(rc2);
       expect(started).toBe(true);
@@ -563,7 +563,7 @@ describe("cross-space link load kick", () => {
       );
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, parent as any, {}, resultCell1);
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
       r1.key("create").send({ name: "Ada" });
       await r1.pull();

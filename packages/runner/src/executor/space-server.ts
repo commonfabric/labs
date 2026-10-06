@@ -52,17 +52,23 @@ import {
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
+  STREAM_ENTRIES_DOC_PREFIX,
   type StreamEventEntry,
   type StreamEventsDocValue,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import {
   type AdmittedCommitNotice,
   type Server as MemoryServer,
 } from "@commonfabric/memory/v2/server";
 
+import type {
+  ParkedRuntimeHandle,
+  ParkedServingRuntime,
+} from "./parked-runtime.ts";
 import { ViewPlanPublisher } from "./view-plan-publisher.ts";
 
 /** The deferral backstop cadence: with NO input arriving at all, a
@@ -96,6 +102,7 @@ import {
   selectStaleBasisInstances,
 } from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/utils/logger";
+import { minOf } from "@commonfabric/utils/math";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
@@ -111,6 +118,7 @@ import type {
   StoreReadThrough,
   TransactionSealDestination,
   Unit,
+  URI,
 } from "../storage/interface.ts";
 import {
   ensurePieceRunningVerdict,
@@ -127,6 +135,7 @@ import {
   waveRunContextOf,
   type WaveWriteAnnotation,
 } from "./wave.ts";
+import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import { readWatermarkSeq, watermarkDocLink } from "./watermark.ts";
@@ -151,6 +160,7 @@ import {
   sameDeliveryDeferral,
   spentDeliveryFailureMs,
 } from "./delivery-failure.ts";
+import { setCfcTrustSnapshot } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("space-server", { enabled: true, level: "warn" });
 
@@ -247,6 +257,21 @@ export type SpaceServerPolicy = {
   /** serving-loop.md §1's IDLE_PARK_MS. */
   idleParkMs?: number;
 
+  /**
+   * How long the host keeps the runtime of a space that parked idle, for
+   * the space's next tenure to serve with (read by the ExecutorHost;
+   * serving-loop.md §1, "Parking"). `0` disposes every runtime at its
+   * park.
+   */
+  parkedRuntimeRetentionMs?: number;
+
+  /**
+   * How many parked runtimes the host keeps at once, across its spaces
+   * (read by the ExecutorHost); keeping one more disposes the
+   * longest-kept. `0` disposes every runtime at its park.
+   */
+  maxParkedRuntimes?: number;
+
   renewIntervalMs?: number;
 
   /** OW54's owner-ratified cumulative confirmed failed-state budget. */
@@ -270,12 +295,11 @@ export type SpaceServerPolicy = {
   parkDisposeTimeoutMs?: number;
 
   /** The host's failure-park re-activation backoff (read by the
-   * ExecutorHost, not the SpaceServer): after N consecutive
-   * loop failures or initialization lease losses of one space, its next
-   * re-activation is delayed
-   * `min(base·2^(N−1), max)` — a permanently failing space rebuilds at
-   * a bounded rate instead of once per admission. A successfully
-   * committed wave clears the streak. */
+   * ExecutorHost, not the SpaceServer): after N consecutive parks of one
+   * space other than idle parks and parks on a rival's lease, its next
+   * re-activation is delayed `min(base·2^(N−1), max)` — a permanently
+   * failing space rebuilds at a bounded rate. An idle park or a
+   * successfully committed wave clears the streak. */
   failureParkBackoffBaseMs?: number;
 
   failureParkBackoffMaxMs?: number;
@@ -346,6 +370,18 @@ export type SpaceServerOptions = {
   policy?: SpaceServerPolicy;
   onParked?: (reason: string) => void;
 
+  /**
+   * Offered the tenure's runtime when the tenure parks idle, in place of
+   * disposing it (serving-loop.md §1, "Parking"). Returns the fenced
+   * instance holding it when the caller keeps it, and `undefined` to have
+   * the tenure dispose it as usual. A park for any other reason disposes
+   * its runtime without asking: a lost lease, a failed loop or a host
+   * closing leaves nothing a successor should build on.
+   */
+  retainParkedRuntime?: (
+    handle: ParkedRuntimeHandle,
+  ) => ParkedServingRuntime | undefined;
+
   /** Internal deterministic-verification seam around the engine-direct wave
    * sink. Production omits it; tests can causally reject one identified wave
    * without replacing storage or parsing logs. */
@@ -400,6 +436,59 @@ export type SpaceServerOptions = {
 const DEFAULT_FLUSH_DEADLINE_MS = 100;
 const DEFAULT_IDLE_PARK_MS = 30_000;
 const DEFAULT_PARK_DISPOSE_TIMEOUT_MS = 5_000;
+
+/**
+ * Awaits `pending`, a runtime dispose, under the park's dispose deadline
+ * (`SpaceServerPolicy.parkDisposeTimeoutMs`). Rejects as `pending` does
+ * when it fails in time. On overrun the dispose is abandoned: counted in
+ * `stats.parkDisposeTimeouts`, logged as an error with `overrun`'s
+ * message, and left running with its eventual outcome logged, while the
+ * returned promise resolves.
+ */
+export async function awaitDisposeTimeboxed(
+  pending: Promise<void>,
+  options: {
+    policy: SpaceServerPolicy | undefined;
+    stats: ServingLoopStats;
+    space: string | undefined;
+    overrun: (timeoutMs: number) => string;
+  },
+): Promise<void> {
+  const timeoutMs = options.policy?.parkDisposeTimeoutMs ??
+    DEFAULT_PARK_DISPOSE_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const winner = await Promise.race([
+    pending.then(
+      () => "disposed" as const,
+      () => "failed" as const,
+    ),
+    new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+  // Re-awaited so that the caller sees the dispose's own error.
+  if (winner === "failed") return pending;
+  if (winner === "disposed") return;
+  options.stats.parkDisposeTimeouts += 1;
+  logger.error("park-dispose-timeout", options.overrun(timeoutMs));
+  // The abandoned dispose keeps running; observe its eventual fate so a
+  // late completion is visible and a late rejection never becomes an
+  // unhandled rejection.
+  pending.then(
+    () => {
+      logger.warn("park-dispose-late", () => [
+        `space ${options.space}: abandoned park dispose completed late`,
+      ]);
+    },
+    (error) => {
+      logger.warn("park-dispose-late-failed", () => [
+        `space ${options.space}: abandoned park dispose failed late`,
+        error,
+      ]);
+    },
+  );
+}
 
 /**
  * Phase 5's foreign re-mark decision (serving-loop.md §3b's cross-space
@@ -525,6 +614,9 @@ export type LifecycleVerb<T> = {
 export const LIFECYCLE_VERB_SPACE_PARKED =
   "the space parked before the lifecycle verb ran";
 
+/** The reason carried by a seal a tenure refuses once it has parked. */
+export const SEAL_AFTER_PARK_REFUSED = "seal-after-park-refused";
+
 type QueuedLifecycleVerb = {
   verb: LifecycleVerb<unknown>;
   resolve: (receipt: unknown) => void;
@@ -573,6 +665,16 @@ export class SpaceServer implements TransactionSealDestination {
   #runtime: Runtime | undefined;
   #viewPlanPublisher = new ViewPlanPublisher();
   #disposeRuntime: (() => Promise<void>) | undefined;
+
+  /** The fenced runtime this tenure handed over when it parked idle. */
+  #retainedAs: ParkedServingRuntime | undefined;
+
+  /**
+   * Whether this tenure refused a write because it had parked. A runtime
+   * that tried to write after its park is never offered on.
+   */
+  #refusedWriteAfterPark = false;
+
   #sink: WaveCommitSink | undefined;
   #renewTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -726,14 +828,24 @@ export class SpaceServer implements TransactionSealDestination {
   /** Cancellation boundary for structure work owned by this tenure. */
   readonly #structureLoadAbort = new AbortController();
 
-  /** Documents changed by admissions during the active structure attempt. */
-  #structureLoadChangedDocs: Set<string> | undefined;
+  /** Documents changed by admissions over a whole demand pass — from the
+   * pull that opens it through its last root's traversal, not one root's
+   * attempt — each mapped to the lowest seq that changed it over that span.
+   * The pull is what registers each root's watch, and a registered
+   * watch is what lets a traversal read from the replica rather than fetch,
+   * so a root's reading is taken over that whole span and an admission
+   * anywhere in it is one the reading may not carry. Narrowing this back to
+   * a per-root lifetime would let a commit landing after the pull terminalize
+   * a root on a verdict that predates it. */
+  #structureLoadChangedDocs: Map<string, number> | undefined;
 
   /**
-   * Re-armed roots whose retry follows frame application. The settle loop
-   * retries them before declaring their demanded derivations current.
+   * Re-armed roots whose retry follows frame application, each mapped to
+   * the lowest seq of an input that may have re-armed it. The settle loop
+   * retries them before declaring their demanded derivations current, and
+   * until it does, W stays below that seq.
    */
-  readonly #rearmedAwaitingSettle = new Set<string>();
+  readonly #rearmedAwaitingSettle = new Map<string, number>();
 
   /** A structure retry that must wake a cycle after an asynchronous load. */
   #pendingStructureRetryWake = false;
@@ -770,13 +882,21 @@ export class SpaceServer implements TransactionSealDestination {
    * session shape: a key with no demander pair — so a warmed,
    * SESSIONLESS tenure structure-loads the staged piece and derives it.
    * Tenure-scoped by construction: the map dies with this SpaceServer
-   * at park (a fresh activation builds a fresh instance), and
-   * recompute-on-demand is the ruled recovery posture for anything a
-   * dying tenure drops (serving-loop.md §6 step 2). */
+   * at park (a fresh activation builds a fresh instance). The requests
+   * behind it outlive a tenure that ends without serving them; see
+   * `#warmNotices`. */
   readonly #warmDemandKeys = new Map<
     string,
     { id: string; scopeKey: string }
   >();
+
+  /** The warm-marked notices this tenure has received, in arrival order,
+   * less each one whose every key an earlier one names. The host hands
+   * them to a successor when this tenure ends without serving them. */
+  readonly #warmNotices: AdmittedCommitNotice[] = [];
+
+  /** The keys `#warmNotices` names. */
+  readonly #warmNoticeKeys = new Set<string>();
 
   /**
    * Count of push-growth demand wakes, bumped once per
@@ -888,6 +1008,35 @@ export class SpaceServer implements TransactionSealDestination {
    * PIECE's actions too, not only when the demand names the piece root
    * itself. Entries retire with their demand key. */
   readonly #pieceRootByDemandKey = new Map<string, string>();
+
+  /** The client demand set as the last demand pass read it, which is what
+   * lets a pass reconcile only the keys whose rows changed since. */
+  readonly #demandMirror = new DemandMirror();
+
+  /** Whether the next demand pass reconciles every key it knows of rather
+   * than only the changed ones: set for the first pass of a tenure, and left
+   * set by a pass whose reconcile threw partway, so the registry and the
+   * mirror are brought back into agreement. */
+  #demandFullReconcile = true;
+
+  /** How many of `#warmDemandKeys` the demand passes have reconciled. Warm
+   * keys are only ever added, so a larger map holds keys no pass has seen. */
+  #warmDemandKeysReconciled = 0;
+
+  /** The demand keys that are structure-load ROOTS — a watch root of some
+   * client session, or a warm key — each with the address its load reads. */
+  readonly #demandRootAddresses = new Map<
+    string,
+    { id: string; scope: CellScope }
+  >();
+
+  /** The keys of `#demandRootAddresses` not yet in `#demandedRoots`: the
+   * roots owed their first structure load. */
+  readonly #rootsAwaitingFirstLoad = new Set<string>();
+
+  /** The (key, demanding pair) entries of `#demandersByKey`, counted as they
+   * enter and leave. */
+  #demandedPairCount = 0;
 
   /** The stage-G effect channel (serving-loop.md §4–§5). */
   #outbox: SpaceOutbox | undefined;
@@ -1072,6 +1221,21 @@ export class SpaceServer implements TransactionSealDestination {
    */
   #eventVisibilityFloor: number | undefined;
 
+  /**
+   * The batch head whose frames a completed settle barrier has applied to
+   * the serving replica, carried across cycles until W covers it. The
+   * settle's PREFIX COVERAGE (serving-loop.md §3) rests on it: input that
+   * keeps arriving keeps the scheduler busy at every exit probe, so a
+   * settle can reach the flush deadline without observing quiescence even
+   * though the batch it drained was long done. Any later moment at which
+   * the scheduler is idle with no re-armed root pending proves this head
+   * covered, since whatever the scheduler ran after the barrier it ran to
+   * completion too; that moment may fall in a later cycle. A wave commit
+   * that aborts clears it, because the abort withdrew consequences the
+   * proof would otherwise count, and so does the end of the tenure.
+   */
+  #barrierHead: number | undefined;
+
   /** Set when a LOAD-PARK deferral — or a handler-not-run withdrawal
    * (review-6459 F1, the same §2 obligation) — fires while a drain pass
    * is running (verification-coverage.md's OW45 residue member). The
@@ -1140,10 +1304,16 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** Resolves when this SpaceServer has fully parked: its runtime
    * disposed, and its lease released or the release's failure logged
-   * (the row expires by TTL either way). The host chains re-activation
-   * on it when a session-open or admission races a park in progress. */
+   * (the row expires by TTL either way). The host chains its
+   * re-evaluation of the space's ACTIVE criteria on it. */
   get whenParked(): Promise<void> {
     return this.#parked.promise;
+  }
+
+  /** The warm-marked notices this tenure has received, in arrival order,
+   * less each one whose every key an earlier one names. */
+  get warmNotices(): readonly AdmittedCommitNotice[] {
+    return this.#warmNotices;
   }
 
   /** Store head minus W — the per-space input to §7's watermarkLag. */
@@ -1242,9 +1412,12 @@ export class SpaceServer implements TransactionSealDestination {
     if (storeReadThrough !== undefined) {
       runtime.storageManager.installStoreReadThrough?.(space, storeReadThrough);
     }
-    // MINOR-2: the fresh runtime's demand-root counters start at 0.
-    this.#lastFoldedDemandEnters = 0;
-    this.#lastFoldedDemandLeaves = 0;
+    // MINOR-2: fold from where this runtime's demand-root counters stand —
+    // 0 on a fresh runtime, and wherever the last tenure folded them to on
+    // one retained across an idle park.
+    const demandRootCounters = runtime.scheduler.demandRootCounters;
+    this.#lastFoldedDemandEnters = demandRootCounters.enters;
+    this.#lastFoldedDemandLeaves = demandRootCounters.leaves;
     const sink = new EngineWaveCommitSink({
       engineFor: (s) => s === space ? engine : this.#foreignEngineFor(s),
       sessionId: this.#holder,
@@ -1260,6 +1433,11 @@ export class SpaceServer implements TransactionSealDestination {
           operations,
           scopeKeyByOpIndex,
         ),
+      // A lapse the renewal drivers have not reached yet shows first as the
+      // memory server refusing a derived commit (serving-loop.md §2).
+      onHomeRefused: () => {
+        this.#confirmLease(engine);
+      },
     });
     this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
@@ -1393,14 +1571,13 @@ export class SpaceServer implements TransactionSealDestination {
 
     // Recovery/warm start are the same move (serving-loop.md §6 step 2):
     // the activation scan computes the stale (action, instance) set
-    // from the basis index and SURFACES it (counted, logged). Phase-1
-    // truth, stated plainly: the scan does not yet seed scheduler
-    // dirtiness — a fresh runtime holds no materialized graph to mark,
-    // and recovery CORRECTNESS rides recompute-on-demand (a demanded
-    // pull recomputes regardless, which is what makes the fresh-start
-    // path sound). The index's skip-still-current warm-start VALUE
-    // materializes when a later stage carries a materialized graph
-    // across activation.
+    // from the basis index and SURFACES it (counted, logged). The scan
+    // does not seed scheduler dirtiness. A fresh runtime holds no
+    // materialized graph to mark, and its recovery CORRECTNESS rides
+    // recompute-on-demand (a demanded pull recomputes regardless). A
+    // runtime kept from an idle park holds one, and is taken only while
+    // the store head is the one its tenure parked at (serving-loop.md §1,
+    // "Parking"), so what its graph holds clean is still current.
     const scanHead = Engine.serverSeq(engine);
     const { stale, foreignReadInstances } = selectStaleBasisInstances(
       engine,
@@ -1415,14 +1592,13 @@ export class SpaceServer implements TransactionSealDestination {
     // surfacing, never a wedge).
     if (foreignReadInstances.length > 0) {
       try {
-        stale.push(
-          ...await selectForeignStaleInstances(
-            engine,
-            { branch: "", space },
-            (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
-            stale,
-          ),
+        const foreignStale = await selectForeignStaleInstances(
+          engine,
+          { branch: "", space },
+          (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
+          stale,
         );
+        for (const entry of foreignStale) stale.push(entry);
       } catch (error) {
         logger.warn("basis-foreign-remark-failed", () => [
           `${foreignReadInstances.length} basis instance(s) carry ` +
@@ -1631,7 +1807,10 @@ export class SpaceServer implements TransactionSealDestination {
   enqueueCommit(record: AdmittedCommitNotice): void {
     if (this.#structureLoadChangedDocs !== undefined) {
       for (const write of record.writes) {
-        this.#structureLoadChangedDocs.add(write.id);
+        const seen = this.#structureLoadChangedDocs.get(write.id);
+        if (seen === undefined || record.seq < seen) {
+          this.#structureLoadChangedDocs.set(write.id, record.seq);
+        }
       }
     }
     // The no-owner skip's re-arm (see #rootEnsureAwaitingOwner): the
@@ -1653,6 +1832,7 @@ export class SpaceServer implements TransactionSealDestination {
       // runs a fresh demand pass over it (the same grace-coalesced
       // latch a session's watch change uses).
       let captured = false;
+      let named = false;
       for (const write of record.writes) {
         // The canonical key encoding (the registry's own), so warm keys
         // can never drift from client demand keys.
@@ -1661,7 +1841,15 @@ export class SpaceServer implements TransactionSealDestination {
           this.#warmDemandKeys.set(key, write);
           captured = true;
         }
+        // A lifecycle verb registers its staged keys as warm demand
+        // before its own warm notice names them, so what decides whether
+        // a notice is kept is the keys the kept notices name.
+        if (!this.#warmNoticeKeys.has(key)) {
+          this.#warmNoticeKeys.add(key);
+          named = true;
+        }
       }
+      if (named) this.#warmNotices.push(record);
       if (captured) this.noteDemandChanged("warm");
     }
     this.#feed.push(record);
@@ -1813,6 +2001,23 @@ export class SpaceServer implements TransactionSealDestination {
   //
 
   seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>> {
+    // A transaction opened during this tenure and closed after it parked
+    // commits nothing: the lease is released and no loop remains to
+    // commit a wave. When the runtime outlived the park, the refusal is
+    // what keeps a successor tenure from being handed a runtime that
+    // tried to write in between.
+    if (this.#parkRequested) {
+      this.#noteRefusedWriteAfterPark();
+      return Promise.resolve({
+        error: {
+          name: "StorageTransactionAborted",
+          message: `space ${this.#options.space}: the transaction closed ` +
+            "after its serving tenure parked; nothing commits once the " +
+            "lease is released (serving-loop.md §2)",
+          reason: new Error(SEAL_AFTER_PARK_REFUSED),
+        },
+      });
+    }
     // A transaction stamped `directCommit` commits to the store on its own
     // (docs/features/server-pattern-lifecycle.md): serialized on the same
     // chain as wave seals, since it applies to the replica overlay through
@@ -1909,8 +2114,10 @@ export class SpaceServer implements TransactionSealDestination {
           // with the intent lost. Noted INSIDE the seal chain, so the
           // flush's pre-commit `await #sealChain` barrier guarantees
           // the mark precedes commitWave. Non-event contexts note
-          // nothing (noteSealFailure filters).
-          wave.noteSealFailure(waveRunContextOf(tx));
+          // nothing (noteSealFailure filters, and it also leaves out a
+          // durable entry's ACL-document refusal, whose consequence is the
+          // error the scheduler seals for it).
+          wave.noteSealFailure(waveRunContextOf(tx), result.error);
         } else {
           // The drain's in-flight guard: an ACCEPTED event-handler seal
           // for a drained copy means its consequence mark now rides an
@@ -1963,6 +2170,15 @@ export class SpaceServer implements TransactionSealDestination {
     tx: IExtendedStorageTransaction,
     row: OutboxAppendRow,
   ): void {
+    if (this.#parkRequested) {
+      // The same refusal `seal()` gives a transaction outliving the tenure.
+      this.#noteRefusedWriteAfterPark();
+      throw new Error(
+        `space ${this.#options.space}: a cross-space event append was ` +
+          "staged after its serving tenure parked; nothing commits once " +
+          "the lease is released (serving-loop.md §2)",
+      );
+    }
     const wave = this.#openWave();
     this.#waveByTx.set(tx, wave);
     wave.enqueueOutboundAppend(tx, row);
@@ -2043,7 +2259,8 @@ export class SpaceServer implements TransactionSealDestination {
   demandedIdentitiesOf(id: string): ScopeKeyIdentity[] {
     const identities: ScopeKeyIdentity[] = [];
     for (const [key, demanders] of this.#demandersByKey) {
-      if (key.endsWith(`\0${id}`)) identities.push(...demanders.values());
+      if (!key.endsWith(`\0${id}`)) continue;
+      for (const identity of demanders.values()) identities.push(identity);
     }
     return identities;
   }
@@ -2092,11 +2309,11 @@ export class SpaceServer implements TransactionSealDestination {
         // foreignWriteRefusals.
         foreignWrites: "accept",
         // The co-hosted memory server's structural grant supply
-        // (protocol.md §2b): owner-by-identity (the actor's own home
-        // space), fresh-store creation (§2b's sanctioned provisioning,
-        // DID-shape-checked), or the target's own ACL granting the
-        // actor WRITE — fail-closed otherwise. The refusal reason is
-        // logged here; the wave's refusal message stays generic.
+        // (protocol.md §2b): the target's own ACL granting the actor
+        // WRITE — fail-closed otherwise, for a malformed DID or a space
+        // no store holds as much as for an ungranted actor. The refusal
+        // reason is logged here; the wave's refusal message stays
+        // generic.
         foreignWriteGrant: async (foreignSpace, acting) => {
           const verdict = await this.#options.server
             .foreignWriteAuthorityFor(foreignSpace, acting.user);
@@ -2107,10 +2324,7 @@ export class SpaceServer implements TransactionSealDestination {
               `${verdict.reason} (protocol.md §2b)`,
             ]);
           }
-          // The FULL verdict, not just the boolean (OW31 B4): the wave
-          // retains the `via` arm so the commit step forces a
-          // `creation`-granted target's genesis ACL before the sink.
-          return verdict;
+          return verdict.granted;
         },
         onForeignWriteRefusal: () => {
           this.#options.stats.foreignWriteRefusals += 1;
@@ -2193,7 +2407,8 @@ export class SpaceServer implements TransactionSealDestination {
       // The carriage's trust snapshot (OW34-family; serving-loop.md §3c):
       // the delegated writeback's CFC labels resolve against the
       // delegated acting principal, matching the memory-plane carriage.
-      tx.setCfcTrustSnapshot(
+      setCfcTrustSnapshot(
+        tx,
         this.#runtime!.trustSnapshotForPrincipal(info.delegated.acting.user),
       );
       stampWaveRunContext(tx, {
@@ -2228,7 +2443,8 @@ export class SpaceServer implements TransactionSealDestination {
     const trustPrincipal = (info.acting ?? acting)?.user ??
       (info.kind === "derivation" ? principal : undefined);
     if (trustPrincipal !== undefined) {
-      tx.setCfcTrustSnapshot(
+      setCfcTrustSnapshot(
+        tx,
         this.#runtime!.trustSnapshotForPrincipal(trustPrincipal),
       );
     }
@@ -2677,7 +2893,7 @@ export class SpaceServer implements TransactionSealDestination {
    * Commit a transaction stamped `directCommit` to the store on its own
    * (docs/features/server-pattern-lifecycle.md): the serving loop's own
    * derived-class commit under the space's lease, made outside the wave,
-   * so the transaction's `commit()` resolves with the store's verdict and
+   * so the transaction's `commit().verdict` reports the store's outcome and
    * nothing the wave later decides can withdraw it.
    *
    * The store validates the transaction's own read set as it does a client
@@ -2878,15 +3094,25 @@ export class SpaceServer implements TransactionSealDestination {
       if (!engine.database.open) return undefined;
       if (
         !scopeKeyApplicableTo(address.scopeKey, own) &&
-        liveExecutionLeaseHolder(engine, this.#options.space) !== this.#holder
-      ) {
-        this.#renew();
-        if (
-          liveExecutionLeaseHolder(engine, this.#options.space) !== this.#holder
-        ) return undefined;
-      }
+        !this.#confirmLease(engine)
+      ) return undefined;
       return read(address);
     };
+  }
+
+  /**
+   * Whether the space's lease row names this holder live. A row that does
+   * not runs the renew arm, which ends the tenure and then reacquires or
+   * parks, and the row is read again after it. A closed engine confirms
+   * nothing.
+   */
+  #confirmLease(engine: Engine.Engine): boolean {
+    if (!engine.database.open) return false;
+    const holds = () =>
+      liveExecutionLeaseHolder(engine, this.#options.space) === this.#holder;
+    if (holds()) return true;
+    this.#renew();
+    return holds();
   }
 
   /** The mid-wave renew (stage C tuning T3): called from the serving
@@ -3044,9 +3270,9 @@ export class SpaceServer implements TransactionSealDestination {
       // Zombie guard: an ACTIVE space whose loop died would renew its
       // lease forever while serving nothing — no successor can acquire,
       // and no cycle ever runs. Park instead: the lease releases, and
-      // the host's activation hooks (admission / session open) recover
-      // the space with a fresh runtime — the same recovery arm as every
-      // other abort (serving-loop.md §6 step 2's recompute-on-demand).
+      // the host re-activates a space that still has demand with a
+      // fresh runtime (serving-loop.md §1) — the same recovery arm as
+      // every other abort (§6 step 2's recompute-on-demand).
       await this.park("loop-failed");
     } finally {
       this.#loopRunning = false;
@@ -3255,7 +3481,7 @@ export class SpaceServer implements TransactionSealDestination {
           "deliveryDeferral",
         ],
       }).withTx(tx).set(checkpoint);
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       const pending = this.#pendingDeliveryCheckpointWrites.get(entry.eventId);
       if (pending?.checkpoint === checkpoint) {
         pending.wave = this.#waveByTx.get(tx);
@@ -3624,7 +3850,7 @@ export class SpaceServer implements TransactionSealDestination {
           // The settle loop applies the re-arming commit's frames before
           // retrying, so a covered watch's stale value cannot terminalize
           // the root again.
-          this.#rearmedAwaitingSettle.add(key);
+          this.#noteRearmed(key, record.seq);
           this.#options.stats.structureLoadRearmed += 1;
           logger.info?.("structure-load-rearmed", () => [
             `terminal demanded root re-armed by commit seq ${record.seq}; ` +
@@ -3641,10 +3867,21 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#drainFeed()`, which under the store read-through
    * posture re-reads the documents one admitted commit wrote, for those
    * the serving replica holds, so its scheduler sees the change a session
-   * watch would otherwise have delivered. The loop's own derived commits
-   * are skipped: the replica confirmed those at its seal, and re-reading
-   * them would only cost the engine a read per written document. Returns
-   * whether the record's writes reached the replica. A read or
+   * watch would otherwise have delivered. Of the loop's own derived
+   * commits only the stream sidecars are re-read. Admission rewrites a
+   * sidecar a derived commit touches: it stamps each appended entry's
+   * `seq` and `firedAt` and recomputes the stream's `eventWatermark`, so
+   * the sidecar the store holds is not the one the replica sealed, and
+   * the drain queues an entry only once the replica's view holds it at
+   * its stamped seq. Admission also rewrites the effects doc, stamping
+   * each intent's `issuedIn` and dropping an appended intent whose nonce
+   * the store already holds; the loop reads neither from the replica,
+   * since retirement scans the store and an intent is a tail append the
+   * store resolves, so that doc is not re-read. Any other document an
+   * own commit writes holds what the replica sealed, merged at most with
+   * a foreign commit whose own record the feed carries, so re-reading it
+   * here would only cost the engine a read.
+   * Returns whether the record's writes reached the replica. A read or
    * integration that throws leaves the record to the next cycle, which
    * retries it: the drain must not consume a record whose writes never
    * reached the replica, since the watermark would then cover an input
@@ -3658,14 +3895,16 @@ export class SpaceServer implements TransactionSealDestination {
     runtime: Runtime,
   ): boolean {
     if (this.#options.policy?.storeReadThrough !== true) return true;
-    if (record.class === "derived" && record.holder === this.#holder) {
-      return true;
-    }
+    const writes = record.class === "derived" && record.holder === this.#holder
+      ? record.writes.filter((write) =>
+        write.id.startsWith(STREAM_ENTRIES_DOC_PREFIX)
+      )
+      : record.writes;
     try {
       this.#options.stats.storeRefreshes +=
         runtime.storageManager.integrateStoreWrites?.(
           this.#options.space,
-          record.writes,
+          writes,
         ) ?? 0;
     } catch (error) {
       const attempts = this.#storeRefreshFailure?.seq === record.seq
@@ -4413,7 +4652,7 @@ export class SpaceServer implements TransactionSealDestination {
           }
         }
       }
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       if (outcome?.kind === "needs-attention") {
         const pending = this.#pendingAttentionNotices.get(entry.eventId);
         if (pending?.attention === outcome.attention) {
@@ -4539,7 +4778,7 @@ export class SpaceServer implements TransactionSealDestination {
             acks: instance.remainingAcks,
           } as never,
         );
-        tx.commit().then(({ error }) => {
+        tx.commit().settled.then(({ error }) => {
           if (error) {
             logger.warn("effects-retirement-seal-failed", () => [
               `retirement for ${instance.scopeKey} failed to seal; ` +
@@ -4617,109 +4856,64 @@ export class SpaceServer implements TransactionSealDestination {
     // §2.1/§2.2; serving-loop.md §1 as RULED 2026-08-18): the memory
     // server exposes every INSTANCE a client session tracks (the roots
     // and every doc the selectors' schemas reach), one row per (instance
-    // key, session). The registry (`#demandersByKey`) is keyed by the
-    // instance key — `toDirtyKey(id, scopeKey)` = `${scopeKey}\0${id}`,
-    // byte-identical to the former `keyOf` — over EVERY demanded row; the
-    // structure load stays ROOT-scoped (flag 4); there is NO demand walk
-    // (deleted; nothing reads here). The pass is O(rows) map
-    // reconciliation on DELTAS: entered keys mark their writers demand
+    // key, session), grouped by session. The registry (`#demandersByKey`)
+    // is keyed by the instance key — `toDirtyKey(id, scopeKey)` =
+    // `${scopeKey}\0${id}` — over EVERY demanded row; the structure load
+    // stays ROOT-scoped (flag 4); there is NO demand walk (nothing reads
+    // here). The pass reconciles DELTAS: `#demandMirror` holds the rows the
+    // last pass read and reports the keys whose rows changed, and only
+    // those keys are reconciled — entered keys mark their writers demand
     // roots (the scheduler's standing `demandedWriters` kind, bracketed —
     // §2.4); entered (key, pair) rows get the currency check (a writer not
     // current for the pair re-arms, B7's clean bit — §2.2); departed keys
-    // release the roots (R-D's coarse boundary). The exposure is O(closure)
-    // per pass (an incremental-delta exposure is a named follow-on if the
-    // union grows to tens of thousands — W0 flag 6); the pass itself does
-    // NO per-row engine read (W0 obligation (i): a per-row read here lands
-    // on the wave-latency critical path — `#loadDemandedStructure` is
-    // awaited before `runtime.idle()`).
+    // release the roots (R-D's coarse boundary). A session whose demand is
+    // unchanged costs one identity comparison, so a pass over unchanged
+    // demand does no per-row work; a session whose demand changed costs a
+    // comparison of its rows. The pass does NO per-row engine read (W0
+    // obligation (i): a per-row read here lands on the wave-latency
+    // critical path — `#loadDemandedStructure` is awaited before
+    // `runtime.idle()`).
     // MINOR-1: snapshot the demand-note generation at the row read — a
-    // note landing after this point is invisible to `rows` and must
+    // note landing after this point is invisible to `demand` and must
     // re-latch a fresh pass (below, in the loadPass `.finally`).
     this.#passDemandNoteGen = this.#demandNoteGeneration;
-    const rows = this.#options.server.demandedInstancesForSpace(
+    const demand = this.#options.server.demandForSpace(
       this.#options.space,
       // The serving session's own watches are its graph's reads, not
       // client demand.
       { excludePrincipal: this.#options.serviceIdentity },
     );
-    const keyOf = (row: { id: string; scopeKey: string }): string =>
-      `${row.scopeKey}\0${row.id}`;
-    // The demanders per key THIS pass sees, the first row per key (the
-    // structure address), and the ROOT keys (the structure load's input).
-    const demandersNow = new Map<string, Map<string, ScopeKeyIdentity>>();
-    const rowByKey = new Map<string, (typeof rows)[number]>();
-    const rootKeys = new Set<string>();
-    for (const row of rows) {
-      const key = keyOf(row);
-      if (!rowByKey.has(key)) rowByKey.set(key, row);
-      if (row.root) rootKeys.add(key);
-      // Anonymous sessions (no principal) contribute the key but own no
-      // instance — not a demander (`fanOutInstances` drops principal-less
-      // pairs; parity with `watchedRootsForSpace`'s identity-less rows).
-      if (row.identity?.principal === undefined) continue;
-      const identity: ScopeKeyIdentity = {
-        principal: row.identity.principal,
-        ...(row.identity.sessionId === undefined
-          ? {}
-          : { sessionId: row.identity.sessionId as never }),
-      };
-      let pairs = demandersNow.get(key);
-      if (pairs === undefined) {
-        pairs = new Map();
-        demandersNow.set(key, pairs);
-      }
-      pairs.set(demanderPairKey(identity), identity);
-    }
+    const changed = this.#demandMirror.update(demand);
     // WARM DEMAND KEYS (the explicit warm request's demand half — see
     // #warmDemandKeys): the staged instances enter the key set
     // identity-less (the anonymous-session shape — a key with no
     // demander pair) and as structure-load ROOTS, so a warmed,
     // sessionless tenure loads the staged piece and its writers become
     // demand roots. Client rows subsume: a key a session already
-    // tracks contributes nothing new here, and the union keeps warm
-    // keys out of the DEPARTED retirement below for this tenure.
-    for (const [key, write] of this.#warmDemandKeys) {
-      if (!rowByKey.has(key)) {
-        rowByKey.set(key, {
-          id: write.id,
-          scope: scopeOfScopeKey(write.scopeKey) as CellScope,
-          scopeKey: write.scopeKey as (typeof rows)[number]["scopeKey"],
-          root: true,
-        });
-      }
-      rootKeys.add(key);
+    // tracks contributes no demander here, and a warm key never departs
+    // for this tenure. The map only grows, so a size past the count
+    // reconciled means keys no pass has seen.
+    if (this.#warmDemandKeys.size !== this.#warmDemandKeysReconciled) {
+      for (const key of this.#warmDemandKeys.keys()) changed.add(key);
+      this.#warmDemandKeysReconciled = this.#warmDemandKeys.size;
     }
-    // NIT-4: `rowByKey` is already the current-key set (a Map with O(1)
-    // `has`); no separate `currentKeys` Set is needed.
-    const addressOf = (key: string, row?: { id: string; scope?: string }) => {
-      const sep = key.indexOf("\0");
-      const scopeKey = key.slice(0, sep);
-      const id = row?.id ?? key.slice(sep + 1);
-      return {
-        space: this.#options.space,
-        id,
-        scope: (row?.scope ?? scopeOfScopeKey(scopeKey)) as CellScope,
-      };
-    };
+    if (this.#demandFullReconcile) {
+      for (const key of this.#demandMirror.keys()) changed.add(key);
+      for (const key of this.#demandersByKey.keys()) changed.add(key);
+      for (const key of this.#warmDemandKeys.keys()) changed.add(key);
+    }
+    // Cleared only once every changed key is reconciled: a throw partway
+    // leaves the registry behind the mirror, and the next pass reconciles
+    // every key to bring the two back into agreement.
+    this.#demandFullReconcile = true;
     // DEPARTED keys (no live client session tracks the instance any
     // more — coarse, RULED R-D): retire the registry entry, the load
     // state, and RELEASE the writers' root status (1→0, bracketed).
-    for (const key of [...this.#demandersByKey.keys()]) {
-      if (rowByKey.has(key)) continue;
-      this.#demandersByKey.delete(key);
-      this.#demandedRoots.delete(key);
-      this.#unindexDemandKey(key);
-      this.#pieceRootByDemandKey.delete(key);
-      this.#pendingStructureLoads.delete(key);
-      this.#terminalStructureLoads.delete(key);
-      this.#rearmedAwaitingSettle.delete(key);
-      // The stuck-streak entry retires with the rest of the per-key
-      // load state (review finding): a departed root's streak would
-      // otherwise linger for the space's whole life, and a later
-      // re-demand of the same key would resume an obsolete streak
-      // instead of starting a fresh episode.
-      this.#structureLoadDeferralStreaks.delete(key);
-      runtime.scheduler.leaveDemandedEntity(addressOf(key));
+    for (const key of changed) {
+      if (this.#isDemandKey(key)) continue;
+      this.#demandRootAddresses.delete(key);
+      this.#rootsAwaitingFirstLoad.delete(key);
+      if (this.#demandersByKey.has(key)) this.#retireDemandKey(runtime, key);
     }
     // ENTERED keys and pairs. A NEW key ENTERS the demanded entity (0→1
     // marks its current writers demand roots); a NEW pair on any key
@@ -4731,189 +4925,274 @@ export class SpaceServer implements TransactionSealDestination {
     // root keys — a superset of the per-key check for root arrivals.
     const arrivals = new Set<string>();
     let notCurrentRearms = 0;
-    for (const [key, row] of rowByKey) {
-      const pairs = demandersNow.get(key) ??
-        new Map<string, ScopeKeyIdentity>();
+    for (const key of changed) {
+      const rows = this.#demandMirror.rowsFor(key);
+      const warm = this.#warmDemandKeys.get(key);
+      if (rows === undefined && warm === undefined) continue;
+      // The first row is the structure address, and the key is a ROOT (the
+      // structure load's input) when any session's row says so or it is
+      // warm.
+      let first: { id: string; scope: CellScope } | undefined;
+      let root = warm !== undefined;
+      const pairs = new Map<string, ScopeKeyIdentity>();
+      for (const row of rows?.values() ?? []) {
+        first ??= row;
+        if (row.root) root = true;
+        // Anonymous sessions (no principal) contribute the key but own no
+        // instance — not a demander (`fanOutInstances` drops principal-less
+        // pairs; parity with `watchedRootsForSpace`'s identity-less rows).
+        if (row.identity?.principal === undefined) continue;
+        const identity: ScopeKeyIdentity = {
+          principal: row.identity.principal,
+          ...(row.identity.sessionId === undefined
+            ? {}
+            : { sessionId: row.identity.sessionId as never }),
+        };
+        pairs.set(demanderPairKey(identity), identity);
+      }
+      first ??= {
+        id: warm!.id,
+        scope: scopeOfScopeKey(warm!.scopeKey) as CellScope,
+      };
+      if (root) {
+        this.#demandRootAddresses.set(key, {
+          id: first.id,
+          scope: first.scope,
+        });
+        if (!this.#demandedRoots.has(key)) {
+          this.#rootsAwaitingFirstLoad.add(key);
+        }
+      } else {
+        this.#demandRootAddresses.delete(key);
+        this.#rootsAwaitingFirstLoad.delete(key);
+      }
+      const address = {
+        space: this.#options.space,
+        id: first.id,
+        scope: first.scope,
+      };
+      // A key and a pair are recorded only once the scheduler has taken
+      // them, so a throw leaves them unrecorded and the full reconcile it
+      // forces takes them again.
       let known = this.#demandersByKey.get(key);
-      const address = addressOf(key, row);
       if (known === undefined) {
+        try {
+          runtime.scheduler.enterDemandedEntity(address);
+        } catch (error) {
+          // The enter counted the entity before it threw.
+          runtime.scheduler.leaveDemandedEntity(address);
+          throw error;
+        }
         known = new Map();
         this.#demandersByKey.set(key, known);
-        this.#indexDemandKey(key, row.id);
-        runtime.scheduler.enterDemandedEntity(address);
+        this.#indexDemandKey(key, first.id);
       }
       for (const pairKey of [...known.keys()]) {
-        if (!pairs.has(pairKey)) known.delete(pairKey);
+        if (pairs.has(pairKey)) continue;
+        known.delete(pairKey);
+        this.#demandedPairCount -= 1;
       }
       for (const [pairKey, identity] of pairs) {
         if (known.has(pairKey)) continue;
-        known.set(pairKey, identity);
-        if (this.#demandedRoots.has(key)) arrivals.add(key);
         notCurrentRearms += runtime.scheduler.rearmNotCurrentForDemander(
           address,
           identity,
         );
+        known.set(pairKey, identity);
+        this.#demandedPairCount += 1;
+        if (this.#demandedRoots.has(key)) arrivals.add(key);
       }
     }
-    // The STRUCTURE LOAD, per watch ROOT — unchanged in scope (flag 4)
-    // and in mechanism (stage P2-F, the OW19 terminal state, the
-    // commit-triggered re-arm); only the demand-walk install is gone.
-    for (const key of rootKeys) {
-      const root = rowByKey.get(key)!;
-      const firstDemand = !this.#demandedRoots.has(key);
-      // A known root re-enters this loop ONLY while its structure load
-      // is still owed (the retry arm).
-      if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
-      if (firstDemand) this.#demandedRoots.add(key);
-      // A root parked TERMINAL stays parked until a commit touching one
-      // of its observed docs re-arms it (the #drainFeed re-arm) — no
-      // per-cycle ensure churn (stage P2-F, the OW19 design).
-      if (this.#terminalStructureLoads.has(key)) {
-        continue;
-      } // Id-class exclusion (RULED 2026-08-07): well-known never-a-piece
-      // ids register NO piece demand — no `ensurePieceRunning` attempt,
-      // no retry, no `structureLoadDeferred` increment (the counter
-      // stays meaningful for genuinely not-yet-loadable pieces).
-      // `computed:` docs are derivation results, `cid:` docs are
-      // content-addressed bundles, and the watermark doc is the
-      // settledness subscription every waitForSettled/overlay client
-      // holds — none can ever carry `patternIdentity` meta. The remaining
-      // `of:` ids — which id classes cannot split into not-yet-created
-      // pieces vs never-a-piece value docs — are covered by the TERMINAL
-      // state below (stage P2-F): confirmed-synced-no-meta parks the
-      // root, and the commit-triggered re-arm keeps the creation race
-      // sound.
-      else if (neverAPieceRootId(root.id)) {
-        this.#pendingStructureLoads.delete(key);
-        this.#structureLoadDeferralStreaks.delete(key);
-        continue;
-      } else {
-        const changedDocs = new Set<string>();
-        this.#structureLoadChangedDocs = changedDocs;
-        try {
-          // propagateErrors: the catch below is the loop's FAILURE arm
-          // (§7 structureLoadFailures); with the helper's default
-          // collapse-to-false it was unreachable and every real
-          // load/start error masqueraded as a creation-race deferral,
-          // silently retried each input-driven cycle (r3739139521).
-          // A demand naming an argument or derived doc resolves to the
-          // OWNING piece root; the per-(action × instance) run supply
-          // finds the demand's identity from that piece's actions through
-          // this mapping (stage P2-F). Recorded before the piece starts,
-          // so a run the start releases finds it. The piece may already
-          // be running, started by another key's load earlier in this
-          // pass, with its nodes run before this key's demanders were
-          // reachable: those nodes re-arm for them exactly as they do for
-          // a demander who arrives after the mapping (the arrival re-arm
-          // below).
-          const onOwningRoot = (rootId: string) => {
-            if (rootId === root.id) return;
-            if (this.#pieceRootByDemandKey.get(key) === rootId) return;
-            this.#pieceRootByDemandKey.set(key, rootId);
-            this.#indexResolvedRoot(key, rootId);
-            runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
-          };
-          const attempt = await this.#attemptStructureLoad(
-            runtime,
-            root,
-            onOwningRoot,
-          );
-          const verdict = attempt.verdict;
-          if (!this.#active || this.#runtime !== runtime) return;
-          if (verdict.started) {
-            this.#pendingStructureLoads.delete(key);
-            this.#structureLoadDeferralStreaks.delete(key);
-          } else if (verdict.reason === "no-pattern-meta") {
-            // Each traversal syncs the complete addresses it reads. Put the
-            // question again before terminalizing, so metadata arriving
-            // during the first traversal can start the piece — to the engine
-            // where it can answer, and to the chain where it cannot.
-            const confirmed = (await this.#confirmNoPatternMeta(
+    this.#demandFullReconcile = false;
+    stats.demand.demandKeysReconciled += changed.size;
+    // The roots whose structure load is owed, with the address each one's
+    // load reads: every root on its first demand, and every root still
+    // pending from an earlier attempt.
+    const rootKeys = new Map<string, { id: string; scope: CellScope }>();
+    for (const key of this.#rootsAwaitingFirstLoad) {
+      rootKeys.set(key, this.#demandRootAddresses.get(key)!);
+    }
+    for (const key of this.#pendingStructureLoads) {
+      const root = this.#demandRootAddresses.get(key);
+      if (root !== undefined) rootKeys.set(key, root);
+    }
+    // ONE changed-doc collection for the whole pass, opened BEFORE the pull
+    // below rather than per root inside it. The pull is what registers each
+    // root's watch, and a registered watch is what lets the traversal read
+    // from the replica instead of fetching, so between the two a root's
+    // reading is only as current as frame delivery has made it. The terminal
+    // arm's invalidation check has to test the span the reading was taken
+    // over, and that span starts here.
+    const changedDocs = new Map<string, number>();
+    this.#structureLoadChangedDocs = changedDocs;
+    try {
+      // Ahead of the loop, and so ahead of the demand-root bookkeeping it
+      // does, which is what lets it read `firstDemand` the way the loop will.
+      await this.#loadStructureRootDocs(runtime, rootKeys);
+      // The STRUCTURE LOAD, per watch ROOT — unchanged in scope (flag 4)
+      // and in mechanism (stage P2-F, the OW19 terminal state, the
+      // commit-triggered re-arm); only the demand-walk install is gone.
+      for (const [key, root] of rootKeys) {
+        const firstDemand = !this.#demandedRoots.has(key);
+        // A known root re-enters this loop ONLY while its structure load
+        // is still owed (the retry arm).
+        if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
+        if (firstDemand) {
+          this.#demandedRoots.add(key);
+          this.#rootsAwaitingFirstLoad.delete(key);
+        }
+        // A root parked TERMINAL stays parked until a commit touching one
+        // of its observed docs re-arms it (the #drainFeed re-arm) — no
+        // per-cycle ensure churn (stage P2-F, the OW19 design).
+        if (this.#terminalStructureLoads.has(key)) {
+          continue;
+        } // Id-class exclusion (RULED 2026-08-07): well-known never-a-piece
+        // ids register NO piece demand — no `ensurePieceRunning` attempt,
+        // no retry, no `structureLoadDeferred` increment (the counter
+        // stays meaningful for genuinely not-yet-loadable pieces).
+        // `computed:` docs are derivation results, `cid:` docs are
+        // content-addressed bundles, and the watermark doc is the
+        // settledness subscription every waitForSettled/overlay client
+        // holds — none can ever carry `patternIdentity` meta. The remaining
+        // `of:` ids — which id classes cannot split into not-yet-created
+        // pieces vs never-a-piece value docs — are covered by the TERMINAL
+        // state below (stage P2-F): confirmed-synced-no-meta parks the
+        // root, and the commit-triggered re-arm keeps the creation race
+        // sound.
+        else if (neverAPieceRootId(root.id)) {
+          this.#pendingStructureLoads.delete(key);
+          this.#structureLoadDeferralStreaks.delete(key);
+          continue;
+        } else {
+          try {
+            // propagateErrors: the catch below is the loop's FAILURE arm
+            // (§7 structureLoadFailures); with the helper's default
+            // collapse-to-false it was unreachable and every real
+            // load/start error masqueraded as a creation-race deferral,
+            // silently retried each input-driven cycle (r3739139521).
+            // A demand naming an argument or derived doc resolves to the
+            // OWNING piece root; the per-(action × instance) run supply
+            // finds the demand's identity from that piece's actions through
+            // this mapping (stage P2-F). Recorded before the piece starts,
+            // so a run the start releases finds it. The piece may already
+            // be running, started by another key's load earlier in this
+            // pass, with its nodes run before this key's demanders were
+            // reachable: those nodes re-arm for them exactly as they do for
+            // a demander who arrives after the mapping (the arrival re-arm
+            // below).
+            const onOwningRoot = (rootId: string) => {
+              if (rootId === root.id) return;
+              if (this.#pieceRootByDemandKey.get(key) === rootId) return;
+              this.#pieceRootByDemandKey.set(key, rootId);
+              this.#indexResolvedRoot(key, rootId);
+              runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
+            };
+            const attempt = await this.#attemptStructureLoad(
               runtime,
               root,
-              attempt,
               onOwningRoot,
-            )).verdict;
+            );
+            const verdict = attempt.verdict;
             if (!this.#active || this.#runtime !== runtime) return;
-            if (confirmed.started) {
+            if (verdict.started) {
               this.#pendingStructureLoads.delete(key);
               this.#structureLoadDeferralStreaks.delete(key);
-            } else if (confirmed.reason === "no-pattern-meta") {
-              const changed = [
-                ...verdict.observedDocIds,
-                ...confirmed.observedDocIds,
-              ]
-                .some((id) => changedDocs.has(id));
-              const shadowed = runtime.storageManager.open(this.#options.space)
-                .replica.unappliedForeignSeqFloor?.() !== undefined;
-              if (changed || shadowed) {
+            } else if (verdict.reason === "no-pattern-meta") {
+              // Each traversal syncs the complete addresses it reads. Put the
+              // question again before terminalizing, so metadata arriving
+              // during the first traversal can start the piece — to the engine
+              // where it can answer, and to the chain where it cannot.
+              const confirmed = (await this.#confirmNoPatternMeta(
+                runtime,
+                root,
+                attempt,
+                onOwningRoot,
+              )).verdict;
+              if (!this.#active || this.#runtime !== runtime) return;
+              if (confirmed.started) {
                 this.#pendingStructureLoads.delete(key);
-                this.#rearmedAwaitingSettle.add(key);
-                this.#pendingStructureRetryWake = true;
+                this.#structureLoadDeferralStreaks.delete(key);
+              } else if (confirmed.reason === "no-pattern-meta") {
+                // The lowest input the verdict may have missed: a change
+                // admitted during the pass, or foreign novelty the replica
+                // still shadows, which lies at or above its floor.
+                const invalidatedAt = Math.min(
+                  minOf(
+                    [...verdict.observedDocIds, ...confirmed.observedDocIds]
+                      .map((id) => changedDocs.get(id) ?? Infinity),
+                  ),
+                  runtime.storageManager.open(this.#options.space)
+                    .replica.unappliedForeignSeqFloor?.() ?? Infinity,
+                );
+                if (invalidatedAt !== Infinity) {
+                  this.#pendingStructureLoads.delete(key);
+                  this.#noteRearmed(key, invalidatedAt);
+                  this.#pendingStructureRetryWake = true;
+                  stats.structureLoadDeferred += 1;
+                  this.#noteStructureLoadDeferral(
+                    key,
+                    root.id,
+                    "confirmation-invalidated",
+                    stats,
+                  );
+                  continue;
+                }
+                this.#pendingStructureLoads.delete(key);
+                this.#structureLoadDeferralStreaks.delete(key);
+                this.#terminalStructureLoads.set(
+                  key,
+                  new Set(confirmed.observedDocIds),
+                );
+                stats.structureLoadTerminal += 1;
+                logger.info?.("structure-load-terminal", () => [
+                  `demanded root ${root.id} confirmed synced with no ` +
+                  "pattern meta; parked terminal until a commit touches " +
+                  "it (stage P2-F, OW19)",
+                ]);
+              } else {
+                this.#pendingStructureLoads.add(key);
                 stats.structureLoadDeferred += 1;
                 this.#noteStructureLoadDeferral(
                   key,
                   root.id,
-                  "confirmation-invalidated",
+                  confirmed.reason,
                   stats,
                 );
-                continue;
               }
-              this.#pendingStructureLoads.delete(key);
-              this.#structureLoadDeferralStreaks.delete(key);
-              this.#terminalStructureLoads.set(
-                key,
-                new Set(confirmed.observedDocIds),
-              );
-              stats.structureLoadTerminal += 1;
-              logger.info?.("structure-load-terminal", () => [
-                `demanded root ${root.id} confirmed synced with no ` +
-                "pattern meta; parked terminal until a commit touches " +
-                "it (stage P2-F, OW19)",
-              ]);
             } else {
+              // Not loadable YET for a non-terminal reason (a chain
+              // cycle mid-write, an unloadable pattern awaiting its
+              // source docs). Counted per attempt (§7
+              // structureLoadDeferred) and left pending: the next
+              // input-driven cycle retries.
               this.#pendingStructureLoads.add(key);
               stats.structureLoadDeferred += 1;
               this.#noteStructureLoadDeferral(
                 key,
                 root.id,
-                confirmed.reason,
+                verdict.reason,
                 stats,
               );
+              logger.debug?.("structure-load-deferred", () => [
+                `demanded root ${root.id} not loadable yet ` +
+                `(${verdict.reason ?? "unclassified"}); ` +
+                "retrying next demand cycle",
+              ]);
             }
-          } else {
-            // Not loadable YET for a non-terminal reason (a chain
-            // cycle mid-write, an unloadable pattern awaiting its
-            // source docs). Counted per attempt (§7
-            // structureLoadDeferred) and left pending: the next
-            // input-driven cycle retries.
+          } catch (error) {
+            if (!this.#active || this.#runtime !== runtime) return;
             this.#pendingStructureLoads.add(key);
-            stats.structureLoadDeferred += 1;
-            this.#noteStructureLoadDeferral(
-              key,
-              root.id,
-              verdict.reason,
-              stats,
-            );
-            logger.debug?.("structure-load-deferred", () => [
-              `demanded root ${root.id} not loadable yet ` +
-              `(${verdict.reason ?? "unclassified"}); ` +
-              "retrying next demand cycle",
+            stats.structureLoadFailures += 1;
+            logger.warn("structure-load-failed", () => [
+              `demanded root ${root.id} did not load`,
+              error,
             ]);
           }
-        } catch (error) {
-          if (!this.#active || this.#runtime !== runtime) return;
-          this.#pendingStructureLoads.add(key);
-          stats.structureLoadFailures += 1;
-          logger.warn("structure-load-failed", () => [
-            `demanded root ${root.id} did not load`,
-            error,
-          ]);
-        } finally {
-          if (this.#structureLoadChangedDocs === changedDocs) {
-            this.#structureLoadChangedDocs = undefined;
-          }
         }
+      }
+    } finally {
+      if (this.#structureLoadChangedDocs === changedDocs) {
+        this.#structureLoadChangedDocs = undefined;
       }
     }
     if (arrivals.size > 0) {
@@ -4940,25 +5219,24 @@ export class SpaceServer implements TransactionSealDestination {
     // The (d′) `demand` counter block (serving-loop.md §7). Current
     // snapshots (`demandedRows` / `demandedInstances` / `demandedPairs` /
     // `demandedWriters`) plus their maxima and the ACCUMULATED tallies.
-    // No per-row engine read: `demandedRows` is the exposed row count,
-    // `demandedInstances` the registry size, both O(1) reads of counts the
-    // reconcile already produced (W0 obligation (i)). No `walkRuns` — the
+    // No per-row engine read: `demandedRows` is the mirror's row count,
+    // `demandedInstances` the registry size and `demandedPairs` the pair
+    // count, all O(1) reads of counts the reconcile keeps (W0 obligation
+    // (i)). No `walkRuns` — the
     // walk is deleted; T9′ pins its absence. The flag-4 no-writer count
     // (a demanded piece doc with no server-registered writer) needs a
     // per-row engine read for the pattern-meta test, so it is NOT computed
     // here; W0 measured it once (chat 2 / note 19 / lunch 0) and the
     // register carries the id-class-filtered structure-load extension as a
     // future option (flag 4).
-    let pairCount = 0;
-    for (const pairs of this.#demandersByKey.values()) pairCount += pairs.size;
     const d = stats.demand;
-    d.demandedRows = rows.length;
+    d.demandedRows = this.#demandMirror.rowCount;
     d.demandedInstances = this.#demandersByKey.size;
     d.demandedInstancesMax = Math.max(
       d.demandedInstancesMax,
       d.demandedInstances,
     );
-    d.demandedPairs = pairCount;
+    d.demandedPairs = this.#demandedPairCount;
     d.demandedWriters = runtime.scheduler.demandedWriterCount;
     d.demandedWritersMax = Math.max(d.demandedWritersMax, d.demandedWriters);
     // Obligation (iii) + MINOR-2: fold the enter/leave delta SINCE THE
@@ -4970,6 +5248,75 @@ export class SpaceServer implements TransactionSealDestination {
     d.notCurrentRearms += notCurrentRearms;
     d.demandPasses += 1;
     d.demandPassMs += performance.now() - passStart;
+  }
+
+  /**
+   * Bring every root document this pass's structure loads will read into the
+   * serving replica, in one pull.
+   *
+   * The pass's structure loads are sequential — each root's traversal may
+   * START a piece, and a start's writes belong to the wave that asked for it
+   * — and each begins by syncing the root document it was handed, and, where
+   * a scoped demand reads meta-less, the space instance it falls back to.
+   * Awaiting them one at a time puts each of those syncs in a
+   * `session.watch.add` of its own, so a pass over a board's roots costs a
+   * round trip per root inside the wave's settle. Issued together, the
+   * replica's refresh queue coalesces them into one add, and the traversals
+   * that follow find their documents already held.
+   *
+   * What this changes is when the pass waits, not how it decides: the
+   * addresses are the ones a load syncs, through the same session and under
+   * the same identity, and a root whose sync fails is left to its own
+   * traversal to report. One address is taken more often than a load takes
+   * it. A load syncs a scoped root's space instance only when the scoped read
+   * finds no pattern pointer and starts nothing, which the pull cannot know
+   * in advance, so it takes that instance for every scoped root, and a scoped
+   * root whose own instance resolves gains one watch its load would not have
+   * added. That shape is uncommon — piece structure lives on the space
+   * instance, so a scoped instance normally reads meta-less and falls back —
+   * and not taking the fallback would leave it a sequential round trip for
+   * every scoped root that does fall back.
+   *
+   * The skips restate the pass's own — a terminal park, an id class that
+   * never owns a piece, and a known root whose load is no longer owed —
+   * and only the coalescing rests on their agreeing. A root this pulls that
+   * the pass then skips is one a client demands either way, and a root this
+   * misses is one its traversal fetches as it always did.
+   */
+  async #loadStructureRootDocs(
+    runtime: Runtime,
+    rootKeys: ReadonlyMap<string, { id: string; scope?: CellScope }>,
+  ): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    for (const [key, root] of rootKeys) {
+      const firstDemand = !this.#demandedRoots.has(key);
+      if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
+      if (this.#terminalStructureLoads.has(key)) continue;
+      if (neverAPieceRootId(root.id)) continue;
+      const scope = root.scope ?? "space";
+      // A scoped demand that reads meta-less falls back to the SPACE
+      // instance, so both are addresses a load may sync and both belong in
+      // the pull. They are one address when the demand is space-scoped.
+      const scopes: CellScope[] = scope === "space" ? ["space"] : [
+        scope,
+        "space",
+      ];
+      for (const instance of scopes) {
+        const cell = runtime.getCellFromLink({
+          space: this.#options.space,
+          id: root.id as URI,
+          scope: instance,
+          path: [],
+        });
+        // A sync that rejects is not this pass's to report: the root's own
+        // traversal issues the same sync a moment later and its failure arm
+        // counts and logs what went wrong.
+        pending.push(cell.sync().catch(() => {}));
+      }
+    }
+    if (pending.length === 0) return;
+    this.#options.stats.demand.structureRootsPreloaded += pending.length;
+    await Promise.all(pending);
   }
 
   /** (d′) — flag 6's index (root id → the registry keys whose
@@ -5013,6 +5360,39 @@ export class SpaceServer implements TransactionSealDestination {
         if (rkeys.size === 0) this.#keysByResolvedRoot.delete(resolved);
       }
     }
+  }
+
+  /** Whether some client session demands `key`, or it is warm demand. */
+  #isDemandKey(key: string): boolean {
+    return this.#demandMirror.rowsFor(key) !== undefined ||
+      this.#warmDemandKeys.has(key);
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which retires a DEPARTED key: its
+   * registry entry and demanding pairs, its structure-load state, and the
+   * standing root status of its writers (1→0, bracketed).
+   */
+  #retireDemandKey(runtime: Runtime, key: string): void {
+    this.#demandedPairCount -= this.#demandersByKey.get(key)?.size ?? 0;
+    this.#demandersByKey.delete(key);
+    this.#demandedRoots.delete(key);
+    this.#unindexDemandKey(key);
+    this.#pieceRootByDemandKey.delete(key);
+    this.#pendingStructureLoads.delete(key);
+    this.#terminalStructureLoads.delete(key);
+    this.#rearmedAwaitingSettle.delete(key);
+    // The stuck-streak entry retires with the rest of the per-key load
+    // state: a departed root's streak would otherwise linger for the space's
+    // whole life, and a later re-demand of the same key would resume an
+    // obsolete streak instead of starting a fresh episode.
+    this.#structureLoadDeferralStreaks.delete(key);
+    const sep = key.indexOf("\0");
+    runtime.scheduler.leaveDemandedEntity({
+      space: this.#options.space,
+      id: key.slice(sep + 1),
+      scope: scopeOfScopeKey(key.slice(0, sep)) as CellScope,
+    });
   }
 
   /** Track one root's consecutive-deferral streak and surface the
@@ -5218,6 +5598,67 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Helper for `#serveWave()`, which clamps `head` below every input the
+   * serving scheduler cannot have run yet however quiet it is: foreign
+   * novelty the replica still shadows behind one of this loop's own parked
+   * commits, an event entry the drain could not queue, and an input that
+   * re-armed a terminal root whose retry has not run. Returns the floor and
+   * the head after the shadow clamp alone as well, which `watermarkClamped`
+   * reads.
+   */
+  #visibleInputHead(
+    runtime: Runtime,
+    head: number,
+  ): {
+    shadowFloor: number | undefined;
+    shadowVisible: number;
+    visible: number;
+  } {
+    const shadowFloor = runtime.storageManager
+      .open(this.#options.space).replica.unappliedForeignSeqFloor?.();
+    const shadowVisible = shadowFloor === undefined
+      ? head
+      : Math.min(head, shadowFloor - 1);
+    // A settled scheduler has not processed an entry the drain could not
+    // queue. Its later frame application alone cannot establish coverage.
+    const eventVisible = this.#eventVisibilityFloor === undefined
+      ? shadowVisible
+      : Math.min(shadowVisible, this.#eventVisibilityFloor - 1);
+    // A root the shadow floor defers keeps its re-arming input uncovered
+    // even when that input sits below the floor.
+    const visible = Math.min(
+      eventVisible,
+      minOf([...this.#rearmedAwaitingSettle.values()].map((seq) => seq - 1)),
+    );
+    return { shadowFloor, shadowVisible, visible };
+  }
+
+  /**
+   * Helper for `#serveWave()`, which reports whether a terminal root that a
+   * commit re-armed still owes this settle its structure load: a settle
+   * does not end while one does. Frame application makes the re-arming
+   * metadata readable, so a root re-armed while the replica shadows foreign
+   * novelty waits for a later cycle, and `#visibleInputHead()` keeps W below
+   * the input that re-armed it meanwhile.
+   */
+  #rearmPending(runtime: Runtime): boolean {
+    return this.#rearmedAwaitingSettle.size > 0 &&
+      runtime.storageManager.open(this.#options.space).replica
+          .unappliedForeignSeqFloor?.() === undefined;
+  }
+
+  /**
+   * Re-arms the terminal root `key` for a retry after frame application,
+   * keeping the lowest seq of an input that may have re-armed it.
+   */
+  #noteRearmed(key: string, seq: number): void {
+    const known = this.#rearmedAwaitingSettle.get(key);
+    if (known === undefined || seq < known) {
+      this.#rearmedAwaitingSettle.set(key, seq);
+    }
+  }
+
+  /**
    * The tenure's space-root ensure (OW45 arm-B server-ensure stage 1;
    * design PR #6209 §1/§4): make sure the space's default pattern
    * EXISTS and is FRESH — the client-era duties 1 and 2, no start (the
@@ -5279,6 +5720,7 @@ export class SpaceServer implements TransactionSealDestination {
         // client's `space === runtime.userIdentityDID` is WRONG here —
         // a serving runtime's userIdentityDID is the SERVICE DID.
         isHomeSpace: owner === space,
+        genesisRoot: readGenesisRoot(engine),
         stampCreationTx: (tx) => {
           runtime.stampServerRun(tx, {
             actionId: `space-root-ensure/${space}`,
@@ -5287,9 +5729,7 @@ export class SpaceServer implements TransactionSealDestination {
           // AFTER the stamp (which leaves an actor-less bookkeeping
           // run's snapshot alone), the owner-resolved per-run snapshot
           // — before the transaction's first read.
-          tx.setCfcTrustSnapshot(
-            runtime.trustSnapshotForPrincipal(owner),
-          );
+          setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(owner));
         },
       });
       // The F2 bound: race the ensure against its deadline. On the
@@ -5357,8 +5797,8 @@ export class SpaceServer implements TransactionSealDestination {
     // passes below load what the ensure materializes. Fully awaited
     // like the drain — once per tenure, so a slow first compile costs
     // the first wave only; its seal joins THIS cycle's wave and commits
-    // with it. (Its commit resolves at seal-accept — the wave commit
-    // happens at this cycle's end — so awaiting it here cannot
+    // with it. (`commit().settled` resolves at seal acceptance — the wave
+    // commit happens at this cycle's end — so awaiting it here cannot
     // deadlock against the wave.)
     if (this.#rootEnsureOwed) {
       this.#rootEnsureOwed = false;
@@ -5592,6 +6032,13 @@ export class SpaceServer implements TransactionSealDestination {
    */
   async #serveWave(runtime: Runtime): Promise<void> {
     const { batchHead } = this.#drainFeed(runtime);
+    // A record the drain holds back stops this batch short of it. An
+    // exhausted cycle's proof is clamped to this batch head in any case;
+    // lowering the carried head too keeps it naming only frames that have
+    // been applied.
+    if (this.#barrierHead !== undefined) {
+      this.#barrierHead = Math.min(this.#barrierHead, batchHead);
+    }
     // The event drain stays a fully-awaited, single-flight step AHEAD
     // of the deadline race (Phase 3's shape): at most one drain runs
     // at a time, so a deadline-cut wave can never leave a detached
@@ -5668,6 +6115,9 @@ export class SpaceServer implements TransactionSealDestination {
     };
     let loadPass = joinLoadPass();
     let exhausted = false;
+    // The head this settle proves covered (see `#barrierHead`), clamped as
+    // the advance below clamps: what an exhausted cycle advances W to.
+    let provenHead: number | undefined;
     // The segment the deadline actually cuts. Read against
     // `executor/wave/cycle`: a settle at the deadline inside a much longer
     // cycle means the wave's cost is the seal and the commit, not the
@@ -5684,6 +6134,19 @@ export class SpaceServer implements TransactionSealDestination {
           (async () => {
             await loadPass;
             await runtime.idle();
+            // The probe and the floors that clamp the proof are read in one
+            // synchronous stretch, as the exit probe below and the floors the
+            // advance reads are, so no shadow promotion falls between them.
+            const barrierHead = this.#barrierHead;
+            if (
+              barrierHead !== undefined && runtime.scheduler.isIdle() &&
+              !this.#rearmPending(runtime)
+            ) {
+              provenHead = Math.max(
+                provenHead ?? 0,
+                this.#visibleInputHead(runtime, barrierHead).visible,
+              );
+            }
             // Couple the settle to FRAME DELIVERY (W-soundness): the
             // feed learns of a commit synchronously at admission, but
             // the serving runtime's DIRTINESS arrives on the loopback
@@ -5698,12 +6161,13 @@ export class SpaceServer implements TransactionSealDestination {
             // The INPUT barrier, not the durability barrier: sealed
             // commits settle at the wave commit BELOW, so the full
             // synced() would deadlock here (see
-            // StorageManager.inputSynced).
+            // StorageManager.inputSynced). It also waits for the
+            // loopback transport to hand over every frame the drain
+            // above sent, which it does one frame per event-loop turn.
             await runtime.storageManager.inputSynced?.();
-            // One macrotask yield: loopback frames are delivered
-            // synchronously on send, but their application schedules
-            // work; the yield lets it register dirtiness so the
-            // isIdle() probe below sees it. (An application parked
+            // One macrotask yield: a handed-over frame's application
+            // schedules work; the yield lets it register dirtiness so
+            // the isIdle() probe below sees it. (An application parked
             // behind one of our own sealed commits is excluded from
             // the W advance below via unappliedForeignSeqFloor — the
             // settle input barrier, Phase 2 revisit (a).)
@@ -5718,11 +6182,10 @@ export class SpaceServer implements TransactionSealDestination {
           break;
         }
         if (!this.#active || this.#runtime !== runtime) break;
-        if (
-          this.#rearmedAwaitingSettle.size > 0 &&
-          runtime.storageManager.open(this.#options.space).replica
-              .unappliedForeignSeqFloor?.() === undefined
-        ) {
+        // The barrier above has applied every frame at or below the batch
+        // head, whatever the probes below find.
+        this.#barrierHead = batchHead;
+        if (this.#rearmPending(runtime)) {
           if (Date.now() >= deadline) {
             exhausted = true;
             this.#purgeLt1Leftovers(runtime);
@@ -5730,7 +6193,7 @@ export class SpaceServer implements TransactionSealDestination {
           }
           // Frame application makes the re-arming metadata readable. Its
           // structure load and derivations still belong to this settle.
-          for (const key of this.#rearmedAwaitingSettle) {
+          for (const key of this.#rearmedAwaitingSettle.keys()) {
             this.#pendingStructureLoads.add(key);
           }
           this.#rearmedAwaitingSettle.clear();
@@ -5753,6 +6216,9 @@ export class SpaceServer implements TransactionSealDestination {
     // one, and folding its duration in would blunt the measurement.
     timing.time(settleStart, "executor", "wave", "settle");
     if (!this.#active || this.#runtime !== runtime) return;
+    // Read once: a settle step the deadline cut keeps running detached, and
+    // a proof it reaches after this point belongs to no wave.
+    const proven = exhausted ? provenHead : undefined;
 
     const wave = this.#currentWave;
     const haveContributions = (wave?.contributionCount ?? 0) > 0;
@@ -5771,9 +6237,9 @@ export class SpaceServer implements TransactionSealDestination {
     // (serving-loop.md §3): everything at or below batchHead has its
     // consequences committed and its demanded derivations current —
     // that is what the settle above established. An exhausted flush
-    // carries no watermark movement. The advance is input-driven (the
-    // batch head only moves when commits arrive), so a quiet space
-    // commits nothing.
+    // moves W only as far as its prefix coverage proved, and not at all
+    // without one. The advance is input-driven (the batch head only
+    // moves when commits arrive), so a quiet space commits nothing.
     //
     // The settle input barrier (Phase 2 revisit (a)): the settle above
     // proves frames were SENT and pulls settled — not that every
@@ -5788,19 +6254,13 @@ export class SpaceServer implements TransactionSealDestination {
     // shadow-flip wake (`shadowFlipObserver`, installed at activation —
     // without it a then-quiet space would wait out the idle window),
     // the woken wave derives over the foreign value, and W catches up.
-    const shadowFloor = runtime.storageManager
-      .open(this.#options.space).replica.unappliedForeignSeqFloor?.();
-    const shadowVisibleHead = shadowFloor === undefined
-      ? batchHead
-      : Math.min(batchHead, shadowFloor - 1);
-    // A settled scheduler has not processed an entry the drain could not
-    // queue. Its later frame application alone cannot establish coverage.
-    const inputVisibleHead = this.#eventVisibilityFloor === undefined
-      ? shadowVisibleHead
-      : Math.min(shadowVisibleHead, this.#eventVisibilityFloor - 1);
-    const inputAdvanceTo = exhausted
+    const { shadowFloor, shadowVisible: shadowVisibleHead, visible } = this
+      .#visibleInputHead(runtime, batchHead);
+    const inputAdvanceTo = !exhausted
+      ? Math.max(this.#watermark, visible)
+      : proven === undefined
       ? this.#watermark
-      : Math.max(this.#watermark, inputVisibleHead);
+      : Math.max(this.#watermark, Math.min(proven, visible));
     if (
       !exhausted && shadowVisibleHead < batchHead &&
       batchHead > this.#watermark
@@ -5813,8 +6273,8 @@ export class SpaceServer implements TransactionSealDestination {
       // REMOVE's sentinel floor 1 holds W entirely — where advanceTo
       // == W and the pre-fix `advanceTo > W` guard missed the count. A
       // floor with batchHead ≤ W is still NOT a clamp: no advance was
-      // owed. An exhausted flush is likewise excluded — exhaustion
-      // suppresses the advance regardless of the floor, and §7's
+      // owed. An exhausted flush is likewise excluded: its advance is
+      // bounded by its prefix coverage before any floor, and §7's
       // wavesBudgetExhausted carries that case.
       this.#options.stats.watermarkClamped += 1;
       logger.info?.("watermark-clamped", () => [
@@ -5874,7 +6334,7 @@ export class SpaceServer implements TransactionSealDestination {
         settleAdvanceGeneration = this.#ownContentGeneration;
       }
     }
-    const shouldAdvance = !exhausted && advanceTo > this.#watermark;
+    const shouldAdvance = advanceTo > this.#watermark;
 
     // The wave the bookkeeping write below seals into must be one opened
     // at this cycle's serverSeq, not one a seal opened earlier and left
@@ -5912,10 +6372,11 @@ export class SpaceServer implements TransactionSealDestination {
     // The loop's own bookkeeping write (the sanctioned internal stamp
     // kind): the watermark doc advances INSIDE the same wave commit —
     // never its own commit (protocol.md §4). An exhausted wave carries
-    // no watermark movement (`derivedThrough` stays at the current W;
-    // serving-loop.md §3). Written as a key-path SET (a patch against an
-    // existing doc) so the bookkeeping conflict class's REBASE arm is
-    // live: a disjoint concurrent patch to the watermark doc commutes,
+    // only the movement its prefix coverage proved (`derivedThrough`
+    // otherwise stays at the current W; serving-loop.md §3). Written as a
+    // key-path SET (a patch against an existing doc) so the bookkeeping
+    // conflict class's REBASE arm is live: a disjoint concurrent patch to
+    // the watermark doc commutes,
     // while a whole-doc authored intrusion (forgery) still conflicts
     // semantically and drops the DOC write whole. Stated truthfully:
     // that drop is decided inside commitWave, AFTER `advanceSealed`
@@ -5955,7 +6416,7 @@ export class SpaceServer implements TransactionSealDestination {
         },
         advanceTo,
       );
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error) {
         // The advance did not enter the wave: W must not move either —
         // the doc and the metadata advance together or not at all
@@ -5988,42 +6449,10 @@ export class SpaceServer implements TransactionSealDestination {
     // sink's engineFor is synchronous. Same host, same process.
     await this.#resolveForeignEngines(closing);
 
-    // OW31 B4 (RULED 2026-08-18; protocol.md §2's genesis clause): for
-    // every foreign target this wave was granted via the `creation`
-    // arm, force the fresh space's GENESIS ACL — signed by the space's
-    // own keys, naming the acting user OWNER — BEFORE the sink applies
-    // the data batch, so the space's commit #1 IS the ACL commit
-    // (INV-13's precedence, mirrored onto the engine-direct plane; the
-    // sink refuses a foreign batch into a seq-0/no-ACL engine as the
-    // backstop). The forcing is the provider mount's own bootstrap
-    // (`#createInitializedSession`): an in-process loopback round trip,
-    // idempotent on replay (the ACL exists → the bootstrap skips, and
-    // the accept gate re-granted via `acl` through the owner). Failure
-    // is isolated per space, exactly like a failed engine resolution:
-    // the sink's refusal then fails the contributions targeting the
-    // space (requeue for events, drop for derivations) and the wave
-    // commits the rest.
-    for (const creationSpace of closing.creationGrantedForeignSpaces()) {
-      try {
-        await this.#runtime!.storageManager.ensureSpaceInitialized?.(
-          creationSpace,
-        );
-      } catch (error) {
-        logger.warn("foreign-genesis-forcing-failed", () => [
-          `forcing the genesis ACL of creation-granted foreign space ` +
-          `${creationSpace} failed; its contributions will be refused ` +
-          `by the sink's INV-13 mirror and replay (OW31 B4; ` +
-          "protocol.md §2b)",
-          error,
-        ]);
-      }
-    }
-
-    const derivedThrough = !exhausted && advanceSealed
-      ? advanceTo
-      : this.#watermark;
+    const derivedThrough = advanceSealed ? advanceTo : this.#watermark;
     const outcome = await closing.commitWave(this.#sink!, { derivedThrough });
     this.#servedWave = { wave: closing, outcome };
+    if (outcome.aborted !== undefined) this.#barrierHead = undefined;
     if (outcome.seq !== undefined) this.#lastCommittedWaveSeq = outcome.seq;
     // The EXPLICIT WARM REQUEST (serving-loop.md §1's third activation
     // trigger; RULED 2026-08-21): every foreign provisioning batch this
@@ -6197,9 +6626,13 @@ export class SpaceServer implements TransactionSealDestination {
         outcome.seq,
         closing.contentContributionCount > 0,
       );
-      if (!exhausted && advanceSealed) {
+      if (advanceSealed) {
         const advancedFrom = this.#watermark;
         this.#watermark = advanceTo;
+        if (exhausted) stats.exhaustedAdvances += 1;
+        if (this.#barrierHead !== undefined && this.#barrierHead <= advanceTo) {
+          this.#barrierHead = undefined;
+        }
         this.#recordSettleCoverage(advanceTo);
         for (const seq of this.#ownDerivedSeqs) {
           if (seq <= advanceTo) this.#ownDerivedSeqs.delete(seq);
@@ -6303,7 +6736,7 @@ export class SpaceServer implements TransactionSealDestination {
    * `runtime.dispose()` forever (its loopback loads died with the
    * crashed wave), and a park gated on that dispose never resolves
    * `#parked` — every recovery the host chains behind `whenParked`
-   * (`#reactivateAfterPark`, fired on each subsequent admission) then
+   * (`#reactivateAfterPark`) then
    * waits for eternity and the space is never served again, while
    * events keep appending durably. By the time dispose runs, the park's
    * semantic obligations are already met: the loop is stopped, the wave
@@ -6317,59 +6750,26 @@ export class SpaceServer implements TransactionSealDestination {
     this.#viewPlanPublisher.dispose();
     const dispose = this.#disposeRuntime;
     if (dispose === undefined) return;
-    const timeoutMs = this.#options.policy?.parkDisposeTimeoutMs ??
-      DEFAULT_PARK_DISPOSE_TIMEOUT_MS;
-    const pending = dispose();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const winner = await Promise.race([
-      pending.then(
-        () => "disposed" as const,
-        () => "failed" as const,
-      ),
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-    if (timer !== undefined) clearTimeout(timer);
-    if (winner === "failed") {
-      // Re-await so the caller's catch logs the error (the existing
-      // park-dispose-failed arm).
-      return pending;
-    }
-    if (winner === "timeout") {
-      this.#options.stats.parkDisposeTimeouts += 1;
-      logger.error(
-        "park-dispose-timeout",
+    // A dispose that fails in time rejects here, for the caller's
+    // park-dispose-failed arm to log.
+    await awaitDisposeTimeboxed(dispose(), {
+      policy: this.#options.policy,
+      stats: this.#options.stats,
+      space: this.#options.space,
+      overrun: (timeoutMs) =>
         `space ${this.#options.space}: runtime dispose overran ` +
-          `${timeoutMs}ms during park (${reason}); abandoning the ` +
-          "factory handle and completing the park — loop stopped, " +
-          "wave abandoned, seal chain drained; lease releases and " +
-          "whenParked resolves now (park liveness)",
-      );
-      // The abandoned dispose keeps running; observe its eventual fate
-      // so a late completion is visible and a late rejection never
-      // becomes an unhandled rejection.
-      pending.then(
-        () => {
-          logger.warn("park-dispose-late", () => [
-            `space ${this.#options.space}: abandoned park dispose ` +
-            "completed late",
-          ]);
-        },
-        (error) => {
-          logger.warn("park-dispose-late-failed", () => [
-            `space ${this.#options.space}: abandoned park dispose ` +
-            "failed late",
-            error,
-          ]);
-        },
-      );
-    }
+        `${timeoutMs}ms during park (${reason}); abandoning the ` +
+        "factory handle and completing the park — loop stopped, " +
+        "wave abandoned, seal chain drained; lease releases and " +
+        "whenParked resolves now (park liveness)",
+    });
   }
 
-  /** Park (serving-loop.md §1): release the lease, dispose the runtime.
-   * A park racing an incoming commit self-heals — the admission hook
-   * re-fires on the next admission and the host re-activates. */
+  /** Park (serving-loop.md §1): release the lease, and either hand the
+   * runtime to `retainParkedRuntime` — an idle park, when the caller keeps
+   * it — or dispose it, as every other park does. Once the park
+   * completes, the host re-activates a space that still meets the ACTIVE
+   * criteria, unless a rival's lease caused the park. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the renew arm's lease-lost park runs
     // unawaited — is what a second caller waits for: the host's close
@@ -6384,6 +6784,13 @@ export class SpaceServer implements TransactionSealDestination {
 
   async #parkResources(reason: string): Promise<void> {
     const wasActive = this.#active;
+    // Only an idle park offers the runtime on (serving-loop.md §1,
+    // "Parking"): the loop settled, nothing was queued, and no session
+    // demanded anything, so the runtime holds a served state a successor
+    // can take up as it stands.
+    const offerRuntime = reason === "idle" && wasActive &&
+      this.#runtime !== undefined &&
+      this.#options.retainParkedRuntime !== undefined;
     this.#active = false;
     this.#parkRequested = true;
     this.#structureLoadAbort.abort();
@@ -6408,6 +6815,7 @@ export class SpaceServer implements TransactionSealDestination {
     // The drain's in-flight copies die with the scheduler queue below.
     this.#drainInFlight.clear();
     this.#eventVisibilityFloor = undefined;
+    this.#barrierHead = undefined;
     for (const timer of this.#deliveryFailureWakeTimers.values()) {
       clearTimeout(timer);
     }
@@ -6424,11 +6832,19 @@ export class SpaceServer implements TransactionSealDestination {
     this.#attentionSealWriteBlocked.clear();
     this.#deliveryWriteBlockedAt.clear();
     this.#uncommittedDeliveryFailureEpochs.clear();
+    if (offerRuntime) this.#leaveDemandedEntities(this.#runtime!);
     this.#demandedRoots.clear();
     this.#demandersByKey.clear();
+    this.#demandedPairCount = 0;
     this.#pieceRootByDemandKey.clear();
     this.#keysByRootId.clear();
     this.#keysByResolvedRoot.clear();
+    this.#demandRootAddresses.clear();
+    this.#rootsAwaitingFirstLoad.clear();
+    // The registry is empty, so the next tenure's first pass reconciles
+    // every key it reads.
+    this.#demandMirror.clear();
+    this.#demandFullReconcile = true;
     if (this.#demandWakeTimer !== undefined) {
       clearTimeout(this.#demandWakeTimer);
       this.#demandWakeTimer = undefined;
@@ -6460,6 +6876,15 @@ export class SpaceServer implements TransactionSealDestination {
     this.#currentWave = undefined;
     await this.#sealChain;
     wave?.abandon(`parked: ${reason}`);
+    // An effect this tenure admitted and has not retired is tied to the
+    // outbox closed below. A held dispatch is dropped there, and only a
+    // fresh runtime's memo re-miss fires it again; a dispatched one
+    // completes after the close, and a successor would commit that
+    // completion without the identity carriage this outbox holds for it.
+    const effectsSettled = (this.#outbox?.inflightCount ?? 0) === 0 &&
+      [...this.#pendingEffectsByWave.values()].every((batches) =>
+        batches.length === 0
+      );
     // Stage G: an abandoned wave's deferred effects are DISCARDED with
     // it — the runtime below is disposed, so this is the
     // crash-equivalent path §4/§6 already cover (the effect re-misses
@@ -6477,6 +6902,7 @@ export class SpaceServer implements TransactionSealDestination {
     // work for a dead runtime after re-activation rebuilt the outbox.
     this.#outbox?.close();
     this.#outbox = undefined;
+    let detached = false;
     try {
       if (this.#runtime !== undefined) {
         this.#runtime.asyncWorkObserver = undefined;
@@ -6492,19 +6918,30 @@ export class SpaceServer implements TransactionSealDestination {
           .shadowFlipObserver = undefined;
       }
       this.#runtime?.clearSealDestination();
+      detached = true;
     } catch (error) {
       logger.warn("park-runtime-cleanup-failed", () => [
         "runtime observer cleanup during park failed",
         error,
       ]);
     }
-    try {
-      await this.#disposeRuntimeTimeboxed(reason);
-    } catch (error) {
-      logger.warn("park-dispose-failed", () => [
-        "runtime dispose during park failed",
-        error,
-      ]);
+    // A runtime whose observers did not all detach still reports into this
+    // tenure, one whose open wave was just abandoned holds runs its
+    // scheduler counts as done whose writes never committed, and one with
+    // effects unsettled holds work only a fresh runtime recovers; each is
+    // disposed rather than offered on.
+    if (
+      !(offerRuntime && detached && wave === undefined && effectsSettled &&
+        this.#offerRuntime())
+    ) {
+      try {
+        await this.#disposeRuntimeTimeboxed(reason);
+      } catch (error) {
+        logger.warn("park-dispose-failed", () => [
+          "runtime dispose during park failed",
+          error,
+        ]);
+      }
     }
     this.#runtime = undefined;
     this.#disposeRuntime = undefined;
@@ -6525,5 +6962,65 @@ export class SpaceServer implements TransactionSealDestination {
     ]);
     this.#options.onParked?.(reason);
     this.#parked.resolve();
+  }
+
+  /**
+   * Helper for `#parkResources()`, which offers the detached runtime to
+   * `retainParkedRuntime` and returns whether it was kept. The store head
+   * it records is read after the tenure's last seal settled, so it covers
+   * everything the tenure committed. A runtime that tried to write after
+   * the park is not offered.
+   */
+  #offerRuntime(): boolean {
+    if (this.#refusedWriteAfterPark) return false;
+    const runtime = this.#runtime!;
+    const dispose = this.#disposeRuntime!;
+    this.#viewPlanPublisher.dispose();
+    try {
+      this.#retainedAs = this.#options.retainParkedRuntime!({
+        runtime,
+        dispose,
+        space: this.#options.space,
+        head: Engine.serverSeq(this.#options.engine),
+      });
+    } catch (error) {
+      logger.warn("park-retain-failed", () => [
+        `space ${this.#options.space}: retaining the parked runtime failed; ` +
+        "disposing it instead",
+        error,
+      ]);
+      return false;
+    }
+    return this.#retainedAs !== undefined;
+  }
+
+  /**
+   * Helper for `#parkResources()`, which releases every demanded entity
+   * this tenure entered on `runtime`'s scheduler before the runtime is
+   * offered on. The successor tenure's demand pass enters what its own
+   * sessions demand, so an entity left entered here would stay a demand
+   * root that nothing ever leaves. Addressed as the demand pass addresses
+   * a departed key.
+   */
+  #leaveDemandedEntities(runtime: Runtime): void {
+    for (const key of this.#demandersByKey.keys()) {
+      const sep = key.indexOf("\0");
+      runtime.scheduler.leaveDemandedEntity({
+        space: this.#options.space,
+        id: key.slice(sep + 1),
+        scope: scopeOfScopeKey(key.slice(0, sep)) as CellScope,
+      });
+    }
+  }
+
+  /**
+   * Helper for `seal()` and `stageOutboundAppend()`, which records a write
+   * refused because this tenure had parked: on this tenure while its
+   * runtime has not been offered yet, and on the fenced instance holding
+   * it once it has.
+   */
+  #noteRefusedWriteAfterPark(): void {
+    this.#refusedWriteAfterPark = true;
+    this.#retainedAs?.noteRefusedWrite();
   }
 }

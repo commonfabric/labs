@@ -1,0 +1,8 @@
+{
+  "command": "loom.inspect",
+  "actor": "user",
+  "loomActor": "user",
+  "loomId": "loom-0123456789abcdef",
+  "version": 12,
+  "originLoomId": "loom-fedcba9876543210"
+}

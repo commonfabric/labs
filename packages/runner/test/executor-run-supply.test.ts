@@ -31,6 +31,10 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  createDocumentReadiness,
+  DocumentPending,
+} from "../src/document-readiness.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import { stampWaveRunContext, waveRunContextOf } from "../src/executor/wave.ts";
 import { MAX_RETRIES_FOR_REACTIVE } from "../src/scheduler/constants.ts";
@@ -64,7 +68,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
    * every run context — the unit-level stand-in for the SpaceServer's
    * stamper seam. */
   const passThroughDestination = (): TransactionSealDestination => ({
-    seal: (tx: IExtendedStorageTransaction) => tx.tx.commit(),
+    seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled,
   });
 
   const recordingStamper = (
@@ -310,7 +314,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       { n: 21 },
       parentCell,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
 
@@ -421,7 +425,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
         { items: [1, 2] },
         parentCell,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
       await runtime.idle();
 
@@ -473,7 +477,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
         pieceRootIds.includes(parentRootId) ? [alice, bob] : [],
     });
     const running = runtime.runner.run(tx, parentPattern, { n: 5 }, parentCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
     const principals = childDerivationPrincipals();
@@ -535,7 +539,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
         true,
         { originTx },
       );
-      expect((await originTx.commit()).error).toBeUndefined();
+      expect((await originTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await handled.promise;
 
@@ -750,6 +754,257 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       cancel();
     }
   });
+
+  it("stops re-running an instance whose seal is always refused, and leaves its sibling instance current", async () => {
+    // Alice's retries carry the causes her failed run consumed, and leave
+    // bob's instance current. Were they to re-run bob, each of his commits
+    // would reset the retry budget the two instances share, and alice's
+    // retries would never stop.
+
+    const rootId = "of:p2f-refused-seal-root";
+    const userDoc = runtime.getCellFromLink<{ v?: number }>({
+      space,
+      id: "of:p2f-refused-seal-user-doc" as never,
+      scope: "user",
+      path: [],
+    });
+    const spaceDoc = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-refused-seal-space-doc" as never,
+      scope: "space",
+      path: [],
+    });
+    const output = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-refused-seal-output" as never,
+      scope: "user",
+      path: [],
+    });
+    // Once `refuseAlice` is set, alice's seals are refused, the way a wave
+    // refuses a write its acting identity holds no grant for, and bob's
+    // commit. A refusal settles after the commits sealed before it, as a
+    // wave's seals settle in the order they sealed.
+    let refuseAlice = false;
+    let committed: Promise<unknown> = Promise.resolve();
+    runtime.installSealDestination({
+      seal: (tx: IExtendedStorageTransaction) => {
+        if (
+          refuseAlice &&
+          waveRunContextOf(tx)?.scopeKeyIdentity?.principal === alice.principal
+        ) {
+          const reason = new Error("write refused for alice");
+          tx.tx.abort(reason);
+          return committed.then(() => ({
+            error: {
+              name: "StorageTransactionAborted",
+              message: "write refused for alice",
+              reason,
+            },
+          }));
+        }
+        const result = tx.tx.commit().settled;
+        committed = result;
+        return result;
+      },
+    }, {
+      runStamper: recordingStamper,
+      runDemanderResolver: (pieceRootIds) =>
+        pieceRootIds.includes(rootId) ? [alice, bob] : [],
+    });
+    const runs = { alice: 0, bob: 0 };
+    let writes = 0;
+    const overBudget = Promise.withResolvers<"over budget">();
+    const action = Object.assign(
+      (tx: IExtendedStorageTransaction) => {
+        userDoc.withTx(tx).get();
+        // Every run writes a value of its own, so that every commit of bob's
+        // carries a write.
+        writes += 1;
+        output.withTx(tx).set((spaceDoc.withTx(tx).get() ?? 0) * 1000 + writes);
+        const principal = waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
+        if (principal === alice.principal) {
+          runs.alice += 1;
+          if (runs.alice > 4 * MAX_RETRIES_FOR_REACTIVE) {
+            overBudget.resolve("over budget");
+          }
+        } else if (principal === bob.principal) {
+          runs.bob += 1;
+        }
+      },
+      {
+        schedulerObservationIdentity: {
+          pieceId: `space:${rootId}`,
+          pieceRootId: rootId,
+        },
+      },
+    );
+    const cancel = runtime.scheduler.register(action, undefined, {
+      isEffect: true,
+    });
+    try {
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(runs).toEqual({ alice: 1, bob: 1 });
+
+      // A write to a space document both instances read dirties both.
+      refuseAlice = true;
+      await runtime.editWithRetry((tx) => spaceDoc.withTx(tx).set(1));
+      expect(
+        await Promise.race([
+          runtime.scheduler.idleWithPendingCommits().then(() => "idle"),
+          overBudget.promise,
+        ]),
+      ).toBe("idle");
+      // Bob ran once more, for the write. Alice ran for the write and then
+      // through her retry budget, which bob's one commit reset once.
+      expect(runs.bob).toBe(2);
+      expect(runs.alice - 1).toBeGreaterThanOrEqual(MAX_RETRIES_FOR_REACTIVE);
+      expect(runs.alice - 1).toBeLessThanOrEqual(MAX_RETRIES_FOR_REACTIVE + 1);
+    } finally {
+      cancel();
+    }
+  });
+
+  it("re-runs only the instance that awaited a document when its confirmation completes, so a refused instance's retries stop at the budget", async () => {
+    // A builtin that holds its output while a document loads re-arms its
+    // action once the document's presence or absence is confirmed. Were the
+    // re-arm to re-run bob, each of his commits would reset the retry budget
+    // the two instances share, and every document alice awaited would hand
+    // her refused retries another budget.
+
+    const rootId = "of:p2f-readiness-root";
+    const awaitedDocuments = 3;
+    const userDoc = runtime.getCellFromLink<{ v?: number }>({
+      space,
+      id: "of:p2f-readiness-user-doc" as never,
+      scope: "user",
+      path: [],
+    });
+    const spaceDoc = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-readiness-space-doc" as never,
+      scope: "space",
+      path: [],
+    });
+    const output = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-readiness-output" as never,
+      scope: "user",
+      path: [],
+    });
+    const awaited = (index: number) =>
+      runtime.getCellFromLink<number>({
+        space,
+        id: `of:p2f-readiness-awaited-${index}` as never,
+        scope: "space",
+        path: [],
+      });
+    let refuseAlice = false;
+    let committed: Promise<unknown> = Promise.resolve();
+    runtime.installSealDestination({
+      seal: (tx: IExtendedStorageTransaction) => {
+        if (
+          refuseAlice &&
+          waveRunContextOf(tx)?.scopeKeyIdentity?.principal === alice.principal
+        ) {
+          const reason = new Error("write refused for alice");
+          tx.tx.abort(reason);
+          return committed.then(() => ({
+            error: {
+              name: "StorageTransactionAborted",
+              message: "write refused for alice",
+              reason,
+            },
+          }));
+        }
+        const result = tx.tx.commit().settled;
+        committed = result;
+        return result;
+      },
+    }, {
+      runStamper: recordingStamper,
+      runDemanderResolver: (pieceRootIds) =>
+        pieceRootIds.includes(rootId) ? [alice, bob] : [],
+    });
+    const cancels: (() => void)[] = [];
+    const readiness = createDocumentReadiness(
+      runtime,
+      (cancel) => cancels.push(cancel),
+    );
+    const runs = { alice: 0, bob: 0 };
+    let refusedRuns = 0;
+    let writes = 0;
+    const action = Object.assign(
+      (tx: IExtendedStorageTransaction) => {
+        userDoc.withTx(tx).get();
+        const principal = waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
+        if (principal === alice.principal) {
+          runs.alice += 1;
+          if (refuseAlice) {
+            // Each of alice's first refused runs awaits a document of its own.
+            refusedRuns += 1;
+            if (refusedRuns <= awaitedDocuments) {
+              try {
+                readiness.requireDocument(awaited(refusedRuns), tx);
+              } catch (error) {
+                if (!(error instanceof DocumentPending)) throw error;
+              }
+            }
+          }
+        } else if (principal === bob.principal) {
+          runs.bob += 1;
+        }
+        writes += 1;
+        output.withTx(tx).set((spaceDoc.withTx(tx).get() ?? 0) * 1000 + writes);
+      },
+      {
+        schedulerObservationIdentity: {
+          pieceId: `space:${rootId}`,
+          pieceRootId: rootId,
+        },
+      },
+    );
+    const cancel = runtime.scheduler.register(action, undefined, {
+      isEffect: true,
+    });
+    readiness.onActionRegistered(action);
+    try {
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(runs).toEqual({ alice: 1, bob: 1 });
+
+      // A write to a space document both instances read dirties both.
+      refuseAlice = true;
+      await runtime.editWithRetry((tx) => spaceDoc.withTx(tx).set(1));
+      await runtime.scheduler.idleWithPendingCommits();
+      await storageManager.crossSpaceSettled();
+      await runtime.scheduler.idleWithPendingCommits();
+
+      // Every awaited document's confirmation completed.
+      for (let index = 1; index <= awaitedDocuments; index += 1) {
+        const tx = runtime.edit();
+        let pending = false;
+        try {
+          readiness.requireDocument(awaited(index), tx);
+        } catch (error) {
+          pending = error instanceof DocumentPending;
+        } finally {
+          tx.abort();
+        }
+        expect(pending).toBe(false);
+      }
+
+      // Alice ran for the write, through her retry budget, and once more for
+      // each confirmation that completed after the budget was spent. Bob ran
+      // once more, for the write.
+      expect(runs.alice - 1).toBeGreaterThanOrEqual(MAX_RETRIES_FOR_REACTIVE);
+      expect(runs.alice - 1).toBeLessThanOrEqual(
+        MAX_RETRIES_FOR_REACTIVE + 1 + awaitedDocuments,
+      );
+      expect(runs.bob).toBe(2);
+    } finally {
+      cancel();
+      cancels.forEach((cancelReadiness) => cancelReadiness());
+    }
+  });
 });
 
 // F1 (RULED 2026-08-13, option c): the piece-start setup commit's
@@ -830,7 +1085,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
       tx,
     );
     const running = runtime.runner.run(tx, v1, { limit: 3 }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     runtime.runner.stop(cell);
     const tx2 = runtime.edit();
@@ -838,7 +1093,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
       identity: v3Ref.identity,
       symbol: v3Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     return cell;
   };
 
@@ -863,7 +1118,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
             },
           });
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) => {
@@ -916,7 +1171,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
       tx,
     );
     const running = runtime.runner.run(tx, v1, { limit: 3 }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     runtime.runner.stop(cell);
 
@@ -937,7 +1192,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
             },
           });
         }
-        return sealTx.tx.commit();
+        return sealTx.tx.commit().settled;
       },
     }, {
       runStamper: (stampTx, info) => {
@@ -977,7 +1232,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
     const cell = await brickedPiece();
     const stamps: ServerRunInfo[] = [];
     runtime.installSealDestination({
-      seal: (tx: IExtendedStorageTransaction) => tx.tx.commit(),
+      seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled,
     }, {
       runStamper: (tx, info) => {
         stamps.push(info);

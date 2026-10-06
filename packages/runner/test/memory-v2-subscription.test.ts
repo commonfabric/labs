@@ -104,7 +104,7 @@ const staleReadSource = (uri: URI, seq: number) => ({
       space,
       id: uri,
       type: "application/json",
-      path: [],
+      path: toDocumentPath([]),
       meta: { seq },
     }];
   },
@@ -167,7 +167,7 @@ describe("Memory v2 storage notifications", () => {
   afterEach(async () => {
     const status = tx?.status();
     if (status?.status === "ready") {
-      await tx.commit();
+      await tx.commit().settled;
     }
     await runtime.dispose();
     await remoteClient.close();
@@ -187,7 +187,7 @@ describe("Memory v2 storage notifications", () => {
       path: [],
     }, { value: "hello" });
 
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(subscription.commits.length).toBeGreaterThanOrEqual(1);
     expect(subscription.commits.at(-1)).toMatchObject({
@@ -212,7 +212,7 @@ describe("Memory v2 storage notifications", () => {
       type: "application/json",
       path: [],
     }, { value: { profile: { name: "Ada", title: "Dr" } } });
-    await tx.commit();
+    await tx.commit().settled;
 
     subscription.clear();
 
@@ -223,7 +223,7 @@ describe("Memory v2 storage notifications", () => {
       type: "application/json",
       path: ["value", "profile", "name"],
     }, "Grace");
-    await tx.commit();
+    await tx.commit().settled;
 
     const commit = subscription.commits.at(-1);
     expect(commit).toMatchObject({
@@ -257,7 +257,7 @@ describe("Memory v2 storage notifications", () => {
       type: "application/json",
       path: [],
     }, { value: { tags: ["alpha", "beta", "gamma"] } });
-    await tx.commit();
+    await tx.commit().settled;
 
     subscription.clear();
 
@@ -268,7 +268,7 @@ describe("Memory v2 storage notifications", () => {
       type: "application/json",
       path: ["value", "tags", "length"],
     }, 2);
-    await tx.commit();
+    await tx.commit().settled;
 
     const commit = subscription.commits.at(-1);
     expect(commit).toMatchObject({
@@ -692,6 +692,7 @@ describe("Memory v2 storage notifications", () => {
       sync: SessionSync;
     }>();
     const session = {
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () => {
         watchStarted.resolve();
         return watchResponse.promise;
@@ -741,6 +742,7 @@ describe("Memory v2 storage notifications", () => {
       close: () => Promise.resolve(),
     } as unknown as MemoryV2Client.Client;
     const session = {
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () => Promise.reject(new Error("scripted watch failure")),
     } as unknown as MemoryV2Client.SpaceSession;
     const sessionFactory: SessionFactory = {

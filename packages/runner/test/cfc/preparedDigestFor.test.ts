@@ -39,11 +39,11 @@ describe("preparedDigestFor()", () => {
     const policy = deepFreeze({
       kind: "custom" as const,
       name: "p",
-      target: address("write", ["value", "nested"]),
+      target: address("write", ["nested"]),
       value: "payload",
     });
     const trace = deepFreeze({
-      source: address("source", ["value", "link"]),
+      source: address("source", ["link"]),
       target: address("target"),
       kind: "value" as const,
     });
@@ -61,6 +61,21 @@ describe("preparedDigestFor()", () => {
         source: address("source", ["link"]),
       }],
     })).toBe(digest);
+    // A leading `value` names a payload field of that name, a different path.
+    expect(preparedDigestFor({
+      ...input,
+      writePolicyInputs: [{
+        ...policy,
+        target: address("write", ["value", "nested"]),
+      }],
+    })).not.toBe(digest);
+    expect(preparedDigestFor({
+      ...input,
+      dereferenceTraces: [{
+        ...trace,
+        source: address("source", ["value", "link"]),
+      }],
+    })).not.toBe(digest);
     expect(preparedDigestFor({ ...input, writePolicyInputs: [policy, policy] }))
       .not.toBe(digest);
   });

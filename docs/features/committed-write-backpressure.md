@@ -37,7 +37,9 @@ commit succeed — that is, whether the rejection is a **stale basis**:
 
 - **Retry through the window — a stale basis.** Two rejections mean the confirmed
   timeline moved under the commit, so re-reading it fresh can resolve it: a
-  server-side `ConflictError` (another writer advanced the entity's sequence) and
+  server-side `ConflictError` (another writer advanced the entity's sequence, or
+  changed a document the commit pinned with an `entity-value-hash`
+  precondition) and
   the local `StorageTransactionInconsistent` guard (a value the transaction read
   changed on this replica between the read and the commit). These are exactly what
   a contention burst — a space rehydrating while a handler writes to it — produces.
@@ -195,8 +197,10 @@ The same `retries` boolean also gates the inSpace-name resolution path
 (`RetryImmediately`), which re-runs the handler to resolve a
 `PatternFactory.inSpace("name")` target. That loop needs no count either: name
 resolution is monotonic — each re-run resolves at least one previously-unresolved
-name into a cache, and a resolved name never becomes pending again — so a handler
-that references finitely many distinct names terminates on its own. A
+name, either by reading the calling space's allocation record or by creating a
+space the runtime remembers for that name, and a resolved name never becomes
+pending again — so a handler that references finitely many distinct names
+terminates on its own. A
 `retries: false` event does not take this path; it drops instead of re-running.
 
 ## Configuration

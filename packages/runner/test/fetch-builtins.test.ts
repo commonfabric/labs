@@ -94,7 +94,7 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -337,7 +337,7 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
 });
 
 describe("schemaWithOpenObjects", () => {
-  it("opens object schemas inside prefixItems slots (CT-1895)", () => {
+  it("opens object schemas inside `prefixItems` slots", () => {
     const opened = schemaWithOpenObjects({
       type: "array",
       prefixItems: [

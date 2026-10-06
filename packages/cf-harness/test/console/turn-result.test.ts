@@ -8,6 +8,10 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { readConsoleTurnResult } from "../../console/turn-result.ts";
+import {
+  createHarnessHandleTable,
+  mintReferentHandle,
+} from "../../src/handle-table.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 
 const writeTranscript = async (
@@ -39,6 +43,53 @@ const writeTranscript = async (
 };
 
 describe("console/turn-result", () => {
+  for (const source of ["total", "legacy", "absent", "malformed"] as const) {
+    it(`projects ${source} usage without guessing missing counts`, async () => {
+      const artifactRoot = await Deno.makeTempDir();
+      try {
+        const turnId = "usage";
+        await writeTranscript(artifactRoot, turnId, [
+          { role: "user", content: "Read the note." },
+          { role: "assistant", content: "The note is ready." },
+        ]);
+        const reportPath = join(artifactRoot, turnId, "run-report.json");
+        const report = JSON.parse(await Deno.readTextFile(reportPath));
+        if (source !== "absent") report.usage = { inputTokens: 10 };
+        if (source === "total") {
+          report.totalUsage = {
+            inputTokens: 40,
+            outputTokens: 8,
+            secret: "private",
+          };
+        } else if (source === "malformed") {
+          report.totalUsage = "unavailable";
+        }
+        await Deno.writeTextFile(reportPath, JSON.stringify(report));
+        const result = await readConsoleTurnResult({
+          artifactRoot,
+          turnId,
+          sessionId: "conversation",
+          continuable: true,
+          spaceName: "usage-test",
+          timing: {
+            startedAt: "2026-09-21T00:00:00Z",
+            endedAt: "2026-09-21T00:00:03.250Z",
+          },
+        });
+        expect(result?.usage).toEqual(
+          source === "total"
+            ? { inputTokens: 40, outputTokens: 8 }
+            : source === "legacy"
+            ? { inputTokens: 10 }
+            : undefined,
+        );
+        expect(result?.elapsedMs).toBe(3250);
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+  }
+
   it("reads an unfamiliar stored outcome as completed while preserving the result body", async () => {
     const artifactRoot = await Deno.makeTempDir();
     try {
@@ -480,6 +531,87 @@ describe("console/turn-result", () => {
         spaceName: "console-test",
         finalText: "The total is 42.",
       });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
+  it("returns the strings its final text's return referents stand for beside the text as written", async () => {
+    const artifactRoot = await Deno.makeTempDir({
+      prefix: "cf-harness-console-result-",
+    });
+    try {
+      const { table, token } = await mintReferentHandle(
+        createHarnessHandleTable("turn-with-referent"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "https://shop.example/item/7",
+          label: {},
+          labelSource: "child",
+        },
+      );
+      await writeTranscript(artifactRoot, "turn-with-referent", [
+        { role: "user", content: "find the item" },
+        {
+          role: "assistant",
+          content: `Found it at ${token}; not cfh:v:zzzzz.`,
+        },
+      ]);
+      await Deno.writeTextFile(
+        join(artifactRoot, "turn-with-referent", "run-state.json"),
+        JSON.stringify({ handleTable: table }),
+      );
+
+      const result = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
+        artifactRoot,
+        turnId: "turn-with-referent",
+        spaceName: "console-test",
+      });
+
+      expect(result?.finalText).toBe(`Found it at ${token}; not cfh:v:zzzzz.`);
+      expect(result?.revealed).toEqual({
+        [token]: "https://shop.example/item/7",
+      });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
+  it("returns no result when the run's state cannot be read or its handle table does not validate", async () => {
+    const artifactRoot = await Deno.makeTempDir({
+      prefix: "cf-harness-console-result-",
+    });
+    try {
+      await writeTranscript(artifactRoot, "turn-with-bad-table", [
+        { role: "user", content: "find the item" },
+        { role: "assistant", content: "Found it." },
+      ]);
+      await Deno.writeTextFile(
+        join(artifactRoot, "turn-with-bad-table", "run-state.json"),
+        JSON.stringify({ handleTable: { type: "not-a-table" } }),
+      );
+      await writeTranscript(artifactRoot, "turn-with-unreadable-state", [
+        { role: "user", content: "find the item" },
+        { role: "assistant", content: "Found it." },
+      ]);
+      await Deno.writeTextFile(
+        join(artifactRoot, "turn-with-unreadable-state", "run-state.json"),
+        "{",
+      );
+      const read = (turnId: string) =>
+        readConsoleTurnResult({
+          sessionId: "session",
+          continuable: true,
+          artifactRoot,
+          turnId,
+          spaceName: "console-test",
+        });
+
+      expect(await read("turn-with-bad-table")).toBeUndefined();
+      expect(await read("turn-with-unreadable-state")).toBeUndefined();
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }

@@ -1,3 +1,4 @@
+import { FabricDurationNsec } from "@commonfabric/data-model/fabric-primitives";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -150,10 +151,9 @@ describe("Engine in SES mode", () => {
       ],
     };
 
-    // The type libraries no longer declare `Proxy`, so this is now turned away
-    // at type check rather than by the snapshot verifier behind it. Either
-    // rejection keeps proxy-backed data out of a top-level snapshot; naming the
-    // constructor simply stops being expressible first.
+    // The type libraries declare no `Proxy` value, so naming the constructor
+    // is turned away at type check, which runs ahead of the snapshot verifier.
+    // Either rejection keeps proxy-backed data out of a top-level snapshot.
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
       /Cannot find name 'Proxy'|Mutable top-level data must be wrapped in __cf_data|Only verified plain data|Only trusted builder calls/,
     );
@@ -323,6 +323,103 @@ describe("Engine in SES mode", () => {
     expect(main?.default?.test("hello")).toBe(true);
   });
 
+  it("keeps a fabric primitive in a top-level snapshot as it is", async () => {
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { FabricDurationNsec } from "commonfabric";',
+            "const settings = { window: new FabricDurationNsec(600n) };",
+            "export default settings;",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    expect(joinedBodies(graph)).toContain("__cf_data({");
+
+    const { main } = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    expect(main?.default?.window).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.default?.window?.value).toBe(600n);
+  });
+
+  it("keeps a fabric primitive constructed at top level as it is", async () => {
+    // A construction at top level, as a `const` and as the default export,
+    // reaches the freezer only through the transformer's `__cf_data()` wrap;
+    // the previous test holds one inside an object literal, which the wrap of
+    // the literal carries.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { FabricDurationNsec } from "commonfabric";',
+            "const Duration = FabricDurationNsec;",
+            "export const window = new FabricDurationNsec(600n);",
+            "export const viaConst = new Duration(2n);",
+            "export default new FabricDurationNsec(1n);",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    expect(joinedBodies(graph)).toContain("__cf_data(new");
+
+    const { main } = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    expect(main?.window).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.window?.value).toBe(600n);
+    expect(main?.viaConst).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.viaConst?.value).toBe(2n);
+    expect(main?.default).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.default?.value).toBe(1n);
+  });
+
+  it("refuses a top-level construction that only looks like a fabric primitive", async () => {
+    // The class declares a member under a symbol that shares the brand's
+    // name. It is not wrapped, so the verifier refuses the module before the
+    // constructor can run.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            "declare const FABRIC_PRIMITIVE_BRAND: unique symbol;",
+            "export default new (class Imposter {",
+            "  declare readonly [FABRIC_PRIMITIVE_BRAND]: true;",
+            "  constructor() {",
+            '    throw new Error("IMPOSTER CONSTRUCTOR EXECUTED");',
+            "  }",
+            "})();",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
+      "Mutable top-level data must be wrapped in __cf_data() in SES mode",
+    );
+  });
+
   it("allows top-level template literal snapshots", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",
@@ -471,8 +568,8 @@ describe("Engine in SES mode", () => {
   });
 
   it("compiles and evaluates a patternTool whose pattern is hoisted to module scope", async () => {
-    // CT-1655: patternTool's `pattern(...)` argument is hoisted to a module-scope
-    // const by BuilderCallHoistingTransformer. Compile + evaluate end-to-end (not
+    // patternTool's `pattern(...)` argument is hoisted to a module-scope const
+    // by BuilderCallHoistingTransformer. Compile + evaluate end-to-end (not
     // just transformer goldens) to confirm the hoisted pattern doesn't trip a
     // module-load error and the tool survives. The pattern returns a plain-data
     // object (as patternTool patterns do); `count` is supplied per-call.

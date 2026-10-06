@@ -139,35 +139,40 @@ Profile creation uses the **anonymous** `PatternFactory.inSpace()` (CT-1650):
 
 ```ts
 // Shown inside a pattern body.
-const profile = ProfileHome.inSpace()({ initialName: name });
+const profile = ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
+  initialName: name,
+});
 ```
 
-The argument MUST be omitted. A *named* `inSpace(spaceName)` derives the space
-DID from `Identity.fromPassphrase("common user").derive(spaceName)` (the
-`createSession` spaceName path) — the name ALONE, ignoring the authenticated
-user — so two users picking the same profile name, or one user creating two
-same-named profiles, collide into a single shared space. That named path
-supports the legacy space names used during development and nothing else, and is
-removed once those development-only spaces have been migrated
-([random space identities](../plans/random-space-identities.md)). The anonymous
-case
-instead derives a fresh DID from the creating handler's frame cause (per-user
-home-space input links + the durable per-event id), so the space is unique per
-user AND per creation event, stable across the cross-space-commit retry. The
-display name is therefore independent of the space identity: it flows to
+The argument MUST be omitted. A *named* `inSpace(spaceName)` names a space as
+the calling space calls it: the home space records one allocation per name, so
+every profile created under one name would land in one space. The anonymous case
+instead records one allocation per call, keyed by the creating handler's frame
+cause (per-user home-space input links + the durable per-event id). Each
+allocation creates a space with a random DID owned by the creating user ([random
+space identities](random-space-identities.md)), so the space is unique per user
+AND per creation event, and stable across the cross-space-commit retry. The
+profile space grants the wildcard `"*"` WRITE. Other users read a profile's
+name, and a runtime showing a profile writes into the profile's space — its
+per-session state at the least — so a space granting READ alone refuses the
+visit. The space's access list therefore protects nothing in a profile. The
+owner integrity on the profile's data fields does ([Authorization](#authorization)),
+and the profile's view state is per session, so a visitor's writes reach
+neither. The display name is independent of the space identity: it flows to
 `initialName`, which the profile shows until a name is stored in the profile's
 `name` cell, and into that cell itself at creation. The cell is initialized
 statically so it keeps its identity — and the name saved in it — across
-releases of the profile pattern; the create handler queues a second step
-(`seedProfileName` in `profile-create.tsx`, addressed by the new entry's
-position in `profiles`) that stores the creation name through `setName`, the
-cell's owner-protected writer, once the profile's docs have loaded, so
-`#profile` readers find the name in storage without running the profile. A profile renamed under
-an earlier release, whose `name` cell was derived from `initialName`, loses
-that saved name once, at its first release under the static initializer, and
-keeps every name saved after. The home default pattern's `profile` link is
-the durable source of truth after creation, and runtime-only `.inSpace`
-annotations are rewritten to the resolved DID during post-run.
+releases of the profile pattern; the create handler
+queues a second step (`seedProfileName` in `profile-create.tsx`, addressed by
+the new entry's position in `profiles`) that stores the creation name through
+`setName`, the cell's owner-protected writer, once the profile's docs have
+loaded, so `#profile` readers find the name in storage without running the
+profile. A profile renamed under an earlier release, whose `name` cell was
+derived from `initialName`, loses that saved name once, at its first release
+under the static initializer, and keeps every name saved after. The home default
+pattern's `profile` link is the durable source of truth after creation, and
+runtime-only `.inSpace` annotations are rewritten to the resolved DID during
+post-run.
 
 ### Profile Default Pattern Output
 
@@ -324,6 +329,19 @@ specified but not implemented here: connectors run in attested cloud
 sandboxes, the assertion says that code hash H observed the login, and verifier
 infrastructure blesses the allowed hashes. That makes the observation
 end-to-end verifiable without hard-coding a closed set of connector providers.
+
+The profile presentation renders every verified assertion, one row each, so a
+type a connector starts publishing reaches the profile without a change there.
+A type the presentation knows by name carries that name — `github.login` reads
+as "GitHub" and links to the GitHub profile — and any other appears under the
+type string itself. A type with no public page, such as `email`, shows its
+value as text rather than a link. The presentation is itself a consumer of the
+list, so it applies the 48-hour freshness window against a clock that ticks
+every five minutes, and hides an assertion it cannot date. Each rendered row
+binds a `cf-cfc-label` badge to the stored assertion's `value`, so the badge
+reports the integrity label the runtime holds for the text beside it, and a
+value that lacks the `loom-verified-external-identity` integrity atom shows as
+unverified.
 
 `elements` is the profile-space analog of favorites and mentionables. Each
 entry points at a piece that lives in the profile space. `tag` stores the

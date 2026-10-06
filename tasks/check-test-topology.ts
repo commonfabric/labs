@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net
+#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=git
 
 /**
  * Whether the topology still accounts for everything.
@@ -8,24 +8,25 @@
  * failure than the workflow edit it replaced. A surface goes missing in
  * three ways, and a check answers each.
  *
- * The tree half needs no store and runs on every pull request. It walks
- * the tree for things that look like tests and fails on any that no
- * suite accounts for, or that two suites claim under the same record
- * surface and variant. This is what catches a pull request adding a test
- * surface nobody registered, at the moment it is added.
+ * The tree half needs no store and runs on every pull request. It reads
+ * every file the repository holds for things that look like tests, and
+ * fails on any that no suite accounts for, or that two suites claim under
+ * the same record surface and variant. This is what catches a pull
+ * request adding a test surface nobody registered, at the moment it is
+ * added.
  *
  * The workflow half runs beside it, over the step definitions under
  * `.github`. A step can wrap a command in `run-recorded`. The three
  * words after it are the command's identity, and every record the
- * command writes carries that identity. The topology is the other place
- * an identity is written down. A lane builds its commands from the
- * topology, so a step whose identity no suite holds runs while that step
- * stands and stops when a lane takes over the job holding it. Nothing in
- * the tree carries such an identity, which is what puts it out of the
- * tree half's reach.
+ * command writes carries that identity. The lanes run every test and
+ * gate the topology declares, so a workflow step that records by hand is
+ * either one the topology already holds, which records that check twice
+ * against one commit, or one it does not, which no lane will ever run
+ * or select. Either way the step fails. Nothing in the tree carries such
+ * an identity, which is what puts it out of the tree half's reach.
  *
- * The store half runs on `main`, over the records of the run that
- * checked this tree out, and fails on any identity no suite recognizes,
+ * The store half runs over the records of the run that checked this tree
+ * out, and fails on any identity no suite recognizes,
  * or that more than one suite claims. This catches the subtler case: a
  * surface that is registered and whose files enumerate, but whose
  * recorded names or configuration do not map back to the topology, which
@@ -40,8 +41,15 @@
  * about without blocking anybody.
  *
  *   deno task check-test-topology            # tree and workflows
- *   deno task check-test-topology --commit <sha> --records <file>...
+ *   deno task check-test-topology --commit <sha> --records <path>...
  *                                            # those and the store
+ *
+ * Each path is a file of records or a directory holding them, walked for
+ * every `.ndjson` under it, so a run's downloaded record artifacts are
+ * named as the one directory they arrive in. A directory a job gathered
+ * carries the commit its records are from in the facts beside them, and
+ * a path holding no records fails rather than being read as a part of
+ * the run that had none.
  */
 
 import * as path from "@std/path";
@@ -58,15 +66,19 @@ import {
   withoutContinuations,
 } from "./ci-workflow.ts";
 import { isLaneMeasurement } from "./lane-measurement.ts";
+import { repositoryFiles } from "./repository-files.ts";
 import { dayOf } from "./test-selection/build.ts";
 import { DENO_TEST_FILE } from "./test-topology/deno-task.ts";
 import { claimsFor, loadTopology } from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
 
 /** What the command line takes, for a command line it cannot act on. */
-const USAGE = `usage:
+export const USAGE = `usage:
   check-test-topology                                   tree and workflows
-  check-test-topology --commit <sha> --records <file>...   and the store`;
+  check-test-topology --commit <sha> --records <path>...   and the store
+
+each <path> is a file of records or a directory of them, an artifact a run
+gathered among them`;
 
 /**
  * What the tree half looks at. The same rule the topology enumerates a
@@ -75,59 +87,23 @@ const USAGE = `usage:
  */
 const TEST_FILE = DENO_TEST_FILE;
 
-/** Directories that hold no test surface of their own. */
-const SKIPPED = new Set([
-  ".git",
-  "node_modules",
-  "vendor",
-  "coverage",
-  "dist",
-  "target",
-]);
-
-/** Roots the walk starts from. Everything else holds no tests. */
-const ROOTS = ["packages", "tasks", "scripts", "tools"];
-
-/** Every path in the tree that looks like a test surface. */
+/**
+ * Every file in the repository that looks like a test surface. A test beside
+ * a module no workspace member owns, such as a hook script under `.claude/`,
+ * counts as much as one inside a package.
+ */
 export async function candidateSurfaces(root: string): Promise<string[]> {
-  const found: string[] = [];
-  const walk = async (relative: string): Promise<void> => {
-    // The entries are read before any of them is followed, and only that
-    // read is allowed to answer "no such directory". A catch around the
-    // recursion as well would let one directory that vanished mid-walk —
-    // a temporary one a running test made and removed — end the walk at
-    // every level above it, silently shortening the list the guard
-    // checks against. That is the guard failing while reporting success.
-    let entries: Deno.DirEntry[];
-    try {
-      entries = await Array.fromAsync(Deno.readDir(path.join(root, relative)));
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      const at = `${relative}/${entry.name}`;
-      if (entry.isDirectory) {
-        if (!SKIPPED.has(entry.name)) await walk(at);
-        continue;
-      }
-      if (!entry.isFile) continue;
-      if (TEST_FILE.test(entry.name)) found.push(at);
-      else if (
-        entry.name.endsWith(".sh") && relative.endsWith("/integration")
-      ) {
-        found.push(at);
-      }
-    }
-  };
-  for (const start of ROOTS) await walk(start);
-  return found.sort();
+  return (await repositoryFiles(root)).filter((file) =>
+    TEST_FILE.test(file) ||
+    (file.endsWith(".sh") && path.dirname(file).endsWith("/integration"))
+  );
 }
 
 /**
- * Paths that look like tests and are not: fixtures a test drives rather
- * than tests of their own. Each says why, and an entry that stops
- * applying fails, so the list cannot go stale unnoticed.
+ * Paths that look like tests and are not: fixtures a test drives, and
+ * programs that only share a test's name. An entry ending in `/` is a
+ * directory, and covers everything under it. Each says why, and an entry
+ * that stops applying fails, so the list cannot go stale unnoticed.
  */
 const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
@@ -149,6 +125,15 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
     path: "packages/deno-web-test/test/timeout-project/hang.test.ts",
     reason: "a project the harness runs to prove it reports a wedged test",
+  },
+  {
+    path: "tasks/test.ts",
+    reason: "the root `deno task test` runner, named like a test module",
+  },
+  {
+    path: "packages/cli/test/fixtures/",
+    reason: "pattern tests the CLI's own tests hand to `cf test`, to check " +
+      "what it reports for each",
   },
   {
     path: "packages/cli/integration/bulk-ops-demo.sh",
@@ -227,7 +212,7 @@ export async function workflowRecords(
       }
       if (!entry.isFile || !/\.ya?ml$/.test(entry.name)) continue;
       const text = await Deno.readTextFile(path.join(root, at));
-      found.push(...recordedIdentities(text, at));
+      for (const identity of recordedIdentities(text, at)) found.push(identity);
     }
   };
   await walk(CI_DEFINITIONS);
@@ -247,9 +232,13 @@ function claimsOf(
 ): { exact: Set<string>; containers: string[] } {
   const exact = new Set<string>(suite.sources ?? []);
   const containers: string[] = [];
+  // A suite answering `unitsForChange()` names units that are not paths —
+  // a type-check scope, a gate — so none of them contains anything, even
+  // where a name such as `tasks` is spelled like a directory.
+  const paths = suite.unitsForChange === undefined;
   for (const unit of suite.units) {
     if (TEST_FILE.test(unit)) exact.add(unit);
-    else containers.push(unit);
+    else if (paths) containers.push(unit);
   }
   for (const entry of suite.unavailable) exact.add(entry.unit);
   return { exact, containers };
@@ -271,6 +260,12 @@ export function checkTree(
   const fixtures = new Map(
     (declared.fixtures ?? []).map((entry) => [entry.path, entry.reason]),
   );
+  // The entry covering a path: the path itself, or a directory above it.
+  const fixtureOf = (candidate: string): string | undefined =>
+    [...fixtures.keys()].find((entry) =>
+      entry === candidate ||
+      (entry.endsWith("/") && candidate.startsWith(entry))
+    );
   const held = new Set<string>();
   for (const candidate of candidates) {
     const exact = claims.filter((claim) => claim.exact.has(candidate));
@@ -294,19 +289,19 @@ export function checkTree(
         });
       }
     }
+    const fixture = fixtureOf(candidate);
     if (exact.length > 0) {
-      const reason = fixtures.get(candidate);
-      if (reason !== undefined) {
+      if (fixture !== undefined) {
         findings.push({
           fails: true,
           message: `${candidate} is claimed by a suite and is still listed ` +
-            `as a fixture: ${reason}`,
+            `as a fixture: ${fixtures.get(fixture)}`,
         });
       }
       continue;
     }
-    if (fixtures.has(candidate)) {
-      held.add(candidate);
+    if (fixture !== undefined) {
+      held.add(fixture);
       continue;
     }
     // A suite whose units are coarser than a file — a workspace member
@@ -316,9 +311,8 @@ export function checkTree(
       claim.containers.some((unit) => candidate.startsWith(`${unit}/`))
     );
     // Containment is coarse and legitimately overlapping: a workspace
-    // member that runs whole contains a directory another suite owns,
-    // and a type-check group's unit is a scope name that reads as a
-    // directory prefix. Only an exact claim is exclusive.
+    // member that runs whole contains a directory another suite owns.
+    // Only an exact claim is exclusive.
     if (containing.length > 0) continue;
     findings.push({
       fails: true,
@@ -327,7 +321,9 @@ export function checkTree(
   }
   for (const path of fixtures.keys()) {
     if (held.has(path)) continue;
-    if (candidates.includes(path)) continue;
+    if (candidates.some((candidate) => fixtureOf(candidate) === path)) {
+      continue;
+    }
     findings.push({
       fails: true,
       message: `${path} is listed as a fixture and the tree no longer holds it`,
@@ -337,8 +333,9 @@ export function checkTree(
 }
 
 /**
- * The workflow half: every identity a workflow step records by hand is
- * claimed by exactly one suite.
+ * The workflow half: no step under `.github` records by hand. Each
+ * identity is named once, however many steps write it, and the message
+ * says whether a suite already holds it.
  */
 export function checkWorkflows(
   suites: readonly Suite[],
@@ -350,14 +347,16 @@ export function checkWorkflows(
     const key = testIdentityKey(record.test);
     if (seen.has(key)) continue;
     seen.add(key);
-    const claims = claimsFor(suites, record);
-    if (claims.length === 1) continue;
+    const claims = claimsFor(suites, record).map((claim) => claim.suite.id);
     findings.push({
       fails: true,
       message: claims.length === 0
-        ? `no suite claims ${key}, which ${record.where} records`
-        : `${claims.map((claim) => claim.suite.id).join(" and ")} ` +
-          `both claim ${key}, which ${record.where} records`,
+        ? `${record.where} records ${key} by hand, and no suite claims ` +
+          "it, so no lane will ever run or select it: declare it in the " +
+          "topology and take the step out"
+        : `${record.where} records ${key} by hand, which ` +
+          `${claims.join(" and ")} already runs in the lanes, so the ` +
+          "step records that check a second time: take the step out",
     });
   }
   return findings;
@@ -370,6 +369,14 @@ export interface StoredIdentity {
 
   /** The commit the run that recorded it was checked out at. */
   commit?: string;
+
+  /**
+   * What the record was read from, named the way the run names it: the
+   * artifact a job shipped, or the file when a path was given directly.
+   * A failing identity is one somebody has to go and find, and this is
+   * the job that produced it.
+   */
+  from?: string;
 }
 
 /**
@@ -394,15 +401,23 @@ export function checkStore(
 ): Finding[] {
   const findings: Finding[] = [];
   const elsewhere = new Set<string>();
-  let unattributed = 0;
+  const nameless = new Set<string>();
   for (const record of records) {
-    if (record.commit === undefined) unattributed += 1;
-    else if (record.commit !== commit) elsewhere.add(record.commit);
+    if (record.commit === undefined) nameless.add(record.from ?? "a record");
+    else if (record.commit !== commit) {
+      elsewhere.add(
+        record.from === undefined
+          ? record.commit
+          : `${record.commit} (${record.from})`,
+      );
+    }
   }
-  if (elsewhere.size > 0 || unattributed > 0) {
+  if (elsewhere.size > 0 || nameless.size > 0) {
     const named = [...elsewhere].sort();
-    if (unattributed > 0) {
-      named.push(`${unattributed} record(s) carrying no commit`);
+    if (nameless.size > 0) {
+      // Naming what carried no commit is what says which producer to go
+      // to; a count alone leaves that to a search.
+      named.push(`no commit at all from ${[...nameless].sort().join(", ")}`);
     }
     return [{
       fails: true,
@@ -413,6 +428,32 @@ export function checkStore(
   }
   const seen = new Set<string>();
   const recorded = new Set<string>();
+  /**
+   * Where a failing identity came from, for a reader who has to go and
+   * find it. The identity alone says what disagreed; this says which job
+   * wrote it down and which file it named, where either is known.
+   */
+  const whence = (record: StoredIdentity): string => {
+    const parts = [
+      ...(record.from === undefined ? [] : [`recorded by ${record.from}`]),
+      ...(record.file === undefined ? [] : [`from ${record.file}`]),
+    ];
+    return parts.length === 0 ? "" : `, ${parts.join(" ")}`;
+  };
+  /**
+   * One way a test's record comes to name no file. A suite of test files
+   * finds a record by its file, and the file comes from the name each
+   * file registers; two files in one run registering one name leave the
+   * name naming neither, which reads here as a test no suite runs. A
+   * harness that recorded no file is another way, and the record alone
+   * cannot say which.
+   */
+  const fileless = (record: StoredIdentity): string =>
+    record.file === undefined &&
+      (record.test.k === "unit" || record.test.k === "integration")
+      ? ". It names no file, which is what a test comes to when two " +
+        "files in one run register tests of its name, among other ways"
+      : "";
   for (const record of records) {
     const key = testIdentityKey(record.test);
     if (seen.has(key)) continue;
@@ -426,7 +467,8 @@ export function checkStore(
     if (claims.length === 0) {
       findings.push({
         fails: true,
-        message: `no suite claims the recorded identity ${key}`,
+        message: `no suite claims the recorded identity ${key}` +
+          whence(record) + fileless(record),
       });
       continue;
     }
@@ -434,7 +476,7 @@ export function checkStore(
       findings.push({
         fails: true,
         message: `${claims.map((claim) => claim.suite.id).join(" and ")} ` +
-          `both claim the recorded identity ${key}`,
+          `both claim the recorded identity ${key}` + whence(record),
       });
       continue;
     }
@@ -460,9 +502,86 @@ export function checkStore(
   return findings;
 }
 
+/** One file of records, and what is known about where it came from. */
+interface RecordFile {
+  path: string;
+
+  /**
+   * What to call it in a finding: the artifact directory a walk found it
+   * in, or the path itself where the caller named the file.
+   */
+  from: string;
+
+  /**
+   * The commit the job that wrote this file was checked out at, where a
+   * `job.json` beside it names one. A report carrying its own context
+   * says so itself and does not need this.
+   */
+  commit?: string;
+}
+
 /**
- * Reads a run's records out of the files named on the command line. With
- * no resolver given, the repository's alias file is loaded.
+ * Every record file a named path holds. A directory is walked, which is
+ * what lets one name stand for a run's downloaded record artifacts: each
+ * arrives as a directory of its own holding the records a job gathered
+ * and the facts that job knew, and a run that produced a single one
+ * arrives flattened into the directory above.
+ *
+ * A gathered artifact is a run's records without the context a report
+ * opens with, which the relay composes when it ships them to the store.
+ * The commit is the part of that context the store half holds a tree to,
+ * and the job wrote it down in `job.json`, so that is where this reads
+ * it rather than asking the caller to vouch for records that name none.
+ */
+async function recordFiles(at: string): Promise<RecordFile[]> {
+  let info: Deno.FileInfo;
+  try {
+    info = await Deno.stat(at);
+  } catch (error) {
+    // A path that is not there holds no records, which the caller
+    // already fails on, and in a sentence rather than a stack trace.
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+  if (!info.isDirectory) return [{ path: at, from: at }];
+  const found: RecordFile[] = [];
+  const commit = await gatheredCommit(at);
+  const from = path.basename(at);
+  for await (const entry of Deno.readDir(at)) {
+    const child = path.join(at, entry.name);
+    if (entry.isDirectory) {
+      for (const file of await recordFiles(child)) found.push(file);
+    } else if (entry.isFile && entry.name.endsWith(".ndjson")) {
+      found.push({
+        path: child,
+        from,
+        ...(commit === undefined ? {} : { commit }),
+      });
+    }
+  }
+  return found.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+/** The commit a gathered artifact's own facts name, where it holds them. */
+async function gatheredCommit(dir: string): Promise<string | undefined> {
+  let facts: unknown;
+  try {
+    facts = JSON.parse(await Deno.readTextFile(path.join(dir, "job.json")));
+  } catch {
+    // A directory that is not a gathered artifact, or one whose facts
+    // cannot be read, leaves its records to say what commit they are
+    // from. The store half is what refuses them when they say nothing.
+    return undefined;
+  }
+  if (typeof facts !== "object" || facts === null) return undefined;
+  const commit = (facts as Record<string, unknown>).commit;
+  return typeof commit === "string" && commit.length > 0 ? commit : undefined;
+}
+
+/**
+ * Reads a run's records out of the paths named on the command line, each
+ * a file of records or a directory holding them. With no resolver given,
+ * the repository's alias file is loaded.
  */
 export async function readRecords(
   paths: readonly string[],
@@ -470,8 +589,12 @@ export async function readRecords(
 ): Promise<StoredIdentity[]> {
   const resolver = aliases ?? await loadAliasResolver();
   const records: StoredIdentity[] = [];
+  const files: RecordFile[] = [];
   for (const at of paths) {
-    const text = await Deno.readTextFile(at);
+    for (const file of await recordFiles(at)) files.push(file);
+  }
+  for (const file of files) {
+    const text = await Deno.readTextFile(file.path);
     for (const group of parseReportGroups(text)) {
       // An alias applies only to records from days before the rename, so
       // the day the report was written is what resolution is asked
@@ -490,9 +613,15 @@ export async function readRecords(
         records.push({
           test: resolved,
           ...(record.file === undefined ? {} : { file: record.file }),
-          ...(group.context === undefined
+          // A report opening with a context says which commit it is
+          // from. One gathered into an artifact does not, and the facts
+          // beside it do.
+          ...(group.context !== undefined
+            ? { commit: group.context.commit }
+            : file.commit === undefined
             ? {}
-            : { commit: group.context.commit }),
+            : { commit: file.commit }),
+          from: file.from,
         });
       }
     }
@@ -557,7 +686,9 @@ export function parseCheckArgs(
   if (!asked) {
     throw new UsageError("--commit names the commit --records were made at");
   }
-  if (records.length === 0) throw new UsageError("--records takes a file");
+  if (records.length === 0) {
+    throw new UsageError("--records takes a file or a directory of them");
+  }
   if (commit === undefined) {
     throw new UsageError("--records needs --commit, the commit they name");
   }
@@ -578,15 +709,38 @@ export async function check(
     await candidateSurfaces(options.root),
     { fixtures: NOT_A_TEST_SURFACE },
   );
-  findings.push(
-    ...checkWorkflows(suites, await workflowRecords(options.root)),
-  );
+  const workflows = await workflowRecords(options.root);
+  for (const finding of checkWorkflows(suites, workflows)) {
+    findings.push(finding);
+  }
   if (options.store !== undefined) {
-    findings.push(...checkStore(
-      suites,
-      await readRecords(options.store.records),
-      options.store.commit,
-    ));
+    // Each named path is read on its own, because a path holding nothing
+    // is a part of the run the store half did not see, and summing them
+    // first would let one path's records answer for another's. Judging
+    // the part that did arrive is the guard reporting on a corpus it
+    // only partly read.
+    const resolver = await loadAliasResolver();
+    // A run's records, and the findings they yield, can outnumber the
+    // arguments one function call takes.
+    const reads: StoredIdentity[][] = [];
+    const empty: string[] = [];
+    for (const at of options.store.records) {
+      const read = await readRecords([at], resolver);
+      if (read.length === 0) empty.push(at);
+      reads.push(read);
+    }
+    if (empty.length > 0) {
+      // This is said alone: every unit the topology holds would
+      // otherwise report as never recorded, and bury it under thousands.
+      findings.push({
+        fails: true,
+        message: `${empty.join(", ")} hold no records, so the store half ` +
+          "read nothing of what they were to carry",
+      });
+      return { findings, suites: suites.length };
+    }
+    const found = checkStore(suites, reads.flat(), options.store.commit);
+    for (const finding of found) findings.push(finding);
   }
   // The count travels with the findings because loading the topology
   // walks every workspace member and every test file, and doing that a

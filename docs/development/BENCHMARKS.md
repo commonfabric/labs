@@ -33,11 +33,11 @@ cannot establish retained memory cost.
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four
 hours on a schedule, on the dedicated runner group. It runs `deno bench --json`
 over `packages/runner/test/*.bench.ts` plus explicitly listed benchmarks in
-`packages/utils`, `packages/fuse`, `packages/memory`, `packages/dashboard`, and
-`packages/patterns`. It uploads JSON stdout and a copy of stderr in the
-`bench-results` artifact with 90-day retention. A bench file outside those paths
-does not run in CI until it is added to the workflow. The workflow's manual
-trigger measures a specific commit.
+`packages/utils`, `packages/fuse`, `packages/memory`, `packages/data-model`,
+`packages/piece`, `packages/dashboard`, and `packages/patterns`. It uploads JSON
+stdout and a copy of stderr in the `bench-results` artifact with 90-day
+retention. A bench file outside those paths does not run in CI until it is added
+to the workflow. The workflow's manual trigger measures a specific commit.
 
 The team ops dashboard charts benchmark trends on its `/bench` page, and its
 trend reads one completed run per four-hour window from those artifacts. Each
@@ -112,14 +112,14 @@ compares across jobs. Adding a bench file to the list does not place it, so
 neither the calibration's position nor any other file's can be arranged from
 here.
 
-Benchmark results are not gated, and neither is CI wall time. The counts gated
-on every pull request include the coverage-debt ratchet
-(`tasks/coverage-check.ts`, in the Coverage Check job), the read limits of the
-headless lunch-poll render fixtures
-([below](#headless-render-read-limits), in Pattern Unit Tests), and the Topics
-read and graph limits ([below](#the-read-budget), in Pattern Integration
-Tests). None of them ingests benchmark results, so a bench regression shows up
-as trend drift on the dashboard rather than as a failing check.
+Benchmark results are not gated, and neither is CI wall time. The counts CI
+gates on include the measured-set coverage gate (`tasks/coverage-gate.ts`, a step
+of `Status`), the read limits of the headless lunch-poll render fixtures
+([below](#headless-render-read-limits), tests of the `pattern-unit` suite), and
+the Topics read and graph limits ([below](#the-read-budget), tests of the
+`pattern-integration` and `pattern-integration-opposite` suites). None of them ingests benchmark results, so a bench
+regression shows up as trend drift on the dashboard rather than as a failing
+check.
 
 Most packages with benches define a `bench` task for running them locally
 (see `packages/runner/deno.jsonc`); otherwise invoke `deno bench` on a
@@ -131,11 +131,45 @@ unrelated chain. Fixture construction stays outside timing; index construction
 and selection are measured together. The selected action count and exclusion of
 the unrelated chain are checked outside the timed interval.
 
+`packages/runner/test/demand-pass.bench.ts` measures the demand read a serving
+loop's demand pass makes, for one client session whose watch reaches 1,000,
+5,000, and 20,000 documents: the memory server's `demandForSpace()` and the
+fold of its result into the loop's `DemandMirror`. `unchanged` reads demand
+nothing has written since the last read, and stays flat across the sizes;
+`one watch added` rebuilds the session's share and folds in a change of one
+key, and grows with the session's closure. The fixture's watch evaluation stays
+outside timing.
+
 `packages/runner/test/view-producer-proof.bench.ts` measures a client's currency
 proof over 10, 14, 18, and 36 producers, where each producer reads the preceding
 two outputs. This shared ancestry exercises repeated paths to the same upstream
 value. Replica setup and plan indexing stay outside timing; the timed interval
 covers one proof against unchanged values.
+
+`packages/runner/test/eager-link-read.bench.ts` measures an eager schema read of
+a list of 200 and of 2,000 links to row documents, each row linking to one
+shared subject that the schema reads as a handle, so each row crosses two
+links. Nothing in the fixture is labeled, so the timing includes the read of
+each crossed document's stored labels that a read makes whether or not any
+exist. Fixture construction and opening the transaction stay outside timing;
+the timed interval is the one `get()`.
+
+`packages/runner/test/executor-sustained-input.bench.ts` measures how long the
+serving watermark takes to cover an input while input keeps arriving. Each
+iteration opens a fresh served space outside the timed interval, then starts a
+stream that commits one input at every settle barrier and stops after eight wave
+cycles. The timed interval runs from the stream's start, which commits its first
+input, to the watermark document covering that input. Each iteration writes the
+per-input admission-to-coverage times and cycle counts, summarized as P50, P90
+and maximum over every streamed input, and the loop's exhaustion counters, to
+stderr.
+
+`packages/runner/test/materializer-writers.bench.ts` measures
+`collectMaterializerWritersForLog()` over logs of 100, 1,000, and 3,500 deep
+reads of one document, the entity eight materializers write, each materializer
+overlapping only a read near the end of the log. Index registration and log
+construction stay outside timing; the timed interval covers one collection, and
+the writer count is checked after it.
 
 ## Constraints on bench files
 
@@ -688,9 +722,9 @@ the topic citing it, and a comment added that the thread then shows. Its board
 comes from `seedTopicBoard`, shaped so exactly one topic cites exactly one
 earlier one. That fixture derives every title and body from the topic's index,
 so two runs of the same size build boards holding the same material, and the
-demo seeds into a space of its own so nothing else a shard left in the shared
+demo seeds into a space of its own so nothing else a lane left in the shared
 space appears on it. `CF_TOPICS_DEMO_TOPICS` sets how many topics that board
-carries; the default is small because CI runs this on every pull request.
+carries; the default is small because CI runs it.
 
 Record it with:
 
@@ -721,10 +755,12 @@ bench file drives one runtime against storage it alone holds, so a write
 conflict cannot arise in one, and the cost of a contended write — the rejected
 commit, the rolled-back optimistic write, the re-run — is invisible to all of
 them. This one runs ten runtimes, each in its own Deno worker, through
-`packages/patterns/integration/multi-runtime-harness.ts`. With server execution
-disabled, the harness hosts an in-process storage server. With
-`EXPERIMENTAL_SERVER_EXECUTION=true`, it uses the serving toolshed at `API_URL`;
-start that toolshed with the same setting. Both modes use ordinary worker
+`packages/patterns/integration/multi-runtime-harness.ts`. The benchmark passes
+the harness no `apiUrl`, so it hosts an in-process storage server whether or
+not `API_URL` is set, matching the resolved posture: a plain one when server
+execution resolves OFF, and one with a serving loop attached when it resolves
+ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default.
+Both modes use ordinary worker
 clients, without a browser or renderer mounts. The view-scoped web-client flag
 therefore does not activate selective replication in this benchmark. Use the
 browser Topics benchmarks to measure that mode, and hold server execution
@@ -812,11 +848,12 @@ reads; event-commit markers are counted separately and do not describe every
 storage transaction. Diagnostics go to stderr. Missing successful event commits, event-commit
 errors, and browser exceptions fail the run.
 
-The workflow pins the shell build, toolshed, and benchmark process to
-`EXPERIMENTAL_SERVER_EXECUTION=false`. This keeps its client-execution series
-stable across changes to the product default. The benchmark checks toolshed
-metadata and the served shell posture before seeding. The contention benchmark
-remains a separate workload.
+The benchmark process must set `EXPERIMENTAL_SERVER_EXECUTION` to `true` or
+`false` explicitly, and before seeding it checks that the toolshed metadata,
+the toolshed's serving loop, and the served shell's build define all name that
+same arm. The workflow pins the shell build, toolshed, and benchmark process to
+`false`, which keeps its client-execution series stable across changes to the
+product default. The contention benchmark remains a separate workload.
 
 For a local run, start matching client-execution dev servers as described in
 [Local dev servers](LOCAL_DEV_SERVERS.md), then run:
@@ -829,6 +866,12 @@ deno bench --json -A \
   packages/patterns/integration/lunch-poll-read-scale.bench.ts \
   > /tmp/lunch-read-scale.json 2> /tmp/lunch-read-scale.log
 ```
+
+To measure the server-execution arm instead, start the dev servers with
+`EXPERIMENTAL_SERVER_EXECUTION=true` in their environment, for example
+`EXPERIMENTAL_SERVER_EXECUTION=true scripts/start-local-dev.sh`, so that the
+toolshed serves on that arm and the shell bakes it into its build define, and
+run the same command with `EXPERIMENTAL_SERVER_EXECUTION=true`.
 
 Set `CF_READ_SCALE_ARTIFACT_DIR` to a local output directory to save one screenshot
 and the latest diagnostic sample per size, after the timed interval. The fixture
@@ -1293,7 +1336,7 @@ probe uses, with no browser and no server.
 the rules below, and `topics-read-budget-limits.ts` beside it holds the limits.
 The cases are divided into groups, and each group runs in a test file of its
 own, `topics-read-budget-<group>.test.ts`, so that no one file takes too large a
-share of a pattern integration job.
+share of a lane.
 
 The gated cases are:
 
@@ -1346,6 +1389,15 @@ lifts, in the same transaction:
 - `per-record`, assigned the graph counts of the thread cases, starts a lift
   for each comment position and each link position on every topic.
 
+Every limit is an upper bound, so the budget catches a change that reads more
+and is blind to one that reads differently. Lazy materialization turned back
+into eager traversal is the case that matters: it makes fewer proxy accesses,
+not more, while every topic's `backlinksOf` runs again on each mention edit.
+`packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
+property directly, on the 32-topic `high-degree` `all-backlinks` case under
+lazy materialization: a mention edit re-runs the lookups of the topics whose
+pivot row changed, and no other.
+
 A case's test fails when a count exceeds its limit, when a measured count has no
 limit, or when a limit names a phase the case did not record. The failure names
 the workload, case, phase, count, observed value, and limit. Run one group from
@@ -1356,8 +1408,9 @@ deno test --v8-flags=--max-old-space-size=4096 -A \
   ./integration/topics-read-budget-high-degree.test.ts
 ```
 
-Continuous integration runs the files in the Pattern Integration Tests job, each
-with a weight in `tasks/select-pattern-integration-files.ts`.
+Continuous integration runs these files as units of the `pattern-integration`
+and `pattern-integration-opposite` suites, packed into lanes by what each has
+cost before.
 
 To derive the limits again, run from the repository root:
 
@@ -1393,6 +1446,21 @@ says, a candidate that exceeds a limit is revised or deferred rather than the
 limit moved, and a new tradeoff needs a documented decision and rationale.
 Nothing here limits startup time or latency.
 
+## Engine current-state reads
+
+`packages/memory/test/v2-engine-read.bench.ts` measures reading 256 documents
+through the memory engine, once each, when every decoded revision is already in
+the engine's document cache. What a read costs past that cache is resolving its
+branch and finding its revision row in SQLite, so the case tracks the per-read
+statement cost. One case reads at the default branch's head; the other reads on
+a fork that holds no rows of its own, so every read falls through to the parent
+as of the fork point. The fixture is written once per run, and checking what the
+reads returned is outside the timed interval. Run with:
+
+```sh
+deno bench --no-lock -A packages/memory/test/v2-engine-read.bench.ts
+```
+
 ## JSON Pointer encoding
 
 `packages/memory/test/v2-path.bench.ts` measures encoding 256 distinct paths and
@@ -1412,6 +1480,28 @@ deno bench --no-lock --json packages/memory/test/v2-path.bench.ts
 The
 [local encoding measurement](../history/development/performance/2026-09-14-encode-pointer.md)
 records interleaved comparisons and their limits.
+
+## Refresh schema-closure walk
+
+`packages/memory/test/v2-refresh-schema-closure.bench.ts` measures a push
+refresh of a tracked graph after a commit to a tally document whose one link
+schema references a schema document the graph already holds, for a graph
+already delivered 10, 100, or 1,000 schema documents through a carrier whose
+links reference each of them. Each sample commits the next tally value and then
+times `refreshTrackedGraph()` over that one dirty document; fixture
+construction, the commit, and the check that the refresh delivered only the
+tally are outside the timed interval.
+
+The tally's schema reference is a root of the refresh's schema-closure walk.
+The walk covers only the closures its changed documents reference and stops at
+schema documents the graph already established, so its cost should not grow
+with the schema count. The documents one untimed refresh reads go to stderr per
+fixture — one, the tally, at every size — which is the count to compare when a
+timing moves. Run with:
+
+```sh
+deno bench -A --json packages/memory/test/v2-refresh-schema-closure.bench.ts
+```
 
 ## String tuple keys
 
@@ -1433,6 +1523,35 @@ Existing persisted and wire key formats keep their protocol-defined encoding.
 The collector and scheduler effects are tracked by
 `packages/runner/test/cfc-consumed-source-dedup.bench.ts` and
 `packages/runner/test/scheduler-invalid-causes.bench.ts` respectively.
+
+## Cold-runtime piece operations
+
+`packages/piece/test/piece-cold-runtime.bench.ts` measures two
+`PiecesController` calls on a runtime that has never run the space it opens.
+Each sample first seeds a fresh emulated store: one runtime compiles a default
+pattern into a new space, runs it, links it as the space's default pattern, and
+runs pieces of a one-field pattern beside it. A second runtime and controller
+then open the same store, and only the call is timed.
+
+- `getDefaultPattern(runIt=true, fresh runtime)` times opening the space's root:
+  loading its pattern from the compiled closure stored in the space, and
+  starting it. Its seed runs 128 pieces and disposes its runtime before the
+  call, leaving the store open. The benchmark throws when the call finds no
+  default pattern, so an empty lookup cannot pass for a measurement.
+- `add(single persisted piece, fresh runtime)` times registering one persisted
+  piece. That loads and starts the root the same way, then sends its `addPiece`
+  event and waits for the commit. The seeding runtime is still running over
+  the store while the call is timed.
+
+Seeding, runtime construction, and teardown are outside the timed interval. The
+default pattern holds only the registry and its handler, so both numbers follow
+the fixed cost of loading and starting a root rather than the size of a real
+default app. The 128 pieces are never added to the registry, so the root starts
+with an empty one. Run with:
+
+```sh
+deno bench -A --json packages/piece/test/piece-cold-runtime.bench.ts
+```
 
 ## Labeled pattern-test mapped render
 

@@ -29,8 +29,8 @@ const signer = await Identity.fromPassphrase(
 );
 const space = signer.did();
 
-// Inv-12 Stage 2: the pattern-facing `inspectConfLabel` builtin — the ONLY
-// application surface for label-metadata introspection (spec §4.6.4.1). End to
+// Inv-12 Stage 2: the pattern-facing `inspectConfLabel` builtin — one of the
+// application surfaces for label-metadata introspection (spec §4.6.4.1). End to
 // end: result labeling through the flow derivation, the fail-closed flow-off
 // degradation, and the untouched display path.
 
@@ -71,7 +71,7 @@ const seedLabeledDoc = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return id;
 };
 
@@ -237,7 +237,7 @@ describe("inspectConfLabel builtin (inv-12 Stage 2)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const source = runtime.getCell(space, "inspect-src-qi", undefined, tx);
       const queryType = runtime.getCell<string>(
@@ -288,7 +288,7 @@ describe("inspectConfLabel builtin (inv-12 Stage 2)", () => {
         { space, scope: "space", id: bareId as URI, path: [] },
         { value: { body: "plain" } },
       );
-      expect((await bare.commit()).ok).toBeDefined();
+      expect((await bare.commit().settled).ok).toBeDefined();
 
       const source = runtime.getCell(space, "inspect-bare", undefined, tx);
       const testPattern = builder.pattern<{ doc: unknown }>(({ doc }) =>
@@ -503,7 +503,7 @@ describe("inspectConfLabel builtin (inv-12 Stage 2)", () => {
           },
         }],
       });
-      await checkTx.commit();
+      await checkTx.commit().settled;
     });
   });
 });

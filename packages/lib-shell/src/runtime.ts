@@ -1,10 +1,18 @@
 import type { CellScope } from "@commonfabric/api";
-import { createSession, DID, Identity, Session } from "@commonfabric/identity";
-import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  createSession,
+  DID,
+  Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
+import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { navigate } from "@commonfabric/navigation";
+import { PROMPT_CAVEAT_FAMILY_KINDS } from "@commonfabric/runner/cfc/prompt-caveat-kinds";
 import { slugIdForSpace } from "@commonfabric/runner/slugs";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import {
   attachOptionsFrom,
@@ -86,18 +94,11 @@ export function defaultRenderConfidentialityCeiling(
       cfcAtom.personalSpace(actingUser),
       actingUser,
     ],
-    // Influence-class caveat kinds, whose canonical display release is the
-    // rendered-disclosure rule (§8.10.5). Deliberately excludes
-    // PromptInjectionRiskUnscreened: a material-risk kind that keeps its
-    // ordinary discharge evidence (screening), not display disclosure.
-    caveatKinds: [
-      // The canonical influence-class concept id.
-      CFC_CONCEPT_KIND.PromptInfluence,
-      // Short-form alias minted by shipped example patterns
-      // (cfc-spec-gallery, cfc-trusted-component-examples) and matched by
-      // the cf-cfc-label disclosure UI.
-      "prompt-influence",
-    ],
+    // The whole §10.1 prompt-caveat family (SC-54, proposed §8.10.6),
+    // screening tiers included. A prompt caveat says not to trust the
+    // content as instructions to a model; a display shows it to the acting
+    // user. Admitting it is not discharging it: it stays on the value.
+    caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
   };
 }
 
@@ -188,6 +189,24 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    * StorageManager.open time so it takes effect on the next runtime (reload).
    */
   concurrentWatchRefresh?: boolean;
+
+  /**
+   * Where this page serves the outer frame of `cf-iframe`'s sandbox, for a
+   * page whose own Content Security Policy refuses the frame the sandbox
+   * otherwise inlines. It says something of the page, not of the runtime: the
+   * client keeps it, the worker is sent none of it, and an attach asserts
+   * nothing by it. Unset, the outer frame is inlined.
+   */
+  iframeOuterFrameUrl?: string;
+
+  /**
+   * When true, the worker holds its initialization reply until the backend's
+   * health check has answered, and `create` rejects when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, and a
+   * host the check cannot reach arrives through `onError` as a
+   * `host-unreachable` report while storage reconnects on its own.
+   */
+  awaitHealth?: boolean;
 
   /**
    * Override the runtime worker URL. By default, deployed builds use the
@@ -333,6 +352,8 @@ export function createRuntimeClientOptions({
   forwardWorkerConsole,
   patternCoverage,
   concurrentWatchRefresh,
+  awaitHealth,
+  iframeOuterFrameUrl,
 }: {
   session: Session;
   apiUrl: URL;
@@ -345,6 +366,8 @@ export function createRuntimeClientOptions({
   forwardWorkerConsole?: boolean;
   patternCoverage?: boolean;
   concurrentWatchRefresh?: boolean;
+  awaitHealth?: boolean;
+  iframeOuterFrameUrl?: string;
 }) {
   // The identity the runtime renders as. A delegated host names it in its own
   // trust snapshot; a snapshot that names nobody leaves the session identity
@@ -359,9 +382,7 @@ export function createRuntimeClientOptions({
     apiUrl,
     spaceHostMap,
     identity: session.as,
-    spaceIdentity: session.spaceIdentity,
     spaceDid: session.space,
-    spaceName: session.spaceName,
     experimental,
     cfcEnforcementMode,
     cfcFlowLabels,
@@ -378,6 +399,8 @@ export function createRuntimeClientOptions({
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
+    awaitHealth,
+    iframeOuterFrameUrl,
   };
 }
 
@@ -516,12 +539,14 @@ export class RuntimeInternals extends EventTarget {
 
   /**
    * Creates a piece in the given space, `options.argument` being the record of
-   * inputs it is created with.
+   * inputs it is created with. `options.cause` derives its identity within
+   * the space: repeated calls reapply setup to the same piece and require
+   * the same pattern identity. A different pattern is rejected.
    */
   async createPiece<T>(
     space: DID,
     source: URL | Program | string,
-    options?: { argument?: FabricPlainObject; run?: boolean },
+    options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     this.#check();
     const piece = await this.#client.createPiece<T>(source, space, options);
@@ -576,9 +601,14 @@ export class RuntimeInternals extends EventTarget {
     return pattern;
   }
 
-  resolveSpaceName(name: string): Promise<DID> {
+  /**
+   * Creates a space owned by this runtime's identity, records it in the
+   * identity's Home space list under `label`, and returns its DID. See
+   * `RuntimeClient.createSpace`.
+   */
+  createSpace(label?: string): Promise<DID> {
     this.#check();
-    return this.#client.resolveSpaceName(name);
+    return this.#client.createSpace(label);
   }
 
   async recreateSpaceRootPattern(space: DID): Promise<PieceHandle<NameSchema>> {
@@ -784,6 +814,15 @@ export class RuntimeInternals extends EventTarget {
     return await this.#client.registerSpaceHost(space, host);
   }
 
+  /** See RuntimeClient.registerSpaceHostDetailed. */
+  async registerSpaceHostDetailed(
+    space: DID,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    this.#check();
+    return await this.#client.registerSpaceHostDetailed(space, host);
+  }
+
   async idle(): Promise<void> {
     this.#check();
     await this.#client.idle();
@@ -928,6 +967,8 @@ export class RuntimeInternals extends EventTarget {
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
+    awaitHealth,
+    iframeOuterFrameUrl,
     getBuildHash = fetchBuildHash,
     workerUrl,
     transport,
@@ -945,9 +986,9 @@ export class RuntimeInternals extends EventTarget {
     }
 
     // One runtime per identity: the worker session is always the
-    // identity's home session. Spaces — including derived named spaces —
-    // are addressed per call; nothing is bound at creation.
-    const session: Session = await createSession({
+    // identity's home session. Spaces are addressed per call; nothing is
+    // bound at creation.
+    const session: Session = createSession({
       identity,
       spaceDid: identity.did(),
     });
@@ -970,6 +1011,8 @@ export class RuntimeInternals extends EventTarget {
       forwardWorkerConsole,
       patternCoverage,
       concurrentWatchRefresh,
+      awaitHealth,
+      iframeOuterFrameUrl,
     });
 
     const connection = transport ??
@@ -980,12 +1023,20 @@ export class RuntimeInternals extends EventTarget {
           getBuildHash,
         }),
       });
-    const client = attach
-      ? await RuntimeClient.attach(
-        connection,
-        attachOptionsFrom(clientOptions),
-      )
-      : await RuntimeClient.initialize(connection, clientOptions);
+    let client: RuntimeClient;
+    try {
+      client = attach
+        ? await RuntimeClient.attach(
+          connection,
+          attachOptionsFrom(clientOptions),
+        )
+        : await RuntimeClient.initialize(connection, clientOptions);
+    } catch (error) {
+      // A worker this call spawned has nobody else to end it; one that came
+      // in over `transport` is the embedder's to keep or drop.
+      if (!transport) await connection.dispose();
+      throw error;
+    }
 
     // Expose a usable RuntimeInternals immediately. Callers that need
     // storage/piece-manager convergence should await `rt.synced(space)`
@@ -999,15 +1050,15 @@ export class RuntimeInternals extends EventTarget {
 }
 
 /**
- * Resolve a named space to its DID (the derived space key) without
- * touching any runtime. "Current space" is embedder view state; this is
- * the one piece of derivation embedders need to translate a
- * human-readable space name into an address.
+ * Resolve a legacy space name to its DID without touching any runtime or the
+ * network. "Current space" is embedder view state; this is the one piece of
+ * derivation embedders need to translate a name a person typed or followed in
+ * a URL into an address. Resolving creates nothing: the DID may name no
+ * space.
  */
 export async function resolveSpaceDid(
-  identity: Identity,
+  _identity: Identity,
   spaceName: string,
 ): Promise<DID> {
-  const session = await createSession({ identity, spaceName });
-  return session.space;
+  return await legacySpaceDid(spaceName);
 }

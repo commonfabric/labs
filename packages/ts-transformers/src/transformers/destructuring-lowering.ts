@@ -6,6 +6,7 @@ import {
   getCommonFabricKeyName,
   getKnownComputedKeyExpression,
   isCommonFabricKeyExpression,
+  isCtHelpersKeyAccess,
 } from "../utils/reactive-keys.ts";
 import type { TransformationContext } from "../core/mod.ts";
 
@@ -351,14 +352,53 @@ export function collectDestructureBindings(
   }
 }
 
-export function createKeyCall(
-  rootIdentifier: ts.Identifier,
+/**
+ * Builds the in-place read of `path` under `receiver`, the one form every
+ * lowering that reads a path off a reactive value emits: `receiver.key(...)`
+ * over the segments. A leading `SELF` segment is the exception. On a
+ * pattern's input it names the pattern's own result rather than a key of the
+ * input, so it stays an element access, the way a destructured `[SELF]`
+ * binding lowers, and the rest of the path is keyed off that:
+ * `input[SELF].items` reads as `input[__cfHelpers.SELF].key("items")`. A
+ * `SELF` segment anywhere else is reported by `pattern-context:self-access`
+ * before any lowering runs, and is keyed like any other segment here.
+ */
+export function createPathRead(
+  receiver: ts.Expression,
   path: readonly PathSegment[],
   factory: ts.NodeFactory,
 ): ts.Expression {
-  const keyCall = factory.createCallExpression(
+  const [head, ...rest] = path;
+  if (head !== undefined && isSelfSegment(head)) {
+    const selfRead = factory.createElementAccessExpression(
+      receiver,
+      cloneKeyExpression(head, factory),
+    );
+    return rest.length === 0
+      ? selfRead
+      : createKeyCall(selfRead, rest, factory);
+  }
+  return createKeyCall(receiver, path, factory);
+}
+
+/**
+ * Whether `segment` is the `SELF` key. Every lowering that builds a path hands
+ * a well-known key over as its `__cfHelpers.SELF` helper expression, so the
+ * test is syntactic.
+ */
+function isSelfSegment(segment: PathSegment): segment is ts.Expression {
+  return typeof segment !== "string" && isCtHelpersKeyAccess(segment, "SELF");
+}
+
+/** Helper for `createPathRead()`, which builds `receiver.key(...path)`. */
+function createKeyCall(
+  receiver: ts.Expression,
+  path: readonly PathSegment[],
+  factory: ts.NodeFactory,
+): ts.Expression {
+  return factory.createCallExpression(
     factory.createPropertyAccessExpression(
-      rootIdentifier,
+      receiver,
       factory.createIdentifier("key"),
     ),
     undefined,
@@ -368,5 +408,4 @@ export function createKeyCall(
         : cloneKeyExpression(segment, factory)
     ),
   );
-  return keyCall;
 }

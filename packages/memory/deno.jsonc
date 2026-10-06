@@ -2,17 +2,11 @@
   "name": "@commonfabric/memory",
   "tasks": {
     "check": "deno check .",
-    "just-test": {
+    "deno-test": {
       "description": "Run unit tests",
-      "command": "deno test --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
     },
-    "test": {
-      "description": "Type check & run tests",
-      "dependencies": [
-        "check",
-        "just-test"
-      ]
-    },
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     "bench": {
       "description": "Run memory benchmarks",
       "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env"
@@ -23,6 +17,8 @@
     }
   },
   "exports": {
+    "./v2/invites": "./v2/invites.ts",
+    "./space-invites": "./space-invites.ts",
     "./acl": "./acl.ts",
     "./interface": "./interface.ts",
     "./v2": "./v2.ts",
@@ -30,7 +26,9 @@
     "./v2/path": "./v2/path.ts",
     "./v2/operation-codec": "./v2/operation-codec.ts",
     "./v2/client": "./v2/client.ts",
+    "./v2/presence": "./v2/presence.ts",
     "./v2/message-compression": "./v2/message-compression.ts",
+    "./v2/genesis-root": "./v2/genesis-root.ts",
     "./v2/engine": "./v2/engine.ts",
     "./v2/execution-lease": "./v2/execution-lease.ts",
     "./v2/execution-outbox": "./v2/execution-outbox.ts",
@@ -38,6 +36,12 @@
     "./v2/server": "./v2/server.ts",
     "./v2/server-execution-default": "./v2/server-execution-default.ts",
     "./v2/standalone": "./v2/standalone.ts",
+    "./v2/connection-auth": "./v2/connection-auth.ts",
+    "./v2/routed-wire": "./v2/routed-wire.ts",
+    "./v2/routed-parser": "./v2/routed-parser.ts",
+    "./v2/routed-host": "./v2/routed-host.ts",
+    "./v2/routed-listener": "./v2/routed-listener.ts",
+    "./v2/routed-epochs": "./v2/routed-epochs.ts",
     "./v2/session-open-auth": "./v2/session-open-auth.ts",
     "./v2/storage-path": "./v2/storage-path.ts",
     "./v2/schema-table-links": "./v2/schema-table-links.ts",
@@ -56,6 +60,9 @@
     "@codemirror/state": "npm:@codemirror/state@^6.7.1",
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@denosaurs/plug": "jsr:@denosaurs/plug@^1.1.0",
-    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1"
+    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
+    "@types/ws": "npm:@types/ws@8.18.1",
+    "fflate": "npm:fflate@0.8.3",
+    "ws": "npm:ws@8.22.0"
   }
 }

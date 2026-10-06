@@ -4,8 +4,14 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { Task } from "@lit/task";
+import type { ReactiveController } from "lit";
 import { type DID, Identity } from "@commonfabric/identity";
-import { NotificationType } from "@commonfabric/runtime-client";
+import { NAVIGATE_EVENT } from "@commonfabric/navigation";
+import {
+  NotificationType,
+  RuntimeErrorCode,
+} from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** Install the browser globals Lit reads and return a restoration function. */
@@ -220,6 +226,48 @@ describe("load-errors", () => {
 
   describe("XBodyView", () => {
     describe("instance members", () => {
+      it("keeps completed sidebar work when pointer keys are unchanged", async () => {
+        const restore = installBrowserGlobals();
+        try {
+          const { XBodyView } = await import("../src/views/BodyView.ts");
+          const controllers: ReactiveController[] = [];
+          class ObservedBodyView extends XBodyView {
+            override addController(controller: ReactiveController): void {
+              controllers.push(controller);
+              super.addController(controller);
+            }
+          }
+          const view = new ObservedBodyView();
+          const task = controllers.find((controller) =>
+            controller instanceof Task
+          );
+          if (!(task instanceof Task)) {
+            throw new Error("Sidebar task unavailable.");
+          }
+          task.hostUpdate();
+          await task.taskComplete;
+          const first = task.value;
+
+          view.piecePath = [];
+          task.hostUpdate();
+          await task.taskComplete;
+          expect(task.value).toBe(first);
+
+          view.piecePath = ["detail"];
+          task.hostUpdate();
+          await task.taskComplete;
+          const detail = task.value;
+          expect(detail).not.toBe(first);
+
+          view.piecePath = ["detail"];
+          task.hostUpdate();
+          await task.taskComplete;
+          expect(task.value).toBe(detail);
+        } finally {
+          restore();
+        }
+      });
+
       describe("render()", () => {
         it("opens the piece menu over the surface a piece failed to load into", async () => {
           const openings: unknown[] = [];
@@ -240,6 +288,9 @@ describe("load-errors", () => {
           >;
           document.createElement = () => panel;
           document.body = {
+            // CodeMirror reads `document.body.style` when its module loads,
+            // and this case can be the first in the process to load it.
+            style: {},
             appendChild(node: { isConnected: boolean }) {
               node.isConnected = true;
             },
@@ -650,6 +701,174 @@ describe("load-errors", () => {
           } finally {
             restore();
           }
+        });
+
+        describe("when no space answers to the address", () => {
+          /** A space load error as the worker reports a space with no history. */
+          const spaceNotFound = () => ({
+            kind: "space" as const,
+            error: Object.assign(new Error("No space at this DID"), {
+              code: RuntimeErrorCode.SpaceNotFound,
+            }),
+          });
+
+          it("says so for the name typed, and offers to create a space under it", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = spaceNotFound();
+              view.spaceName = "team-lunch";
+
+              const text = templateText(view.render());
+              expect(text).toContain(
+                'No space answers to the name "team-lunch"',
+              );
+              expect(text).toContain('Create a new space called "team-lunch"');
+              expect(text).not.toContain("We could not load this space");
+            } finally {
+              restore();
+            }
+          });
+
+          it("says so for an address with no name, and offers to create a space", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = spaceNotFound();
+
+              const text = templateText(view.render());
+              expect(text).toContain("No space answers to this address");
+              expect(text).toContain("Create a new space");
+              expect(text).not.toContain("called");
+            } finally {
+              restore();
+            }
+          });
+
+          it("creates a space labeled with the name, then navigates to it by DID", async () => {
+            const restore = installBrowserGlobals();
+            const created = "did:key:z6Mk-shell-created-space" as DID;
+            const labels: Array<string | undefined> = [];
+            const navigations: unknown[] = [];
+            const onNavigate = (event: Event) =>
+              navigations.push((event as CustomEvent).detail);
+            globalThis.addEventListener(NAVIGATE_EVENT, onNavigate);
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = spaceNotFound();
+              view.spaceName = "team-lunch";
+              view.rt = {
+                createSpace: (label?: string) => {
+                  labels.push(label);
+                  return Promise.resolve(created);
+                },
+              } as never;
+
+              const create = findBinding(view.render(), '@click="') as () =>
+                Promise<void>;
+              await create();
+
+              expect(labels).toEqual(["team-lunch"]);
+              expect(navigations).toEqual([{ spaceDid: created }]);
+            } finally {
+              globalThis.removeEventListener(NAVIGATE_EVENT, onNavigate);
+              restore();
+            }
+          });
+
+          it("creates nothing and navigates nowhere without a runtime", async () => {
+            const restore = installBrowserGlobals();
+            const navigations: unknown[] = [];
+            const onNavigate = (event: Event) =>
+              navigations.push((event as CustomEvent).detail);
+            globalThis.addEventListener(NAVIGATE_EVENT, onNavigate);
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = spaceNotFound();
+              view.spaceName = "team-lunch";
+
+              const create = findBinding(view.render(), '@click="') as () =>
+                Promise<void>;
+              await create();
+
+              expect(navigations).toEqual([]);
+              expect(templateText(view.render())).toContain(
+                'Create a new space called "team-lunch"',
+              );
+            } finally {
+              globalThis.removeEventListener(NAVIGATE_EVENT, onNavigate);
+              restore();
+            }
+          });
+
+          it("shows why a space could not be created, and navigates nowhere", async () => {
+            const restore = installBrowserGlobals();
+            const navigations: unknown[] = [];
+            const onNavigate = (event: Event) =>
+              navigations.push((event as CustomEvent).detail);
+            globalThis.addEventListener(NAVIGATE_EVENT, onNavigate);
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = spaceNotFound();
+              view.rt = {
+                createSpace: () =>
+                  Promise.reject(new Error("The genesis commit was refused")),
+              } as never;
+
+              const create = findBinding(view.render(), '@click="') as () =>
+                Promise<void>;
+              await create();
+
+              expect(templateText(view.render())).toContain(
+                "The genesis commit was refused",
+              );
+              expect(navigations).toEqual([]);
+            } finally {
+              globalThis.removeEventListener(NAVIGATE_EVENT, onNavigate);
+              restore();
+            }
+          });
+
+          it("shows the ordinary error for a space error of another kind", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = {
+                kind: "space",
+                error: Object.assign(new Error("The compiler did not load"), {
+                  code: RuntimeErrorCode.CompilerStackLoadFailed,
+                }),
+              };
+              view.spaceName = "team-lunch";
+
+              const text = templateText(view.render());
+              expect(text).toContain("We could not load this space");
+              expect(text).not.toContain("No space answers");
+            } finally {
+              restore();
+            }
+          });
+
+          it("shows the ordinary error for a piece that failed with that code", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const { XBodyView } = await import("../src/views/BodyView.ts");
+              const view = new XBodyView();
+              view.loadError = { ...spaceNotFound(), kind: "piece" };
+
+              const text = templateText(view.render());
+              expect(text).toContain("We could not load this piece");
+              expect(text).not.toContain("No space answers");
+            } finally {
+              restore();
+            }
+          });
         });
       });
     });

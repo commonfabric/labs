@@ -1,3 +1,4 @@
+import type { JSONSchema } from "@commonfabric/api";
 import type {
   CfcConfClause,
   CfcEnforcementMode,
@@ -17,6 +18,7 @@ import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.t
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type { HarnessWellKnownGrant } from "./contracts/well-known-grants.ts";
 import type { HarnessInputCell } from "./contracts/input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessPatternRef } from "./contracts/pattern-refs.ts";
 import type { HarnessResearchRunSummary } from "./contracts/research.ts";
 import type { HarnessPolicyEvent } from "./contracts/policy.ts";
@@ -127,7 +129,8 @@ export interface HarnessFabricSessionCfcPosture {
   posture?: "max-enforcement";
 
   /**
-   * The read ceiling the session's runtime bounds every `sqliteQuery` by:
+   * The read ceiling the session's runtime bounds cell payload reads and every
+   * `sqliteQuery` by:
    * the run manifest's, met with any the operator configured. Absent when
    * the session reads unbounded.
    */
@@ -188,6 +191,21 @@ export interface HarnessRunState {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+
+  /**
+   * Whether the run's final answer must name a piece with `assign_slug`, as
+   * the prompt loop last decided it. A resume that cannot back `assign_slug`
+   * cannot re-derive this from its own tools, so it keeps the recorded value.
+   * Absent from records written before the decision was recorded.
+   */
+  pieceOutputRequired?: boolean;
+
+  /** Root-run structured-result configuration, retained across resume. */
+  structuredResult?: {
+    schema: JSONSchema;
+    path: string;
+  };
+
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
   skillRegistry?: HarnessSkillRegistry;
@@ -232,6 +250,10 @@ export interface HarnessRunState {
   skillsRoot?: HarnessSkillsRootRecord;
   wellKnownGrants?: HarnessWellKnownGrant[];
   inputCells?: HarnessInputCell[];
+
+  /** Pieces successfully named by this run, retained for session follow-ups. */
+  assignedPieces?: HarnessAssignedPiece[];
+
   patternRefs?: HarnessPatternRef[];
   policyEvents: HarnessPolicyEvent[];
   policyDecisions?: HarnessPolicyDecisionRecord[];
@@ -285,6 +307,10 @@ export interface CreateHarnessRunStateOptions {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+  structuredResult?: {
+    schema: JSONSchema;
+    path: string;
+  };
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
   skillRegistry?: HarnessSkillRegistry;
@@ -321,6 +347,7 @@ export interface CreateHarnessRunStateOptions {
   skillsRoot?: HarnessSkillsRootRecord;
   wellKnownGrants?: HarnessWellKnownGrant[];
   inputCells?: HarnessInputCell[];
+  assignedPieces?: HarnessAssignedPiece[];
   patternRefs?: HarnessPatternRef[];
   policyDecisions?: HarnessPolicyDecisionRecord[];
   researchRuns?: HarnessResearchRunSummary[];
@@ -375,6 +402,9 @@ export const createHarnessRunState = (
       : {}),
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
+      : {}),
+    ...(options.structuredResult !== undefined
+      ? { structuredResult: structuredClone(options.structuredResult) }
       : {}),
     ...(options.runManifest !== undefined
       ? { runManifest: options.runManifest }
@@ -462,6 +492,9 @@ export const createHarnessRunState = (
       : {}),
     ...(options.inputCells !== undefined
       ? { inputCells: structuredClone(options.inputCells) }
+      : {}),
+    ...(options.assignedPieces !== undefined
+      ? { assignedPieces: structuredClone(options.assignedPieces) }
       : {}),
     ...(options.patternRefs !== undefined
       ? { patternRefs: structuredClone(options.patternRefs) }

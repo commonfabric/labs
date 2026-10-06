@@ -27,11 +27,16 @@ export {
 } from "@commonfabric/test-support/records";
 export type {
   Calibration,
+  CalibrationHealth,
   CoverageBaseline,
   LanePlan,
   Manifest,
   ManifestEntry,
+  PreviousSuiteHealth,
+  ProcessFit,
   ScoreInputs,
+  SuiteFit,
+  SuiteHealth,
   UnavailableEntry,
   UnschedulableEntry,
   WithheldEntry,

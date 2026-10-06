@@ -1,221 +1,39 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  authorClaimLabel,
+  type AuthorshipObservation,
+  type CfcAuthorshipState,
+  observeAuthorship,
+} from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { initialsForName } from "../cf-avatar/index.ts";
 
-export type CfcAuthorshipState = "verified" | "unverified" | "unknown";
-
-type CfcLabelQueryableValue = {
-  getCfcLabel(): Promise<CfcLabelView | undefined>;
-};
-
-type CfcLabelResolvableValue = {
-  resolveAsCell(): Promise<CfcLabelQueryableValue>;
-};
-
-type CfcLabelSubscribableValue = {
-  subscribe(
-    callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
-    options?: { includeCfcLabel?: boolean },
-  ): () => void;
-};
-
-type CfcReadableClaimValue = {
-  get?(): unknown;
-  sync?(): Promise<unknown>;
-  resolveAsCell?(): Promise<unknown> | unknown;
-};
+/**
+ * What the badge shows: the state its labels decide, or `loading` while a
+ * label it reads has not loaded yet.
+ */
+export type CfcAuthorshipBadgeState = CfcAuthorshipState | "loading";
 
 const DEFAULT_AUTHORSHIP_KIND = "authored-by";
-// Poll cadence for re-reading a label whose resolved cell wasn't loaded yet.
-// Mirrors cf-cfc-label's retry-on-undefined; bounded so a resolved cell that
-// genuinely never carries a label stops retrying.
-const LABEL_RETRY_INTERVAL_MS = 100;
-const MAX_LABEL_RETRY_COUNT = 100;
-const AUTHOR_FIELDS = [
-  "subject",
-  "author",
-  "authorId",
-  "sender",
-  "senderId",
-  "user",
-  "userId",
-  "id",
-] as const;
-const AUTHOR_DISPLAY_FIELDS = [
-  "name",
-  "displayName",
-  "fullName",
-  "label",
-  "username",
-] as const;
 
-const hasLabelQuery = (value: unknown): value is CfcLabelQueryableValue =>
-  isObjectOrArray(value) &&
-  "getCfcLabel" in value &&
-  typeof (value as { getCfcLabel?: unknown }).getCfcLabel === "function";
-
-const hasLabelSubscription = (
-  value: unknown,
-): value is CfcLabelSubscribableValue =>
-  isObjectOrArray(value) &&
-  "subscribe" in value &&
-  typeof (value as { subscribe?: unknown }).subscribe === "function";
-
-const hasLabelResolution = (
-  value: unknown,
-): value is CfcLabelResolvableValue =>
-  isObjectOrArray(value) &&
-  "resolveAsCell" in value &&
-  typeof (value as { resolveAsCell?: unknown }).resolveAsCell === "function";
-
-const hasReadableClaim = (
-  value: unknown,
-): value is CfcReadableClaimValue =>
-  isObjectOrArray(value) &&
-  (typeof (value as { get?: unknown }).get === "function" ||
-    typeof (value as { sync?: unknown }).sync === "function");
-
-const labelHasRootIntegrityKind = (
-  view: CfcLabelView,
-  kind: string,
-): boolean =>
-  view.entries.some((entry) =>
-    entry.path.length === 0 &&
-    (entry.label.integrity ?? []).some((atom) => {
-      if (typeof atom === "string") {
-        return atom.startsWith(`${kind}:`);
-      }
-      if (!isObjectNotArray(atom)) {
-        return false;
-      }
-      return (atom as Record<string, unknown>).kind === kind;
-    })
-  );
-
-const mergeLabelViews = (
-  ...views: Array<CfcLabelView | undefined>
-): CfcLabelView | undefined => {
-  const entries: CfcLabelView["entries"] = [];
-  const seen = new Set<string>();
-  for (const view of views) {
-    if (view === undefined) {
-      continue;
-    }
-    for (const entry of view.entries) {
-      const key = JSON.stringify(entry);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      entries.push(entry);
-    }
-  }
-  return entries.length === 0 ? undefined : { version: 1, entries };
-};
-
-const isConcreteAuthorClaim = (value: unknown): boolean => {
-  if (
-    typeof value === "string" || typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return true;
-  }
-  if (!isObjectNotArray(value)) {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return AUTHOR_FIELDS.some((field) => {
-    const fieldValue = record[field];
-    return typeof fieldValue === "string" ||
-      typeof fieldValue === "number" ||
-      typeof fieldValue === "boolean";
-  });
-};
-
-const readClaimValue = async (
-  value: CfcReadableClaimValue,
-): Promise<unknown> => {
-  const readCandidate = async (candidate: unknown): Promise<unknown> => {
-    if (!hasReadableClaim(candidate)) {
-      return isConcreteAuthorClaim(candidate) ? candidate : undefined;
-    }
-
-    const beforeSync = candidate.get?.();
-    if (beforeSync !== undefined) {
-      return beforeSync;
-    }
-
-    const synced = typeof candidate.sync === "function"
-      ? await candidate.sync()
-      : undefined;
-    if (synced !== undefined && synced !== candidate) {
-      const syncedClaim = await readCandidate(synced);
-      if (syncedClaim !== undefined) {
-        return syncedClaim;
-      }
-    }
-
-    return candidate.get?.();
-  };
-
-  const directClaim = await readCandidate(value);
-  if (directClaim !== undefined) {
-    return directClaim;
-  }
-
-  if (typeof value.resolveAsCell === "function") {
-    const resolved = await value.resolveAsCell();
-    return await readCandidate(resolved);
-  }
-
-  return undefined;
-};
-
-interface LabelViewResult {
-  readonly view: CfcLabelView | undefined;
-
-  /**
-   * True when the fallback `resolveAsCell()` path read a resolved cell's label
-   * and got nothing back. `getCfcLabel` is a pure, non-blocking store read, so
-   * an empty result means the resolved cell's doc is not loaded yet. This
-   * component subscribes to `value`/`author`, NOT to that internally-resolved
-   * cell, so its load would not re-trigger this read — the caller retries until
-   * it lands (same liveness contract cf-cfc-label gets from its undefined-retry).
-   */
-  readonly pendingResolution: boolean;
+/** What an observation watches, and the options it decides by. */
+interface ObservedSources {
+  readonly value: unknown;
+  readonly author: unknown;
+  readonly kind: string;
+  readonly authorName: string | undefined;
 }
 
-const readLabelView = async (
-  value: unknown,
-  requiredRootIntegrityKind?: string,
-): Promise<LabelViewResult> => {
-  let direct: CfcLabelView | undefined;
-  if (hasLabelQuery(value)) {
-    direct = await value.getCfcLabel();
-  }
-
-  if (
-    direct !== undefined && requiredRootIntegrityKind !== undefined &&
-    labelHasRootIntegrityKind(direct, requiredRootIntegrityKind)
-  ) {
-    return { view: direct, pendingResolution: false };
-  }
-
-  let resolvedLabel: CfcLabelView | undefined;
-  let pendingResolution = false;
-  if (hasLabelResolution(value)) {
-    const resolved = await value.resolveAsCell();
-    if (hasLabelQuery(resolved)) {
-      resolvedLabel = await resolved.getCfcLabel();
-      pendingResolution = resolvedLabel === undefined;
-    }
-  }
-
-  return { view: mergeLabelViews(direct, resolvedLabel), pendingResolution };
-};
+/** Whether `a` and `b` name the same sources and options. */
+const sameSources = (
+  a: ObservedSources | undefined,
+  b: ObservedSources,
+): boolean =>
+  a !== undefined && Object.is(a.value, b.value) &&
+  Object.is(a.author, b.author) && a.kind === b.kind &&
+  a.authorName === b.authorName;
 
 const primitiveToString = (value: unknown): string | undefined => {
   if (typeof value === "string") {
@@ -227,151 +45,6 @@ const primitiveToString = (value: unknown): string | undefined => {
   return undefined;
 };
 
-const objectField = (
-  value: Record<string, unknown>,
-  field: string,
-): string | undefined => primitiveToString(value[field]);
-
-const objectStringFields = (
-  value: unknown,
-  fields: readonly string[],
-): string[] => {
-  if (!isObjectNotArray(value)) {
-    return [];
-  }
-
-  const record = value as Record<string, unknown>;
-  return fields.flatMap((field) => {
-    const fieldValue = objectField(record, field);
-    return fieldValue === undefined ? [] : [fieldValue];
-  });
-};
-
-const uniqueStrings = (values: readonly string[]): string[] => [
-  ...new Set(values),
-];
-
-const authorIdsForClaim = (author: unknown): string[] => {
-  const primitive = primitiveToString(author);
-  if (primitive !== undefined) {
-    return [primitive];
-  }
-  return uniqueStrings(objectStringFields(author, AUTHOR_FIELDS));
-};
-
-const primaryAuthorId = (author: unknown): string | undefined =>
-  authorIdsForClaim(author)[0];
-
-const authorDisplayName = (author: unknown): string | undefined =>
-  objectStringFields(author, AUTHOR_DISPLAY_FIELDS)[0];
-
-const representsPrincipalSubjectForLabel = (
-  view: CfcLabelView | undefined,
-): string | undefined => {
-  if (!view) {
-    return undefined;
-  }
-  for (const entry of rootEntries(view)) {
-    for (const atom of entry.label.integrity ?? []) {
-      if (!isObjectNotArray(atom)) {
-        continue;
-      }
-      const atomRecord = atom as Record<string, unknown>;
-      if (objectField(atomRecord, "kind") !== "represents-principal") {
-        continue;
-      }
-      const subject = objectField(atomRecord, "subject");
-      if (subject !== undefined) {
-        return subject;
-      }
-    }
-  }
-  return undefined;
-};
-
-const principalAuthorClaim = (
-  subject: string | undefined,
-  displayName: string | undefined,
-): unknown | undefined => {
-  if (subject === undefined) {
-    return undefined;
-  }
-  return {
-    subject,
-    ...(displayName !== undefined ? { name: displayName } : {}),
-  };
-};
-
-export const integrityAtomMatchesAuthor = (
-  atom: unknown,
-  author: unknown,
-  kind: string = DEFAULT_AUTHORSHIP_KIND,
-): boolean => {
-  const authorIds = authorIdsForClaim(author);
-  if (authorIds.length === 0) {
-    return false;
-  }
-
-  if (typeof atom === "string") {
-    return authorIds.some((authorId) => atom === `${kind}:${authorId}`);
-  }
-
-  if (!isObjectNotArray(atom)) {
-    return false;
-  }
-
-  const atomRecord = atom as Record<string, unknown>;
-  if (objectField(atomRecord, "kind") !== kind) {
-    return false;
-  }
-
-  return AUTHOR_FIELDS.some((field) => {
-    const atomAuthor = objectField(atomRecord, field);
-    return atomAuthor !== undefined && authorIds.includes(atomAuthor);
-  });
-};
-
-const rootEntries = (view: CfcLabelView) =>
-  view.entries.filter((entry) => entry.path.length === 0);
-
-const hasAuthorshipIntegrity = (
-  entries: ReturnType<typeof rootEntries>,
-  kind: string,
-): boolean =>
-  entries.some((entry) =>
-    (entry.label.integrity ?? []).some((atom) =>
-      typeof atom === "string"
-        ? atom.startsWith(`${kind}:`)
-        : isObjectNotArray(atom) &&
-          objectField(atom as Record<string, unknown>, "kind") === kind
-    )
-  );
-
-export const authorshipStateForLabel = (
-  view: CfcLabelView | undefined,
-  author: unknown,
-  kind: string = DEFAULT_AUTHORSHIP_KIND,
-): CfcAuthorshipState => {
-  if (!view || authorIdsForClaim(author).length === 0) {
-    return "unknown";
-  }
-
-  const entries = rootEntries(view);
-  for (const entry of entries) {
-    const integrity = entry.label.integrity;
-    if (!Array.isArray(integrity)) {
-      continue;
-    }
-    if (
-      integrity.some((atom) => integrityAtomMatchesAuthor(atom, author, kind))
-    ) {
-      return "verified";
-    }
-  }
-
-  return hasAuthorshipIntegrity(entries, kind) ? "unverified" : "unknown";
-};
-
 /**
  * Shows trusted authorship state for a bound CFC-labeled content cell.
  *
@@ -379,6 +52,12 @@ export const authorshipStateForLabel = (
  * cannot inspect arbitrary slotted DOM: callers should slot the UI block that
  * renders the same bound value and author claim so the badge and rendered
  * content remain adjacent.
+ *
+ * The labels are read and decided by `observeAuthorship()` from
+ * `@commonfabric/runtime-client`, while the element is connected. Until the
+ * value's label and the author's have loaded, the badge is neutral: it reads
+ * `loading`, with no warning. It reads `unknown` only once both have loaded and
+ * establish no authorship.
  *
  * @element cf-cfc-authorship
  *
@@ -392,7 +71,8 @@ export const authorshipStateForLabel = (
  *   integrity verification.
  * @prop {"ok"|"blocked"} textIntegrityState - Renderer-reported descendant text
  *   integrity state.
- * @attr {string} kind - Integrity object kind; defaults to `authored-by`.
+ * @attr {string} kind - Integrity object kind, `authored-by` (the default) or
+ *   `represents-principal`; any other kind never verifies.
  */
 export class CFCFCAuthorship extends BaseElement {
   static override styles = [
@@ -462,6 +142,11 @@ export class CFCFCAuthorship extends BaseElement {
       .authorship.unknown .badge {
         border-color: var(--cf-theme-color-border, hsl(220, 14%, 86%));
         background: var(--cf-theme-color-muted, hsl(220, 18%, 96%));
+      }
+
+      .authorship.loading .state {
+        color: var(--cf-theme-color-text-muted, hsl(220, 10%, 44%));
+        font-weight: 400;
       }
 
       .avatar,
@@ -558,19 +243,21 @@ export class CFCFCAuthorship extends BaseElement {
   declare allowLiteralText: boolean;
   declare textIntegrityState: "ok" | "blocked";
 
-  private _labelRequestId = 0;
-  private _authorRequestId = 0;
-  private _value: unknown = undefined;
-  private _author: unknown = undefined;
-  private _authorClaim: unknown = undefined;
-  private _observedValue: unknown = undefined;
-  private _observedAuthor: unknown = undefined;
-  private _unsubscribeValue: (() => void) | undefined;
-  private _unsubscribeAuthor: (() => void) | undefined;
-  private _labelRetryTimeout: ReturnType<typeof setTimeout> | undefined;
-  private _labelRetryCount = 0;
-  private _valueResolutionPending = false;
-  private _authorResolutionPending = false;
+  #value: unknown = undefined;
+  #author: unknown = undefined;
+
+  /** Ends the running observation; unset while none runs. */
+  #cancelObservation: (() => void) | undefined;
+
+  /**
+   * What the latest observation watches. It outlives a disconnection, so
+   * that an element moved within the document keeps its verdict while it
+   * observes the same sources again.
+   */
+  #sources: ObservedSources | undefined;
+
+  /** What the latest observation last reported; unset until it reports. */
+  #observation: AuthorshipObservation | undefined;
 
   constructor() {
     super();
@@ -585,260 +272,124 @@ export class CFCFCAuthorship extends BaseElement {
   }
 
   get value(): unknown {
-    return this._value;
+    return this.#value;
   }
 
   set value(next: unknown) {
-    const previous = this._value;
-    this._value = next;
+    const previous = this.#value;
+    this.#value = next;
     this.requestUpdate("value", previous);
-    this.refreshForCurrentValue();
+    if (!Object.is(previous, next)) this.#observe();
   }
 
   get author(): unknown {
-    return this._author;
+    return this.#author;
   }
 
   set author(next: unknown) {
-    const previous = this._author;
-    this._author = next;
+    const previous = this.#author;
+    this.#author = next;
     this.requestUpdate("author", previous);
-    this.refreshForCurrentAuthor();
+    if (!Object.is(previous, next)) this.#observe();
   }
 
-  get authorshipState(): CfcAuthorshipState {
-    const labelState = authorshipStateForLabel(
-      this.cfcLabel,
-      this.authorClaim,
-      this.kind ?? DEFAULT_AUTHORSHIP_KIND,
-    );
+  /**
+   * What the badge shows: `loading` until the value's label and the author's
+   * have both loaded, and after that the state they decide, `verified`
+   * lowered to `unverified` when text integrity is required and the renderer
+   * blocked the content's text. So `unknown` means that the loaded labels
+   * establish no authorship, never that they have yet to arrive.
+   */
+  get authorshipState(): CfcAuthorshipBadgeState {
+    const observation = this.#observation;
+    if (observation === undefined) {
+      return "loading";
+    }
     if (
-      labelState === "verified" &&
+      observation.state === "verified" &&
       this.verifyTextIntegrity &&
       this.textIntegrityState === "blocked"
     ) {
       return "unverified";
     }
-    return labelState;
+    return observation.state;
   }
 
+  /** Who the author claim names, once the labels have loaded. */
   get authorClaim(): unknown {
-    return hasReadableClaim(this.author) || hasLabelQuery(this.author) ||
-        hasLabelResolution(this.author)
-      ? this._authorClaim
-      : this.author;
+    return this.#observation?.authorClaim;
   }
 
   override connectedCallback() {
     super.connectedCallback();
-    this.refreshForCurrentValue();
-    this.refreshForCurrentAuthor();
+    this.#observe();
   }
 
   override disconnectedCallback() {
-    this.clearValueSubscription();
-    this.clearAuthorSubscription();
-    this.clearLabelRetry();
+    this.#cancelObservation?.();
+    this.#cancelObservation = undefined;
     super.disconnectedCallback();
   }
 
-  protected override firstUpdated(
-    changedProperties: Map<PropertyKey, unknown>,
-  ) {
-    super.firstUpdated(changedProperties);
-    this.refreshForCurrentValue();
-    this.refreshForCurrentAuthor();
+  protected override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
+    super.willUpdate(changedProperties);
+    if (!sameSources(this.#sources, this.#currentSources)) this.#observe();
   }
 
-  private refreshForCurrentValue(): void {
-    const hasSubscription = this.observeValue(this.value);
-    if (!hasSubscription) {
-      void this.refreshLabel();
-    }
-  }
-
-  private refreshForCurrentAuthor(): void {
-    this.observeAuthor(this.author);
-    void this.refreshAuthorClaim();
-  }
-
-  private observeValue(value: unknown): boolean {
-    if (Object.is(value, this._observedValue)) {
-      return this._unsubscribeValue !== undefined;
-    }
-
-    this.clearValueSubscription();
-    this._observedValue = value;
-    // New value → fresh retry budget for its (possibly cold) resolved label.
-    this._labelRetryCount = 0;
-
-    if (!hasLabelSubscription(value)) {
-      return false;
-    }
-
-    // includeCfcLabel makes the worker read this cell's label (and its
-    // one-hop link target's) on the sink's tracked tx, so a label-only change
-    // re-fires this subscription and refreshLabel re-reads the new label — the
-    // resolved-cell label is now reactive, not just polled.
-    this._unsubscribeValue = value.subscribe(() => {
-      void this.refreshLabel();
-    }, { includeCfcLabel: true });
-    return true;
-  }
-
-  private clearValueSubscription(): void {
-    this._unsubscribeValue?.();
-    this._unsubscribeValue = undefined;
-    this._observedValue = undefined;
-  }
-
-  private observeAuthor(author: unknown): boolean {
-    if (Object.is(author, this._observedAuthor)) {
-      return this._unsubscribeAuthor !== undefined;
-    }
-
-    this.clearAuthorSubscription();
-    this._observedAuthor = author;
-    // New author → fresh retry budget for its (possibly cold) resolved label.
-    this._labelRetryCount = 0;
-
-    if (!hasLabelSubscription(author)) {
-      return false;
-    }
-
-    this._unsubscribeAuthor = author.subscribe((claim) => {
-      if (hasLabelQuery(author) || hasLabelResolution(author)) {
-        void this.refreshAuthorClaim();
-        return;
-      }
-      const previous = this._authorClaim;
-      this._authorClaim = claim;
-      this.requestUpdate("author", previous);
-    }, { includeCfcLabel: true });
-    return true;
-  }
-
-  private clearAuthorSubscription(): void {
-    this._unsubscribeAuthor?.();
-    this._unsubscribeAuthor = undefined;
-    this._observedAuthor = undefined;
-  }
-
-  async refreshLabel(): Promise<void> {
-    const requestId = ++this._labelRequestId;
-    let view: typeof this.cfcLabel;
-    let pendingResolution: boolean;
-    try {
-      ({ view, pendingResolution } = await readLabelView(
-        this.value,
-        this.kind ?? DEFAULT_AUTHORSHIP_KIND,
-      ));
-    } catch {
-      // This runs fire-and-forget (void this.refreshLabel()). A disposal race
-      // (logout, runtime swap) cancels the read; leave the label as-is rather
-      // than leaking an unhandled rejection — matching refreshAuthorClaim.
-      return;
-    }
-    if (requestId === this._labelRequestId) {
-      const previous = this.cfcLabel;
-      this.cfcLabel = view;
-      this.requestUpdate("cfcLabel", previous);
-      this._valueResolutionPending = pendingResolution;
-      this.reconcileLabelRetry();
-    }
-  }
-
-  async refreshAuthorClaim(): Promise<void> {
-    const requestId = ++this._authorRequestId;
-    const author = this.author;
-    const canReadAuthor = hasReadableClaim(author);
-    if (
-      !canReadAuthor && !hasLabelQuery(author) &&
-      !hasLabelResolution(author)
-    ) {
-      const previous = this._authorClaim;
-      this._authorClaim = undefined;
-      this.requestUpdate("author", previous);
-      this._authorResolutionPending = false;
-      this.reconcileLabelRetry();
-      return;
-    }
-
-    let authorClaim: unknown;
-    let pendingResolution = false;
-    try {
-      const valueClaim = canReadAuthor
-        ? await readClaimValue(author)
-        : undefined;
-      const profile = await readLabelView(author, "represents-principal");
-      pendingResolution = profile.pendingResolution;
-      const profileSubject = representsPrincipalSubjectForLabel(profile.view);
-      authorClaim = principalAuthorClaim(
-        profileSubject,
-        authorDisplayName(valueClaim) ?? primitiveToString(this.authorName),
-      ) ?? valueClaim;
-    } catch {
-      authorClaim = undefined;
-    }
-
-    if (requestId === this._authorRequestId) {
-      const previous = this._authorClaim;
-      this._authorClaim = authorClaim;
-      this.requestUpdate("author", previous);
-      this._authorResolutionPending = pendingResolution;
-      this.reconcileLabelRetry();
-    }
+  /** What an observation started now would watch and decide by. */
+  get #currentSources(): ObservedSources {
+    return {
+      value: this.#value,
+      author: this.#author,
+      kind: this.kind ?? DEFAULT_AUTHORSHIP_KIND,
+      authorName: primitiveToString(this.authorName),
+    };
   }
 
   /**
-   * Re-reads the label(s) while a resolved cell's doc is still loading. The
-   * resolved cell is queried one-shot inside `readLabelView()` and is not
-   * subscribed to, so without this poll a cold linked/bound-prop author would
-   * stay unverified until an unrelated `value`/`author` change happened to
-   * re-run the read. Bounded by `MAX_LABEL_RETRY_COUNT`.
+   * Starts an observation of the current sources, in place of the running
+   * one, while the element is connected. A change of sources forgets the
+   * verdict, so the badge reads `loading` until the new observation reports.
    */
-  private reconcileLabelRetry(): void {
-    if (this._valueResolutionPending || this._authorResolutionPending) {
-      this.scheduleLabelRetry();
-    } else {
-      this.clearLabelRetry();
-      this._labelRetryCount = 0;
-    }
-  }
-
-  private scheduleLabelRetry(): void {
+  #observe(): void {
+    this.#cancelObservation?.();
+    this.#cancelObservation = undefined;
+    const sources = this.#currentSources;
     if (
-      !this.isConnected ||
-      this._labelRetryTimeout !== undefined ||
-      this._labelRetryCount >= MAX_LABEL_RETRY_COUNT
+      !sameSources(this.#sources, sources) && this.#observation !== undefined
     ) {
-      return;
+      this.#observation = undefined;
+      this.requestUpdate();
     }
-    this._labelRetryTimeout = setTimeout(() => {
-      this._labelRetryTimeout = undefined;
-      if (!this.isConnected) return;
-      this._labelRetryCount += 1;
-      void this.refreshLabel();
-      void this.refreshAuthorClaim();
-    }, LABEL_RETRY_INTERVAL_MS);
+    this.#sources = sources;
+    if (!this.isConnected) return;
+    this.#cancelObservation = observeAuthorship(
+      sources.value,
+      sources.author,
+      (observation) => {
+        this.#observation = observation;
+        const previous = this.cfcLabel;
+        this.cfcLabel = observation.cfcLabel;
+        this.requestUpdate("cfcLabel", previous);
+        this.requestUpdate();
+      },
+      { kind: sources.kind, authorName: sources.authorName },
+    );
   }
 
-  private clearLabelRetry(): void {
-    if (this._labelRetryTimeout !== undefined) {
-      clearTimeout(this._labelRetryTimeout);
-      this._labelRetryTimeout = undefined;
+  private renderAvatar(state: CfcAuthorshipBadgeState) {
+    if (state === "loading") {
+      return html`
+        <span class="status-dot" part="status-dot" aria-hidden="true"></span>
+      `;
     }
-  }
-
-  private renderAvatar(state: CfcAuthorshipState) {
     if (state !== "verified") {
       return html`
         <span class="status-dot" part="status-dot" aria-hidden="true">!</span>
       `;
     }
 
-    const authorName = authorDisplayName(this.authorClaim) ??
-      primaryAuthorId(this.authorClaim);
+    const authorName = authorClaimLabel(this.authorClaim);
     const avatar = primitiveToString(this.avatar);
     return html`
       <span
@@ -858,15 +409,18 @@ export class CFCFCAuthorship extends BaseElement {
 
   override render() {
     const state = this.authorshipState;
-    const claimLabel = authorDisplayName(this.authorClaim) ??
-      primaryAuthorId(this.authorClaim);
+    const claimLabel = authorClaimLabel(this.authorClaim);
     const authorLabel = state === "verified"
       ? claimLabel ?? "unknown author"
+      : state === "loading"
+      ? claimLabel ?? primitiveToString(this.authorName) ?? ""
       : claimLabel ?? primitiveToString(this.authorName) ?? "unknown author";
     const stateLabel = state === "verified"
       ? "Verified author"
       : state === "unverified"
       ? "Unverified author"
+      : state === "loading"
+      ? "Checking author"
       : "Unknown author";
 
     return html`

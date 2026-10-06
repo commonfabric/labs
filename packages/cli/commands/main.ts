@@ -8,6 +8,7 @@ import {
   reservesStdoutForCommandOutput,
 } from "../lib/json-output.ts";
 import { acl } from "./acl.ts";
+import { agent } from "./agent.ts";
 import { completion } from "./completion.ts";
 import { deps } from "./deps.ts";
 import { check } from "./dev.ts";
@@ -121,6 +122,7 @@ export const main = new Command()
   .reset()
   // @ts-ignore for the above type issue
   .command("acl", acl)
+  .command("agent", agent)
   .command("ingest", ingest)
   // @ts-ignore for the above type issue
   .command("piece", piece)

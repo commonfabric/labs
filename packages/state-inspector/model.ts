@@ -51,7 +51,8 @@
 //                  (`hasTable`, the scope_key shim). A schema-migration concern.
 // └────────────────────────────────────────────────────────────────────────────┘
 
-import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { isFabricPlainObject } from "@commonfabric/data-model";
 import {
   classifySchemaMetaValue,
   SCHEMA_DOCUMENT_REF_PREFIX,
@@ -187,16 +188,16 @@ export interface EntityModel {
 }
 
 /** The target id of a SigilLink value, if it is one. */
-function linkId(v: unknown): string | undefined {
+function linkId(v: FabricValue): string | undefined {
   return decodedLinkOf(v)?.id ?? undefined;
 }
 
 /** Owned child cell ids from a piece's `internal` manifest. */
-function internalIds(internal: unknown): string[] {
+function internalIds(internal: FabricValue): string[] {
   if (!Array.isArray(internal)) return [];
   const out: string[] = [];
   for (const el of internal) {
-    if (isObjectNotArray(el) && "link" in el) {
+    if (isFabricPlainObject(el) && "link" in el) {
       const id = linkId(el.link);
       if (id) out.push(id);
     }
@@ -275,10 +276,10 @@ export function spaceDocumentReader(
  * where it was reached by reference.
  */
 export interface ResolvedSchema {
-  schema: unknown;
+  schema: FabricValue;
 
   /** The document whose `$defs` a local `$ref` in `schema` names. */
-  root: unknown;
+  root: FabricValue;
 
   /** Whether the schema was held inline or read out of a schema document. */
   via: "own" | "document";
@@ -369,7 +370,7 @@ export function streamDeclarationOf(
   if (!Array.isArray(manifest)) return undefined;
   const resolveExternal = externalReferenceResolver(readDocument);
   for (const entry of manifest) {
-    if (!isObjectNotArray(entry)) continue;
+    if (!isFabricPlainObject(entry)) continue;
     const link = decodedLinkOf(entry.link);
     if (link === null || link.id !== id || (link.path?.length ?? 0) > 0) {
       continue;
@@ -404,13 +405,13 @@ function isPieceResultValue(v: unknown): boolean {
  * retirement note).
  */
 function isLegacyProcessValue(
-  v: unknown,
+  v: FabricValue,
 ): v is {
   $TYPE: string;
-  resultRef?: unknown;
-  argument?: unknown;
-  spell?: unknown;
-  source?: unknown;
+  resultRef?: FabricValue;
+  argument?: FabricValue;
+  spell?: FabricValue;
+  source?: FabricValue;
 } {
   return isObjectNotArray(v) && typeof v.$TYPE === "string" &&
     ("resultRef" in v || "spell" in v || "source" in v);
@@ -858,19 +859,18 @@ export function visibleEntityRows(
   // a farther link is hidden by the nearer branch that claimed it.
   const gone = new Set<string>();
   if (!opts.includeDeleted) {
-    const tombstoned = space.db.prepare(
-      `SELECT r.id FROM revision r
+    const tombstoned = `SELECT r.id FROM revision r
        WHERE r.branch = ? AND r.scope_key = ? AND r.op = 'delete' AND r.seq <= ?
          AND NOT EXISTS (
            SELECT 1 FROM revision h
            WHERE h.branch = r.branch AND h.id = r.id
              AND h.scope_key = r.scope_key AND h.seq <= ?
              AND (h.seq > r.seq OR (h.seq = r.seq AND h.op_index > r.op_index))
-         )`,
-    );
+         )`;
     for (const link of branchReadChain(space, branch)) {
       for (
-        const r of tombstoned.all<{ id: string }>(
+        const r of space.all<{ id: string }>(
+          tombstoned,
           link.branch,
           scope,
           link.atSeq,
@@ -890,6 +890,40 @@ export function visibleEntityRows(
     // property of the space; a hand-rolled comparison is a second definition of
     // string order in the one domain that already has a shared one.
     .sort((a, b) => b.revisions - a.revisions || utf8Compare(a.id, b.id));
+}
+
+/**
+ * Every scope's entity rows in ONE pass, keyed by scope — for each scope,
+ * exactly what `visibleEntityRows(space, { branch, scope, includeDeleted: true })`
+ * returns, in the same order.
+ *
+ * The per-scope query filters on `scope_key` with no `id`, and the revision
+ * index leads with `id`, so SQLite cannot seek to a scope: it walks every
+ * revision on the branch and keeps the few that match. Asked once per scope,
+ * that is a whole-branch scan per scope, and a real store holds thousands of
+ * scopes — the Estuary Topics store has 13,571, most of them a handful of
+ * entities apiece, so enumerating it took hours. Asking once, unfiltered, walks
+ * the branch a single time and sorts the rows into their scopes as it goes.
+ *
+ * Tombstones stay, which is the records view `listEntityModels` reads: a
+ * `deleted` row models as `deleted` rather than disappearing.
+ */
+export function visibleEntityRowsByScope(
+  space: SpaceDb,
+  opts: { branch?: string } = {},
+): Map<string, EntityScanRow[]> {
+  const byScope = new Map<string, EntityScanRow[]>();
+  for (const r of visibleRevisionRows(space, { branch: opts.branch ?? "" })) {
+    let rows = byScope.get(r.scope);
+    if (rows === undefined) byScope.set(r.scope, rows = []);
+    rows.push({ id: r.id, revisions: r.revisions, link: r.link });
+  }
+  // The same comparator `visibleEntityRows` applies, so a scope's share of this
+  // pass is interchangeable with that function's answer for the scope.
+  for (const rows of byScope.values()) {
+    rows.sort((a, b) => b.revisions - a.revisions || utf8Compare(a.id, b.id));
+  }
+  return byScope;
 }
 
 /**
@@ -973,6 +1007,19 @@ export function listEntityModels(
     scope?: string;
     limit?: number;
     kind?: EntityKind;
+
+    /**
+     * This scope's rows, already fetched, in place of
+     * `visibleEntityRows(space, { branch, scope, includeDeleted: true })`. The
+     * listing covers exactly these rows, and `extent.total` counts them, so a
+     * caller that passes a subset gets a listing of that subset. A caller
+     * enumerating EVERY scope passes each scope's share of one
+     * {@link visibleEntityRowsByScope} pass rather than letting each call
+     * fetch its own: the per-scope query cannot seek on `scope_key` (the index
+     * leads with `id`), so it walks the branch's whole revision set, and one of
+     * those per scope is the cost of the listing rather than a part of it.
+     */
+    rows?: readonly EntityScanRow[];
   } = {},
 ): EntityListing {
   const branch = opts.branch ?? "";
@@ -983,7 +1030,7 @@ export function listEntityModels(
   // A listing describes the space's RECORDS, so it keeps tombstones (they model
   // as `deleted`, which is why `--kind deleted` can ask for them) — and that
   // keeps `extent.total` counting exactly the set this pass returns.
-  const rows = visibleEntityRows(space, {
+  const rows = opts.rows ?? visibleEntityRows(space, {
     branch,
     scope,
     includeDeleted: true,

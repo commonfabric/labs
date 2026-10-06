@@ -1,13 +1,15 @@
 export type {
   CfcLabelView,
   CfcLabelViewEntry,
+  CfcLabelViewSource,
   CfcLabelViewStatus,
+  ResolvedLabelReadOptions,
 } from "./label-view.ts";
 export {
   type CfcCellLinkRefPayload,
   linkCfcLabelView,
-  setLinkCfcLabelView,
   stripSigilCfcLabelViews,
+  withLinkCfcLabelView,
 } from "./link-label-view.ts";
 export {
   CLASSIFIED_KIND_FAMILIES,
@@ -18,6 +20,7 @@ export {
   type LabelFieldClassificationEntry,
   type LabelFieldRepresentationClass,
 } from "./label-field-classification.ts";
+export { InvalidIfcLabelError, parseIfcLabel } from "./label-parser.ts";
 export {
   type CfcFieldCommitment,
   commitCfcFieldValue,
@@ -27,15 +30,18 @@ export {
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
 export {
+  cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
   cfcLabelViewForCellWithStatus,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
+  cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
+  cfcLabelViewForResolvedTarget,
   cfcLabelViewFromMetadata,
-  cfcLabelViewSymbol,
+  cfcLabelViewSourceForCell,
   cloneCfcLabelView,
   getCarriedCfcLabelView,
   mergeCfcLabelViews,
@@ -52,6 +58,7 @@ export type {
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
   CfcEnforcementMode,
+  CfcExternalContentObservation,
   CfcFlowLabelsMode,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
@@ -59,6 +66,7 @@ export type {
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcPrepareState,
+  CfcRecordAddress,
   CfcSandboxDiagnostic,
   CfcSandboxExitCodeObservation,
   CfcSandboxJsonValue,
@@ -109,7 +117,10 @@ export {
   CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON,
   CfcSchemaMigrationError,
 } from "./migration-reason.ts";
-export { LABEL_METADATA_OBSERVATION } from "./observation-classes.ts";
+export {
+  LABEL_METADATA_OBSERVATION,
+  readConsumesEntry,
+} from "./observation-classes.ts";
 export type { LabelMetadataObservationClass } from "./observation-classes.ts";
 export {
   CFC_ENFORCEMENT_MODES,
@@ -130,17 +141,22 @@ export {
   canonicalizeCfcLabel,
   canonicalizeCfcMetadata,
   canonicalizeDereferenceTrace,
+  canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   canonicalizePreparedDigestInput,
   canonicalizeWritePolicyInput,
   cfcDereferenceTracesEqual,
+  cfcRecordPath,
   logicalPathToPointer,
   preparedDigestFor,
 } from "./canonical.ts";
 export type { CfcConfClause, CfcOrClause } from "./clause.ts";
 export {
   type CfcModulePolicyLoader,
+  type CfcModulePolicySource,
+  createRuntimeCfcModulePolicySource,
   createTxCfcModulePolicyResolver,
+  type RenderModulePolicyResolver,
 } from "./policy-resolver.ts";
 export {
   clauseAlternatives,
@@ -164,13 +180,17 @@ export type {
   PolicyRecord,
   PolicySnapshot,
 } from "./policy.ts";
-export { buildCfcPolicySnapshot } from "./policy.ts";
+export {
+  buildCfcPolicyArtifactManifest,
+  buildCfcPolicySnapshot,
+} from "./policy.ts";
 export {
   MATERIAL_RISK_DISCHARGE_KINDS,
   MATERIAL_RISK_DISCHARGE_POLICY,
   MATERIAL_RISK_KINDS,
   STANDARD_PROMPT_CAVEAT_POLICY,
 } from "./standard-profile.ts";
+export { PROMPT_CAVEAT_FAMILY_KINDS } from "./prompt-caveat-kinds.ts";
 export type {
   CfcConceptEdge,
   CfcTrustConfig,
@@ -222,9 +242,10 @@ export type {
 } from "./render-ceiling.ts";
 export {
   createRenderConfidentialityResolver,
+  membershipSpacesInConfidentiality,
+  modulePolicyRefsInConfidentiality,
   RENDER_DISPLAY_SINK_CLASS,
   RENDER_SINK_NAME,
-  spaceAtomIdsInConfidentiality,
   STANDARD_RENDER_EXCHANGE_RULES,
 } from "./render-ceiling.ts";
 export type { SpaceMembershipProvider, SpaceRole } from "./space-membership.ts";
@@ -236,10 +257,10 @@ export {
   CFC_PREFIX_PROVENANCE_MAX_WRITES,
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
-  flowReadExcluded,
   gatedSinkRequestExists,
   loadStoredCfcEnvelope,
   prepareBoundaryCommit,
+  releaseMergeOptions,
   storedCfcEnvelopeMergeIssue,
 } from "./prepare.ts";
 export type {
@@ -250,6 +271,12 @@ export type {
   StoredCfcEnvelope,
 } from "./prepare.ts";
 export {
+  addCfcDenialListener,
+  CFC_DENIAL_CODES,
+  type CfcDenial,
+  type CfcDenialCode,
+  type CfcDenialListener,
+  isCfcDenialCode,
   reportCfcDenial,
   resetCfcDenialAnnouncements,
 } from "./denial-report.ts";
@@ -318,12 +345,15 @@ export {
   INITIAL_SINK_INVENTORY,
   isInitialSinkInventoryName,
   KNOWN_SINKS,
+  SINK_CLASSES,
   SINK_UNGATED_RATIONALES,
   sinkCeilingsOf,
+  sinkClassOf,
   ungatedSink,
 } from "./sink-inventory.ts";
 export type {
   KnownSinkName,
+  SinkClass,
   SinkGovernance,
   SinkGovernanceRegistry,
   SinkMaxConfidentiality,
@@ -333,6 +363,7 @@ export type {
 export {
   buildCfcReadCeiling,
   type CfcReadCeiling,
+  CfcReadCeilingError,
   type CfcReadCeilingLabels,
   type CfcReadCeilingOptions,
   type CfcReadOnExceed,
@@ -384,6 +415,10 @@ export {
   resolveCfcSchemaRefsOrThrow,
   selectReferencedCfcSchemaDefs,
 } from "./schema-refs.ts";
+export {
+  LLM_DERIVED_RESULT_STAMP_SCHEMA,
+  withLlmDerivedStamp,
+} from "./llm-derived-stamp.ts";
 export {
   type SchemaOpaqueLinkSanitizationResult,
   type StructuredResultReservedKeys,

@@ -1,0 +1,1 @@
+{"date":"2026-09-20","from":{"k":"unit","s":"runner","n":"Path operations > setValueAtPath > is Fabric-aware: a differing FabricBytes is a real change (CT-1770)"},"to":{"k":"unit","s":"runner","n":"Path operations > setValueAtPath > is Fabric-aware: a differing `FabricBytes` is a real change"}}

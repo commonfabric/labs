@@ -52,7 +52,7 @@ const setup = async (separateChild = false) => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
   };
   await write(0, "first-author");
@@ -95,12 +95,12 @@ describe("read-only Cell subscriptions", () => {
       }
       const childWrite = runtime.edit();
       child.withTx(childWrite).set(2);
-      expect((await childWrite.commit()).error).toBeUndefined();
+      expect((await childWrite.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(seen).toEqual([0]);
       const triggerWrite = runtime.edit();
       source.withTx(triggerWrite).key("trigger").set(1);
-      expect((await triggerWrite.commit()).error).toBeUndefined();
+      expect((await triggerWrite.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(seen).toEqual([0, 1]);
       expect(prepared.length).toBeGreaterThanOrEqual(4);
@@ -112,7 +112,7 @@ describe("read-only Cell subscriptions", () => {
       cancel();
       const afterCancel = runtime.edit();
       source.withTx(afterCancel).key("trigger").set(2);
-      expect((await afterCancel.commit()).error).toBeUndefined();
+      expect((await afterCancel.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(seen).toEqual([0, 1]);
     } finally {
@@ -206,7 +206,7 @@ describe("read-only Cell subscriptions", () => {
           identity,
           symbol: "default",
         }, rawMetaWriteAuthorization);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
       };
       await write("first");

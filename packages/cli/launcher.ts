@@ -1,3 +1,5 @@
+import { CF_PERMISSION_FLAGS } from "./lib/cf-permissions.ts";
+
 export interface CfLauncherOptions {
   denoPath: string;
   labsRoot: string;
@@ -189,7 +191,7 @@ export const parseCfLauncherArgs = (
   for (let index = 0; index < options.argv.length; index += 1) {
     const arg = options.argv[index]!;
     if (arg === "--") {
-      cfArgs.push(...options.argv.slice(index + 1));
+      for (const cfArg of options.argv.slice(index + 1)) cfArgs.push(cfArg);
       break;
     }
     if (arg === "--launcher-help") {
@@ -220,7 +222,7 @@ export const parseCfLauncherArgs = (
       index += 1;
       continue;
     }
-    cfArgs.push(...options.argv.slice(index));
+    for (const cfArg of options.argv.slice(index)) cfArgs.push(cfArg);
     break;
   }
 
@@ -249,12 +251,7 @@ export const buildCfLauncherCommand = (
     "--quiet",
     "--config",
     options.configPath,
-    "--allow-net",
-    "--allow-ffi",
-    "--allow-read",
-    "--allow-write",
-    "--allow-env",
-    "--allow-run",
+    ...CF_PERMISSION_FLAGS,
     options.cliEntrypoint,
     ...options.cfArgs,
   ],

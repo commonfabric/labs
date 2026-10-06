@@ -5,14 +5,18 @@
  * a member's task cannot be handed a subset: almost every one of them
  * lists its own paths, so appending more would add to what runs rather
  * than restrict it. What the task does carry is everything else the run
- * needs — the permissions, `--no-check`, a fake-clock preload, an `ENV`
- * assignment in front — so the task is read for those and its paths are
- * replaced with the chosen ones.
+ * needs — the permissions, a fake-clock preload, an `ENV` assignment in
+ * front — so the task is read for those and its paths are replaced with the
+ * chosen ones.
  *
  * Only the simple shape is read: leading `NAME=value` assignments, then
  * `deno test`, then flags and paths. A task carrying a shell
  * metacharacter or naming its own import map is not this shape, and the
- * member it belongs to is one unit that runs whole.
+ * member it belongs to is one unit that runs whole. The batch runner, the one
+ * wrapper the workspace puts around `deno test`, is read as the `deno test` it
+ * runs. Each member behind it therefore becomes one unit per test file. The
+ * runner names files that need flags of their own, and {@link testBatches} is
+ * how both it and a lane split files by those flags.
  */
 
 import * as path from "@std/path";
@@ -32,23 +36,56 @@ export interface ParsedTestTask {
 
   /** Globs the task refuses, from every `--ignore`. */
   ignores: string[];
+
+  /**
+   * Globs naming the files that cannot run beside another test file in one
+   * process, from every `--serial` the batch runner takes. Empty for a
+   * plain `deno test`.
+   */
+  serial: string[];
+
+  /**
+   * Globs naming the files that need every permission, from every
+   * `--all-access` the batch runner takes. Empty for a plain
+   * `deno test`.
+   */
+  allAccess: string[];
 }
 
 /** A metacharacter puts the flags and paths somewhere other than the test. */
 const METACHARACTER = /[&;|<>`$()]/;
 
 /**
- * The one command substitution the workspace writes, which several
- * members use to name the Deno they are running under in an
- * `--allow-run` list. It is resolved here rather than treated as a
- * metacharacter, because the alternative is those members losing file
- * granularity over a path this process already knows.
+ * The command substitution several members use to name the Deno they are
+ * running under in an `--allow-run` list. It is resolved here rather
+ * than treated as a metacharacter, because the alternative is those
+ * members losing file granularity over a path this process already
+ * knows. The seed substitution below is the other one the workspace
+ * writes, and is taken out for the same reason.
  */
 const EXEC_PATH_SUBSTITUTION =
   /\$\(deno eval ["']console\.log\(Deno\.execPath\(\)\)["']\)/g;
 
+/**
+ * What stands in for that substitution while the task is split into
+ * words. The path goes in afterwards, because a path holding a space
+ * would otherwise be split into two words that are neither of them it.
+ */
+const EXEC_PATH_PLACEHOLDER = "@DENO_EXEC_PATH@";
+
+/**
+ * The seed substitution every test task writes, which this takes out
+ * rather than resolving: a suite builds its own `--shuffle` from the
+ * seed the run settled on, which is the one to use where an override
+ * names a seed other than the commit's.
+ */
+const SHUFFLE_SUBSTITUTION = /\s*--shuffle=\$\(deno task -q test-seed\)/g;
+
 /** `NAME=value` in front of the command. */
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+
+/** The wrapper a member runs when some of its files need flags of their own. */
+const BATCH_RUNNER = "run-test-batches.ts";
 
 /**
  * Strips shell quoting from a task's argument.
@@ -77,28 +114,183 @@ export function unquote(word: string): string {
   return out;
 }
 
+/** The globs a comma-separated option names, less any empty entry. */
+function globList(value: string): string[] {
+  return value.split(",").filter((glob) => glob.length > 0);
+}
+
+/**
+ * What the batch runner's arguments name, read the way a task running
+ * `deno test` over the same files is read, or undefined where they are not
+ * the runner's shape: the directory or glob it walks, the files it leaves
+ * out, the files that need flags of their own, and the flags for
+ * `deno test`. The environment is empty, because the runner's arguments set
+ * none.
+ *
+ * The runner takes the directory or glob to walk, any number of
+ * `--serial=GLOBS` and `--all-access=GLOBS` options, a `--` separator, and
+ * then the flags for the `deno test` it runs. Each option takes a
+ * comma-separated list. An `--ignore=GLOBS` among the flags is taken out of
+ * them and applied to the walk, as it is for a task that runs `deno test`
+ * itself.
+ */
+export function readBatchRunnerArguments(
+  args: readonly string[],
+): ParsedTestTask | undefined {
+  const [root, ...rest] = args;
+  const separator = rest.indexOf("--");
+  // A second `--` would make every word after it, the files the runner
+  // appends included, an argument to the test modules rather than to
+  // `deno test`.
+  if (
+    root === undefined || separator < 0 ||
+    rest.indexOf("--", separator + 1) >= 0
+  ) {
+    return undefined;
+  }
+  const test: ParsedTestTask = {
+    env: {},
+    flags: [],
+    paths: [root],
+    ignores: [],
+    serial: [],
+    allAccess: [],
+  };
+  for (const option of rest.slice(0, separator)) {
+    if (option.startsWith("--serial=")) {
+      for (const glob of globList(option.slice("--serial=".length))) {
+        test.serial.push(glob);
+      }
+    } else if (option.startsWith("--all-access=")) {
+      for (const glob of globList(option.slice("--all-access=".length))) {
+        test.allAccess.push(glob);
+      }
+    } else {
+      return undefined;
+    }
+  }
+  for (const flag of rest.slice(separator + 1)) {
+    if (flag.startsWith("--ignore=")) {
+      for (const glob of globList(flag.slice("--ignore=".length))) {
+        test.ignores.push(glob);
+      }
+    } else {
+      test.flags.push(flag);
+    }
+  }
+  return test;
+}
+
+/**
+ * A `deno run` of the batch runner, as the `deno test` it runs, or undefined
+ * for any other `deno run`. The words before the runner are the runner's own
+ * permissions, and the tests do not run under them.
+ *
+ * A word after the separator that is not a flag makes this return undefined.
+ * The runner appends its files after those words, so a path there would run
+ * alongside whatever a lane asked for.
+ */
+function parseBatchRunner(
+  env: Record<string, string>,
+  words: readonly string[],
+): ParsedTestTask | undefined {
+  const runner = words.findIndex((word) => !word.startsWith("-"));
+  if (runner < 0) return undefined;
+  if (path.basename(words[runner]!) !== BATCH_RUNNER) return undefined;
+  const test = readBatchRunnerArguments(words.slice(runner + 1).map(unquote));
+  if (test === undefined) return undefined;
+  if (test.flags.some((flag) => !flag.startsWith("-"))) return undefined;
+  return { ...test, env };
+}
+
+/** One `deno test` over part of a member's test files. */
+export interface TestBatch {
+  /** The flags the batch runs under. */
+  flags: string[];
+
+  /** The batch's files, in the order they were given. */
+  files: string[];
+}
+
+/** A flag granting a permission, which `--allow-all` stands in for. */
+const PERMISSION_FLAG =
+  /^(-A|-[RWNES](=.*)?|--allow-(read|write|net|env|run|ffi|sys|import)(=.*)?)$/;
+
+/**
+ * Splits a member's test files into the `deno test` runs they need. A file
+ * one of the task's `serial` globs names runs without `--parallel`, so that
+ * no other test file runs beside it in its process. A file one of its
+ * `allAccess` globs names runs under `--allow-all` in place of every flag
+ * granting a permission. Files that need the same flags share a batch.
+ *
+ * The batches come in a fixed order, whatever order the files do: the
+ * files neither kind of glob names first, the serial files last. A batch
+ * that would hold no file is left out, so a plain `deno test` task gives
+ * one batch under its own flags.
+ */
+export function testBatches(
+  task: Pick<ParsedTestTask, "flags" | "serial" | "allAccess">,
+  files: readonly string[],
+): TestBatch[] {
+  const allAccessFlags = [
+    ...task.flags.filter((flag) => !PERMISSION_FLAG.test(flag)),
+    "--allow-all",
+  ];
+  const withoutParallel = (flags: readonly string[]) =>
+    flags.filter((flag) => flag !== "--parallel");
+  // In the order `testBatchOf()` numbers them.
+  const batches: TestBatch[] = [
+    { flags: task.flags, files: [] },
+    { flags: allAccessFlags, files: [] },
+    { flags: withoutParallel(task.flags), files: [] },
+    { flags: withoutParallel(allAccessFlags), files: [] },
+  ];
+  for (const file of files) batches[testBatchOf(task, file)]!.files.push(file);
+  return batches.filter((batch) => batch.files.length > 0);
+}
+
+/**
+ * Which of the `deno test` runs {@link testBatches} puts `file` in, as a
+ * number that stays the same whichever other files are run beside it.
+ */
+export function testBatchOf(
+  task: Pick<ParsedTestTask, "serial" | "allAccess">,
+  file: string,
+): number {
+  // Indexed by whether a file is all-access, plus two when it is serial.
+  return (matchesAny(file, task.allAccess) ? 1 : 0) +
+    (matchesAny(file, task.serial) ? 2 : 0);
+}
+
 /**
  * A member's test task as the pieces a subset run needs, or undefined for
- * a task this cannot read: one that is not a single `deno test`, one
- * carrying a shell metacharacter, or one naming its own import map. That
- * map governs every module of the invocation, the preload included, so a
- * specifier the preload needs and the map does not carry would fail the
- * whole run.
+ * a task this cannot read. That is a task that is neither a single `deno test`
+ * nor a `deno run` of the batch runner, a task carrying a shell
+ * metacharacter, or a task naming its own import map. A task's import map
+ * applies to every module of the invocation, including the preload, so a
+ * specifier the preload needs has to be in it.
  */
 export function parseTestTask(
   task: string,
   execPath: string = Deno.execPath(),
 ): ParsedTestTask | undefined {
-  const resolved = task.replace(EXEC_PATH_SUBSTITUTION, execPath);
+  const resolved = task
+    .replace(EXEC_PATH_SUBSTITUTION, EXEC_PATH_PLACEHOLDER)
+    .replace(SHUFFLE_SUBSTITUTION, "");
   if (METACHARACTER.test(resolved)) return undefined;
   if (/--import-map[= ]/.test(resolved)) return undefined;
-  const words = resolved.trim().split(/\s+/).filter((word) => word.length > 0);
+  const words = resolved.trim().split(/\s+/)
+    .filter((word) => word.length > 0)
+    .map((word) => word.replaceAll(EXEC_PATH_PLACEHOLDER, execPath));
   const env: Record<string, string> = {};
   let index = 0;
   for (; index < words.length; index++) {
     const assignment = ASSIGNMENT.exec(words[index]!);
     if (assignment === null) break;
     env[assignment[1]!] = unquote(assignment[2]!);
+  }
+  if (words[index] === "deno" && words[index + 1] === "run") {
+    return parseBatchRunner(env, words.slice(index + 2));
   }
   if (words[index] !== "deno" || words[index + 1] !== "test") return undefined;
   index += 2;
@@ -108,8 +300,8 @@ export function parseTestTask(
   for (; index < words.length; index++) {
     const word = words[index]!;
     if (word.startsWith("--ignore=")) {
-      for (const glob of unquote(word.slice("--ignore=".length)).split(",")) {
-        if (glob.length > 0) ignores.push(glob);
+      for (const glob of globList(unquote(word.slice("--ignore=".length)))) {
+        ignores.push(glob);
       }
       continue;
     }
@@ -119,7 +311,7 @@ export function parseTestTask(
     }
     paths.push(unquote(word));
   }
-  return { env, flags, paths, ignores };
+  return { env, flags, paths, ignores, serial: [], allAccess: [] };
 }
 
 /** What Deno takes for a test file when it walks a directory. */
@@ -182,7 +374,10 @@ async function memberExcludes(memberDir: string): Promise<string[]> {
 }
 
 /** Whether a member-relative path is covered by one of these globs. */
-function matchesAny(candidate: string, globs: readonly string[]): boolean {
+function matchesAny(
+  candidate: string,
+  globs: readonly string[],
+): boolean {
   return globs.some((glob) => {
     const pattern = path.globToRegExp(glob, { globstar: true });
     if (pattern.test(candidate)) return true;
@@ -193,16 +388,16 @@ function matchesAny(candidate: string, globs: readonly string[]): boolean {
 }
 
 /**
- * Every test file a member's task runs, member-relative and sorted. The
- * task's own paths are expanded — a directory the way Deno walks one, a
- * glob the way Deno expands one — and then its `--ignore` globs and the
- * member's `exclude` are applied. An explicit path reaches `deno test`
- * without passing through either, which is why they are applied here
- * rather than left to the command line.
+ * Every test file a member's task runs, member-relative, slash-separated
+ * whatever the platform, and sorted. The task's own paths are expanded — a
+ * directory the way Deno walks one, a glob the way Deno expands one — and
+ * then its `--ignore` globs and the member's `exclude` are applied. An
+ * explicit path reaches `deno test` without passing through either, which is
+ * why they are applied here rather than left to the command line.
  */
 export async function memberTestFiles(
   memberDir: string,
-  parsed: ParsedTestTask,
+  parsed: Pick<ParsedTestTask, "paths" | "ignores">,
 ): Promise<string[]> {
   const found: string[] = [];
   // No path at all means the member's own directory, which is what
@@ -239,9 +434,22 @@ export async function memberTestFiles(
   }
   const excludes = [...parsed.ignores, ...await memberExcludes(memberDir)];
   const relative = found
-    .map((file) => path.relative(memberDir, file))
+    .map((file) => slashSeparated(path.relative(memberDir, file)))
     .filter((file) => !matchesAny(file, excludes));
   return [...new Set(relative)].sort();
+}
+
+/**
+ * The path `relative`, written with the platform separator `separator`, as
+ * the slash-separated path a manifest's globs are written against. On a
+ * platform whose separator is a slash it is returned as it is, since a
+ * backslash there is part of a file name.
+ */
+export function slashSeparated(
+  relative: string,
+  separator: string = path.SEPARATOR,
+): string {
+  return relative.split(separator).join("/");
 }
 
 /** What a member's manifest says about running its tests. */
@@ -259,6 +467,12 @@ export interface MemberTasks {
   /** Whether the member names a browser half, which runs as one unit. */
   browserTest: boolean;
 
+  /**
+   * The paths and globs the browser half's task hands its runner, as the
+   * member directory sees them. Empty where the member has no browser half.
+   */
+  browserPaths: string[];
+
   /** Whether the member defines any test task at all. */
   present: boolean;
 
@@ -268,6 +482,24 @@ export interface MemberTasks {
    * browser unit and no more.
    */
   denoHalf: boolean;
+}
+
+/**
+ * The paths a `deno run` of a test runner names after its script, or none
+ * for a task of another shape. The browser half's runner takes the files it
+ * runs as its arguments, which is what tells its files from those another
+ * suite runs.
+ */
+export function runnerPaths(task: string): string[] {
+  if (METACHARACTER.test(task)) return [];
+  const words = task.trim().split(/\s+/).map(unquote);
+  const command = words.findIndex((word) => !ASSIGNMENT.test(word));
+  if (words[command] !== "deno" || words[command + 1] !== "run") return [];
+  const script = words.findIndex((word, index) =>
+    index > command + 1 && !word.startsWith("-")
+  );
+  if (script < 0) return [];
+  return words.slice(script + 1).filter((word) => !word.startsWith("-"));
 }
 
 /** A manifest's tasks, whichever of the two file names carries them. */
@@ -326,11 +558,12 @@ export async function taskEnvironment(
  *
  * The Deno-only half is `deno-test` where a member names one and `test`
  * otherwise, which is the same rule the per-package coverage gate
- * measures by. A task written as a dependency list — several members
- * write `test` as a type check followed by `just-test` — resolves to
- * whichever of its dependencies is a readable `deno test`, so those
- * members keep their file granularity instead of running whole over a
- * wrapper task.
+ * measures by, and the same task `tasks/run-member-tests.ts` hands a
+ * member's appended flags to. A member running several commands names
+ * that half, so this and the workspace runner read one task rather than
+ * one each. A task written as a dependency list resolves to whichever of
+ * its dependencies is a readable `deno test`, which is what a member
+ * still writing one keeps its file granularity by.
  */
 export async function memberTasks(
   memberDir: string,
@@ -347,11 +580,12 @@ export async function memberTasks(
     return typeof task === "string" ? [] : task?.dependencies ?? [];
   };
   const browserTest = tasks["browser-test"] !== undefined;
+  const browserPaths = runnerPaths(commandOf("browser-test") ?? "");
   const half = tasks["deno-test"] !== undefined ? "deno-test" : "test";
   if (tasks[half] === undefined) {
     // A member with only a browser half is still a test surface: it runs
     // whole, as one unit, and its records come from the browser harness.
-    return { browserTest, present: browserTest, denoHalf: false };
+    return { browserTest, browserPaths, present: browserTest, denoHalf: false };
   }
   const candidates = [half, ...dependenciesOf(half)];
   for (const name of candidates) {
@@ -363,6 +597,7 @@ export async function memberTasks(
         denoTest: parsed,
         denoTestTask: name,
         browserTest,
+        browserPaths,
         present: true,
         denoHalf: true,
       };
@@ -370,6 +605,7 @@ export async function memberTasks(
   }
   return {
     browserTest,
+    browserPaths,
     denoHalf: true,
     present: true,
     // A member whose only test task echoes that it has none is not a
@@ -378,4 +614,26 @@ export async function memberTasks(
       ? {}
       : { present: false }),
   };
+}
+
+/**
+ * The globs among `globs` that name none of the test files `paths` reaches
+ * in the member at `memberDir`. The member's `exclude` lists apply, and no
+ * `--ignore` does, so that a glob naming a file the task leaves out still
+ * finds it. A glob that names nothing is a file renamed or removed from
+ * under the task that names it.
+ */
+export async function unmatchedGlobs(
+  memberDir: string,
+  paths: readonly string[],
+  globs: readonly string[],
+): Promise<string[]> {
+  if (globs.length === 0) return [];
+  const files = await memberTestFiles(memberDir, {
+    paths: [...paths],
+    ignores: [],
+  });
+  return globs.filter((glob) =>
+    !files.some((file) => matchesAny(file, [glob]))
+  );
 }

@@ -1,7 +1,7 @@
 /**
- * `cf profile`: a person's profile from the command line — create one, or say
- * which one `#profile` resolves to. The create path is the CLI equivalent of
- * the shell's create form; `lib/profile.ts` says why a command may stand in
+ * `cf profile`: create, locate, or inspect and repair a person's profile.
+ * The create path is the CLI equivalent of the shell's create form;
+ * `lib/profile.ts` says why a command may stand in
  * for that gesture.
  */
 
@@ -12,6 +12,7 @@ import { parseCellSelectionOptions } from "../lib/cell-selection.ts";
 import { cliText } from "../lib/cli-name.ts";
 import { getDidFromFile } from "../lib/identity.ts";
 import { createProfile } from "../lib/profile.ts";
+import { profileNameProtection } from "../lib/profile-name-protection.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import { projectWishValue, readWish } from "../lib/wish.ts";
@@ -118,10 +119,37 @@ export async function profileShowAction(
   render(projectWishValue(result), { json: true });
 }
 
+/** Inspects a named profile, or applies the exact receipt the owner reviewed. */
+export async function profileRepairNameProtectionAction(
+  options: ProfileCommandOptions & {
+    cell: string;
+    apply?: boolean;
+    expect?: string;
+  },
+  run: typeof profileNameProtection = profileNameProtection,
+): Promise<void> {
+  if (!!options.apply !== (options.expect !== undefined)) {
+    throw new ValidationError(
+      "Use --apply and --expect <inspection> together.",
+      { exitCode: 1 },
+    );
+  }
+  setQuietMode(!!options.quiet);
+  const connectionConfig = await connection(options);
+  render(
+    await run({
+      ...connectionConfig,
+      cell: options.cell,
+      expectedInspection: options.expect,
+      jsonOutput: true,
+    }),
+    { json: true },
+  );
+}
+
 /**
- * A subcommand carrying the connection flags every `cf profile` verb takes.
- * The identity's home space is where a profile lives, so there is no
- * `--space`.
+ * Connection flags shared by `cf profile` verbs. Create and show use the
+ * identity's home space; repair takes the profile's explicit full address.
  */
 // Typed as the other subcommand builders are: cliffy's `.command()` overloads
 // take a `Command<any>`, and a builder returning the narrowed option type is
@@ -146,7 +174,7 @@ export const profile = new Command()
   .name("profile")
   .description(
     cliText(
-      "Your profile: create one, or show the one '#profile' resolves to.",
+      "Your profile: create, locate, or repair its stored name protection.",
     ),
   )
   .default("help")
@@ -185,4 +213,34 @@ its display name.`,
       .action(async (options: ProfileCommandOptions) => {
         await profileShowAction(options);
       }),
+  )
+  .command(
+    "repair-name-protection",
+    connected(
+      "Inspect a profile's stored name protection, or apply its reviewed repair. Always prints JSON.",
+    )
+      .option(
+        "--cell <address:string>",
+        "Full profile address including its space DID.",
+        { required: true },
+      )
+      .option(
+        "--apply",
+        "Accept the inspected name and persist its missing protection.",
+      )
+      .option(
+        "--expect <inspection:string>",
+        "Exact inspection receipt required with --apply.",
+      )
+      .action(
+        async (
+          options: ProfileCommandOptions & {
+            cell: string;
+            apply?: boolean;
+            expect?: string;
+          },
+        ) => {
+          await profileRepairNameProtectionAction(options);
+        },
+      ),
   );

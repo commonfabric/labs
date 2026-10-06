@@ -14,6 +14,8 @@ import {
   type HarnessChatTurnStatus,
 } from "./contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
+import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import {
   createHarnessTranscriptOmissions,
   isHarnessTranscriptOmissions,
@@ -44,7 +46,10 @@ CREATE TABLE IF NOT EXISTS chat_session (
   status      TEXT NOT NULL,
   transcript  TEXT NOT NULL,
   research_context TEXT,
+  assigned_pieces TEXT,
   transcript_omissions TEXT,
+  handle_table TEXT,
+  client_action_catalog_answers TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   closed_at   TEXT
@@ -95,7 +100,10 @@ type SessionRow = {
   status: string;
   transcript: string;
   research_context: string | null;
+  assigned_pieces: string | null;
   transcript_omissions: string | null;
+  handle_table: string | null;
+  client_action_catalog_answers: string | null;
 };
 
 type EventRow = {
@@ -237,7 +245,10 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         status,
         transcript,
         research_context,
+        assigned_pieces,
         transcript_omissions,
+        handle_table,
+        client_action_catalog_answers,
         created_at,
         updated_at,
         closed_at
@@ -247,7 +258,10 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         :status,
         :transcript,
         :research_context,
+        :assigned_pieces,
         :transcript_omissions,
+        :handle_table,
+        :client_action_catalog_answers,
         :created_at,
         :updated_at,
         :closed_at
@@ -256,7 +270,10 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         status = :status,
         transcript = :transcript,
         research_context = :research_context,
+        assigned_pieces = :assigned_pieces,
         transcript_omissions = :transcript_omissions,
+        handle_table = :handle_table,
+        client_action_catalog_answers = :client_action_catalog_answers,
         updated_at = :updated_at,
         closed_at = :closed_at
     `).run({
@@ -269,6 +286,16 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
       research_context: snapshot.researchContext === undefined
         ? null
         : JSON.stringify(snapshot.researchContext),
+      assigned_pieces: snapshot.assignedPieces === undefined
+        ? null
+        : JSON.stringify(snapshot.assignedPieces),
+      handle_table: snapshot.handleTable === undefined
+        ? null
+        : JSON.stringify(snapshot.handleTable),
+      client_action_catalog_answers:
+        snapshot.clientActionCatalogAnswers === undefined
+          ? null
+          : JSON.stringify(snapshot.clientActionCatalogAnswers),
       created_at: snapshot.session.createdAt,
       updated_at: snapshot.session.updatedAt,
       closed_at: snapshot.session.closedAt ?? null,
@@ -279,7 +306,8 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
     sessionId: string,
   ): HarnessChatSessionSnapshot | undefined {
     const row = this.database.prepare(`
-      SELECT status, transcript, research_context, transcript_omissions
+      SELECT status, transcript, research_context, assigned_pieces, transcript_omissions,
+        handle_table, client_action_catalog_answers
       FROM chat_session
       WHERE session_id = :session_id
     `).get({ session_id: sessionId }) as SessionRow | undefined;
@@ -288,7 +316,8 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
 
   listSessions(): readonly HarnessChatSessionSnapshot[] {
     return (this.database.prepare(`
-      SELECT status, transcript, research_context, transcript_omissions
+      SELECT status, transcript, research_context, assigned_pieces, transcript_omissions,
+        handle_table, client_action_catalog_answers
       FROM chat_session
       ORDER BY created_at ASC, session_id ASC
     `).all() as SessionRow[]).map(decodeSessionRow);
@@ -563,6 +592,24 @@ const decodeSessionRow = (row: SessionRow): HarnessChatSessionSnapshot => {
         "chat_session.research_context",
       ),
     }),
+    ...(row.assigned_pieces == null ? {} : {
+      assignedPieces: parseJsonColumn<HarnessAssignedPiece[]>(
+        row.assigned_pieces,
+        "chat_session.assigned_pieces",
+      ),
+    }),
+    ...(row.handle_table == null ? {} : {
+      handleTable: parseJsonColumn<HarnessHandleTable>(
+        row.handle_table,
+        "chat_session.handle_table",
+      ),
+    }),
+    ...(row.client_action_catalog_answers == null ? {} : {
+      clientActionCatalogAnswers: parseJsonColumn<Record<string, string>>(
+        row.client_action_catalog_answers,
+        "chat_session.client_action_catalog_answers",
+      ),
+    }),
     session: parseJsonColumn<HarnessChatSessionStatus>(
       row.status,
       "chat_session.status",
@@ -666,9 +713,28 @@ export const openSqliteHarnessChatSessionStore = async (
             "ALTER TABLE chat_session ADD COLUMN research_context TEXT",
           );
         }
+        if (!columns.some((column) => column.name === "assigned_pieces")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN assigned_pieces TEXT",
+          );
+        }
         if (!columns.some((column) => column.name === "transcript_omissions")) {
           database.exec(
             "ALTER TABLE chat_session ADD COLUMN transcript_omissions TEXT",
+          );
+        }
+        if (
+          !columns.some((column) =>
+            column.name === "client_action_catalog_answers"
+          )
+        ) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN client_action_catalog_answers TEXT",
+          );
+        }
+        if (!columns.some((column) => column.name === "handle_table")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN handle_table TEXT",
           );
         }
       }).immediate();

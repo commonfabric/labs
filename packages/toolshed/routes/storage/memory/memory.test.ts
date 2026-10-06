@@ -2,7 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 
 import { type FabricValue, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { createSession, Identity } from "@commonfabric/identity";
+import { Identity } from "@commonfabric/identity";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -148,49 +148,71 @@ const serialTest = (
   });
 
 serialTest(
-  "memory websocket authorizes session opens with a workspace spaceIdentity",
+  "memory websocket admits the creator of a created space and refuses another identity",
   async () => {
-    const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
-      identity,
-      spaceName: `memory-space-identity-${Date.now()}`,
-    });
+    const creator = await Identity.generate({ implementation: "noble" });
+    const stranger = await Identity.generate({ implementation: "noble" });
     const server = Deno.serve({ port: 0 }, app.fetch);
     const base = new URL(`http://${server.addr.hostname}:${server.addr.port}`);
-    const storageManager = StorageManager.open({
-      as: session.as,
-      memoryHost: new URL(base),
-      spaceIdentity: session.spaceIdentity,
-    });
-    const runtime = new Runtime({
-      apiUrl: base,
-      storageManager,
-    });
+    const runtime = createRuntime(creator, base);
+    let socket: WebSocket | undefined;
 
     try {
+      const space = await runtime.createSpace();
       const tx = runtime.edit();
       const cell = runtime.getCell(
-        session.space,
-        `memory-space-identity-cell-${Date.now()}`,
+        space,
+        `memory-created-space-cell-${Date.now()}`,
         undefined,
         tx,
       );
-      cell.set({ hello: "workspace" });
+      cell.set({ hello: "created" });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       assert("ok" in result);
 
       await runtime.storageManager.synced();
-      const provider = runtime.storageManager.open(session.space);
+      const provider = runtime.storageManager.open(space);
       assertEquals(
         provider.replica.get({
           id: cell.getAsNormalizedFullLink().id,
           type: "application/json",
         })?.is,
-        { value: { hello: "workspace" } },
+        { value: { hello: "created" } },
       );
+
+      // The space's genesis grants its creator alone, so a signed session
+      // open from anyone else is refused.
+      socket = await openSocket(
+        new URL(
+          `ws://${server.addr.hostname}:${server.addr.port}/api/storage/memory`,
+        ),
+      );
+      socket.send(encodeMemoryBoundary(HELLO));
+      const hello = await readJsonMessage<HelloOkWithSessionOpen>(socket);
+      socket.send(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "open-1",
+        space,
+        session: {},
+        ...(await createSessionOpenAuth(
+          stranger,
+          space,
+          {},
+          hello.sessionOpen,
+        )),
+      }));
+      const refusal = await readJsonMessage<{
+        type: "response";
+        requestId: string;
+        error: { name: string; message: string };
+      }>(socket);
+      assertEquals(refusal.requestId, "open-1");
+      assertEquals(refusal.error?.name, "AuthorizationError");
     } finally {
+      socket?.close();
       await runtime.dispose();
+      await runtime.storageManager.close();
       await server.shutdown();
     }
   },
@@ -227,7 +249,7 @@ serialTest(
       );
 
       cell.set({ hello: "world" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await storageManager.synced();
 
@@ -267,7 +289,7 @@ serialTest(
       const tx = runtime1.edit();
       const writer = runtime1.getCell(identity.did(), cause, undefined, tx);
       writer.set({ persisted: true, count: 1 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.idle();
       await runtime1.storageManager.synced();
       await runtime1.dispose();
@@ -309,7 +331,9 @@ serialTest("memory websocket negotiates a session", async () => {
 
     assertEquals(message.type, "hello.ok");
     assertEquals(message.protocol, MEMORY_PROTOCOL);
-    assertEquals(message.flags, getMemoryProtocolFlags());
+    // The route's server advertises what its host configured, which for
+    // `connectionAuth` is what the `sharedMemoryConnection` flag says.
+    assertEquals(message.flags, memoryServer.memoryProtocolFlags());
     assert(message.sessionOpen.audience.length > 0);
     assert(message.sessionOpen.challenge.value.length > 0);
 
@@ -725,7 +749,7 @@ serialTest(
         tx,
       );
       addressCell.set({ city: "San Francisco" });
-      await tx.commit();
+      await tx.commit().settled;
 
       tx = runtime1.edit();
       const personCell = runtime1.getCell(
@@ -735,7 +759,7 @@ serialTest(
         tx,
       );
       personCell.set({ name: "Alice" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
       await runtime1.dispose();
@@ -769,7 +793,7 @@ serialTest(
         name: "Alice",
         address: addressLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime3.storageManager.synced();
 
       await gotAddress.promise;
@@ -823,7 +847,7 @@ serialTest(
         tx,
       );
       addressCell.set({ city: "New York" });
-      await tx.commit();
+      await tx.commit().settled;
       await addressCell.sync();
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
@@ -839,7 +863,7 @@ serialTest(
         name: "Bob",
         address: addressLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -872,7 +896,7 @@ serialTest(
       await addressCell3.sync();
       tx = runtime3.edit();
       addressCell3.withTx(tx).set({ city: "Los Angeles" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime3.storageManager.synced();
 
       await gotNewCity.promise;
@@ -936,7 +960,7 @@ serialTest(
         tx,
       );
       cityCell.set({ name: "Seattle", population: 750000 });
-      await tx.commit();
+      await tx.commit().settled;
       await cityCell.sync();
       await runtime1.storageManager.synced();
       const cityLink = structuredClone(cityCell.getAsLink());
@@ -952,7 +976,7 @@ serialTest(
         street: "123 Main St",
         city: cityLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await addressCell.sync();
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
@@ -968,7 +992,7 @@ serialTest(
         name: "Charlie",
         address: addressLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1000,7 +1024,7 @@ serialTest(
       await cityCell3.sync();
       tx = runtime3.edit();
       cityCell3.withTx(tx).set({ name: "Seattle", population: 800000 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime3.storageManager.synced();
 
       await gotPopulation.promise;
@@ -1049,7 +1073,7 @@ serialTest(
         tx,
       );
       writer.set({ count: 1 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1082,7 +1106,7 @@ serialTest(
       await counterWriter.sync();
       tx = runtime2.edit();
       counterWriter.withTx(tx).set({ count: 2 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime2.storageManager.synced();
 
       await gotReconnectUpdate.promise;
@@ -1136,7 +1160,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1198,7 +1222,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1232,7 +1256,7 @@ serialTest(
       await targetCell2.sync();
       tx = runtime2.edit();
       targetCell2.withTx(tx).set({ count: 2, label: "after-restart" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime2.storageManager.synced();
 
       await gotUpdate.promise;
@@ -1294,7 +1318,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
 
       const subscriberRuntime = createRuntime(identity, base);
@@ -1321,7 +1345,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
 
       await gotRetarget.promise;

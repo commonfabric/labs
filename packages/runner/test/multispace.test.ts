@@ -28,8 +28,8 @@ describe("Multi-space Runtime", () => {
   });
 
   afterEach(async () => {
-    await tx1.commit();
-    await tx2.commit();
+    await tx1.commit().settled;
+    await tx2.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

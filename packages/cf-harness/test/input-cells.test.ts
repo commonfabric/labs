@@ -94,6 +94,34 @@ describe("input-cells", () => {
   });
 
   describe("mintInputCellHandles()", () => {
+    it("mints a foreign reference only when its DID is admitted", async () => {
+      const spec = { name: "foreign", ref: FOREIGN_REF };
+      const admitted = await mintInputCellHandles(
+        undefined,
+        "admitted-foreign",
+        [spec],
+        SPACE_DID,
+        {
+          foreignSpaces: {
+            "did:key:z6MkforeignSpaceForInputCellTest":
+              "https://foreign.example/",
+          },
+        },
+      );
+      const entry = resolveHandleToken(
+        admitted.table,
+        admitted.inputCells[0].token,
+      );
+      expect(entry?.ref).toContain("did:key:z6MkforeignSpaceForInputCellTest");
+      await expect(mintInputCellHandles(
+        undefined,
+        "unadmitted-foreign",
+        [spec],
+        SPACE_DID,
+        { foreignSpaces: { "did:key:zOther": "https://foreign.example/" } },
+      )).rejects.toThrow("targets another space");
+    });
+
     it("mints a resolvable token into a fresh table when the run has none", async () => {
       const { table, inputCells } = await mintInputCellHandles(
         undefined,

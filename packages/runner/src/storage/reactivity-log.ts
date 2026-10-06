@@ -47,6 +47,10 @@ const linkResolutionProbeMarker: unique symbol = Symbol(
   "linkResolutionProbeMarker",
 );
 
+const dereferenceResolutionProbeMarker: unique symbol = Symbol(
+  "dereferenceResolutionProbeMarker",
+);
+
 const mergeableOpReadMarker: unique symbol = Symbol(
   "mergeableOpReadMarker",
 );
@@ -109,6 +113,16 @@ export const linkResolutionProbe: Metadata = {
 };
 
 /**
+ * Marks a link probe issued inside the resolver that follows links on behalf
+ * of a content read. The probe itself is runtime machinery; the target read is
+ * the observation and is checked independently.
+ */
+export const dereferenceResolutionProbe: Metadata = {
+  ...linkResolutionProbe,
+  [dereferenceResolutionProbeMarker]: true,
+};
+
+/**
  * Marks the reads a mergeable write (push / addUnique / increment / the keyed
  * ops) issues as part of building its own write — the value it reads to compute
  * the change. The commit's read-set builder drops these (and the write-target
@@ -124,7 +138,8 @@ export const mergeableOpRead: Metadata = {
 /**
  * Marks the reads the write machinery makes of the region it is about to
  * write: the stream-marker probe that chooses between an event send and a
- * stored write, and the diff's read of each destination path. Each answer
+ * stored write, the diff's read of each destination path, and the append's
+ * destination snapshot that supplies storage positions. Each answer
  * decides how and whether to write, never what is written, and where a
  * stored link sends the write somewhere else the walk reads that slot again
  * without this marker. CFC flow-label derivation excludes these from the
@@ -146,11 +161,11 @@ export function isReadIgnoredForCommit(meta?: Metadata): boolean {
 }
 
 // Rejection listeners, registered per inner transaction (CT-1950). A
-// rejected commit's promise resolves only after finalizeRejection's
+// rejected commit's `receipt.settled` resolves after `finalizeRejection()`'s
 // read-repair gate — the caller's retry needs the repaired base — but the
 // commit's FATE is sealed the moment the rejection is received, and the
 // verdict-gated effect layer (verdict callbacks, outbox clearing) must not
-// wait out the repair round trip; commit callbacks ride the promise and DO
+// wait out the repair round trip; commit callbacks ride settlement and DO
 // wait. The transaction registers its verdict resolver at commit() entry;
 // the push path notifies every contributing source at rejection receipt,
 // and finalizeRejection covers the cascade paths. Rejections only: an
@@ -182,7 +197,7 @@ export function notifyCommitRejected(
 // Fan-out coverage waits, recorded per transaction (CT-1950). The push path
 // resolves its result at the server verdict and records the parked
 // application's promise here; the transaction layer drains the record so
-// that its commit() promise resolves only once the subscribed view reflects
+// that `commit().settled` resolves once the subscribed view reflects
 // the committed write. The split exists so post-commit effects gated on
 // durability alone (verdict callbacks, the outbox flush) can hook the
 // verdict instead of inheriting the fan-out window.
@@ -388,6 +403,18 @@ export function isReadMarkedAsAttemptedWrite(meta?: Metadata): boolean {
   return meta?.[markReadAsAttemptedWriteMarker] === true;
 }
 
+/**
+ * `meta` without the attempted-write mark, for a read a writer makes to find
+ * out where or what to write rather than at the place it writes. Such a read
+ * is not an attempt to write what it reads, and marking it one would make the
+ * commit boundary judge the write against every policy beneath that place.
+ */
+export function withoutAttemptedWriteMark(meta?: Metadata): Metadata {
+  const rest: Metadata = { ...meta };
+  delete rest[markReadAsAttemptedWriteMarker];
+  return rest;
+}
+
 export function isMergeableOpRead(meta?: Metadata): boolean {
   return meta?.[mergeableOpReadMarker] === true;
 }
@@ -408,6 +435,10 @@ export function isLinkResolutionProbe(meta?: Metadata): boolean {
   return meta?.[linkResolutionProbeMarker] === true;
 }
 
+export function isDereferenceResolutionProbe(meta?: Metadata): boolean {
+  return meta?.[dereferenceResolutionProbeMarker] === true;
+}
+
 const schedulerDependencyReadMarker: unique symbol = Symbol(
   "schedulerDependencyReadMarker",
 );
@@ -418,7 +449,9 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
  * dependencies so the reactivity log covers them for subscriptions, but
  * they are scheduling machinery, not handler consumption (§8.10.1:
  * dependency-discovery reads must not count as consumed inputs). Flow-label
- * derivation excludes them; the action body's own reads carry the taint.
+ * derivation and the runtime read ceiling exclude them; their materialized
+ * values never enter the handler. The action body's own reads enforce its
+ * ceiling and carry the taint.
  */
 export const schedulerDependencyRead: Metadata = {
   [schedulerDependencyReadMarker]: true,

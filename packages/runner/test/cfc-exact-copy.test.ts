@@ -49,7 +49,7 @@ describe("CFC exact copy claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const persistedId = parseLink(cell.getAsLink()).id!;
@@ -117,7 +117,7 @@ describe("CFC exact copy claims", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("exactCopyOf failed");
     } finally {
       await runtime.dispose();

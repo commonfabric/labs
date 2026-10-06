@@ -18,6 +18,13 @@
  * storage host for a route it does not have hears, and it carries a status
  * that stops the answer being read as the thing that was asked for.
  *
+ * It serves storage and nothing else: no serving loop runs here, so a runtime
+ * in the server-execution ON posture that connects to it sends events nothing
+ * delivers. `listenServingMemoryServer()` in
+ * `@commonfabric/runner/executor/serving-memory-server.deno` co-hosts one on
+ * {@link StandaloneMemoryServer.server}; it lives in the runner because the
+ * serving loop does.
+ *
  * Deno-only (uses `Deno.serve`); keep this export path out of browser
  * bundles.
  */
@@ -25,6 +32,7 @@
 import { Identity } from "@commonfabric/identity";
 
 import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
+import { verifyConnectionAuthorization } from "./connection-auth.ts";
 import {
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
@@ -116,7 +124,13 @@ export class StandaloneMemoryServer {
       acl?: {
         mode: MemoryServer.MemoryAclMode;
         serviceDids?: readonly string[];
+        delegatingDids?: readonly string[];
       };
+
+      /** Whether the server verifies `connection.auth`, and so advertises
+       *  `connectionAuth`. Default: it does not, and every `session.open`
+       *  is signed. */
+      connectionAuth?: boolean;
 
       /** Answers the non-websocket requests this address receives. Anything
        *  it declines, by answering `undefined`, is told to upgrade. */
@@ -127,6 +141,9 @@ export class StandaloneMemoryServer {
   ): StandaloneMemoryServer {
     const memory = new MemoryServer.Server({
       authorizeSessionOpen,
+      ...(options.connectionAuth === true
+        ? { authorizeConnection: verifyConnectionAuthorization }
+        : {}),
       sessionOpenAuth: {
         audience: standaloneMemoryAudience,
       },
@@ -219,7 +236,7 @@ export class StandaloneMemoryServer {
           return;
         }
         if (closed) return;
-        channel.receive(frame, async (payload) => {
+        channel.receive(frame, (payload) => {
           const control = parseMemoryCompressionControlMessage(payload);
           if (control && helloReceived) {
             const enabled = compressionNegotiated && control.enabled;
@@ -230,7 +247,11 @@ export class StandaloneMemoryServer {
             }));
             return;
           }
-          await connection.receive(payload);
+          // The connection takes the frame's place in its turn order as it
+          // is handed over, so the handling is not waited for: waiting would
+          // hold every later frame behind this one, whichever spaces they
+          // name.
+          connection.receive(payload).catch(failChannel);
           if (debugWrites) {
             logCommitOperations(connectionTag, payload);
           }
@@ -241,6 +262,15 @@ export class StandaloneMemoryServer {
       return response;
     });
     return new StandaloneMemoryServer(memory, http, channels);
+  }
+
+  /**
+   * The memory server behind the websocket. A caller co-hosting a serving
+   * loop attaches its `ExecutorHost` here, and a runtime in this process may
+   * connect to it in-process rather than over the socket.
+   */
+  get server(): MemoryServer.Server {
+    return this.#memory;
   }
 
   /**

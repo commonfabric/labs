@@ -1,5 +1,5 @@
-import { Identity } from "@commonfabric/identity";
-import { env } from "@commonfabric/integration";
+import { type DID, Identity } from "@commonfabric/identity";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -17,7 +17,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const FIRST_TITLE = "Navigation target";
 const SECOND_TITLE = "Navigation neighbour";
 
@@ -26,6 +26,7 @@ describe("Topics durable navigation", () => {
   shell.bindLifecycle();
 
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let board: PieceController;
   let boardSinkCancel: (() => void) | undefined;
@@ -33,8 +34,9 @@ describe("Topics durable navigation", () => {
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -94,7 +96,7 @@ describe("Topics durable navigation", () => {
     const page = shell.page();
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId: board.id },
+      view: { spaceDid, pieceId: board.id },
       identity,
     });
     await waitForRuntimeIdle(page);
@@ -112,7 +114,7 @@ describe("Topics durable navigation", () => {
       true,
       `Open navigated to ${openedPieceId}, which is neither board topic`,
     );
-    await waitForPieceView(page, SPACE_NAME, openedPieceId);
+    await waitForPieceView(page, spaceDid, openedPieceId);
 
     const droppedEvents = await page.evaluate(() =>
       ((globalThis as typeof globalThis & {

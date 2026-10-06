@@ -17,6 +17,7 @@ import {
   normalizeBindingName,
   reserveIdentifier,
 } from "../../utils/identifiers.ts";
+import { createPathRead } from "../../transformers/destructuring-lowering.ts";
 import { createReactiveWrapperForExpression } from "../../transformers/expression-rewrite/rewrite-helpers.ts";
 import { unwrapExpression } from "../../utils/expression.ts";
 import {
@@ -26,6 +27,7 @@ import {
 } from "../../utils/reactive-keys.ts";
 import { CaptureCollector } from "../capture-collector.ts";
 import { buildCaptureParamsObject } from "../utils/capture-scaffold.ts";
+import { expandCapturedObjectSpreads } from "../utils/captured-object-spread.ts";
 import { PatternBuilder } from "../utils/pattern-builder.ts";
 import { createArrayMethodCallbackSchema } from "../utils/schema-factory.ts";
 import {
@@ -96,13 +98,10 @@ function lowerMapReceiverMemberAccess(
   }
 
   return preserveSourceMapRange(
-    context.factory.createCallExpression(
-      context.factory.createPropertyAccessExpression(
-        context.factory.createIdentifier(current.text),
-        context.factory.createIdentifier("key"),
-      ),
-      undefined,
+    createPathRead(
+      context.factory.createIdentifier(current.text),
       segments,
+      context.factory,
     ),
     expression,
   );
@@ -212,6 +211,7 @@ function createPatternCallWithParams(
             checker,
             factory,
             sourceFile: context.sourceFile,
+            state: context.state,
           },
           typeRegistry,
         );
@@ -435,7 +435,12 @@ export function transformArrayMethodCallback(
   const body = family === "groupBy" || family === "keyBy"
     ? tagSelectorReturns(callback.body, context)
     : callback.body;
-  const transformedBody = ts.visitNode(body, visitor) as ts.ConciseBody;
+  const transformedBody = expandCapturedObjectSpreads(
+    ts.visitNode(body, visitor) as ts.ConciseBody,
+    callback,
+    new Set(captureTree.keys()),
+    context,
+  );
 
   return createPatternCallWithParams(
     methodCall,

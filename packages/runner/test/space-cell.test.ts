@@ -95,7 +95,7 @@ describe("Runtime.getSpaceCell", () => {
       const tx = runtime.edit();
       mockPiece.withTx(tx).set({ name: "TestDefaultPattern" });
       spaceCell.key("defaultPattern").withTx(tx).set(mockPiece);
-      await tx.commit();
+      await tx.commit().settled;
 
       // Verify persistence (read doesn't need transaction)
       const spaceCell2 = runtime.getSpaceCell(space);

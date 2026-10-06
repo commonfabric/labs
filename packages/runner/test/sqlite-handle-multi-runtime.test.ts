@@ -21,6 +21,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { SqliteTableSchemas } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -98,7 +99,7 @@ async function seedDbFile(
     "sqlite",
   ) as unknown as { exec(sql: string, params?: readonly unknown[]): void };
   db.exec("INSERT INTO notes (body) VALUES (?)", ["seed"]);
-  const res = await tx.commit();
+  const res = await tx.commit().settled;
   expect(res.error).toBeUndefined();
 }
 
@@ -133,7 +134,7 @@ function runPattern(runtime: Runtime) {
   // The handle and the query are computations: a reader has to demand
   // them, and the runtime's disposal ends the subscription.
   resultCell.sink(() => {});
-  const commit = tx.commit();
+  const commit = tx.commit().settled;
   return { resultCell, commit };
 }
 
@@ -219,6 +220,73 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     const afterExec = handle.getRaw() as Record<string, unknown>;
     expect((afterExec as { rev?: number }).rev).toBe(1);
     expect(collectSigilLinks(afterExec)).toEqual([]);
+  });
+
+  it("a second runtime keeps a sparse array in a column's stored confidentiality atom when its declaration omits the label", async () => {
+    const atom = () => ({
+      type: "custom-policy",
+      parameters: new Array<string>(1),
+    });
+    const { commonfabric: cfA } = createTrustedBuilder(runtimeA);
+    const declared = (labeled: boolean) => ({
+      items: cfA.table({
+        id: "integer primary key",
+        tag: labeled
+          ? { type: "integer", ifc: { confidentiality: [atom()] } }
+          : { type: "integer" },
+      }),
+    });
+    const pattern = (cf: typeof cfA) =>
+      cf.pattern<{ tables: SqliteTableSchemas }>(({ tables }) => ({
+        db: cf.sqliteDatabase({ tables }),
+      }));
+    const cause = "sqlite-sparse-atom";
+    const tablesCause = "sqlite-sparse-atom-tables";
+
+    const tx = runtimeA.edit();
+    const tables = runtimeA.getCell<unknown>(space, tablesCause, undefined, tx);
+    tx.writeValueOrThrow(
+      tables.getAsNormalizedFullLink(),
+      declared(true) as unknown as FabricValue,
+    );
+    const resultCell = runtimeA.getCell(space, cause, undefined, tx);
+    runtimeA.run(tx, pattern(cfA), { tables }, resultCell);
+    resultCell.sink(() => {});
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtimeA.settled();
+    const redeclare = runtimeA.edit();
+    redeclare.writeValueOrThrow(
+      tables.getAsNormalizedFullLink(),
+      declared(false) as unknown as FabricValue,
+    );
+    expect((await redeclare.commit().settled).error).toBeUndefined();
+    await runtimeA.storageManager.synced();
+
+    // The init that merges a declaration into the stored handle runs once per
+    // runtime, so the re-declaration is read by a second one.
+    runtimeB = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+    });
+    const { commonfabric: cfB } = createTrustedBuilder(runtimeB);
+    const resultCellB = runtimeB.getCell(space, cause, undefined);
+    await runtimeB.runSynced(resultCellB, pattern(cfB));
+    // A reader demands the handle, so the second runtime runs its init.
+    resultCellB.sink(() => {});
+    await runtimeB.settled();
+    await runtimeB.storageManager.synced();
+
+    const handle = resultCellB.key("db").resolveAsCell().getRawUntyped() as {
+      tables: Record<string, {
+        properties: Record<string, {
+          ifc?: { confidentiality?: { parameters: unknown[] }[] };
+        }>;
+      }>;
+    };
+    const parameters = handle.tables.items.properties.tag.ifc!
+      .confidentiality![0].parameters;
+    expect(parameters.length).toBe(1);
+    expect(Object.hasOwn(parameters, 0)).toBe(false);
   });
 
   it("a second runtime adopts the settled shared query instead of re-issuing", async () => {

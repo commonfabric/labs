@@ -14,21 +14,26 @@
 // live runtime/Cell needed). In the encoded form embedded links are
 // `/quote`-escaped literals, so a context-less decode is inert.
 
-import { hashStringOf, toCompactDebugString } from "@commonfabric/data-model";
+import {
+  type FabricPlainObject,
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+  toCompactDebugString,
+} from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
 import { fabricFromJsonValue } from "@commonfabric/data-model/codecs";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-  isPlainObject,
-} from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { shortDid } from "./did-display.ts";
 
-/** Decode a stored payload string, routing the `data-model` codec envelope. */
-export function decodeStored(data: string): unknown {
+/**
+ * Decode a stored payload string, routing the `data-model` codec envelope. An
+ * untagged payload is plain JSON, whose every value is a `FabricValue` too.
+ */
+export function decodeStored(data: string): FabricValue {
   return JsonCodecEngine.seemsLikeEncoded(data)
     ? fabricFromJsonValue(data)
     : JSON.parse(data);
@@ -46,10 +51,8 @@ export interface DecodedLink {
    * it can hold — `true` constrains nothing, `false` admits nothing — and
    * neither may be synthesized to stand for a schema that is merely present.
    */
-  schema?: Json;
+  schema?: FabricValue;
 }
-
-type Json = unknown;
 
 /**
  * Whether `v` is a record this file may descend by property name.
@@ -59,11 +62,15 @@ type Json = unknown;
  * rebuilding one from its enumerable properties yields `{}`. Descending is
  * reserved for values whose properties are the whole of what they say.
  */
-function isNameWalkable(v: Json): v is Record<string, Json> {
-  return isPlainObject(v);
+function isNameWalkable(v: FabricValue): v is FabricPlainObject {
+  return isFabricPlainObject(v);
 }
 
-function setOwn(target: Record<string, Json>, key: string, value: Json): void {
+function setOwn(
+  target: Record<string, FabricValue>,
+  key: string,
+  value: FabricValue,
+): void {
   Object.defineProperty(target, key, {
     value,
     enumerable: true,
@@ -72,7 +79,7 @@ function setOwn(target: Record<string, Json>, key: string, value: Json): void {
   });
 }
 
-function payloadToLink(payload: Record<string, Json>): DecodedLink {
+function payloadToLink(payload: FabricPlainObject): DecodedLink {
   return {
     id: typeof payload.id === "string" ? payload.id : undefined,
     space: typeof payload.space === "string" ? payload.space : undefined,
@@ -85,7 +92,7 @@ function payloadToLink(payload: Record<string, Json>): DecodedLink {
 }
 
 /** A sigil link: `{ "/": { "link@N": {...} } }` (legacy at-rest form). */
-export function parseSigilLink(v: Json): DecodedLink | null {
+export function parseSigilLink(v: FabricValue): DecodedLink | null {
   if (!isNameWalkable(v)) return null;
   const keys = Object.keys(v);
   if (keys.length !== 1 || keys[0] !== "/") return null;
@@ -107,25 +114,24 @@ export function parseSigilLink(v: Json): DecodedLink | null {
  * an opaque instance with no enumerable keys and vanishes from
  * links/lineage/graph.
  */
-export function decodedLinkOf(v: Json): DecodedLink | null {
+export function decodedLinkOf(v: FabricValue): DecodedLink | null {
   const sigil = parseSigilLink(v);
   if (sigil) return sigil;
   if (v instanceof FabricLink) {
-    const payload = v.payload as Record<string, Json>;
-    return payloadToLink(payload);
+    return payloadToLink(v.payload);
   }
   return null;
 }
 
 /** An entity reference: `{ "/": "of:…" | "computed:…" | "fid1:…" }`. */
-export function parseEntityRef(v: Json): string | null {
+export function parseEntityRef(v: FabricValue): string | null {
   if (!isNameWalkable(v)) return null;
   const keys = Object.keys(v);
   if (keys.length !== 1 || keys[0] !== "/") return null;
   return typeof v["/"] === "string" ? (v["/"] as string) : null;
 }
 
-export function isStream(v: Json): boolean {
+export function isStream(v: FabricValue): boolean {
   return isNameWalkable(v) && v["$stream"] === true;
 }
 
@@ -195,9 +201,9 @@ export function summarizeLink(link: DecodedLink): string {
 
 interface AnnotationVisit {
   kind: "visit";
-  value: Json;
+  value: FabricValue;
   depth: number;
-  target: Record<string, Json>;
+  target: Record<string, FabricValue>;
   key: string;
 }
 
@@ -233,7 +239,7 @@ const utf8 = new TextEncoder();
  * therefore be written out inline while rendering a little longer than the
  * bound. Nothing downstream reads the count as an allocation size.
  */
-function jsonByteLength(value: Json): number {
+function jsonByteLength(value: FabricValue): number {
   try {
     return utf8.encode(JSON.stringify(value)).length;
   } catch {
@@ -248,7 +254,7 @@ function jsonByteLength(value: Json): number {
  * digest to report. An absent digest means it was not computed, and two
  * summaries that both lack one say nothing about whether their schemas agree.
  */
-function schemaDigest(schema: Json): string | undefined {
+function schemaDigest(schema: FabricValue): string | undefined {
   try {
     return hashStringOf(schema).slice(0, 12);
   } catch {
@@ -268,7 +274,7 @@ function schemaDigest(schema: Json): string | undefined {
  * for which see `schemaDigest()`, and `keys` when the stored schema is not an
  * object and so has none.
  */
-function schemaSummary(schema: Json, bytes: number): Json {
+function schemaSummary(schema: FabricValue, bytes: number): FabricValue {
   const digest = schemaDigest(schema);
   return {
     ...(isNameWalkable(schema) ? { keys: Object.keys(schema) } : {}),
@@ -303,9 +309,9 @@ function schemaSummary(schema: Json, bytes: number): Json {
  * stays the thing to compare two schemas by.
  */
 function linkSchemaFields(
-  schema: Json,
+  schema: FabricValue,
   maxDepth: number,
-): Record<string, Json> {
+): Record<string, FabricValue> {
   if (!Number.isFinite(maxDepth)) {
     return { schema: annotate(schema, Number.POSITIVE_INFINITY) };
   }
@@ -325,8 +331,8 @@ function linkSchemaFields(
  * an infinite one additionally writes out every link's schema in full; see
  * `linkSchemaFields()` for what a finite one does with a large schema.
  */
-export function annotate(v: Json, maxDepth = 8): Json {
-  const root: Record<string, Json> = {};
+export function annotate(v: FabricValue, maxDepth = 8): FabricValue {
+  const root: Record<string, FabricValue> = {};
   const detectCycles = !Number.isFinite(maxDepth);
   const ancestors = new WeakSet<object>();
   const work: AnnotationFrame[] = [{
@@ -344,7 +350,8 @@ export function annotate(v: Json, maxDepth = 8): Json {
       continue;
     }
 
-    const assign = (value: Json) => setOwn(frame.target, frame.key, value);
+    const assign = (value: FabricValue) =>
+      setOwn(frame.target, frame.key, value);
     if (frame.depth < 0) {
       assign("…");
       continue;
@@ -411,9 +418,9 @@ export function annotate(v: Json, maxDepth = 8): Json {
         keys.length === frame.value.length &&
         keys.every(isArrayIndexPropertyName)
       ) {
-        const output = new Array<Json>(frame.value.length);
+        const output = new Array<FabricValue>(frame.value.length);
         assign(output);
-        const target = output as unknown as Record<string, Json>;
+        const target = output as unknown as Record<string, FabricValue>;
         for (let index = frame.value.length - 1; index >= 0; index--) {
           work.push({
             kind: "visit",
@@ -426,16 +433,16 @@ export function annotate(v: Json, maxDepth = 8): Json {
         continue;
       }
 
-      const entries: Record<string, Json> = {};
-      const properties: Record<string, Json> = {};
-      const sparseArray: Record<string, Json> = {};
+      const entries: Record<string, FabricValue> = {};
+      const properties: Record<string, FabricValue> = {};
+      const sparseArray: Record<string, FabricValue> = {};
       setOwn(sparseArray, "length", frame.value.length);
       setOwn(sparseArray, "entries", entries);
       if (keys.some((key) => !isArrayIndexPropertyName(key))) {
         setOwn(sparseArray, "properties", properties);
       }
       assign({ $sparseArray: sparseArray });
-      const source = frame.value as unknown as Record<string, Json>;
+      const source = frame.value as unknown as Record<string, FabricValue>;
       for (let index = keys.length - 1; index >= 0; index--) {
         const key = keys[index];
         work.push({
@@ -459,7 +466,7 @@ export function annotate(v: Json, maxDepth = 8): Json {
         work.push({ kind: "leave", value: frame.value });
       }
 
-      const output: Record<string, Json> = {};
+      const output: Record<string, FabricValue> = {};
       assign(output);
       const entries = Object.entries(frame.value);
       for (let index = entries.length - 1; index >= 0; index--) {
@@ -475,12 +482,16 @@ export function annotate(v: Json, maxDepth = 8): Json {
       continue;
     }
 
-    // A `FabricInstance` has no enumerable state to walk by property name.
-    if (isObjectOrArray(frame.value)) {
-      assign({ $fabric: toCompactDebugString(frame.value) });
-      continue;
+    const leaf = frame.value;
+    if (
+      leaf === null || typeof leaf === "string" || typeof leaf === "number" ||
+      typeof leaf === "boolean"
+    ) {
+      assign(leaf);
+    } else {
+      // A `FabricInstance` has no enumerable state to walk by property name.
+      assign({ $fabric: toCompactDebugString(leaf) });
     }
-    assign(frame.value);
   }
 
   return root.value;
@@ -488,7 +499,7 @@ export function annotate(v: Json, maxDepth = 8): Json {
 
 interface JsonValueFrame {
   kind: "value";
-  value: Json;
+  value: unknown;
   depth: number;
 }
 
@@ -513,7 +524,7 @@ function inspectorJsonIndent(depth: number): string {
   return INSPECTOR_JSON_INDENTS[Math.min(depth, 32)];
 }
 
-function omittedJsonObjectValue(value: Json): boolean {
+function omittedJsonObjectValue(value: unknown): boolean {
   return value === undefined || typeof value === "function" ||
     typeof value === "symbol";
 }
@@ -522,7 +533,7 @@ function omittedJsonObjectValue(value: Json): boolean {
  * Serialize annotated inspector data without recursive descent. Indentation
  * stops growing after 32 levels so deeply nested output stays linear in size.
  */
-export function stringifyInspectorJson(value: Json): string {
+export function stringifyInspectorJson(value: unknown): string {
   const output: string[] = [];
   const ancestors = new WeakSet<object>();
   const work: JsonFrame[] = [{
@@ -594,7 +605,7 @@ export function stringifyInspectorJson(value: Json): string {
     }
 
     const keys = Object.keys(frame.value).filter((key) =>
-      !omittedJsonObjectValue((frame.value as Record<string, Json>)[key])
+      !omittedJsonObjectValue((frame.value as Record<string, unknown>)[key])
     );
     output.push("{");
     if (keys.length === 0) {
@@ -609,7 +620,7 @@ export function stringifyInspectorJson(value: Json): string {
       const key = keys[index];
       work.push({
         kind: "value",
-        value: (frame.value as Record<string, Json>)[key],
+        value: (frame.value as Record<string, unknown>)[key],
         depth: frame.depth + 1,
       });
       work.push({
@@ -625,7 +636,7 @@ export function stringifyInspectorJson(value: Json): string {
 }
 
 /** Compact one-line summary of any value, for table cells. */
-export function summarize(v: Json): string {
+export function summarize(v: FabricValue): string {
   const link = decodedLinkOf(v);
   if (link) return summarizeLink(link);
   if (isStream(v)) return "⊙ stream";
@@ -793,7 +804,7 @@ function pathOf(at: Trail): readonly string[] {
  * object's keys in `Object.entries` order and an array's items in index order.
  */
 export function linksWithPaths(
-  v: Json,
+  v: FabricValue,
   bounds: LinkWalkBounds,
 ): LinkWalk {
   const links: LinkAtPath[] = [];
@@ -801,7 +812,7 @@ export function linksWithPaths(
   const opaque: (readonly string[])[] = [];
   let budget = bounds.maxNodes;
   let budgetExhausted = false;
-  const walk = (held: Json, at: Trail, depth: number): void => {
+  const walk = (held: FabricValue, at: Trail, depth: number): void => {
     if (budgetExhausted) return;
     // Budget before depth: once the budget is gone the walk is over, and a
     // path it declines from there is one it never reached rather than one it

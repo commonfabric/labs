@@ -31,6 +31,7 @@ export type HarnessPolicyDecisionReasonCode =
   | "write_file_enforce_explicit_requires_direct_command"
   | "write_file_enforce_strict_direct_command"
   | "write_file_enforce_strict_requires_direct_command"
+  | "structured_result_return"
   | "subagent_profile_allowed"
   | "subagent_profile_not_allowed"
   | "invalid_tool_call"

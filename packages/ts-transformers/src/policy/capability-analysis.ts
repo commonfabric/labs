@@ -3,6 +3,8 @@ import {
   type MergeableOpMethodKind,
 } from "@commonfabric/api";
 import { type CellBrand } from "@commonfabric/schema-generator/cell-brand";
+import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
 
 import {
@@ -17,7 +19,6 @@ import {
   type CapabilityParamSummary,
   type FunctionCapabilitySummary,
   type ReactiveCapability,
-  resolvesToCommonFabricSymbol,
   type UnreadableCellArgument,
 } from "../core/mod.ts";
 import { isBrandedCellType } from "../transformers/cell-type.ts";
@@ -49,6 +50,15 @@ export interface CapabilityAnalysisOptions {
   readonly inProgress?: WeakSet<ts.Node>;
 
   /**
+   * Whether the function is the callback of a `pattern()` call, however the
+   * call names it. Its first parameter is then the pattern's input, on which
+   * `SELF` names the pattern's own result rather than any of the input's data,
+   * so the summary leaves out every path under `SELF` on that parameter. Left
+   * unset, `x[SELF]` on any parameter is the path `$SELF`.
+   */
+  readonly patternCallback?: boolean;
+
+  /**
    * Transformer-known types for nodes the checker can't resolve. Required for
    * synthetic callbacks (e.g. the destructure-lowered lift-applied param, whose
    * bindings type as `any`): without it, type-based heuristics like
@@ -59,15 +69,16 @@ export interface CapabilityAnalysisOptions {
 
   /**
    * Optional sink for the read-then-mergeable-`push` misuse check. When set,
-   * the analysis reports each `Cell.push` whose receiver collection path the
-   * same function also reads explicitly (a `.get()` or an iteration), classified
-   * by how that read relates to the push (see
-   * {@link MergeablePushMisuse.kind}): a push that depends on the read through
-   * a guard or its value is the dedup-then-push shape, better expressed as an
-   * identity-addressed `addUnique` or a read-modify-write `set`; a read that
-   * instead feeds an independent write to the same collection keeps the append
-   * conflict-prone and belongs in its own handler. A read unrelated to both is
-   * not reported. Left unset (the default), the analysis records no push sites.
+   * the analysis reports each mergeable append, a `Cell.push` or a
+   * `Cell.pushAll`, whose receiver collection path the same function also reads
+   * explicitly (a `.get()` or an iteration), classified by how that read
+   * relates to the push (see {@link MergeablePushMisuse.kind}): a push that
+   * depends on the read through a guard or its value is the dedup-then-push
+   * shape, better expressed as an identity-addressed `addUnique` or a
+   * read-modify-write `set`; a read that instead feeds an independent write to
+   * the same collection keeps the append conflict-prone and belongs in its own
+   * handler. A read unrelated to both is not reported. Left unset (the
+   * default), the analysis records no push sites.
    */
   readonly mergeablePushMisuseSink?: (finding: MergeablePushMisuse) => void;
 }
@@ -176,10 +187,10 @@ function extendSourceRef(
 
 const PARAMETER_SUMMARY_PREFIX = "__param";
 
-// The mergeable-op writer methods (increment, push, addUnique, removeByValue)
-// come from the canonical catalog in @commonfabric/api, so a new mergeable op is
-// classified by registering it there — no edit here. The non-mergeable Cell
-// writers stay listed explicitly.
+// The mergeable-op writer methods (increment, push, pushAll, addUnique,
+// removeByValue) come from the canonical catalog in @commonfabric/api, so a new
+// mergeable op is classified by registering it there — no edit here. The
+// non-mergeable Cell writers stay listed explicitly.
 const mergeableMethods = (kind: MergeableOpMethodKind): string[] =>
   MERGEABLE_OP_METHODS.filter((op) => op.kind === kind).map((op) => op.method);
 
@@ -207,12 +218,17 @@ const ARRAY_IDENTITY_WRITER_METHODS = new Set([
   ...mergeableMethods("array-identity-writer"),
 ]);
 const ARRAY_IDENTITY_PRESERVING_CHAIN_METHODS = new Set(["slice"]);
-// The mergeable tail-append op. Only `push` commits as a mergeable `append`
-// that drops the op's own array read from conflict detection; a handler that
-// also reads the same collection then has a fragile read-then-push shape. The
-// other identity writers either dedup/remove by value (the recommended
-// replacements) or are ordinary read-modify-writes, so they are not flagged.
-const MERGEABLE_APPEND_METHODS = new Set(["push"]);
+// The mergeable tail-append ops: the catalog methods that commit as a mergeable
+// `append`, which drops the op's own array read from conflict detection. A
+// handler that also reads the same collection then has a fragile read-then-push
+// shape. The other identity writers either dedup/remove by value (the
+// recommended replacements) or are ordinary read-modify-writes, so they are not
+// flagged.
+const MERGEABLE_APPEND_METHODS = new Set(
+  MERGEABLE_OP_METHODS.filter((op) => op.wireOp === "append").map((op) =>
+    op.method
+  ),
+);
 const READER_METHODS = new Set(["get"]);
 const OPAQUE_DERIVATION_METHODS = new Set([
   "map",
@@ -375,10 +391,7 @@ function getExplicitCellKindFromTypeNode(
   // The depth guard bounds the type-parameter-constraint recursion below
   // against a circular constraint on ill-typed input.
   if (!typeNode || depth > 16) return undefined;
-
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getExplicitCellKindFromTypeNode(typeNode.type, checker, depth + 1);
-  }
+  typeNode = unwrapTypeParentheses(typeNode);
 
   if (ts.isUnionTypeNode(typeNode)) {
     const kinds = new Set<CellBrand>();
@@ -474,10 +487,7 @@ function isAmbiguousCellWrapperUnion(
   typeNode: ts.TypeNode | undefined,
   checker: ts.TypeChecker,
 ): boolean {
-  let node = typeNode;
-  while (node && ts.isParenthesizedTypeNode(node)) {
-    node = node.type;
-  }
+  const node = typeNode && unwrapTypeParentheses(typeNode);
   if (!node || !ts.isUnionTypeNode(node)) return false;
   // If the union collapses to a single capability it is readable; only flag when
   // it does not, yet at least one member is a recognized cell wrapper.
@@ -507,9 +517,7 @@ function getRestParameterElementTypeNode(
   typeNode: ts.TypeNode | undefined,
 ): ts.TypeNode | undefined {
   if (!typeNode) return undefined;
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getRestParameterElementTypeNode(typeNode.type);
-  }
+  typeNode = unwrapTypeParentheses(typeNode);
   if (
     ts.isTypeOperatorNode(typeNode) &&
     typeNode.operator === ts.SyntaxKind.ReadonlyKeyword
@@ -1172,14 +1180,30 @@ function isArrayIdentityWriterValueArgument(
   call: ts.CallExpression,
   usage: ts.Expression,
 ): boolean {
-  if (!methodName || !ARRAY_IDENTITY_WRITER_METHODS.has(methodName)) {
-    return false;
+  return !!methodName && ARRAY_IDENTITY_WRITER_METHODS.has(methodName) &&
+    arrayIdentityWriterElementArguments(methodName, call.arguments).includes(
+      usage,
+    );
+}
+
+/**
+ * The arguments of a call to the array identity writer `methodName` that are
+ * themselves elements the write stores: all of them, except the position and
+ * count that open a `splice`, and the list a `pushAll` takes. That list is not
+ * an element, so it is read as an ordinary value, in full.
+ */
+function arrayIdentityWriterElementArguments(
+  methodName: string,
+  args: readonly ts.Expression[],
+): readonly ts.Expression[] {
+  switch (methodName) {
+    case "splice":
+      return args.slice(2);
+    case "pushAll":
+      return [];
+    default:
+      return args;
   }
-  const index = call.arguments.findIndex((argument) => argument === usage);
-  if (index < 0) {
-    return false;
-  }
-  return methodName === "splice" ? index >= 2 : true;
 }
 
 function isOptionalAliasInitializerMemberUsage(usage: ts.Expression): boolean {
@@ -1736,6 +1760,9 @@ function buildCapabilityParamSummary(
   };
 }
 
+/** Path segment that a `SELF` key denotes in a recorded path. */
+const SELF_PATH_SEGMENT = "$SELF";
+
 export function analyzeFunctionCapabilities(
   fn: CapabilityAnalyzableFunction,
   options?: CapabilityAnalysisOptions,
@@ -1825,11 +1852,20 @@ export function analyzeFunctionCapabilities(
       return state;
     };
 
+    // On a pattern's input, `SELF` names the pattern's own result rather than
+    // any of the input's data, so a use through it records nothing against
+    // the input: no path, and no flag a path would set.
+    const isPatternCallback = !!options?.patternCallback;
+    const isSelfReference = (name: string, path: readonly string[]): boolean =>
+      isPatternCallback && name === parameterStateKeys[0] &&
+      path[0] === SELF_PATH_SEGMENT;
+
     const trackRead = (
       name: string,
       path: readonly string[],
       options?: { identityOnly?: boolean },
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.reads.add(encodePath(path));
       if (options?.identityOnly) {
@@ -1840,6 +1876,7 @@ export function analyzeFunctionCapabilities(
     };
 
     const trackWrite = (name: string, path: readonly string[]): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.writes.add(encodePath(path));
       state.hasNonIdentityUse = true;
@@ -1849,6 +1886,7 @@ export function analyzeFunctionCapabilities(
       name: string,
       path: readonly string[],
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.fullShapeReads.add(encodePath(path));
       state.hasNonIdentityUse = true;
@@ -1858,6 +1896,7 @@ export function analyzeFunctionCapabilities(
       name: string,
       path: readonly string[] = [],
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.wildcard = true;
       state.wildcardPaths.add(encodePath(path));
@@ -1889,6 +1928,7 @@ export function analyzeFunctionCapabilities(
     };
 
     const markOpaqueUse = (name: string, path: readonly string[]): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.hasNonIdentityUse = true;
       if (path.length === 0) {
@@ -1900,6 +1940,7 @@ export function analyzeFunctionCapabilities(
       name: string,
       path: readonly string[],
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.rawOpaquePaths.add(encodePath(path));
       state.hasNonIdentityUse = true;
@@ -1913,6 +1954,7 @@ export function analyzeFunctionCapabilities(
       path: readonly string[],
       options?: { cellLike?: boolean },
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       const encoded = encodePath(path);
       state.rawIdentityPaths.add(encoded);
@@ -1927,6 +1969,7 @@ export function analyzeFunctionCapabilities(
       path: readonly string[],
       options?: { cellLike?: boolean },
     ): void => {
+      if (isSelfReference(name, path)) return;
       recordIdentityPath(name, path, options);
       const state = ensureState(name);
       const encoded = encodePath(path);
@@ -2358,7 +2401,7 @@ export function analyzeFunctionCapabilities(
         if (
           receiverExpr &&
           (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted")
+            methodName === "toSorted" || methodName === "slice")
         ) {
           return resolveBinding(receiverExpr);
         }
@@ -2458,7 +2501,7 @@ export function analyzeFunctionCapabilities(
         if (
           receiverExpr &&
           (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted")
+            methodName === "toSorted" || methodName === "slice")
         ) {
           return resolveArrayElementBinding(receiverExpr);
         }
@@ -3467,9 +3510,10 @@ export function analyzeFunctionCapabilities(
         ) {
           recordLocalArrayIdentityWrite(
             localReceiverName,
-            localMethodName === "splice"
-              ? node.arguments.slice(2)
-              : node.arguments,
+            arrayIdentityWriterElementArguments(
+              localMethodName,
+              node.arguments,
+            ),
           );
         } else if (localReceiverName && localMethodName === "set") {
           recordLocalMapSet(localReceiverName, node.arguments[1]);
@@ -3680,7 +3724,12 @@ export function analyzeFunctionCapabilities(
                 }
               }
               let hasIdentityArgument = false;
-              for (const argument of node.arguments) {
+              for (
+                const argument of arrayIdentityWriterElementArguments(
+                  methodName,
+                  node.arguments,
+                )
+              ) {
                 const argumentRef = resolveSourceRef(argument);
                 const rawArgument = unwrapExpression(argument);
                 const rawAlias = ts.isIdentifier(rawArgument)

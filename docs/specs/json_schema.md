@@ -27,10 +27,11 @@ The authoritative field inventory is the `JSONSchema` type in
   (a stream interface for connecting events to listeners), or
   `asCell: ["opaque"]` (pass-through-only). Nesting composes:
   `Cell<Cell<T>>` becomes `asCell: ["cell", "cell"]`. See `AsCellType` in
-  `packages/api/index.ts` for the entry shape. (A separate boolean-style
-  `asStream` field existed historically; it is no longer part of the type and
-  is not emitted — a couple of runner utilities still tolerate it on stored
-  data.)
+  `packages/api/index.ts` for the entry shape, and
+  [Streams](#streams-are-declarations-not-views) for the one entry that is not
+  a view onto a value. (A separate boolean-style `asStream` field existed
+  historically; it is no longer part of the type and is not emitted — a couple
+  of runner utilities still tolerate it on stored data.)
 - **`scope`**: storage-partition selector emitted for `PerSpace<T>` /
   `PerUser<T>` / `PerSession<T>` wrappers.
 - **`tier`**: verb listing mark on stream properties. `tier: "wrapper"` names
@@ -43,15 +44,28 @@ The authoritative field inventory is the `JSONSchema` type in
   mark on the other axis, produced from `@deprecated` JSDoc.
 - **`ifc`**: Information Flow Control (IFC) annotations (see [IFC](#ifc))
 
+### Streams are declarations, not views
+
+`asCell: ["cell"]` is a flag about how the value beside it is handed over. The
+rest of the schema still describes that value and still filters it; a reader
+that drops the flag reads the same data inline.
+
+`asCell: ["stream"]` is not that kind of flag. It says what the position is —
+a stream, which holds no value — so the keywords beside it describe the event
+a `send()` carries, not something readable at the position. The marker stands
+in front of the event schema rather than combining with a description of the
+position's own value, and the two do not compose: a schema cannot declare a
+stream and a readable value at the same place.
+
 ### IFC
 
 The `ifc` extension attaches Information Flow Control metadata to schema
 nodes. The key set is defined by the `ifc` field of the `JSONSchema` type in
 `packages/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
-`writeAuthorizedBy`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
-The compile-time side (CFC authoring aliases and UI helpers
-lowering to these keys) is specified in
+`writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
+`observes`, and `uiContract`. The compile-time side (CFC authoring aliases and
+UI helpers lowering to these keys) is specified in
 `docs/specs/ts-transformer/cfc_authoring_contract.md` and
 `docs/specs/ts-transformer/cfc_ui_helper_contract.md`; the label semantics live
 in the CFC spec (specs repo, `cfc/`).
@@ -150,14 +164,26 @@ crossed schema that declares one, so a link's top-level `default` overrides
 earlier links' and the reader's own, and the reader's stands where no link
 declares one.
 
-The strict pseudo-intersection (`combineSchema`) remains in use for merging
-a compound schema's base keywords with its own `anyOf`/`oneOf` branches.
-There, properties and `required` fields from either side survive, shared
-properties combine recursively, and the three `additionalProperties` states
-above stay distinct: an absent `additionalProperties` does not prohibit a
-property declared only by the other side, an explicit
+The strict pseudo-intersection (`combineSchema`) remains in use where a
+compound schema's base keywords are merged with its own `anyOf`/`oneOf`
+branches to narrow it against a concrete value — `resolveSchemaForValue`, and
+the `asCell` candidates behind `asCellCompoundSchemaForValue`, both in
+`schema.ts`. There, properties and `required` fields from either side survive,
+shared properties combine recursively, and the three `additionalProperties`
+states above stay distinct: an absent `additionalProperties` does not prohibit
+a property declared only by the other side, an explicit
 `additionalProperties: false` rejects such one-sided properties, and `true`
 permits them.
+
+Traversal composes the same two parts differently. It merges the keywords
+beside a combinator into each branch shallowly, letting the branch's own
+keywords win, and that applies to `allOf` as much as to `anyOf` and `oneOf`.
+The difference shows where both sides name properties, since the branch's
+`properties` map replaces the sibling one rather than combining with it, and
+where a sibling `additionalProperties: false` rides into a branch that does
+not restate it. See
+[Logical schema operators](space-model/8-traversal.md#logical-schema-operators)
+for that composition and for how the surviving branches' results are merged.
 
 See [Link-schema precedence](link-schema-precedence.md) for the
 consolidated specification, and
@@ -181,7 +207,8 @@ those reads back unchanged. It does not follow `patternProperties` either: a
 property whose only description is a pattern is neither shaped by that pattern
 nor admitted by it through a closed object.
 [Traversal](space-model/8-traversal.md) is the specification, including how
-`anyOf`, `oneOf` and `allOf` branch results are merged, which is
+the keywords beside a combinator reach its branches and how the surviving
+branches' results are merged — a union of what each produced, which is
 runtime-specific rather than standard. Narrowing a schema across a path
 boundary can be more permissive than standard semantics, for the reason
 [Schema Narrowing](#schema-narrowing) gives below.
@@ -233,9 +260,10 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   gets it.
 - `{ "type": "undefined" }` — preserved as an explicit union member (e.g.
   `string | undefined`) so optionality survives schema round-trips.
-- `FabricPrimitive` types — `"FabricBytes"`, `"FabricEpochDay"`,
-  `"FabricEpochNsec"`, `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`,
-  `"FabricUnavailable"` — each naming a
+- `FabricPrimitive` types — `"FabricBytes"`, `"FabricDurationDay"`,
+  `"FabricDurationNsec"`, `"FabricEpochDay"`, `"FabricEpochNsec"`,
+  `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`, `"FabricUnavailable"` —
+  each naming a
   concrete `FabricPrimitive` class from the data-model. A value matches by
   prototype (`instanceof`), not by structure: these values are opaque leaves
   with no enumerable properties, and they are never property-walked.
@@ -464,3 +492,55 @@ permissive than expected.
   ]
 }
 ```
+
+### How a step narrows
+
+`ContextualFlowControl.schemaAtPath` narrows one path segment at a time, and
+what the cursor declares about its type decides how:
+
+- `type: "object"` narrows a segment to the property it names, else to
+  `additionalProperties`, else to `true` — an unnamed key is admitted, since an
+  absent `additionalProperties` means `true`. A schema that names properties
+  and omits `additionalProperties` reports an unnamed key as a missing
+  property, which a read drops rather than admits.
+- `type: "array"` narrows an index to its `prefixItems` entry, else to
+  `items`, else to `true`, and a segment that is not an index to `false`.
+- `type: "unknown"` narrows to `unknown`.
+- Any other declared type holds no children: the segment narrows to `false`,
+  and nothing has been turned down.
+- A type list, an `anyOf` or a `oneOf` narrows each arm and unions the
+  results; an arm that narrows to `false` drops out, and one that narrows to a
+  true schema makes the union `true`. Returning to the same `anyOf` or `oneOf`
+  branch list in the same definition scope without consuming a path segment
+  contributes `false`: the other arms already describe the children it can
+  reach. Consuming a segment permits the list to be expanded again, so recursive
+  object and array paths keep narrowing at each level. One narrowing expands
+  each such list once for its definition scope and the segments left, and a
+  route reaching it again takes what it came to. What a list came to while a
+  cycle through it was still open lacks the union the cycle returns to, so once
+  the outermost union of that cycle has narrowed, a later route expands the
+  list afresh.
+- A schema declaring no `type` admits every type, and which of its keywords
+  apply — `properties` and `additionalProperties`, or `prefixItems` and
+  `items` — is settled only by a value. Without one, narrowing can say only
+  what both readings admit, so the schema is read as the union of its object
+  and array readings: `{ items: … }` at a key that is not an index admits
+  anything, and at an index admits anything as well, since the object reading
+  does. A reader that holds the value settles the type first
+  (`ContextualFlowControl.settledForContainer`), so both traversal and the
+  lazy view narrow an object's key through the object reading and an array's
+  element through `items`. A declared type, a reference and a true schema are
+  left as they stand.
+- An `enum` or `const` beside no `type` is read as the type list of its
+  members' types, and nothing more of the members is read: a string
+  enumeration is a string and holds no children, and one holding an object
+  member admits any key under its object arm, a key no member holds included.
+  Traversal does not validate the keyword either, so the two agree; an
+  exact-match reading would narrow such a key to what the members hold.
+- A true schema — `true`, `{}`, or one carrying only `asCell`, `default` and
+  the other internal keys — is the wildcard every child narrows to, markers
+  and all. A false schema, `false` or `{ not: true }`, holds no children.
+- An `allOf` is not read a child out of: a conjunction beside no `type`
+  narrows to `false`. Traversal evaluates a conjunction whole, merging the
+  keywords beside it into each part, which is where a property only a part
+  declares is reached.

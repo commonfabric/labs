@@ -17,20 +17,21 @@ import { ViewError } from "./errors.ts";
 import { detectDiff, type DiffModel, parseDiff } from "./diff.ts";
 import {
   buildDiffDocument,
+  type DiffFileLanguages,
+  diffLanguages,
+  type DiffWorkspace,
   realWorkspace,
   type WorkspaceCache,
 } from "./diffdoc.ts";
 import {
   byteInputFor,
-  canRenderDiffLines,
   decodeLanguageInput,
   diffSemanticsFor,
-  distinctLanguages,
   type Language,
-  languageForFile,
   languageForName,
   languageForTransformedOutput,
   languageNames,
+  prepareLanguages,
   type Semantics,
 } from "./languages/language.ts";
 import type { DecodedLanguageSource } from "./languages/decoder.ts";
@@ -96,7 +97,7 @@ export async function viewMain(options: ViewOptions): Promise<void> {
     }
     return;
   }
-  const { doc, semantics, editSource } = buildView(
+  const { doc, semantics, editSource } = await buildPreparedView(
     input,
     options.file,
     options.diff,
@@ -204,6 +205,9 @@ function validateSourceSelection(
  *
  * `selection` chooses syntax for piped source. Its virtual filename is
  * advisory and does not make the source editable.
+ *
+ * The languages this reaches must already have their parsers, which
+ * {@link buildPreparedView} is the entry point that arranges.
  */
 export function buildView(
   input: string | Uint8Array | ViewByteInput,
@@ -215,6 +219,68 @@ export function buildView(
   semantics: () => Semantics | undefined;
   editSource: EditableSource;
 } {
+  return builtView(selectView(input, file, forceDiff, selection));
+}
+
+/** Build a view after loading the parsers its languages need. */
+export async function buildPreparedView(
+  input: string | Uint8Array | ViewByteInput,
+  file?: string,
+  forceDiff?: boolean,
+  selection: SourceSelection = {},
+): Promise<{
+  doc: Document;
+  semantics: () => Semantics | undefined;
+  editSource: EditableSource;
+}> {
+  const selected = selectView(input, file, forceDiff, selection);
+  await prepareLanguages(selected.languages);
+  return builtView(selected);
+}
+
+/**
+ * What selection settles before anything is parsed: how the bytes decode,
+ * whether they read as a diff, and the languages the view will parse through.
+ */
+interface SelectedInput {
+  readonly loaded: ViewByteInput;
+  readonly decoded: DecodedLanguageSource;
+  readonly text: string;
+  readonly file: string | undefined;
+  readonly fileName: string | undefined;
+
+  /** Every language this view can parse through, which is what has to have
+   * its parser before anything is parsed. A diff's two sides are resolved
+   * separately, so a rename across languages brings both. */
+  readonly languages: readonly Language[];
+}
+
+type ViewSelection =
+  & SelectedInput
+  & ({
+    readonly model: DiffModel;
+
+    /** Where the diff's files are read from. */
+    readonly ws: DiffWorkspace;
+
+    /**
+     * The languages of each diff file's two sides, decided from their paths
+     * and from what `ws` holds of their content.
+     */
+    readonly fileLanguages: readonly DiffFileLanguages[];
+  } | {
+    readonly model: null;
+
+    /** The language ordinary source parses through. */
+    readonly language: Language;
+  });
+
+function selectView(
+  input: string | Uint8Array | ViewByteInput,
+  file: string | undefined,
+  forceDiff: boolean | undefined,
+  selection: SourceSelection,
+): ViewSelection {
   let loaded: ViewByteInput;
   if (typeof input === "string") {
     const bytes = new TextEncoder().encode(input);
@@ -264,34 +330,23 @@ export function buildView(
         lines: text.split("\n").map(() => ({ kind: "other" as const })),
       }
       : null);
+  const common = { loaded, decoded: decoded.source, text, file, fileName };
   if (model) {
     const ws = realWorkspace(safeCwd());
-    // One workspace cache shared by the initial build and every deferred
-    // re-parse, so the named files are read and parsed once per session.
-    const cache: WorkspaceCache = new Map();
-    const { doc, maps, edit } = buildDiffDocument(text, model, ws, cache);
-    // The diff's semantic layer comes from the languages the diff touches.
-    const languages = distinctLanguages(
-      model.files.map((f) => f.newPath ?? f.oldPath),
-    );
-    const hasRenderedView = model.files.some((diffFile) =>
-      [diffFile.oldPath, diffFile.newPath].some((path) =>
-        path !== undefined && canRenderDiffLines(languageForFile(path))
-      )
-    );
+    const fileLanguages = diffLanguages(text, model, ws);
     return {
-      doc,
-      semantics: () =>
-        diffSemanticsFor(languages, text, maps, { cwd: safeCwd() }),
-      // A diff edits the new side of the files it touches, in place. Saving
-      // edited `git show` output amends HEAD with those file and message edits.
-      editSource: diffSource(
-        ws,
-        edit,
-        cache,
-        realGit(safeCwd()),
-        hasRenderedView,
-      ),
+      ...common,
+      model,
+      ws,
+      fileLanguages,
+      languages: [
+        ...new Set(
+          fileLanguages.flatMap(({ oldLanguage, newLanguage }) => [
+            newLanguage,
+            oldLanguage,
+          ]),
+        ),
+      ],
     };
   }
   const transformedOutput = selectedLanguage.input.kind === "text" &&
@@ -299,6 +354,39 @@ export function buildView(
     looksLikeTransformedOutput(text);
   const language = selection.language ??
     (transformedOutput ? languageForTransformedOutput() : selectedLanguage);
+  return { ...common, model, language, languages: [language] };
+}
+
+function builtView(selected: ViewSelection): {
+  doc: Document;
+  semantics: () => Semantics | undefined;
+  editSource: EditableSource;
+} {
+  const { text, file, fileName, loaded } = selected;
+  if (selected.model !== null) {
+    const { model, ws } = selected;
+    // One workspace cache shared by the initial build and every deferred
+    // re-parse, so the named files are read and parsed once per session.
+    const cache: WorkspaceCache = new Map();
+    const { doc, maps, edit } = buildDiffDocument(
+      text,
+      model,
+      ws,
+      cache,
+      "source",
+      selected.fileLanguages,
+    );
+    return {
+      doc,
+      // The diff's semantic layer comes from the languages of the files it
+      // leaves behind, which is the side a query resolves against.
+      semantics: () => diffSemanticsFor(text, maps, { cwd: safeCwd() }),
+      // A diff edits the new side of the files it touches, in place. Saving
+      // edited `git show` output amends HEAD with those file and message edits.
+      editSource: diffSource(ws, edit, cache, realGit(safeCwd())),
+    };
+  }
+  const language = selected.language;
   const doc = language.parseDocument(text, fileName);
   return {
     doc,
@@ -308,7 +396,7 @@ export function buildView(
     // A pipe (transformed output, etc.) has no file to edit.
     editSource: file
       ? fileSource(file, language, {
-        encode: decoded.source.encode,
+        encode: selected.decoded.encode,
         renderExtent: loaded.extent,
       })
       : readonlySource(

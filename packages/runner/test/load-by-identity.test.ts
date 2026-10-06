@@ -56,7 +56,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     tx = runtime.edit();
   });
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -93,7 +93,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, pattern as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     return result.getAsQueryResult();
@@ -267,7 +267,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -433,7 +433,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -516,7 +516,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.storageManager.synced();
 
@@ -661,14 +661,19 @@ describe("legacy-envelope tolerance on cold load", () => {
   });
 
   afterEach(async () => {
-    for (const rt of runtimes.splice(0)) {
+    // Every runtime's write-backs drain before any runtime is disposed. They
+    // share one storage manager, and a loader's cold-load write-back still in
+    // flight when the runtime that persisted the closure is disposed never
+    // settles, so flushing it afterwards would wait forever.
+    const finished = runtimes.splice(0);
+    for (const rt of finished) {
       try {
         await rt.patternManager.flushCompileCacheWrites();
       } catch {
         // Dispose regardless; individual tests assert on write-back success.
       }
-      await rt.dispose();
     }
+    for (const rt of finished) await rt.dispose();
     await storageManager?.close();
   });
 
@@ -771,7 +776,7 @@ describe("legacy-envelope tolerance on cold load", () => {
       tx,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.storageManager.synced();
   };
 
@@ -791,10 +796,100 @@ describe("legacy-envelope tolerance on cold load", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, pattern as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
     return result.getAsQueryResult();
   };
+
+  for (const withData of [false, true]) {
+    it(`cold-loads a child with its parent's source roots${withData ? " and data" : ""}`, async () => {
+      const writer = newRuntime();
+      const fixture = await writer.harness.compileToRecordGraph({
+        main: "/parent.tsx",
+        sourceRoots: ["/attached.test.ts"],
+        dataFiles: withData ? ["/note.txt"] : [],
+        files: [
+          {
+            name: "/parent.tsx",
+            contents: `
+import { pattern } from "commonfabric";
+import Child from "./child.tsx";
+export const offset = 11;
+export const childPattern = () => Child;
+export default pattern<{value: number}>(({value}) => ({value}));
+`,
+          },
+          {
+            name: "/child.tsx",
+            contents: `
+import { computed, pattern, dataFile } from "commonfabric";
+import { offset } from "./parent.tsx";
+export default pattern<{value: number}>(({value}) => ({
+  result: computed(() => value + offset),
+${withData ? '  note: dataFile("./note.txt"),' : ""}
+}));
+`,
+          },
+          { name: "/attached.test.ts", contents: "export const fixture = 17;" },
+          { name: "/note.txt", contents: "Attached bytes, not TypeScript." },
+        ],
+      });
+      await persist(writer, fixture);
+      const child = fixture.modules.find((module) =>
+        module.filename === "/child.tsx"
+      );
+      expect(child).toBeDefined();
+      if (!child) throw new Error("Missing child fixture");
+      const reader = newRuntime();
+      const loaded = await reader.patternManager.loadPatternByIdentity(
+        child.identity,
+        "default",
+        space,
+      );
+      expect(typeof loaded).toBe("function");
+      expect(await runPattern(reader, loaded, 4, "source-package child"))
+        .toEqual(
+          {
+            result: 15,
+            ...(withData ? { note: "Attached bytes, not TypeScript." } : {}),
+          },
+        );
+      await reader.patternManager.flushCompileCacheWrites();
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      expect(runtimeVersion).toBeDefined();
+      if (!runtimeVersion) throw new Error("Missing runtime version");
+      const readTx = reader.edit();
+      try {
+        const repaired = await loadCompiledClosure(
+          reader,
+          space,
+          child.identity,
+          { runtimeVersion },
+          readTx,
+        );
+        const parent = repaired?.get(fixture.entryIdentity);
+        expect(
+          parent?.imports.filter((edge) =>
+            edge.specifier.startsWith("cf:source-root/") ||
+            edge.specifier.startsWith("cf:data-file/")
+          ),
+        )
+          .toEqual(
+            fixture.modules.find((module) =>
+              module.identity === fixture.entryIdentity
+            )?.imports.filter((edge) =>
+              edge.specifier.startsWith("cf:source-root/") ||
+              edge.specifier.startsWith("cf:data-file/")
+            ).map(({ specifier, targetIdentity }) => ({
+              specifier,
+              identity: targetIdentity,
+            })),
+          );
+      } finally {
+        readTx.abort("source-package assertions complete");
+      }
+    });
+  }
 
   it("T1: heals a legacy-envelope closure on cold load, preserving identity", async () => {
     const rt1 = newRuntime();

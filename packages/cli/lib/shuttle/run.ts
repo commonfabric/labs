@@ -1,6 +1,13 @@
 /**
- * Running a shuttle: one connection, one place, and the prompt over both, for
- * as long as the person keeps typing.
+ * Running a shuttle: one connection, two positions, and the prompt over all
+ * three, for as long as the person keeps typing.
+ *
+ * The positions are the fabric place and the external working location, and
+ * they are composed differently because they are built from different things.
+ * A place stands in a space, so it cannot be built before the connect that
+ * resolves one; the external location stands outside the fabric and is
+ * seeded from this process's own working directory, so it is built from what
+ * the process already holds and asks nothing of anybody.
  *
  * This is what `cf sh` calls. The terminal opens first and the connection
  * inside it, because the terminal is where the connection's own writing has to
@@ -27,11 +34,14 @@
  * and what arrives is the connection it settled on.
  */
 
+import { toFileUrl } from "@std/path";
+
 import { loadPieces, type SpaceConfig } from "../piece.ts";
 import { newSessionId } from "../session.ts";
 import { announcingOutput } from "./announce.ts";
 import { type ConnectionOpener, HeldConnection } from "./connection.ts";
 import { openEditor } from "./editor.ts";
+import { ExternalLocation } from "./external.ts";
 import { CurrentPlace } from "./place.ts";
 import { runPrompt } from "./prompt.ts";
 import { ShuttleSession } from "./session.ts";
@@ -54,6 +64,16 @@ export interface ShuttleDeps {
   readonly newSessionId?: typeof newSessionId;
 
   /**
+   * The external working location the run starts at; the process's own
+   * working directory where a caller names none.
+   *
+   * It is a seam because the two things it is built from — the working
+   * directory and the home — are facts about the machine, and a case that
+   * read them would assert what that machine happens to hold.
+   */
+  readonly external?: ExternalLocation;
+
+  /**
    * Reads lines against what this composed, which is where everything above
    * ends up.
    *
@@ -64,6 +84,30 @@ export interface ShuttleDeps {
    * reaches it without a cell to read first.
    */
   readonly prompt?: typeof runPrompt;
+}
+
+/**
+ * Returns the external location a run starts at: the process's own working
+ * directory, on the plane that reads a directory.
+ *
+ * A shell starts where it was started from, and the external plane is the one
+ * a `file:` path is read against, so the process's working directory is what
+ * makes `xcd ../foo` on the first line mean what a person typing it means.
+ * The home is read here for the same reason and passed on rather than reached
+ * for again (`external.ts`).
+ */
+function startingExternal(): ExternalLocation {
+  // The platform-aware conversion, where `external.ts` uses the posix one.
+  // The two look like one spelling and are not: this converts the working
+  // directory the operating system reports, which on some of them is not a
+  // posix path at all, and that module converts a path it derived from a URL,
+  // which always is.
+  //
+  // The directory is handed over as it stands. `ExternalLocation` is what
+  // makes a location read as a container, so a separator added here would be
+  // a second answer to a question already answered — and at the filesystem
+  // root it is a separator appended to one.
+  return new ExternalLocation(toFileUrl(Deno.cwd()), Deno.env.get("HOME"));
 }
 
 /**
@@ -97,6 +141,7 @@ export async function runShuttle(
     const shuttle: Shuttle = {
       config,
       place: new CurrentPlace(pieces.getSpace()),
+      external: deps.external ?? startingExternal(),
       connection,
       session: new ShuttleSession(),
       invocationSession: (deps.newSessionId ?? newSessionId)(),

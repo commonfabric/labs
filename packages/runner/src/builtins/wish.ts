@@ -19,8 +19,8 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
-// commit can be withdrawn AFTER commit() resolves — runner.ts's pattern-swap
-// settlement precedent) so a withdrawn one-shot is at least named.
+// contribution can be withdrawn after `commit().settled` resolves — the
+// pattern-swap settlement precedent in runner.ts) so a withdrawn one-shot is at least named.
 import { waveSettlementOf } from "../executor/wave.ts";
 import {
   type CellScope,
@@ -29,9 +29,14 @@ import {
   type Pattern,
   UI,
 } from "../builder/types.ts";
+import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
+import { resolveLink } from "../link-resolution.ts";
 import {
   createSigilLinkFromParsedLink,
+  isPrimitiveCellLink,
+  type NormalizedFullLink,
+  parseLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -47,18 +52,19 @@ import {
   isStorageTransactionInconsistent,
 } from "../storage/rejection.ts";
 import { isCfcRejectedCommitError } from "../scheduler/cfc-rejection-report.ts";
-import { onSchemaRegistryClear } from "../schema-registry.ts";
+import { schemaRegistryEpoch } from "../schema-registry.ts";
 import {
   enrollRuntimeOwnedStore,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import { scopedCell } from "./scope-policy.ts";
 import {
-  createWishProfileReadiness,
-  WishProfilePending,
-} from "./wish-profile-readiness.ts";
+  createDocumentReadiness,
+  DocumentLoadError,
+  DocumentPending,
+} from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -127,8 +133,15 @@ class WishError extends Error {
   }
 }
 
+/** The error a wish reports when the profile roster is confirmed empty. */
+const NO_PROFILE_ERROR = "No profile exists yet";
+
 /** A confirmed empty profile roster, for which Wish offers creation. */
-class NoProfileError extends WishError {}
+class NoProfileError extends WishError {
+  constructor() {
+    super(NO_PROFILE_ERROR);
+  }
+}
 
 //
 // Interval #now constants and helpers
@@ -223,6 +236,8 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#journal":
     case "#learned":
     case "#learnedSummary":
+    case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -273,7 +288,11 @@ export function tagMatchesHashtag(
 
 type WishContext = {
   runtime: Runtime;
-  profileReadiness: ReturnType<typeof createWishProfileReadiness>;
+  readiness: ReturnType<typeof createDocumentReadiness>;
+
+  /** Candidate load failures encountered during this resolution. */
+  candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -299,7 +318,7 @@ type SharedHashtagState = {
   result?: Cell<unknown>;
   candidates: Cell<unknown>[];
   error?: unknown;
-  [UI]?: VNode;
+  [UI]?: VNode | Cell<unknown>;
 };
 
 type SharedHashtagResolver = {
@@ -356,12 +375,15 @@ export function getArbitraryDIDs(scope?: string[]): DID[] {
 function resolvePath(
   base: Cell<any>,
   path: readonly string[],
+  ctx: Pick<WishContext, "readiness" | "tx">,
 ): Cell<unknown> {
-  let current = base;
+  let current = base.resolveAsCell();
+  ctx.readiness.requireDocument(current, ctx.tx);
   for (const segment of path) {
-    current = current.key(segment);
+    current = current.key(segment).resolveAsCell();
+    ctx.readiness.requireDocument(current, ctx.tx);
   }
-  return current.resolveAsCell();
+  return current;
 }
 
 function buildResolutionPath(
@@ -408,6 +430,28 @@ function profileCellIsValid(
   if (!rawIsSet) return false;
   const link = cell.getAsNormalizedFullLink();
   return link.space !== homeSpace && link.path.length === 0;
+}
+
+/**
+ * Whether home `defaultPattern` keeps its default in a slot: whether its
+ * `defaultProfile` holds an object at its root, read in the cell the field
+ * names rather than through it. A home without the slot keeps its default as a
+ * link at the root of that cell, or has nothing there; one with the slot keeps
+ * such a link, chosen before the slot, as `legacyDefaultProfile`.
+ */
+function homeHasDefaultProfileSlot(
+  runtime: Runtime,
+  defaultPattern: Cell<unknown>,
+  tx: IExtendedStorageTransaction | undefined,
+): boolean {
+  const field = defaultPattern.key("defaultProfile");
+  const fieldRaw = field.getRaw();
+  const root = isPrimitiveCellLink(fieldRaw)
+    ? runtime.getCellFromLink(parseLink(fieldRaw, field), undefined, tx)
+      .getRaw()
+    : fieldRaw;
+  return isObjectOrArray(root) && !Array.isArray(root) &&
+    !isPrimitiveCellLink(root);
 }
 
 /**
@@ -477,7 +521,7 @@ function subscribeProfileName(cell: Cell<unknown>): void {
  * `ProfileHome.inSpace()` space, so the `defaultProfile` / `mru` links are
  * matched to candidates by space, not `Cell.equals` (see `sameProfileCell`;
  * CT-1842). Skips confirmed-absent entries when a valid candidate remains.
- * Throws `WishProfilePending` while backing documents load, and `WishError`
+ * Throws `DocumentPending` while backing documents load, and `WishError`
  * when absent entries leave no valid candidate.
  */
 function getProfileCandidateCells(
@@ -485,11 +529,11 @@ function getProfileCandidateCells(
 ): { ordered: Cell<unknown>[]; defaultValid: boolean } {
   const homeSpaceCell = getHomeSpaceCell(ctx);
   // These checks gate loading; confirmed absence yields an empty roster below.
-  ctx.profileReadiness.requireDocument(homeSpaceCell, ctx.tx);
+  ctx.readiness.requireDocument(homeSpaceCell, ctx.tx);
   const defaultPattern = homeSpaceCell.key("defaultPattern").resolveAsCell();
-  ctx.profileReadiness.requireDocument(defaultPattern, ctx.tx);
+  ctx.readiness.requireDocument(defaultPattern, ctx.tx);
   const profilesCell = defaultPattern.key("profiles").resolveAsCell();
-  ctx.profileReadiness.requireDocument(profilesCell, ctx.tx);
+  ctx.readiness.requireDocument(profilesCell, ctx.tx);
   // Read the list as cell references so a freshly-created profile (a link into
   // its own space, not yet loaded here) is still counted rather than collapsing
   // the whole list to `undefined`. See profileLinkListSchema.
@@ -501,7 +545,7 @@ function getProfileCandidateCells(
   for (let i = 0; i < length; i++) {
     const entry = profilesCell.key(i);
     const cell = entry.resolveAsCell();
-    if (!ctx.profileReadiness.requireDocument(cell, ctx.tx)) {
+    if (!ctx.readiness.requireDocument(cell, ctx.tx)) {
       hasAbsentProfile = true;
       continue;
     }
@@ -522,14 +566,33 @@ function getProfileCandidateCells(
     return { ordered: [], defaultValid: false };
   }
 
-  // Ordering inputs: the default link and the MRU list.
-  const defaultEntry = defaultPattern.key("defaultProfile");
-  const defaultCell = defaultEntry.resolveAsCell();
-  const defaultValid = profileCellIsValid(
-    defaultCell,
-    defaultEntry.getRaw() !== undefined,
-    homeSpaceCell.space,
+  // Ordering inputs: the default and the MRU list. The default is the link
+  // under `profile` in home's slot, or, while the slot holds none, the link a
+  // home keeps an earlier default in: `legacyDefaultProfile`, or
+  // `defaultProfile` itself for a home without the slot.
+  const hasSlot = homeHasDefaultProfileSlot(
+    ctx.runtime,
+    defaultPattern,
+    ctx.tx,
   );
+  const slotEntry = defaultPattern.key("defaultProfile").key("profile");
+  const slotCell = slotEntry.resolveAsCell();
+  const slotValid = hasSlot &&
+    profileCellIsValid(
+      slotCell,
+      slotEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
+  const legacyEntry = defaultPattern.key(
+    hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+  );
+  const defaultCell = slotValid ? slotCell : legacyEntry.resolveAsCell();
+  const defaultValid = slotValid ||
+    profileCellIsValid(
+      defaultCell,
+      legacyEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
 
   const mruCell = defaultPattern.key("mru");
   const mruRaw = mruCell.asSchema(profileLinkListSchema).get();
@@ -566,7 +629,7 @@ function getProfileCandidateCells(
 function getDefaultProfileCell(ctx: WishContext): Cell<unknown> {
   const { ordered } = getProfileCandidateCells(ctx);
   if (ordered.length === 0) {
-    throw new NoProfileError("No profile exists yet");
+    throw new NoProfileError();
   }
   return ordered[0];
 }
@@ -586,9 +649,28 @@ function formatTarget(parsed: ParsedWishTarget): string {
     (parsed.path.length > 0 ? "/" + parsed.path.join("/") : "");
 }
 
-/**
- * Search favorites in home space for pieces matching a hashtag.
- */
+/** Checks a discovery candidate, retaining load failures for an empty search. */
+function requireDiscoveryCandidate(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (!(error instanceof DocumentLoadError)) throw error;
+    ctx.candidateFailures.set(cell, error);
+    return false;
+  }
+}
+
+/** Reports a candidate load failure when no readable match remains. */
+function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
+  const failure = ctx.candidateFailures.values().next().value;
+  if (failure) throw failure;
+  throw new WishError(message);
+}
+
+/** Searches favorites in home space for pieces matching a hashtag. */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
@@ -603,9 +685,7 @@ function searchFavoritesForHashtag(
     queryKey,
     () => {
       const homeSpaceCell = getHomeSpaceCell(ctx);
-      return homeSpaceCell
-        .key("defaultPattern")
-        .key("favorites")
+      return resolvePath(homeSpaceCell, ["defaultPattern", "favorites"], ctx)
         .asSchema(favoriteListSchema);
     },
   );
@@ -633,39 +713,36 @@ function searchFavoritesForHashtag(
   return measureWishPhase(
     "favorites-result-map",
     queryKey,
-    () => matches.map((match) => ({ cell: match.cell, pathPrefix })),
+    () =>
+      matches.flatMap((match) => {
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
-type HashtagSearchResult = {
-  matches: BaseResolution[];
-
-  /** true when cell data has loaded (even if empty); false when still pending */
-  loaded: boolean;
-};
-
 /**
  * Search mentionables in current space for pieces matching a hashtag.
- * Synchronous: reads cell.get() which returns undefined if data isn't loaded
- * yet. The reactive system will re-trigger wish when the data arrives.
+ * Waits for the index and candidate documents before choosing a result.
  */
 function searchMentionablesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
   spaceCell?: Cell<unknown>,
-): HashtagSearchResult {
+): BaseResolution[] {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const mentionableCell = measureWishPhase(
     "mentionable-cell",
     queryKey,
     () =>
-      (spaceCell ?? getSpaceCell(ctx))
-        .key("defaultPattern")
-        .key("backlinksIndex")
-        .key("mentionable")
-        .resolveAsCell()
-        .asSchema(mentionableListSchema),
+      resolvePath(
+        spaceCell ?? getSpaceCell(ctx),
+        ["defaultPattern", "backlinksIndex", "mentionable"],
+        ctx,
+      ).asSchema(mentionableListSchema),
   );
   const raw = measureWishPhase(
     "mentionable-get",
@@ -673,8 +750,7 @@ function searchMentionablesForHashtag(
     () => mentionableCell.get(),
   );
   if (raw === undefined || raw === null) {
-    // Data not loaded yet — reactive system will re-trigger when it arrives
-    return { matches: [], loaded: false };
+    return [];
   }
   const mentionables = (raw || []) as Cell<any>[];
 
@@ -684,6 +760,8 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
+        const resolved = pieceCell.resolveAsCell();
+        if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",
@@ -732,28 +810,24 @@ function searchMentionablesForHashtag(
       }),
   );
 
-  return {
-    matches: measureWishPhase(
-      "mentionable-result-map",
-      queryKey,
-      () => matches.map((match) => ({ cell: match, pathPrefix })),
-    ),
-    loaded: true,
-  };
+  return measureWishPhase(
+    "mentionable-result-map",
+    queryKey,
+    () => matches.map((match) => ({ cell: match, pathPrefix })),
+  );
 }
 
 function searchProfileForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
-): HashtagSearchResult {
+): BaseResolution[] {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const elementsCell = measureWishPhase(
     "profile-elements-cell",
     queryKey,
     () =>
-      getDefaultProfileCell(ctx)
-        .key("elements")
+      resolvePath(getDefaultProfileCell(ctx), ["elements"], ctx)
         .asSchema(profileElementListSchema),
   );
   const elements = measureWishPhase(
@@ -762,7 +836,7 @@ function searchProfileForHashtag(
     () => elementsCell.get(),
   );
   if (elements === undefined || elements === null) {
-    return { matches: [], loaded: false };
+    return [];
   }
 
   const profileElements = elements as Array<{
@@ -784,23 +858,23 @@ function searchProfileForHashtag(
       }),
   );
 
-  return {
-    matches: measureWishPhase(
-      "profile-elements-result-map",
-      queryKey,
-      () =>
-        matches.flatMap((match) =>
-          match.cell ? [{ cell: match.cell, pathPrefix }] : []
-        ),
-    ),
-    loaded: true,
-  };
+  return measureWishPhase(
+    "profile-elements-result-map",
+    queryKey,
+    () =>
+      matches.flatMap((match) => {
+        if (!match.cell) return [];
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
+  );
 }
 
 /**
  * Search for pieces by hashtag across favorites and/or mentionables based on scope.
- * Synchronous: relies on cell.get() returning undefined for unloaded data;
- * the reactive system will re-trigger wish when data arrives.
+ * Publishes only after every searched scope's backing documents have loaded.
  */
 function searchByHashtag(
   parsed: ParsedWishTarget,
@@ -816,54 +890,48 @@ function searchByHashtag(
   const searchProfile = ctx.scope?.includes("profile");
 
   const allMatches: BaseResolution[] = [];
-  let allScopedDataLoaded = true;
 
   if (searchFavorites) {
-    allMatches.push(
-      ...searchFavoritesForHashtag(ctx, searchTermWithoutHash, parsed.path),
+    const matches = searchFavoritesForHashtag(
+      ctx,
+      searchTermWithoutHash,
+      parsed.path,
     );
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchMentionables) {
-    const { matches, loaded } = searchMentionablesForHashtag(
+    const matches = searchMentionablesForHashtag(
       ctx,
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
-    if (!loaded) allScopedDataLoaded = false;
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchProfile) {
-    const { matches, loaded } = searchProfileForHashtag(
+    const matches = searchProfileForHashtag(
       ctx,
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
-    if (!loaded) allScopedDataLoaded = false;
+    for (const match of matches) allMatches.push(match);
   }
 
   // Search mentionables in arbitrary DID spaces
   const arbitraryDIDs = getArbitraryDIDs(ctx.scope);
   for (const did of arbitraryDIDs) {
     const didSpaceCell = getSpaceCellForDID(ctx.runtime, did, ctx.tx);
-    const { matches, loaded } = searchMentionablesForHashtag(
+    const matches = searchMentionablesForHashtag(
       ctx,
       searchTermWithoutHash,
       parsed.path,
       didSpaceCell,
     );
-    allMatches.push(...matches);
-    if (!loaded) allScopedDataLoaded = false;
+    for (const match of matches) allMatches.push(match);
   }
 
   if (allMatches.length === 0) {
-    if (!allScopedDataLoaded) {
-      // Some scoped data not loaded yet — return empty so the reactive
-      // system re-triggers wish when cell data arrives.
-      return [];
-    }
     const parts: string[] = [];
     if (searchFavorites) parts.push("favorites");
     if (searchMentionables) parts.push("mentionables");
@@ -872,10 +940,39 @@ function searchByHashtag(
       parts.push(`${arbitraryDIDs.length} space(s)`);
     }
     const scopeDesc = parts.join(" or ") || "favorites";
-    throw new WishError(`No ${scopeDesc} found matching "${searchTerm}"`);
+    throwNoDiscoveryMatch(
+      ctx,
+      `No ${scopeDesc} found matching "${searchTerm}"`,
+    );
   }
 
   return allMatches;
+}
+
+/**
+ * Throws a `WishError` naming the remedies when the home pattern in
+ * `homeSpaceCell` holds nothing at `field`, which it names to the user as
+ * `what`. The system home pattern gains a field its current source adds only
+ * when the home space is next opened, since nothing updates a piece nobody
+ * opens, so a home set up before the field existed lacks it until then. A
+ * custom home pattern follows no source of the system's, and holds the field
+ * only if it says so. The wish does not open the home itself.
+ */
+function requireHomeField(
+  homeSpaceCell: Cell<unknown>,
+  field: string,
+  what: string,
+  ctx: WishContext,
+): void {
+  const held = resolvePath(homeSpaceCell, ["defaultPattern", field], ctx);
+  if (held.getRaw() === undefined) {
+    throw new WishError(
+      `The home space holds no ${what}. If its home pattern is the system ` +
+        `one, set up before it had one, open the home space once, which ` +
+        `brings it up to date. A custom home pattern needs to hold the ` +
+        `${what} itself.`,
+    );
+  }
 }
 
 /**
@@ -903,24 +1000,28 @@ function resolveHomeSpaceTarget(
 
       // Path provided = search by tag (legacy behavior)
       const searchTerm = parsed.path[0].toLowerCase();
-      const favoritesCell = homeSpaceCell
-        .key("defaultPattern")
-        .key("favorites")
-        .asSchema(favoriteListSchema);
+      const favoritesCell = resolvePath(
+        homeSpaceCell,
+        ["defaultPattern", "favorites"],
+        ctx,
+      ).asSchema(favoriteListSchema);
       const favorites = favoritesCell.get() || [];
 
       const match = favorites.find((entry) => {
         const userTags = entry.userTags ?? [];
-        for (const t of userTags) {
-          if (t.toLowerCase().includes(searchTerm)) return true;
-        }
-
         // Match the discovery tags snapshotted when favorited.
-        return (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        const tagged = userTags.some((t) =>
+          t.toLowerCase().includes(searchTerm)
+        ) || (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        return tagged &&
+          requireDiscoveryCandidate(entry.cell.resolveAsCell(), ctx);
       });
 
       if (!match) {
-        throw new WishError(`No favorite found matching "${searchTerm}"`);
+        throwNoDiscoveryMatch(
+          ctx,
+          `No favorite found matching "${searchTerm}"`,
+        );
       }
 
       return [{
@@ -952,6 +1053,40 @@ function resolveHomeSpaceTarget(
       }];
     }
 
+    case "#agent_queue": {
+      // The user's agent queue: the index of their agent runs and their
+      // registered runner. A hashtag search would not find it, since under
+      // `scope: ["~"]` that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #agent_queue",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "agentQueue"],
+      }];
+    }
+
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      const homeSpaceCell = getHomeSpaceCell(ctx);
+      requireHomeField(homeSpaceCell, "chatManager", "chat manager", ctx);
+      return [{
+        cell: homeSpaceCell,
+        pathPrefix: ["defaultPattern", "chatManager"],
+      }];
+    }
+
     case "#learnedSummary": {
       // The free-form learned summary string (home `learned.summary`). This is
       // what `#profile` used to resolve to before it was repurposed for the
@@ -977,7 +1112,7 @@ function resolveHomeSpaceTarget(
       if (ordered.length === 0) {
         // No profile yet — throw so the #profile error path falls back to the
         // create surface (see profileCreateUI).
-        throw new NoProfileError("No profile exists yet");
+        throw new NoProfileError();
       }
       // Always expose the full, ordered roster as `candidates`. The wish action
       // below still makes `ordered[0]` the current profile and only renders the
@@ -1421,25 +1556,31 @@ function resolveSpaceTarget(
  *    #now)
  * 2. Well-known home space targets (#favorites, #journal, #learned, #profile)
  * 3. Hashtag search (arbitrary #tags in favorites/mentionables)
+ *
+ * Returns at least one resolution or throws a pending-load or resolution error.
  */
 function resolveBase(
   parsed: ParsedWishTarget,
   ctx: WishContext,
 ): BaseResolution[] {
-  // Try space targets first (most common)
-  const spaceResult = resolveSpaceTarget(parsed, ctx);
-  if (spaceResult) return spaceResult;
+  try {
+    // Try space targets first (most common)
+    const spaceResult = resolveSpaceTarget(parsed, ctx);
+    if (spaceResult) return spaceResult;
 
-  // Try home space targets
-  const homeResult = resolveHomeSpaceTarget(parsed, ctx);
-  if (homeResult) return homeResult;
+    // Try home space targets
+    const homeResult = resolveHomeSpaceTarget(parsed, ctx);
+    if (homeResult) return homeResult;
 
-  // Hashtag search
-  if (parsed.key.startsWith("#")) {
-    return searchByHashtag(parsed, ctx);
+    // Hashtag search
+    if (parsed.key.startsWith("#")) {
+      return searchByHashtag(parsed, ctx);
+    }
+
+    throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
+  } finally {
+    ctx.readiness.requireLoadedReads(ctx.tx, ctx.candidateFailures.keys());
   }
-
-  throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
 }
 
 function isSharedHashtagSearchTarget(parsed: ParsedWishTarget): boolean {
@@ -1502,26 +1643,22 @@ function createSharedHashtagResolver(
     ctx.tx,
   );
 
+  const [cancel, addCancel] = useCancelGroup();
+  const readiness = createDocumentReadiness(ctx.runtime, addCancel);
   const action: Action = (tx: IExtendedStorageTransaction) => {
+    const sharedContext: WishContext = {
+      runtime: ctx.runtime,
+      readiness,
+      candidateFailures: new Map(),
+      tx,
+      parentCell: ctx.parentCell,
+      scope: sharedScope,
+    };
     const actionStartedAt = performance.now();
     const stateCell = sharedCell.withTx(tx);
     const queryKey = sanitizeQueryKey(query);
     try {
-      const baseResolutions = searchByHashtag(sharedParsed, {
-        runtime: ctx.runtime,
-        profileReadiness: ctx.profileReadiness,
-        tx,
-        parentCell: ctx.parentCell,
-        scope: sharedScope,
-      });
-      if (baseResolutions.length === 0) {
-        stateCell.set({
-          result: undefined,
-          candidates: [],
-          [UI]: undefined,
-        });
-        return;
-      }
+      const baseResolutions = resolveBase(sharedParsed, sharedContext);
 
       const resultCells = measureWishPhase(
         "shared-resolve-paths",
@@ -1532,7 +1669,11 @@ function createSharedHashtagResolver(
               baseResolution,
               sharedParsed.path,
             );
-            return resolvePath(baseResolution.cell, combinedPath);
+            return resolvePath(
+              baseResolution.cell,
+              combinedPath,
+              sharedContext,
+            );
           }),
       );
       const uniqueResultCells = measureWishPhase(
@@ -1545,18 +1686,20 @@ function createSharedHashtagResolver(
                 index,
           ),
       );
+      // The phase keeps its name so its timings compare with earlier runs.
       const resultUI = measureWishPhase(
         "shared-result-ui-get",
         queryKey,
-        () => uniqueResultCells[0].key(UI).get(),
-      ) as VNode | undefined;
+        () => foundPieceUI(ctx.runtime, tx, uniqueResultCells[0]),
+      );
 
       stateCell.set({
         result: uniqueResultCells[0],
         candidates: uniqueResultCells,
-        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+        [UI]: resultUI,
       });
     } catch (error) {
+      if (error instanceof DocumentPending) return;
       const errorMessage = error instanceof Error
         ? error.message
         : String(error);
@@ -1585,7 +1728,8 @@ function createSharedHashtagResolver(
     shallowReads: [],
     writes: [toMemorySpaceAddress(sharedCell.getAsNormalizedFullLink())],
   };
-  const cancel = ctx.runtime.scheduler.subscribe(action, initialLog);
+  readiness.onActionRegistered(action);
+  addCancel(ctx.runtime.scheduler.subscribe(action, initialLog));
 
   return { cell: sharedCell, cancel, refCount: 0 };
 }
@@ -1663,16 +1807,13 @@ export type SidecarSurfaceState = {
   openingEpoch?: number;
 };
 
-let schemaRegistryEpoch = 0;
-onSchemaRegistryClear(() => {
-  schemaRegistryEpoch += 1;
-});
-
 /** The pattern this slot has already opened, when it is still usable. */
 export function openedSidecarSurface(
   state: SidecarSurfaceState,
 ): Pattern | undefined {
-  return state.patternEpoch === schemaRegistryEpoch ? state.pattern : undefined;
+  return state.patternEpoch === schemaRegistryEpoch()
+    ? state.pattern
+    : undefined;
 }
 
 /**
@@ -1703,7 +1844,7 @@ export function openSidecarSurface(
 ): Promise<Pattern | undefined> {
   const opened = openedSidecarSurface(state);
   if (opened !== undefined) return Promise.resolve(opened);
-  const epoch = schemaRegistryEpoch;
+  const epoch = schemaRegistryEpoch();
   // An open started in an epoch that has since ended would answer with a
   // pattern whose schema references nothing can resolve, so it is left to
   // settle on its own and a fresh one is asked instead.
@@ -1722,7 +1863,7 @@ export function openSidecarSurface(
       // started one joins it, and otherwise a fresh one starts here. The
       // caller is handed a live answer either way, rather than a dead one or an
       // error account written over a surface still on its way.
-      if (epoch !== schemaRegistryEpoch) {
+      if (epoch !== schemaRegistryEpoch()) {
         return openSidecarSurface(runtime, state, piece, surface, options);
       }
       if (pattern !== undefined) {
@@ -1817,14 +1958,71 @@ function cellLinkUI(cell: Cell<unknown>): VNode {
   return h("cf-cell-link", { $cell: cell });
 }
 
+/** What a view slot holds, as far as choosing a view needs to know. */
+type ViewSlotKind = "link" | "view node" | "other";
+
+/**
+ * Returns what the slot at `slot` holds: `"link"` for a link, `"view node"`
+ * for a value whose `type` is `vnode`, and `"other"` for any other value or
+ * for nothing.
+ *
+ * Reads through `tx`, resolving links on the way to the slot but not a link
+ * the slot holds. It makes two reads: a shape read of the slot, which observes
+ * whether the slot exists and whether it holds a link, and, for a value that
+ * is a record, a read of its `type`. It reads nothing else inside the slot and
+ * hands back no part of it, so a caller that needs more reads it itself.
+ */
+function viewSlotKind(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  slot: NormalizedFullLink,
+): ViewSlotKind {
+  const address = resolveLink(runtime, tx, slot, "top", {
+    markIfcCrossings: true,
+  });
+  const held = tx.readValueOrThrow(address, { nonRecursive: true });
+  if (isPrimitiveCellLink(held)) return "link";
+  if (!isObjectOrArray(held) || Array.isArray(held)) return "other";
+  const type = tx.readValueOrThrow({
+    ...address,
+    path: [...address.path, "type"],
+  });
+  return type === "vnode" ? "view node" : "other";
+}
+
+/**
+ * Returns the view a wish shows for the piece it found: a reference to the
+ * piece's own `[UI]` slot when that slot holds a link or a view node, and a
+ * `cf-cell-link` to the piece otherwise.
+ *
+ * A wish result is a reference to what it found (CFC spec §8.2), and its view
+ * is a reference too, so the choice is made from the `[UI]` slot of the piece's
+ * own document, through `tx`, by {@link viewSlotKind}. A link in the slot is
+ * not followed: the document behind it can be one a computation derived from
+ * sealed data, and its labels are consumed where the view is rendered.
+ */
+function foundPieceUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  resultCell: Cell<unknown>,
+): VNode | Cell<unknown> {
+  // The reference carries no schema: a view is read under the renderer's own.
+  const ui = resultCell.asSchema(undefined).key(UI);
+  return viewSlotKind(runtime, tx, ui.getAsNormalizedFullLink()) === "other"
+    ? cellLinkUI(resultCell)
+    : ui;
+}
+
 function wishResultUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
   parsed: ParsedWishTarget,
   resultCell: Cell<unknown>,
-): VNode | undefined {
+): VNode | Cell<unknown> {
   if (isProfilePersonaTarget(parsed)) {
     return cellLinkUI(resultCell);
   }
-  return resultCell.key(UI).get() as VNode | undefined;
+  return foundPieceUI(runtime, tx, resultCell);
 }
 
 function projectWishCellValue(
@@ -1978,7 +2176,7 @@ export function wish(
   runtime: Runtime,
 ): RawBuiltinResult {
   let cancelled = false;
-  const profileReadiness = createWishProfileReadiness(runtime, addCancel);
+  const readiness = createDocumentReadiness(runtime, addCancel);
   // Per-instance cached #now cell — prevents non-idempotent re-runs from
   // Date.now() producing a different value each time the sync action fires.
   let nowCell: Cell<unknown> | undefined;
@@ -2023,6 +2221,8 @@ export function wish(
     input?: {
       profiles: unknown;
       defaultProfile: unknown;
+      legacyDefaultProfile: unknown;
+      offersSetDefault: boolean;
       mru: unknown;
     };
     resultCell?: Cell<any>;
@@ -2081,6 +2281,9 @@ export function wish(
   const sidecarRunOptions = (surface: SidecarSurface) => ({
     parentPieceRootId: parentCell.getAsNormalizedFullLink().id,
     sourceOrigin: surface.origin,
+    // A sidecar the wish instantiates, in a continuation of its action, is
+    // no principal's act.
+    attributeInitialization: false,
   });
 
   addCancel(() => {
@@ -2137,7 +2340,6 @@ export function wish(
     recordRuntimeOwnedStore(tx, parentCell, scoped);
     enrollRuntimeOwnedStore(tx, parentCell, scoped);
     setResultCell(scoped, parentCell.withTx(tx));
-    setPatternCell(scoped, parentCell.withTx(tx).key("pattern"));
     scoped.set(value);
     surfaceWishStateCommitFailure(tx, scoped);
     sendResult(tx, scoped);
@@ -2295,7 +2497,7 @@ export function wish(
       >[1],
     );
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     if (error === undefined) return;
     if (
       attempt < 2 &&
@@ -2453,7 +2655,7 @@ export function wish(
       sidecarError: message,
     });
     runtime.prepareTxForCommit(errorTx);
-    const { error } = await errorTx.commit();
+    const { error } = await errorTx.commit().settled;
     // The account of the failure failed to land, so the surface stays blank
     // and this is the only place the reason exists. Writing it again would
     // meet whatever refused it the first time.
@@ -2538,7 +2740,7 @@ export function wish(
           sidecarRunOptions(surface),
         );
         runtime.prepareTxForCommit(runTx);
-        const { error } = await runTx.commit();
+        const { error } = await runTx.commit().settled;
         if (error) {
           const disposition = await sidecarRunFailureDisposition(
             error,
@@ -2556,7 +2758,8 @@ export function wish(
           );
           return;
         }
-        // Under a serving wave, commit() resolving ok is not durability:
+        // Under a serving wave, `commit().settled` resolving `ok` accepts
+        // the contribution into the wave:
         // the commit step can still withdraw the contribution (runner.ts's
         // pattern-swap settlement precedent). Nothing re-issues a withdrawn
         // sidecar instantiation, so at least SAY so — the silent one-shot
@@ -2708,7 +2911,7 @@ export function wish(
               });
               readyCell.withTx(readyTx).set(true);
               runtime.prepareTxForCommit(readyTx);
-              trackSidecarLaunch(readyTx.commit());
+              trackSidecarLaunch(readyTx.commit().settled);
             }
             return runSidecarInOwnTx(
               slot.resultCell,
@@ -2790,13 +2993,31 @@ export function wish(
     );
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
+    // A home with the slot hands it over for "Set default" and its earlier
+    // default as `legacyDefaultProfile`. A home without hands over no slot and
+    // `offersSetDefault: false`, since a write through a cell whose root holds
+    // a link lands in the linked profile; its `defaultProfile` cell, holding
+    // the default that way, goes as `legacyDefaultProfile`.
+    const hasSlot = homeHasDefaultProfileSlot(
+      runtime,
+      homeDefaultPattern,
+      ctx.tx,
+    );
     slot.input = {
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
-      defaultProfile: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+      defaultProfile: hasSlot
+        ? createSigilLinkFromParsedLink(
+          homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+        )
+        : undefined,
+      legacyDefaultProfile: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key(
+          hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+        ).getAsNormalizedFullLink(),
       ),
+      offersSetDefault: hasSlot,
       mru: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
       ),
@@ -2827,6 +3048,8 @@ export function wish(
       return slot.input && {
         profiles: bindInputCell(slot.input.profiles),
         defaultProfile: bindInputCell(slot.input.defaultProfile),
+        legacyDefaultProfile: bindInputCell(slot.input.legacyDefaultProfile),
+        offersSetDefault: slot.input.offersSetDefault,
         mru: bindInputCell(slot.input.mru),
       };
     };
@@ -2953,7 +3176,8 @@ export function wish(
         if (query.startsWith("/") || /^#[a-zA-Z0-9-]+/.test(query)) {
           const ctx: WishContext = {
             runtime,
-            profileReadiness,
+            readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3021,29 +3245,6 @@ export function wish(
             // Persist #now cell across re-runs to avoid non-idempotent loops
             if (ctx.nowCell) nowCell = ctx.nowCell;
 
-            if (baseResolutions.length === 0) {
-              // No matches yet — data may still be loading. Send a pending
-              // result; the reactive system will re-trigger when cells update
-              // (dependencies were registered by the cell.get() calls in the
-              // search functions).
-              measureWishPhase(
-                "send-pending",
-                queryKey,
-                () =>
-                  sendWishState(
-                    tx,
-                    {
-                      result: undefined,
-                      candidates: [],
-                      [UI]: undefined,
-                    } satisfies WishState<any>,
-                    outputScope,
-                    schema,
-                  ),
-              );
-              return;
-            }
-
             const resultCells = measureWishPhase(
               "resolve-paths",
               queryKey,
@@ -3056,6 +3257,7 @@ export function wish(
                   const resolvedCell = resolvePath(
                     baseResolution.cell,
                     combinedPath,
+                    ctx,
                   );
                   return schema ? resolvedCell.asSchema(schema) : resolvedCell;
                 }),
@@ -3139,11 +3341,13 @@ export function wish(
               profileHasValidDefault
             ) {
               // Single result or headless mode - fast path with unified shape
-              // Prefer the result cell's own [UI]; fall back to cf-cell-link
+              // The phase keeps its name so its timings compare with earlier
+              // runs.
               const resultUI = measureWishPhase(
                 "result-ui-get",
                 queryKey,
-                () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                () =>
+                  wishResultUI(runtime, tx, activeParsed, uniqueResultCells[0]),
               );
               measureWishPhase(
                 "send-fast",
@@ -3157,7 +3361,7 @@ export function wish(
                         schema,
                       ),
                       candidates: candidatesCell,
-                      [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                      [UI]: resultUI,
                     },
                     outputScope,
                     schema,
@@ -3188,10 +3392,18 @@ export function wish(
                 );
               } else {
                 // Surface not open yet — send first result, start opening it
+                // The phase keeps its name so its timings compare with earlier
+                // runs.
                 const resultUI = measureWishPhase(
                   "result-ui-get",
                   queryKey,
-                  () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                  () =>
+                    wishResultUI(
+                      runtime,
+                      tx,
+                      activeParsed,
+                      uniqueResultCells[0],
+                    ),
                 );
                 measureWishPhase(
                   "send-fast-before-suggestion",
@@ -3205,7 +3417,7 @@ export function wish(
                           schema,
                         ),
                         candidates: candidatesCell,
-                        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                        [UI]: resultUI,
                       },
                       outputScope,
                       schema,
@@ -3228,7 +3440,7 @@ export function wish(
               }
             }
           } catch (e) {
-            if (e instanceof WishProfilePending) return;
+            if (e instanceof DocumentPending) return;
             const errorMsg = e instanceof WishError ? e.message : String(e);
             const ui = e instanceof NoProfileError && parsed &&
                 isProfilePersonaTarget(parsed)
@@ -3276,7 +3488,8 @@ export function wish(
           // Otherwise it's a generic query, instantiate suggestion.tsx
           const suggestionCtx: WishContext = {
             runtime,
-            profileReadiness,
+            readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3331,5 +3544,5 @@ export function wish(
       );
     }
   };
-  return { action, onActionRegistered: profileReadiness.onActionRegistered };
+  return { action, onActionRegistered: readiness.onActionRegistered };
 }

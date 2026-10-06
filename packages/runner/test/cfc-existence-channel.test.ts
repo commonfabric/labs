@@ -88,7 +88,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         labelMap: { version: 1, entries },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -132,7 +132,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       value,
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return outId;
   };
 
@@ -164,7 +164,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: false },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, []);
     expect(shape.length).toBe(1);
@@ -200,7 +200,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: false },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const valueEntry = entriesOf(outId).find((e) => e.observes === "value");
     expect(valueEntry?.label.confidentiality).toEqual(["public-ish"]);
@@ -233,7 +233,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { deep: true },
     );
     tainted.prepareCfc();
-    expect((await tainted.commit()).ok).toBeDefined();
+    expect((await tainted.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"]).length).toBe(1);
 
     // Clean ROOT overwrite: descendant pair cleared, existence folds to [].
@@ -243,7 +243,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { flat: true },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const childShape = shapeEntriesAt(outId, ["child"]);
     expect(childShape.length).toBe(1);
@@ -285,7 +285,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { deep: true },
     );
     create.prepareCfc();
-    expect((await create.commit()).ok).toBeDefined();
+    expect((await create.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"])[0]?.label.confidentiality)
       .toEqual(["secret-one"]);
 
@@ -297,7 +297,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { other: 2 },
     );
     del.prepareCfc();
-    expect((await del.commit()).ok).toBeDefined();
+    expect((await del.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"])[0]?.label.confidentiality)
       .toEqual(["secret-one"]);
 
@@ -311,7 +311,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { back: true },
     );
     recreate.prepareCfc();
-    expect((await recreate.commit()).ok).toBeDefined();
+    expect((await recreate.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["child"]);
     expect(shape.length).toBe(1);
@@ -341,7 +341,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { deep: true },
     );
     create.prepareCfc();
-    expect((await create.commit()).ok).toBeDefined();
+    expect((await create.commit().settled).ok).toBeDefined();
 
     const del = rt.edit();
     del.writeOrThrow(
@@ -349,7 +349,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { other: 2 },
     );
     del.prepareCfc();
-    expect((await del.commit()).ok).toBeDefined();
+    expect((await del.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"]).length).toBe(1);
 
     const recreate = rt.edit();
@@ -364,7 +364,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       true,
     );
     recreate.prepareCfc();
-    expect((await recreate.commit()).ok).toBeDefined();
+    expect((await recreate.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["child"]);
     expect(shape.length).toBe(1);
@@ -396,7 +396,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { deep: true },
     );
     create.prepareCfc();
-    expect((await create.commit()).ok).toBeDefined();
+    expect((await create.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"])[0]?.label.confidentiality)
       .toEqual(["secret-one"]);
 
@@ -409,7 +409,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       undefined,
     );
     toUndef.prepareCfc();
-    expect((await toUndef.commit()).ok).toBeDefined();
+    expect((await toUndef.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"])[0]?.label.confidentiality)
       .toEqual(["secret-one"]);
 
@@ -423,7 +423,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { other: 2, child: 5 },
     );
     overwrite.prepareCfc();
-    expect((await overwrite.commit()).ok).toBeDefined();
+    expect((await overwrite.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["child"]);
     expect(shape.length).toBe(1);
@@ -455,7 +455,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { deep: true },
     );
     create.prepareCfc();
-    expect((await create.commit()).ok).toBeDefined();
+    expect((await create.commit().settled).ok).toBeDefined();
 
     const toUndef = rt.edit();
     toUndef.writeOrThrow(
@@ -463,7 +463,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       undefined,
     );
     toUndef.prepareCfc();
-    expect((await toUndef.commit()).ok).toBeDefined();
+    expect((await toUndef.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"])[0]?.label.confidentiality)
       .toEqual(["secret-one"]);
 
@@ -477,7 +477,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       5,
     );
     overwrite.prepareCfc();
-    expect((await overwrite.commit()).ok).toBeDefined();
+    expect((await overwrite.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["child"]);
     expect(shape.length).toBe(1);
@@ -505,7 +505,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { deep: true },
     );
     create.prepareCfc();
-    expect((await create.commit()).ok).toBeDefined();
+    expect((await create.commit().settled).ok).toBeDefined();
 
     const del = rt.edit();
     del.writeOrThrow(
@@ -513,7 +513,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { other: 2 },
     );
     del.prepareCfc();
-    expect((await del.commit()).ok).toBeDefined();
+    expect((await del.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["child"]).length).toBe(1);
 
     const recreate = rt.edit();
@@ -522,7 +522,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { back: true },
     );
     recreate.prepareCfc();
-    expect((await recreate.commit()).ok).toBeDefined();
+    expect((await recreate.commit().settled).ok).toBeDefined();
 
     expect(shapeEntriesAt(outId, ["child"])).toEqual([]);
   });
@@ -565,7 +565,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         },
       },
     );
-    expect((await legacy.commit()).ok).toBeDefined();
+    expect((await legacy.commit().settled).ok).toBeDefined();
 
     const tx = rt.edit();
     tx.writeOrThrow(
@@ -573,7 +573,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: false },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, []);
     expect(shape.length).toBe(1);
@@ -598,7 +598,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     }, tx1);
     list.set([el0Cell]);
     tx1.prepareCfc();
-    expect((await tx1.commit()).ok).toBeDefined();
+    expect((await tx1.commit().settled).ok).toBeDefined();
     const listId = list.getAsNormalizedFullLink().id;
     expect(
       entriesOf(listId).some((e) => e.origin === "structure"),
@@ -610,7 +610,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { replaced: true },
     );
     tx2.prepareCfc();
-    expect((await tx2.commit()).ok).toBeDefined();
+    expect((await tx2.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(listId, []);
     expect(shape.length).toBe(1);
@@ -637,7 +637,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: true },
     );
     taint.prepareCfc();
-    expect((await taint.commit()).ok).toBeDefined();
+    expect((await taint.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["slot"]).length).toBe(1);
 
     // Replace the slot with a LINK (a clean tx): the link machinery owns
@@ -648,7 +648,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     const otherCell = rt.getCell(space, "ec-link-target", undefined, linkTx);
     outCell.key("slot").set(otherCell);
     linkTx.prepareCfc();
-    expect((await linkTx.commit()).ok).toBeDefined();
+    expect((await linkTx.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["slot"]);
     expect(shape.length).toBe(1);
@@ -675,7 +675,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       "tainted",
     );
     taint.prepareCfc();
-    expect((await taint.commit()).ok).toBeDefined();
+    expect((await taint.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["secret"]).length).toBe(1);
 
     // Clean overwrite that ALSO records a schema policy input covering the
@@ -690,7 +690,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     );
     const clean = rt.edit();
     clean.writeValueOrThrow(
-      { space, scope: "space", id: uri(outId), path: ["value", "secret"] },
+      { space, scope: "space", id: uri(outId), path: ["secret"] },
       "fresh",
     );
     clean.recordCfcWritePolicyInput({
@@ -699,13 +699,13 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         space,
         scope: "space",
         id: uri(outId),
-        path: ["value", "secret"],
+        path: ["secret"],
       },
       schemaHash: declared.taggedHashString,
       schema: declared.schema,
     });
     clean.prepareCfc();
-    expect((await clean.commit()).ok).toBeDefined();
+    expect((await clean.commit().settled).ok).toBeDefined();
 
     const stored = entriesOf(outId);
     // The declared entry re-minted…
@@ -745,7 +745,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       "tainted",
     );
     taint.prepareCfc();
-    expect((await taint.commit()).ok).toBeDefined();
+    expect((await taint.commit().settled).ok).toBeDefined();
     expect(shapeEntriesAt(outId, ["secret"]).length).toBe(1);
 
     // The clean tx writes a DIFFERENT doc but records a schema input naming
@@ -761,7 +761,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     });
     const clean = rt.edit();
     clean.writeValueOrThrow(
-      { space, scope: "space", id: uri(elsewhereId), path: ["value"] },
+      { space, scope: "space", id: uri(elsewhereId), path: [] },
       { unrelated: 2 },
     );
     clean.recordCfcWritePolicyInput({
@@ -770,13 +770,13 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         space,
         scope: "space",
         id: uri(outId),
-        path: ["value", "secret"],
+        path: ["secret"],
       },
       schemaHash: declared.taggedHashString,
       schema: declared.schema,
     });
     clean.prepareCfc();
-    expect((await clean.commit()).ok).toBeDefined();
+    expect((await clean.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["secret"]);
     expect(shape.length).toBe(1);
@@ -825,7 +825,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { space, scope: "space", id: uri(outId), path: ["cfc"] },
       flipped as never,
     );
-    expect((await flip.commit()).ok).toBeDefined();
+    expect((await flip.commit().settled).ok).toBeDefined();
 
     // Re-derive: reads the source again (normalized clause) and overwrites
     // the root — the fold meets the reversed stored form.
@@ -836,7 +836,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: false },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, []);
     expect(shape.length).toBe(1);
@@ -852,7 +852,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: 2 },
     );
     again.prepareCfc();
-    expect((await again.commit()).ok).toBeDefined();
+    expect((await again.commit().settled).ok).toBeDefined();
     expect(JSON.stringify(entriesOf(outId))).toEqual(before);
   });
 
@@ -884,7 +884,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       }, tx);
       list.set(cells);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       return list.getAsNormalizedFullLink().id;
     };
 
@@ -939,7 +939,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
       { copied: true },
     );
     taint.prepareCfc();
-    expect((await taint.commit()).ok).toBeDefined();
+    expect((await taint.commit().settled).ok).toBeDefined();
     // Rewrite stored metadata: ONE legacy covering derived entry at the slot.
     const replica = storageManager!.open(space).replica as unknown as {
       getDocument(id: string): { cfc?: Record<string, unknown> };
@@ -960,7 +960,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         },
       },
     );
-    expect((await legacy.commit()).ok).toBeDefined();
+    expect((await legacy.commit().settled).ok).toBeDefined();
 
     // Replace the slot with a LINK in a clean tx: the legacy entry pools
     // through the link-path skip; no stamp path covers a link write, so
@@ -976,7 +976,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     );
     outCell.key("slot").set(otherCell);
     linkTx.prepareCfc();
-    expect((await linkTx.commit()).ok).toBeDefined();
+    expect((await linkTx.commit().settled).ok).toBeDefined();
 
     const shape = shapeEntriesAt(outId, ["slot"]);
     expect(shape.length).toBe(1);
@@ -1006,7 +1006,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     const el = rt.getCell(space, "ec-mixed-el", undefined, tx);
     out.key("list").withTx(tx).set([el]);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const entries = entriesOf(outId);
     expect(
@@ -1039,7 +1039,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         value,
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     };
     await overwrite({ copied: false });
     const firstEntries = entriesOf(outId);
@@ -1108,7 +1108,7 @@ describe("CFC slot-pointer channel (C3, SC-8 end-to-end)", () => {
         },
       },
     );
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     // Observe WHICH link sits at the slot without following it: lastNode
     // "top" stops at the slot after probing it — the row-3 observation.
@@ -1132,7 +1132,7 @@ describe("CFC slot-pointer channel (C3, SC-8 end-to-end)", () => {
       { observed: true },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const replica = storageManager.open(space).replica as unknown as {
       getDocument(id: string): {

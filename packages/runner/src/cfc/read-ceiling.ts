@@ -1,21 +1,43 @@
 /**
- * The runtime-wide read ceiling: a confidentiality ceiling every `db.query`
- * the runtime issues reads under, whether or not the query declares one of
- * its own. Declared through `RuntimeOptions.cfcReadMaxConfidentiality` and
+ * The runtime-wide read ceiling: a confidentiality ceiling every cell payload
+ * read and `db.query` uses, whether or not the query declares one of its own.
+ * Declared through `RuntimeOptions.cfcReadMaxConfidentiality` and
  * `cfcReadOnExceed`, validated and frozen here at construction.
  *
  * A pattern can declare a per-query ceiling, but the only carrier a pattern
  * can read is a cell in the space, which every runtime on the space shares.
  * A ceiling that has to differ per runtime — a per-device lens, a per-run
  * clearance — therefore cannot live in a pattern's inputs. It lives on the
- * runtime, and the query builtin meets it with whatever the query declares,
- * so the query can tighten the runtime's ceiling and never widen it.
+ * runtime. Session-scoped queries meet it with their declared ceiling; shared
+ * queries materialize labeled results which the runtime measures on cell reads.
  */
 
-import { readCeilingShapeError } from "@commonfabric/memory/v2";
+import { readCeilingShapeError, toDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+  IReadOptions,
+} from "../storage/interface.ts";
+import {
+  internalVerifierRead,
+  isDereferenceResolutionProbe,
+  isInternalVerifierRead,
+  isLinkResolutionProbe,
+  isMachineryRead,
+  isSchedulerDependencyRead,
+  isWriteDestinationRead,
+} from "../storage/reactivity-log.ts";
+import { canonicalizeDocumentPath } from "./canonical.ts";
 import type { CfcConfClause } from "./clause.ts";
+import {
+  cfcLabelViewFromMetadata,
+  rebaseCfcLabelView,
+} from "./label-view-state.ts";
+import { readStoredCfcLabelsForReader } from "./metadata.ts";
+import { atomsOutsideCeiling } from "./observation.ts";
+import { readConsumesEntry } from "./observation-classes.ts";
 
 /** What a read does with a row the runtime's ceiling does not admit. */
 export type CfcReadOnExceed = "fail" | "skip";
@@ -111,4 +133,83 @@ export function buildCfcReadCeiling(
     maxConfidentiality: Object.freeze(clauses),
     onExceed,
   });
+}
+
+/**
+ * A value withheld because its stored label exceeds the runtime read ceiling.
+ */
+export class CfcReadCeilingError extends Error {
+  constructor() {
+    super("the runtime read ceiling withholds this value");
+    this.name = "CfcReadCeilingError";
+  }
+}
+
+/**
+ * Measures a payload read against its runtime ceiling before returning content.
+ * Labels come from the stored envelope, including descendants of a raw object
+ * read, and for a scoped instance from its broader instances' confidentiality
+ * too (`readStoredCfcLabelsForReader`). A link-resolution probe issued inside
+ * dereference resolution or marked as runtime wiring is machinery, as are
+ * write-destination and scheduler dependency probes. A standalone link probe
+ * observes the pointer and is measured here; the content read after
+ * resolution is measured at its target.
+ */
+export function assertCfcReadCeiling(
+  tx: IExtendedStorageTransaction,
+  address: IMemorySpaceAddress,
+  ceiling: readonly CfcConfClause[] | undefined,
+  options?: IReadOptions,
+): void {
+  const linkProbe = isLinkResolutionProbe(options?.meta);
+  if (
+    ceiling === undefined ||
+    isInternalVerifierRead(options?.meta) ||
+    isDereferenceResolutionProbe(options?.meta) ||
+    (linkProbe && isMachineryRead(options?.meta)) ||
+    isWriteDestinationRead(options?.meta) ||
+    isSchedulerDependencyRead(options?.meta)
+  ) return;
+  // A read addresses the stored document, so its path is rooted there. A read
+  // of one of the document's own members observes no payload, so no payload
+  // label limits it.
+  const documentPath = toDocumentPath(address.path);
+  const payloadPath = canonicalizeDocumentPath(documentPath);
+  if (payloadPath === undefined) return;
+  const metadata = readStoredCfcLabelsForReader(tx, address);
+  let entries = cfcLabelViewFromMetadata(metadata, payloadPath)?.entries ??
+    [];
+  if (linkProbe) {
+    entries = entries.filter((entry) => readConsumesEntry("followRef", entry));
+  } else if (documentPath.at(-1) === "length") {
+    const parentPath = toDocumentPath(documentPath.slice(0, -1));
+    // Only an array's native length observes its parent's membership. The
+    // verifier probe distinguishes it from an ordinary object field without
+    // exposing or consuming the parent's payload.
+    const parent = tx.readOrThrow({ ...address, path: parentPath }, {
+      meta: internalVerifierRead,
+      nonRecursive: true,
+    });
+    const parentPayloadPath = canonicalizeDocumentPath(parentPath);
+    if (Array.isArray(parent) && parentPayloadPath !== undefined) {
+      const parentEntries = cfcLabelViewFromMetadata(
+        metadata,
+        parentPayloadPath,
+      )?.entries ?? [];
+      const membershipEntries = parentEntries.filter((entry) =>
+        entry.path.length === 0 && readConsumesEntry("shape", entry)
+      );
+      const lengthEntries = rebaseCfcLabelView({
+        version: 1,
+        entries: parentEntries.filter((entry) => entry.path.length > 0),
+      }, ["length"])?.entries ?? [];
+      entries = [...membershipEntries, ...lengthEntries];
+    }
+  }
+  const confidentiality = entries.flatMap((entry) =>
+    entry.label.confidentiality ?? []
+  );
+  if (atomsOutsideCeiling(confidentiality, ceiling).length > 0) {
+    throw new CfcReadCeilingError();
+  }
 }

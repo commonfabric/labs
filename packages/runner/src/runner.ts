@@ -12,6 +12,7 @@ import {
   refuseFabricInstance,
   valueEqual,
 } from "@commonfabric/data-model";
+import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -37,11 +38,13 @@ import {
 } from "@commonfabric/utils/types";
 
 import { isAliasBinding } from "./alias-binding.ts";
+import { runInFrameContext } from "./builder/frame-context.ts";
 import {
   patternFromFrame,
   popFrame,
   pushFrameFromCause,
 } from "./builder/pattern.ts";
+import { commitSpaceAccessChanges } from "./builder/space-access-change.ts";
 import {
   type CellScope,
   type FabricExecValue,
@@ -64,12 +67,37 @@ import {
   useCancelGroup,
   useDeferredCancelOwnership,
 } from "./cancel.ts";
-import { type Cell, createCell, isCell, syncCellForIdentity } from "./cell.ts";
+import {
+  type Cell,
+  cellRuntime,
+  cellTx,
+  createCell,
+  isCell,
+  schemaCellScope,
+  syncCellForIdentity,
+} from "./cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
+import {
+  recordNewDocumentProtectedDefaults,
+  recordNewProtectedDefaults,
+} from "./cfc/default-initialization.ts";
+import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
+  CFC_POLICY_MANIFEST_ID_PREFIX,
+  cfcPolicyManifestDocId,
+  collectModulePolicyDigests,
+} from "./cfc/policy.ts";
+import {
+  recordCapturedArgumentFields,
+  recordReferencedArgumentFields,
+  recordReplayedArgumentSlots,
+} from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
+import { spaceReaderRole } from "./cfc/space-membership.ts";
+import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
 import { MAX_PATH_RESOLUTION_LENGTH, resolveLink } from "./link-resolution.ts";
@@ -118,6 +146,7 @@ import {
 } from "./builtins/navigate-context.ts";
 import { opInputsDocKey } from "./builtins/op-pattern-ref.ts";
 import {
+  delegatedCarriageOf,
   requireWaveAcceptance,
   waveRunContextOf,
   waveSettlementOf,
@@ -141,16 +170,21 @@ import {
   type EventHandler,
   ignoreReadForScheduling,
 } from "./scheduler.ts";
+import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
 import { RetryImmediately } from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
+import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
-import { TransactionWrapper } from "./storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+  TransactionWrapper,
+} from "./storage/extended-storage-transaction.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import {
   type CommitError,
-  type DID,
   type IExtendedStorageTransaction,
   type IStorageSubscription,
   type MemorySpace,
@@ -226,11 +260,12 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { isCellScope, narrowestScope } from "./scope.ts";
+import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
   asPatternIdentityRef,
+  META_LINK_FIELDS,
   rawMetaWriteAuthorization,
 } from "./meta-seam.ts";
 export {
@@ -274,6 +309,83 @@ const RESULT_SHORTCUT_LIMIT = 4096;
  */
 const NAMING_PROBE_BUDGET = 256;
 
+/**
+ * How many times a named piece's run starts again after its start transaction
+ * is refused retryably, matching the bound `Runtime.editWithRetry()` puts on
+ * any other retrying writer. Each attempt waits for the refusal's catch-up
+ * first, so the bound caps a basis that keeps moving rather than a spin.
+ */
+const PIECE_RUN_START_MAX_RETRIES = 5;
+
+/**
+ * The ids of the documents whose basis moved, as a commit refusal names them:
+ * a stale-read conflict's documents, or a local inconsistency's. Any other
+ * refusal names none.
+ */
+const refusedDocumentIds = (error: CommitError): unknown[] => {
+  if (isStorageTransactionInconsistent(error)) {
+    return [(error as { address?: { id?: unknown } }).address?.id];
+  }
+  if (!isStaleReadConflict(error)) return [];
+  const { conflict, conflicts } = error as {
+    conflict?: { of?: unknown };
+    conflicts?: readonly { of?: unknown }[];
+  };
+  return [conflict?.of, ...(conflicts ?? []).map((entry) => entry?.of)]
+    .filter((id) => id !== undefined);
+};
+
+const isPolicyManifestId = (id: unknown): boolean =>
+  typeof id === "string" && id.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX);
+
+/**
+ * Whether a commit refusal names a module-policy manifest document among the
+ * documents whose basis moved. A manifest is content-addressed and never
+ * rewritten, so such a refusal is the transaction's own install meeting a
+ * manifest another participant installed first, and once the replica has
+ * caught up the install reads it as present and writes nothing.
+ */
+const refusalNamesPolicyManifest = (error: CommitError): boolean =>
+  refusedDocumentIds(error).some(isPolicyManifestId);
+
+/**
+ * Whether every document a commit refusal names is a module-policy manifest,
+ * which is a lost install ({@link refusalNamesPolicyManifest}) and nothing
+ * else. A refusal that also names other documents is a stale read over them,
+ * whatever the manifest beside them.
+ */
+const refusalNamesOnlyPolicyManifests = (error: CommitError): boolean => {
+  const ids = refusedDocumentIds(error);
+  return ids.length > 0 && ids.every(isPolicyManifestId);
+};
+
+/**
+ * The digests of the module policies a run of `pattern` can install, which
+ * are those its schemas name, its nodes' and its nested patterns' included.
+ */
+const modulePolicyDigestsOf = (pattern: Pattern): Set<string> => {
+  const digests = new Set<string>();
+  const seen = new Set<Pattern>();
+  const visit = (current: Pattern): void => {
+    if (seen.has(current)) return;
+    seen.add(current);
+    collectModulePolicyDigests(current.argumentSchema, digests);
+    collectModulePolicyDigests(current.resultSchema, digests);
+    for (const cell of current.derivedInternalCells ?? []) {
+      collectModulePolicyDigests(cell.schema, digests);
+    }
+    for (const { module } of current.nodes) {
+      collectModulePolicyDigests(module.argumentSchema, digests);
+      collectModulePolicyDigests(module.resultSchema, digests);
+      if (module.type === "pattern" && isPattern(module.implementation)) {
+        visit(module.implementation);
+      }
+    }
+  };
+  visit(pattern);
+  return digests;
+};
+
 type InternalCellDescriptor = {
   partialCause: JSONValue;
 
@@ -291,6 +403,13 @@ type StartAttempt = {
   readonly lifecycleEpoch: number;
   readonly generationsByDoc: Map<string, number>;
   readonly preResolutionStopKeys: Set<string>;
+
+  /** Parent demand and synchronization context for a retained child. */
+  readonly options?: Pick<
+    RunnerRunOptions,
+    "parentPieceRootId" | "awaitSyncBeforeInitialRun"
+  >;
+
   // The result this attempt resolved to, which a link start only learns by
   // following the link.
   targetKey?: `${MemorySpace}/${ScopeKey}/${URI}`;
@@ -390,14 +509,6 @@ function schedulerActionInstanceKey(parts: {
     reads: (parts.reads ?? []).map(schedulerActionLinkIdentity),
     writes: (parts.writes ?? []).map(schedulerActionLinkIdentity),
   }).hashString.slice(0, 12);
-}
-
-function schemaCellScope(
-  schema: JSONSchema | undefined,
-): CellScope | undefined {
-  if (!isObjectNotArray(schema)) return undefined;
-  schema = resolveExternalRootRefForStructure(schema);
-  return isCellScope(schema.scope) ? schema.scope : undefined;
 }
 
 function patternDefaultScope(pattern: Pattern): CellScope | undefined {
@@ -807,12 +918,23 @@ function describeSkippedSubPatternNode(
   };
 }
 
+/**
+ * Records what each write redirect `projection` stages into `resultCell`
+ * initializes, at the position the redirect takes. A redirect to one of
+ * `ownCells`, the documents the setup creates for its piece, is the setup's own
+ * initialization of that cell and records a setup projection. Any other
+ * redirect names a cell the piece was handed, through its argument or through
+ * the code setting it up, and records a binding of the slot holding it: the
+ * slot is compared by the cell it names, a later setup may re-point it, and
+ * the cell itself is not initialized.
+ */
 const recordSetupProjectionPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>,
   resultSchema: JSONSchema | undefined,
   projection: unknown,
+  ownCells: readonly NormalizedFullLink[],
   schemaPath: readonly string[] = [],
 ): void => {
   if (resultSchema === undefined) {
@@ -832,20 +954,39 @@ const recordSetupProjectionPolicyInputs = (
   // still-deferred binding of an embedded pattern) is inert there. The
   // prepare gate agrees: marker verification requires the stored value to be
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
-  // marker for an alias would wrongly widen
+  // setup-projection marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to.
+  // a path nothing redirects to. A binding of an alias would name a slot that
+  // never holds the link it records.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
+    const slot = {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      path: [...target.path, ...schemaPath],
+    };
     const source = parseLink(projection, target);
+    const own = ownCells.some((cell) =>
+      cell.space === source.space && cell.id === source.id &&
+      normalizeCellScope(cell.scope) === normalizeCellScope(source.scope)
+    );
+    if (!own) {
+      // A cell the piece was handed: staging the redirect initializes the
+      // slot and nothing of the cell. Every setup stages it again, and a
+      // pattern version may name another cell for it, so a later setup may
+      // re-point the slot, which a list builtin's capture may not.
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: slot,
+        value: projection,
+      }, runtimeWritePolicyAuthorization);
+      return;
+    }
     tx.recordCfcWritePolicyInput({
       kind: "structural-provenance",
-      target: {
-        space: target.space,
-        id: target.id,
-        scope: target.scope,
-        path: [...target.path, ...schemaPath],
-      },
+      target: slot,
       claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
       sources: [{
         space: source.space,
@@ -853,7 +994,7 @@ const recordSetupProjectionPolicyInputs = (
         scope: source.scope,
         path: [...source.path],
       }],
-    });
+    }, runtimeWritePolicyAuthorization);
     return;
   }
 
@@ -865,6 +1006,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        ownCells,
         [...schemaPath, String(index)],
       )
     );
@@ -894,6 +1036,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        ownCells,
         [...schemaPath, key],
       );
     }
@@ -994,8 +1137,31 @@ const markPieceOwnedStores = (
   resultCell: Cell<any>,
   pattern: Pattern,
 ): void => {
+  // The modules of the program this setup installs, whose writer stamps the
+  // pattern's schemas carry: a release adopts an unstamped stored claim only
+  // for one of them.
+  const patternManager = cellRuntime(resultCell).patternManager;
+  const entry = patternManager.getArtifactEntryRef(pattern);
+  const modules = entry === undefined
+    ? undefined
+    : patternManager.programModuleIdentities(entry.identity);
   for (const store of pieceOwnedStores(tx, resultCell, pattern)) {
     recordRuntimeOwnedStore(tx, resultCell, store);
+    // This transaction is a release of the piece: the marker the release
+    // rules key on. A pattern defined in a module no evaluation ran as its
+    // main (a nested piece defined in a dependency) has no program recorded,
+    // so its release names none and adopts no stamp (see
+    // `programModuleIdentities`).
+    tx.recordCfcWritePolicyInput({
+      kind: "release-program",
+      target: {
+        space: store.space,
+        id: store.id,
+        scope: store.scope,
+        path: [],
+      },
+      modules: modules === undefined ? [] : [...modules].sort(),
+    }, runtimeWritePolicyAuthorization);
   }
 };
 
@@ -1016,7 +1182,7 @@ const enrollPieceOwnedStores = (
   pattern: Pattern,
 ): void => {
   const owner = resultCell.getAsNormalizedFullLink();
-  const identity = resultCell.runtime.scopeKeyIdentity;
+  const identity = cellRuntime(resultCell).scopeKeyIdentity;
   for (const store of pieceOwnedStores(tx, resultCell, pattern)) {
     recordRuntimeOwnedStore(tx, resultCell, store);
     // Same space by construction: every store here is minted in the result
@@ -1149,6 +1315,9 @@ export interface RunSyncedOptions {
    * caller-owned transaction, which keeps its owner's.
    */
   cfcTrustSnapshot?: TrustSnapshot;
+
+  /** See `RunnerRunOptions.attributeInitialization`. */
+  attributeInitialization?: boolean;
 }
 
 /** Options for a pattern setup whose fresh source revision proves a commit. */
@@ -1168,6 +1337,15 @@ export interface RunSyncedWithCommitOptions extends RunSyncedOptions {
 type SetupValidationOptions = {
   /** Proposed module authority owned by this source transition. */
   sourceUpdate?: PreparedSourceUpdate;
+
+  /** See `RunnerRunOptions.referencedArgumentFields`. */
+  referencedArgumentFields?: readonly string[];
+
+  /** See `RunnerRunOptions.capturedArgumentFields`. */
+  capturedArgumentFields?: readonly string[];
+
+  /** See `RunnerRunOptions.attributeInitialization`. */
+  attributeInitialization?: boolean;
 
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
@@ -1495,7 +1673,7 @@ const LIST_OP_INPUT_SCHEMAS = {
 
 // Options shared by `run()`, `#startWithTx()`, and
 // `#startAfterSuccessfulCommit()`.
-type RunnerRunOptions = {
+export type RunnerRunOptions = {
   doNotUpdateOnPatternChange?: boolean;
   // Resumed-from-synced-state: hold each action's initial rehydration/run until
   // the space has finished syncing, so consumers don't race the data.
@@ -1507,11 +1685,33 @@ type RunnerRunOptions = {
   // instance) run supply resolves a nested piece's demanded instances
   // through the OUTER piece a client watches.
   parentPieceRootId?: string;
+  // Argument fields a collection builtin fills with a link to a cell that
+  // exists already: a list's entry, the list itself. Each one whose staged
+  // value is a link that is not a write redirect is recorded as a protected
+  // initialization (docs/specs/cfc-protected-initialization.md), so handing a
+  // new piece a reference to an owner-protected cell does not pass for
+  // modifying it.
+  referencedArgumentFields?: readonly string[];
+  // Argument fields a collection builtin fills with the bindings its callback
+  // captures: a record holding a write redirect to each captured cell, and
+  // values beside them. Each link in the record is recorded as a captured
+  // binding (docs/specs/cfc-protected-initialization.md), so handing a new
+  // piece a binding to an owner-protected cell does not pass for modifying
+  // it; a value in the record is not recorded.
+  capturedArgumentFields?: readonly string[];
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
   // alone: what a piece records after it exists is decided by a source
   // transition, never by another run of it.
   sourceOrigin?: string;
+  // Whether a piece this run brings into being outside any scheduled action
+  // is the acting principal's act, so that what its setup initializes is
+  // attributed to them (`CfcTxState.attributedInitialization`); `true` when
+  // absent. A builtin instantiating a pattern from a continuation of its
+  // action passes `false`: the piece is nobody's act. `false` declines the
+  // mark for this run's transaction and withdraws none the transaction
+  // carries, so such a run takes a transaction of its own.
+  attributeInitialization?: boolean;
 };
 
 // The relaxed copy of a handler's argument schema, built once per schema
@@ -1794,6 +1994,11 @@ type PieceVariantRegistration = {
 };
 
 export class Runner {
+  /** Scoped defaults in a caller-owned setup share its commit or abort. */
+  readonly #callerOwnedSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
   #runtime: Runtime;
   readonly #cancels = new Map<
     `${MemorySpace}/${ScopeKey}/${URI}`,
@@ -1995,11 +2200,14 @@ export class Runner {
    * only while its pattern identity matches the run, a transient rejection
    * included. Eviction or replacement by another pattern's landing can cause
    * another probe and hold. Recording the landing lets the deferred run's
-   * re-check pass the gate.
+   * re-check pass the gate. A caller-owned setup only names dependencies;
+   * its defaults remain in the caller's commit. That landing cannot stand
+   * in for the default preparation of a later independently owned start.
    */
   readonly #namedFamilies = new BoundedKeyMap<
     string,
-    { pending: Promise<void> } | { landed: string }
+    | { pending: Promise<void>; initializesDefaults: boolean }
+    | { landed: string; defaultsPrepared: boolean; seedInRun: boolean }
   >(RESULT_SHORTCUT_LIMIT);
 
   /**
@@ -2304,8 +2512,8 @@ export class Runner {
     resultCell: Cell<unknown>,
   ): { identity: string; symbol: string } | undefined {
     const key = this.#getSetupKey(resultCell);
-    const staged = resultCell.tx &&
-      this.#stagedSessionPatternPointers.get(resultCell.tx.tx);
+    const tx = cellTx(resultCell);
+    const staged = tx && this.#stagedSessionPatternPointers.get(tx.tx);
     if (staged?.has(key)) return staged.get(key)!.pointer;
     return this.#sessionPatternPointers.get(key);
   }
@@ -2531,6 +2739,7 @@ export class Runner {
     options: SetupValidationOptions = {},
   ): Promise<Cell<R>> {
     if (providedTx) {
+      this.#callerOwnedSetupTransactions.add(providedTx);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -2548,6 +2757,7 @@ export class Runner {
       // `#setupInternal()` so callers don't silently continue after a broken
       // setup.
       return this.#runtime.editWithRetry((tx) => {
+        this.#callerOwnedSetupTransactions.add(tx);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -2760,17 +2970,19 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a setup-projection marker, and
-    // a marker exempts writes at-or-below its target from `writeAuthorizedBy`
-    // for the rest of the transaction (`writeIsPatternSetupInitialization` in
-    // cfc/prepare.ts), so the redirects it walks are the ones this setup
-    // establishes rather than the ones the document already held.
+    // slots in. Each redirect it finds records a binding of the slot holding
+    // it (`writeIsRuntimeInitialization` in cfc/prepare.ts), so the redirects
+    // it walks are the ones this setup establishes rather than the ones the
+    // document already held. The cell a redirect names receives no exemption:
+    // it is the caller's, and this setup writes none of it, so no cell counts
+    // as the setup's own.
     recordSetupProjectionPolicyInputs(
       tx,
       this.#runtime,
       argumentCell,
       argumentSchema,
       projection,
+      [],
     );
     diffAndUpdate(
       this.#runtime,
@@ -2865,6 +3077,8 @@ export class Runner {
     pattern: Pattern,
     patternRef: { identity: string; symbol: string },
     setupState: SetupStateReuse,
+    referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): SetupResult<R> | undefined {
     const key = this.#getDocKey(resultCell);
     if (!this.#cancels.has(key)) return undefined;
@@ -2923,6 +3137,12 @@ export class Runner {
         pattern.argumentSchema,
         supplied,
       );
+      recordReferencedArgumentFields(
+        tx,
+        argumentLink,
+        referencedArgumentFields,
+      );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
       return { resultCell, patternRef, needsStart: false };
     }
 
@@ -2943,12 +3163,20 @@ export class Runner {
       options,
     );
     if (changed) {
+      // A result field the setup projects to one of the piece's internal
+      // cells is the setup's own initialization of that cell. Those cells are
+      // minted from the result cell's cause, so no one else names them; a
+      // field naming any other cell, the piece's argument or a cell the code
+      // setting it up closed over, is a binding of the field alone.
       recordSetupProjectionPolicyInputs(
         tx,
         this.#runtime,
         resultCell,
         pattern.resultSchema,
         result,
+        (pattern.derivedInternalCells ?? []).map((descriptor) =>
+          getDerivedInternalCellLink(resultCell, descriptor)
+        ),
       );
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)
@@ -3055,9 +3283,14 @@ export class Runner {
         descriptor,
         tx,
       );
+      const derivedScope = derivedCell.getAsNormalizedFullLink().scope;
+      // An entry matches only at the scope it records: a pattern version that
+      // changes the cell's scope keeps its partial cause, and the entry the
+      // earlier version left vouches for an instance at the other scope.
       const manifestMatch = existingManifest.findIndex((existingDescriptor) =>
         deepEqual(existingDescriptor.partialCause, descriptor.partialCause) &&
-        existingDescriptor.kind === descriptor.kind
+        existingDescriptor.kind === descriptor.kind &&
+        parseLink(existingDescriptor.link, resultCell)?.scope === derivedScope
       );
       // Re-emit the manifest link and backlink from the current descriptor on
       // every setup. A compatible setsrc may narrow an internal schema while
@@ -3073,15 +3306,15 @@ export class Runner {
         link: derivedSigilLink,
       });
       setResultCell(derivedCell, resultCell.asSchema(pattern.resultSchema));
-      if (manifestMatch === -1) {
-        // Seed the build-time default for the freshly created cell. The
-        // manifest entry and this default are written together in one
-        // transaction, so a manifest-referenced cell is already durable; on a
-        // cold-cache resume its value may simply be unsynced. Reading and
-        // seeding only when there is no manifest entry keeps resume read-mostly:
-        // a probe read of the not-yet-loaded value would otherwise enter the
-        // commit's conflict set and lose to the durable value when it streams
-        // in, reverting the whole instantiation commit.
+      // The manifest and the initial default commit together. Later actor
+      // instances are initialized by the start's preparation in transactions
+      // of their own, before setup consumes the piece's other values.
+      if (
+        manifestMatch === -1 ||
+        (this.#callerOwnedSetupTransactions.has(tx) &&
+          scopeRank(derivedScope) >
+            scopeRank(resultCell.getAsNormalizedFullLink().scope))
+      ) {
         const schemaDefault = isObjectOrArray(descriptor.schema)
           ? descriptor.schema.default as JSONValue | undefined
           : undefined;
@@ -3090,9 +3323,23 @@ export class Runner {
             meta: ignoreReadForScheduling,
           });
           if (currentValue === undefined) {
-            derivedCell.setRawUntyped(
-              fabricFromConvertibleJsValue(schemaDefault),
-            );
+            const seed = fabricFromConvertibleJsValue(schemaDefault);
+            derivedCell.setRawUntyped(seed);
+            // The cell is the pattern's own and absent until now, so its
+            // default is an initialization whether or not anything projects
+            // it: a result field, a sub-pattern's argument, or nothing.
+            const seeded = derivedCell.getAsNormalizedFullLink();
+            tx.recordCfcWritePolicyInput({
+              kind: "initialization",
+              mode: "seed",
+              target: {
+                space: seeded.space,
+                id: seeded.id,
+                scope: seeded.scope,
+                path: [...seeded.path],
+              },
+              value: seed,
+            }, runtimeWritePolicyAuthorization);
           }
         }
       }
@@ -3115,6 +3362,7 @@ export class Runner {
     const stored = this.#runtime
       .getCellFromLink(argumentLink, undefined, tx)
       .getRaw({ meta: ignoreReadForScheduling });
+    recordReplayedArgumentSlots(tx, argumentLink, argument, stored);
     return foldStoredArgumentSlots(argument, stored);
   }
 
@@ -3129,6 +3377,8 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
+    referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): void {
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
@@ -3195,6 +3445,20 @@ export class Runner {
       if (argumentLink === undefined) {
         throw new Error("Invalid argument link in updateArgument");
       }
+      // The argument document is new, so a protected field the caller leaves
+      // out, and setup fills with its default, is the setup's initialization,
+      // whatever later reads or projects the field. A field the caller
+      // supplies is the caller's write, even where it equals the default.
+      if (nextArgument !== undefined) {
+        recordNewDocumentProtectedDefaults(
+          tx,
+          argumentLink,
+          pattern.argumentSchema,
+          defaults,
+          argument,
+          nextArgument,
+        );
+      }
     } else if (!restageStoredArgument) {
       // Same stored setup over an argument document that already exists. The
       // write below replaces the whole document, so it carries the slots this
@@ -3214,6 +3478,7 @@ export class Runner {
         meta: ignoreReadForScheduling,
       }) as T | undefined;
 
+      const previousArgumentSchema = argumentLink.schema;
       const nextArgumentCell = previousArgumentCell.asSchema(
         pattern.argumentSchema,
       );
@@ -3246,6 +3511,17 @@ export class Runner {
           defaults as Partial<T>,
           pattern.argumentSchema,
         );
+
+        if (this.#runtime.patternManager.getArtifactEntryRef(pattern)) {
+          recordNewProtectedDefaults(
+            tx,
+            argumentLink,
+            previousArgumentSchema,
+            pattern.argumentSchema,
+            defaults,
+            nextArgument,
+          );
+        }
 
         // Stage the exact Fabric-layer representation before validating it.
         // The untyped materialization inside resolves ordinary sigil links
@@ -3281,6 +3557,14 @@ export class Runner {
         pattern.argumentSchema,
         suppliedProjection ?? nextArgument,
       );
+    }
+    if (nextArgument !== undefined) {
+      recordReferencedArgumentFields(
+        tx,
+        argumentLink,
+        referencedArgumentFields,
+      );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
     }
 
     // Record the content-addressed {identity, symbol} reference — the ONLY
@@ -3480,6 +3764,20 @@ export class Runner {
     }
 
     const { pattern, entryRef, resolvedPatternOrModule } = resolvedPattern;
+    // A piece brought into being outside any scheduled action — a deploy, a
+    // host creating one on the principal's behalf — is the acting principal's
+    // act, as a handler run is: what its setup initializes is attributed to
+    // them (`CfcTxState.attributedInitialization`). One a builtin instantiates
+    // is nobody's act: in an action, whose transaction names it, or from a
+    // continuation of one, which declines the mark. Nor is a run of a piece
+    // that is already there.
+    if (
+      previousIdentityRef === undefined && patternOrModule !== undefined &&
+      validationOptions.attributeInitialization !== false &&
+      tx.tx.sourceAction === undefined
+    ) {
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+    }
     // The reuse arms below write the argument without reaching
     // `#applySetupState`, which names these stores for every other setup
     // write. Naming them twice on one transaction costs a second marker
@@ -3621,6 +3919,8 @@ export class Runner {
       pattern,
       entryRef,
       setupState,
+      validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
     if (runningSetup) {
       return runningSetup;
@@ -3642,6 +3942,8 @@ export class Runner {
       setupState,
       argument,
       resultCell,
+      validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
 
     if (validationOptions.validateArgumentLinks !== undefined) {
@@ -4261,6 +4563,11 @@ export class Runner {
     // pattern can only change via a fresh run(), not via the meta watcher).
     const KEYLESS = "\0keyless";
     let currentPatternKey: string | undefined;
+    // The key of the pattern whose nodes are live, in `currentPatternKey`'s
+    // terms, which a swap whose setup does not land steps the watcher back to.
+    let instantiatedPatternKey: string | undefined;
+    // The swap requested last; only it may step the watcher back.
+    let latestSwap: object | undefined;
     // The identity of the pattern whose nodes are LIVE right now — which can
     // differ from `currentPatternKey` (the pointer value last observed): a
     // parent-driven start instantiates its given pattern while the durable
@@ -4472,9 +4779,18 @@ export class Runner {
             active && startLifecycleEpoch === this.#lifecycleEpoch &&
             registrations.get(key) === cancel && cancelNodes === nodeCancel &&
             currentPatternKey === patternKeyAtInstantiation;
+          // `refusal` is how the commit was lost: its basis to the serving
+          // side, a policy manifest install to another participant, or
+          // neither, which is terminal. One retry is enough for a lost
+          // install: a manifest never changes once present, so once the
+          // catch-up has loaded it the install reads it as present and writes
+          // nothing, and the same refusal cannot recur. A named piece's run
+          // start takes up to `PIECE_RUN_START_MAX_RETRIES` instead, because
+          // its refusal may also name the piece's own documents, whose basis
+          // other writers can keep moving.
           const recoverInstantiationOnce = async (
             error: unknown,
-            recoverable = true,
+            refusal: "basis" | "manifest" | "terminal",
           ) => {
             if (!exactNodesAreCurrent()) {
               // A stop, a runtime cycle, or a newer instantiation retired
@@ -4487,7 +4803,7 @@ export class Runner {
               ]);
               return;
             }
-            if (!recoverOnce || !recoverable) {
+            if (!recoverOnce || refusal === "terminal") {
               // Either the one retry lost the same way, or this failure was
               // never the recoverable class. The graph's setup does not
               // become durable and the load has genuinely failed.
@@ -4501,8 +4817,13 @@ export class Runner {
             // would report a loss that the retry below goes on to repair,
             // and a routine race would read as a health regression.
             logger.warn("piece-start-commit-recovering", () => [
-              `piece-start commit ${instantiateActionId} lost its basis to ` +
-              "the serving side; re-instantiating once from the caught-up view",
+              `piece-start commit ${instantiateActionId} ` + (refusal ===
+                  "manifest"
+                ? "was refused over a policy manifest another participant " +
+                  "installed; loading the manifest, and instantiating once " +
+                  "more if it loads"
+                : "lost its basis to the serving side; re-instantiating once " +
+                  "from the caught-up view"),
               error,
             ]);
 
@@ -4514,7 +4835,7 @@ export class Runner {
             // cancellation handle.
             nodeCancel();
             if (cancelNodes === nodeCancel) cancelNodes = undefined;
-            await this.#runtime.awaitCommitRetryReadiness(
+            const unloaded = await this.#runtime.awaitCommitRetryReadiness(
               error,
               retryReadinessTeardown.signal,
             );
@@ -4532,6 +4853,28 @@ export class Runner {
             ) {
               return;
             }
+            // A retry reads the manifest the catch-up loaded. One that could
+            // not be loaded would read as absent and be installed again, so
+            // the start fails here, with the reason the load gave.
+            if (refusal === "manifest" && unloaded.length > 0) {
+              this.#reportPieceStartCommitFailure(
+                instantiateActionId,
+                new Error(
+                  `piece-start commit ${instantiateActionId} lost a policy ` +
+                    "manifest install, and its catch-up could not load " +
+                    unloaded.map(({ id }) => id).join(", "),
+                  {
+                    cause: unloaded.length === 1
+                      ? unloaded[0].error
+                      : new AggregateError(
+                        unloaded.map(({ error }) => error),
+                      ),
+                  },
+                ),
+              );
+              teardownRegistrationIfCurrent();
+              return;
+            }
             try {
               instantiatePattern(pattern, undefined, false);
             } catch (retryError) {
@@ -4542,50 +4885,60 @@ export class Runner {
               teardownRegistrationIfCurrent();
             }
           };
-          const commitWork = actualTx.commit().then(async ({ error }) => {
-            if (error !== undefined) {
-              if (
-                this.#runtime.experimental.serverExecution === true &&
-                isStaleReadConflict(error)
-              ) {
-                await recoverInstantiationOnce(error);
+          const commitWork = actualTx.commit().settled.then(
+            async ({ error }) => {
+              if (error !== undefined) {
+                // A lost manifest install recovers in every posture, for the
+                // reason `refusalNamesOnlyPolicyManifests` gives.
+                if (refusalNamesOnlyPolicyManifests(error)) {
+                  await recoverInstantiationOnce(error, "manifest");
+                  return;
+                }
+                // A stale read recovers only where a serving side supplies the
+                // view the retry reads.
+                if (
+                  this.#runtime.experimental.serverExecution === true &&
+                  isStaleReadConflict(error)
+                ) {
+                  await recoverInstantiationOnce(error, "basis");
+                  return;
+                }
+                this.#reportPieceStartCommitFailure(instantiateActionId, error);
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
                 return;
               }
-              this.#reportPieceStartCommitFailure(instantiateActionId, error);
-              if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-              return;
-            }
-            const settlement = waveSettlementOf(actualTx);
-            if (settlement === undefined) return;
-            const settled = await settlement;
-            if (settled.error === undefined) return;
+              const settlement = waveSettlementOf(actualTx);
+              if (settlement === undefined) return;
+              const settled = await settlement;
+              if (settled.error === undefined) return;
 
-            const waveWithdrawalCause = (settled.error as {
-              waveWithdrawalCause?: unknown;
-            }).waveWithdrawalCause;
-            if (waveWithdrawalCause === "wave-abandoned") {
-              // Explicit abandon is clean enclosing-lifecycle teardown, not a
-              // structure-load failure. Keep it visible without incrementing
-              // the serving runtime's failure observer/health counter.
-              logger.warn("piece-start-commit-abandoned", () => [
-                `piece-start commit ${instantiateActionId} was withdrawn by ` +
-                "wave abandon; the enclosing lifecycle owns any restart",
+              const waveWithdrawalCause = settled.error.waveWithdrawalCause;
+              if (waveWithdrawalCause === "wave-abandoned") {
+                // Explicit abandon is clean enclosing-lifecycle teardown, not a
+                // structure-load failure. Keep it visible without incrementing
+                // the serving runtime's failure observer/health counter.
+                logger.warn("piece-start-commit-abandoned", () => [
+                  `piece-start commit ${instantiateActionId} was withdrawn by ` +
+                  "wave abandon; the enclosing lifecycle owns any restart",
+                  settled.error,
+                ]);
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
+                return;
+              }
+              // A WHOLE contribution drop is recoverable in the same sense the
+              // stale-read refusal is, and the helper reports only if its one
+              // retry also loses. A partial drop is not: part of the
+              // contribution stands, so there is no rolled-back view to
+              // re-instantiate against, and it takes the same terminal arm a
+              // second failure takes.
+              await recoverInstantiationOnce(
                 settled.error,
-              ]);
-              if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-              return;
-            }
-            // A WHOLE contribution drop is recoverable in the same sense the
-            // stale-read refusal is, and the helper reports only if its one
-            // retry also loses. A partial drop is not: part of the
-            // contribution stands, so there is no rolled-back view to
-            // re-instantiate against, and it takes the same terminal arm a
-            // second failure takes.
-            await recoverInstantiationOnce(
-              settled.error,
-              waveWithdrawalCause === "contribution-dropped",
-            );
-          }).catch((error) => {
+                waveWithdrawalCause === "contribution-dropped"
+                  ? "basis"
+                  : "terminal",
+              );
+            },
+          ).catch((error) => {
             this.#reportPieceStartCommitFailure(instantiateActionId, error);
             if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
           });
@@ -4612,6 +4965,8 @@ export class Runner {
         newRef: { identity: string; symbol: string },
       ) => {
         const pattern = this.#resolveToPattern(loaded as Pattern);
+        const swap = {};
+        latestSwap = swap;
         // Whoever moved the pointer may have staged the incoming pattern in
         // the same transaction, which is how a transition makes staging and
         // the pointer succeed or fail together. Its completion marker says
@@ -4625,6 +4980,7 @@ export class Runner {
           cancelNodes?.();
           instantiatePattern(pattern);
           runningRef = newRef;
+          instantiatedPatternKey = patternIdentityKey(newRef);
           return;
         }
         const setupTx = this.#runtime.edit();
@@ -4648,6 +5004,20 @@ export class Runner {
           instantiatePattern(pattern);
           runningRef = newRef;
           runningPattern = pattern;
+          instantiatedPatternKey = patternIdentityKey(newRef);
+        };
+        // A swap whose setup does not land leaves the running pattern in
+        // place. Neither the watcher nor the result-pattern memo may go on
+        // naming the pattern that did not arrive, or a later request for it
+        // reads as no change and the swap never happens.
+        const keepRunningPattern = () => {
+          if (
+            latestSwap === swap &&
+            currentPatternKey === patternIdentityKey(newRef)
+          ) {
+            currentPatternKey = instantiatedPatternKey;
+          }
+          this.#evictResultPatternMemos(`${pieceLink.space}/${pieceLink.id}`);
         };
         if (!this.#runtime.sealDestinationInstalled) {
           // The OFF arm (and ON-arm client speculation): setup commits to
@@ -4673,6 +5043,7 @@ export class Runner {
               `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
               error,
             );
+            keepRunningPattern();
             return;
           }
           finishSwap();
@@ -4680,7 +5051,7 @@ export class Runner {
         }
         // ON-arm serving: the setup seals into the wave, and the wave
         // can still WITHDRAW it at the commit step (a conflict drop, a
-        // lease-lost abort) AFTER commit() resolved — so the running
+        // lease-lost abort) after `commit().settled` resolved — so the running
         // graph is replaced only once the setup is DURABLY accepted
         // (waveSettlementOf). On withdrawal the OLD graph stays: v2
         // running against withdrawn setup would read internal cells that
@@ -4702,13 +5073,14 @@ export class Runner {
               resultCell,
             );
             this.#runtime.prepareTxForCommit(setupTx);
-            const committed = await setupTx.commit();
+            const committed = await setupTx.commit().settled;
             if (committed.error !== undefined) {
               logger.error(
                 "pattern-swap-setup-error",
                 `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} was refused at the seal`,
                 committed.error,
               );
+              keepRunningPattern();
               return;
             }
           } catch (error) {
@@ -4717,6 +5089,7 @@ export class Runner {
               `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
               error,
             );
+            keepRunningPattern();
             return;
           }
           const settlement = waveSettlementOf(setupTx);
@@ -4730,6 +5103,7 @@ export class Runner {
                   settled.error,
                 ],
               );
+              keepRunningPattern();
               return;
             }
           }
@@ -4792,7 +5166,17 @@ export class Runner {
             swapToPattern(live, newRef);
             return;
           }
-          const named = this.#syncCellsForRunningPattern(resultCell, live)
+          const named = this.#prepareCellsForRunningPattern(
+            resultCell,
+            live,
+            undefined,
+            {
+              isCurrent: () =>
+                active && startLifecycleEpoch === this.#lifecycleEpoch &&
+                currentPatternKey === newKey,
+              allowReadOnly: true,
+            },
+          )
             .then(() => {
               // A pointer that moved again while the sync was in flight
               // has its own swap on the way; this one is stale.
@@ -4968,7 +5352,17 @@ export class Runner {
             });
             // Loaded from the store, so what it reads may be absent here
             // too; named before the swap as on the live path.
-            return this.#syncCellsForRunningPattern(resultCell, loaded).then(
+            return this.#prepareCellsForRunningPattern(
+              resultCell,
+              loaded,
+              undefined,
+              {
+                isCurrent: () =>
+                  active && startLifecycleEpoch === this.#lifecycleEpoch &&
+                  currentPatternKey === newKey,
+                allowReadOnly: true,
+              },
+            ).then(
               () => {
                 if (
                   !active || startLifecycleEpoch !== this.#lifecycleEpoch ||
@@ -5155,6 +5549,7 @@ export class Runner {
     // Determine initial pattern
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
+      instantiatedPatternKey = currentPatternKey;
       try {
         instantiateInitialPattern(givenPattern, initialRef, tx);
         // Real artifact refs only: setup mints and INDEXES a `keyless:`
@@ -5220,6 +5615,7 @@ export class Runner {
 
     // Sync path - instantiate immediately
     currentPatternKey = patternIdentityKey(initialRef);
+    instantiatedPatternKey = currentPatternKey;
     const initialPattern = this.#resolveToPattern(initialResolved);
     instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
@@ -5601,6 +5997,7 @@ export class Runner {
       if (!this.#isStartAttemptCurrent(attempt)) return Promise.resolve(false);
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
+          ...attempt.options,
           givenPattern: resolvedPattern,
         });
       } catch (err) {
@@ -5626,7 +6023,15 @@ export class Runner {
         patternIdentityKey(current) === expectedPatternKey;
     };
     return (async () => {
-      await this.#syncCellsForRunningPattern(rootCell, resolvedPattern);
+      await this.#prepareCellsForRunningPattern(
+        rootCell,
+        resolvedPattern,
+        undefined,
+        {
+          isCurrent: () => this.#isStartAttemptCurrent(attempt),
+          allowReadOnly: true,
+        },
+      );
       if (!this.#isStartAttemptCurrent(attempt)) return false;
       // The result doc can hot-swap while the dependency pre-sync is awaiting
       // I/O. Never carry the old resolved Pattern into the new identity; restart
@@ -5647,6 +6052,7 @@ export class Runner {
       const startCoreStart = performance.now();
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
+          ...attempt.options,
           givenPattern: resolvedPattern,
           schedulerRehydration: this.#schedulerRehydrationOptions(
             rootCell,
@@ -5656,6 +6062,7 @@ export class Runner {
             // (e.g. maps reconciling an empty array, then re-running once it
             // streams in).
             true,
+            attempt.options?.parentPieceRootId,
           ),
         });
       } finally {
@@ -5707,7 +6114,7 @@ export class Runner {
     resultCell: Cell<any>,
   ): Promise<Result<Unit, CommitError>> {
     const committer = this.#deferredStartCommitter;
-    const commit: DeferredStartCommit = () => tx.commit();
+    const commit: DeferredStartCommit = () => tx.commit().settled;
     return committer === undefined
       ? commit()
       : committer(tx, resultCell, commit);
@@ -5822,6 +6229,12 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      // A start deferred from a handler run initializes on that run's behalf.
+      if (tx.getCfcState().attributedInitialization) {
+        startTx.markCfcAttributedInitialization(
+          runtimeWritePolicyAuthorization,
+        );
+      }
       // Minted inside a commit callback — by definition outside any scheduler
       // run; the deferred start's node wiring is piece machinery, stamped
       // bookkeeping per serving-loop.md §3d. A flag-ON CLIENT's
@@ -5912,7 +6325,7 @@ export class Runner {
   /** Key a named execution family by its complete resolution identity. */
   #getFamilyKey(
     cell: Cell<any>,
-    identity = cell.tx?.tx.scopeKeyIdentity,
+    identity = cellTx(cell)?.tx.scopeKeyIdentity,
   ): string {
     const key = this.#getDocKey(cell);
     if (identity === undefined) return key;
@@ -5985,7 +6398,18 @@ export class Runner {
     if (named !== undefined && "pending" in named) {
       return { pattern: resolved.pattern, entryKey, identity };
     }
-    if (named?.landed === entryKey) return undefined;
+    if (named?.landed === entryKey) {
+      // A failed load or superseded manifest can leave preparation incomplete.
+      // Initialize in the actual setup that accepts the requested pattern,
+      // rather than caching success or retrying an obsolete declaration.
+      if (named.seedInRun) this.#callerOwnedSetupTransactions.add(tx);
+      if (
+        named.defaultsPrepared || this.#callerOwnedSetupTransactions.has(tx)
+      ) {
+        return undefined;
+      }
+      return { pattern: resolved.pattern, entryKey, identity };
+    }
     // A result this runner prepared under this pattern has its family here
     // already, however much of it the store holds; a missing entry costs a
     // probe, never a wrong verdict.
@@ -6044,7 +6468,7 @@ export class Runner {
     argumentLink: NormalizedFullLink,
     resultCell: Cell<any>,
   ): boolean {
-    const readTx = this.#familyReadTx(resultCell.tx?.tx.scopeKeyIdentity);
+    const readTx = this.#familyReadTx(cellTx(resultCell)?.tx.scopeKeyIdentity);
     const present = (link: NormalizedFullLink): boolean =>
       this.#documentPresent(readTx, link);
     if (!present(argumentLink)) return true;
@@ -6223,9 +6647,11 @@ export class Runner {
       identity?: ScopeKeyIdentity;
     },
     argument: unknown,
+    isCurrent: () => boolean,
+    initializeDefaults = true,
   ): Promise<void> {
     const sourceIdentity = toName.identity ??
-      resultCell.tx?.tx.scopeKeyIdentity;
+      cellTx(resultCell)?.tx.scopeKeyIdentity;
     const identity = sourceIdentity === undefined
       ? undefined
       : { ...sourceIdentity };
@@ -6233,26 +6659,59 @@ export class Runner {
     const resultLink = resultCell.getAsNormalizedFullLink();
     const inFlight = this.#namedFamilies.get(key);
     if (inFlight !== undefined && "pending" in inFlight) {
+      if (initializeDefaults && !inFlight.initializesDefaults) {
+        return inFlight.pending.then(() => {
+          if (!isCurrent()) return;
+          return this.#nameFamilyBeforeRun(
+            resultCell,
+            toName,
+            argument,
+            isCurrent,
+          );
+        });
+      }
       return inFlight.pending;
     }
-    const pending = this.#syncCellsForRunningPattern(
-      resultCell,
-      toName.pattern,
-      argument,
-      identity,
-    ).then(
-      () => {},
-      (error: unknown) => {
-        logger.warn(
-          "runner-start",
-          "naming a piece before its run rejected",
-          [resultLink.id, error],
-        );
-      },
-    ).then(() => {
-      this.#namedFamilies.set(key, { landed: toName.entryKey });
+    const onSyncError = (error: unknown) => {
+      logger.warn("runner-start", "naming a piece before its run rejected", [
+        resultLink.id,
+        error,
+      ]);
+    };
+    const preparation = initializeDefaults
+      ? this.#prepareCellsForRunningPattern(
+        resultCell,
+        toName.pattern,
+        argument,
+        {
+          identity,
+          isCurrent,
+          onSyncError,
+        },
+      )
+      : this.#syncCellsForRunningPattern(
+        resultCell,
+        toName.pattern,
+        argument,
+        identity,
+      )
+        .catch(onSyncError);
+    const pending = preparation.then((defaultsPrepared) => {
+      if (isCurrent()) {
+        this.#namedFamilies.set(key, {
+          landed: toName.entryKey,
+          defaultsPrepared: initializeDefaults && defaultsPrepared === true,
+          seedInRun: initializeDefaults && defaultsPrepared !== true,
+        });
+      } else this.#namedFamilies.delete(key);
+    }, (error: unknown) => {
+      this.#namedFamilies.delete(key);
+      throw error;
     });
-    this.#namedFamilies.set(key, { pending });
+    this.#namedFamilies.set(key, {
+      pending,
+      initializesDefaults: initializeDefaults,
+    });
     return pending;
   }
 
@@ -6288,16 +6747,51 @@ export class Runner {
     const startLifecycleEpoch = this.#lifecycleEpoch;
     const ownership = this.#createDeferredStartOwnership(resultCell);
     const speculationContext = speculationRunContextOf(tx);
+    const speculative = speculationContext?.kind === "derivation" ||
+      speculationContext?.kind === "event-handler";
     const durableReads = isDurableReadTx(tx);
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
+    // Whether the setup is the principal's act was decided by the transaction
+    // the run was asked in — a handler run's, or one outside any scheduled
+    // action that did not decline it — and the transaction it runs in once
+    // the family has landed carries that decision, not one of its own.
+    const attributed = tx.getCfcState().attributedInitialization ||
+      (tx.tx.sourceAction === undefined &&
+        options.attributeInitialization !== false);
     const work = (async () => {
       let toName = named;
+      let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
       for (;;) {
-        await this.#nameFamilyBeforeRun(resultCell, toName, argument);
+        try {
+          await this.#nameFamilyBeforeRun(
+            resultCell,
+            toName,
+            argument,
+            () =>
+              !ownership.isCancelled() &&
+              startLifecycleEpoch === this.#lifecycleEpoch,
+            !speculative,
+          );
+        } catch (error) {
+          if (!ownership.isCancelled()) {
+            ownership.cancel();
+            this.#reportPieceStartCommitFailure(actionId, error);
+          }
+          return;
+        }
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
+        // Speculative starts keep defaults in their overlay transaction. A
+        // bookkeeping seed here would escape the parent's destination, and a
+        // later authored start still needs its own durable preparation.
+        if (speculative) this.#callerOwnedSetupTransactions.add(startTx);
+        if (attributed) {
+          startTx.markCfcAttributedInitialization(
+            runtimeWritePolicyAuthorization,
+          );
+        }
         if (durableReads) markDurableReadTx(startTx);
         if (identity !== undefined) startTx.tx.scopeKeyIdentity = identity;
         // A speculative child's continuation keeps its origin across the
@@ -6342,7 +6836,7 @@ export class Runner {
             patternOrModule,
             argument,
             startCell,
-            options,
+            { ...options, attributeInitialization: false },
           );
           if (ownership.markInstalled(started.installedCancel)) {
             startTx.abort("Deferred runner start was cancelled");
@@ -6369,6 +6863,20 @@ export class Runner {
         ) {
           return;
         }
+        const retry = retriesLeft > 0
+          ? await this.#retryPieceRunStart(
+            error,
+            resultCell,
+            startLifecycleEpoch,
+            ownership,
+            started.installedCancel,
+          )
+          : "terminal";
+        if (retry === "retry") {
+          retriesLeft--;
+          continue;
+        }
+        if (retry === "settled") return;
         ownership.cancel();
         this.#reportPieceStartCommitFailure(actionId, error);
         return;
@@ -6376,6 +6884,75 @@ export class Runner {
     })();
     this.#runtime.scheduler.trackBackgroundTask(work);
     return ownership.cancel;
+  }
+
+  /**
+   * Prepares a named piece's run for another attempt after its start
+   * transaction was refused over a policy manifest another participant
+   * installed first. Resolves `"retry"` when the caller should run it again,
+   * `"terminal"` when the caller's failure arm should run as it does for any
+   * other refusal, and `"settled"` when the start was stopped or the runtime
+   * torn down during the wait, so there is nothing left to report.
+   *
+   * The run is this participant's own setup of a piece set up elsewhere, and
+   * when its argument carries a PolicyOf label that setup installs the policy
+   * manifest, which a replica that never loaded it reads as absent. In a
+   * shared space that absence is ordinarily stale, and the refusal names the
+   * manifest ({@link refusalNamesPolicyManifest}). Only a fresh transaction
+   * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
+   * other retrying writer: wait for the refusal's catch-up, then prepare the
+   * run from the start, where the install reads the manifest as present.
+   * Every other refusal stays terminal, a stale read over the piece's own
+   * documents included: whether a re-commit converges against a serving
+   * side's derived writes is a different question, which
+   * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
+   *
+   * The refused install is torn down only while it is still the key's current
+   * registration, and the ownership token goes back to pending for the wait,
+   * so a stop or a release during it cancels the retry the way it cancels a
+   * pending first attempt. An attempt that installed nothing is terminal, as
+   * is one whose key another start took during the wait: in both the key's
+   * registration is not this attempt's to replace.
+   */
+  async #retryPieceRunStart<T>(
+    error: CommitError,
+    resultCell: Cell<T>,
+    scheduledLifecycleEpoch: number,
+    ownership: DeferredCancelOwnership,
+    installedRegistration: Cancel | undefined,
+  ): Promise<"retry" | "terminal" | "settled"> {
+    // A stop, a release, or `stopAll()` since the install removed it from
+    // the registry, so the registration check also covers a canceled token
+    // and a newer lifecycle epoch.
+    const key = this.#getDocKey(resultCell);
+    if (
+      !refusalNamesPolicyManifest(error) ||
+      installedRegistration === undefined ||
+      this.#cancels.get(key) !== installedRegistration
+    ) {
+      return "terminal";
+    }
+    this.stop(resultCell);
+    ownership.markInstalled(undefined);
+    this.#registerPendingDeferredStart(key, ownership);
+    logger.info(
+      "piece-start-commit-retrying",
+      "piece-run start lost a policy manifest install to another " +
+        "participant; running it again once storage has caught up",
+      resultCell.getAsNormalizedFullLink().id,
+      error,
+    );
+    const teardown = this.#runtime.writeTeardownSignal;
+    await this.#runtime.awaitCommitRetryReadiness(error, teardown);
+    if (
+      ownership.isCancelled() || teardown.aborted ||
+      scheduledLifecycleEpoch !== this.#lifecycleEpoch
+    ) {
+      ownership.cancel();
+      return "settled";
+    }
+    if (this.#cancels.has(key)) return "terminal";
+    return "retry";
   }
 
   /**
@@ -6415,7 +6992,10 @@ export class Runner {
    *
    * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
    * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
-   * arm stays terminal.
+   * arm of a commit-gated start stays terminal. A named piece's run refused
+   * over a policy manifest another participant installed first is not that
+   * story either: `#retryPieceRunStart()` runs it again in a fresh
+   * transaction, under either arm, when this recovery declines.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -6604,8 +7184,10 @@ export class Runner {
   #startFromServedState<T>(
     resultCell: Cell<T>,
     ownership?: DeferredCancelOwnership,
+    options?: StartAttempt["options"],
   ): Promise<boolean> {
     const attempt: StartAttempt = {
+      options,
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
@@ -6685,6 +7267,13 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      // A result pattern deferred from a handler run initializes on that
+      // run's behalf, as the deferred start above does.
+      if (tx.getCfcState().attributedInitialization) {
+        startTx.markCfcAttributedInitialization(
+          runtimeWritePolicyAuthorization,
+        );
+      }
       // Minted inside a commit callback — outside any scheduler run;
       // bookkeeping per serving-loop.md §3d, like the deferred start above (and
       // with the same §3d speculative-consequence stamp: a flag-ON client's
@@ -6842,6 +7431,7 @@ export class Runner {
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> | Promise<never> {
+    this.#callerOwnedSetupTransactions.add(tx);
     const toName = this.#patternToNameBeforeRun(
       pattern,
       argument,
@@ -6849,7 +7439,13 @@ export class Runner {
       resultCell,
     );
     if (toName !== undefined) {
-      return this.#nameFamilyBeforeRun(resultCell, toName, argument).then(
+      return this.#nameFamilyBeforeRun(
+        resultCell,
+        toName,
+        argument,
+        () => true,
+        false,
+      ).then(
         () => {
           throw new RetryImmediately(
             "Loading the compiled child's execution family",
@@ -6932,12 +7528,17 @@ export class Runner {
       patternOrModule,
       argument,
       resultCell,
-      creatingPiece
-        ? {
-          initializePieceSourceHistory: true,
-          initialPieceSourceOrigin: options.sourceOrigin,
-        }
-        : {},
+      {
+        referencedArgumentFields: options.referencedArgumentFields,
+        capturedArgumentFields: options.capturedArgumentFields,
+        attributeInitialization: options.attributeInitialization,
+        ...(creatingPiece
+          ? {
+            initializePieceSourceHistory: true,
+            initialPieceSourceOrigin: options.sourceOrigin,
+          }
+          : {}),
+      },
     );
 
     let installedCancel: Cancel | undefined;
@@ -6967,11 +7568,21 @@ export class Runner {
     // The setup writes are staged in this transaction; the registration is
     // not, so a transaction that does not become durable would otherwise leave
     // a piece running over writes that never landed. A stale basis is the
-    // exception: the re-run that follows reuses what is already there.
+    // exception: the re-run that follows reuses what is already there. A wave
+    // withdrawing the transaction after accepting it releases the registration
+    // too, because the runs of its nodes are withdrawn with the transaction and
+    // a later setup of the same result starts nothing while it stands.
     if (installedCancel !== undefined) {
       const startedCancel = installedCancel;
-      tx.addCommitCallback((_settledTx, result) => {
-        if (!result.error) return;
+      tx.addCommitCallback((settledTx, result) => {
+        if (!result.error) {
+          const settlement = waveSettlementOf(settledTx) ??
+            waveSettlementOf(tx);
+          void settlement?.then(({ error }) => {
+            if (error) this.releaseChild(resultCell, startedCancel);
+          });
+          return;
+        }
         if (
           isConflictRejection(result.error) ||
           isStorageTransactionInconsistent(result.error)
@@ -7059,7 +7670,7 @@ export class Runner {
     inputs: any,
     options: RunSyncedWithCommitOptions,
   ): Promise<RunSyncedCommitResult<any>> {
-    if (resultCell.tx?.status().status === "ready") {
+    if (cellTx(resultCell)?.status().status === "ready") {
       throw new Error(
         "a committed pattern setup receipt requires an unbound result cell",
       );
@@ -7158,7 +7769,8 @@ export class Runner {
     // TODO(seefeld): There is currently likely a race condition with the
     // scheduler if the transaction isn't committed before the first functions
     // run. Though most likely the worst case is just extra invocations.
-    const givenTx = resultCell.tx?.status().status === "ready" && resultCell.tx;
+    const givenTx = cellTx(resultCell)?.status().status === "ready" &&
+      cellTx(resultCell);
     let setupRes: SetupResult<any> | undefined;
     let commit: PatternSetupCommitReceipt | undefined;
     let committedTx: IExtendedStorageTransaction | undefined;
@@ -7182,6 +7794,7 @@ export class Runner {
       }
     };
     if (givenTx) {
+      this.#callerOwnedSetupTransactions.add(givenTx);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -7200,6 +7813,7 @@ export class Runner {
           pieceSourceTransition: options?.pieceSourceTransition,
           validateCurrentArgument: options?.validateCurrentArgument,
           validateArgumentLinks: options?.validateArgumentLinks,
+          attributeInitialization: options?.attributeInitialization,
         },
       );
     } else {
@@ -7240,7 +7854,7 @@ export class Runner {
             ...(options?.directCommit === true ? { directCommit: true } : {}),
           });
           if (options?.cfcTrustSnapshot !== undefined) {
-            tx.setCfcTrustSnapshot(options.cfcTrustSnapshot);
+            setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
           return this.#setupInternal(
@@ -7254,6 +7868,7 @@ export class Runner {
               sourceUpdate,
               validateCurrentArgument: options?.validateCurrentArgument,
               validateArgumentLinks: options?.validateArgumentLinks,
+              attributeInitialization: options?.attributeInitialization,
             },
           );
         },
@@ -7324,7 +7939,11 @@ export class Runner {
     try {
       // If a new pattern was specified, make sure to sync any new cells
       if (pattern || !synced) {
-        await this.#syncCellsForRunningPattern(resultCell, presyncPattern);
+        if (givenTx) {
+          await this.#syncCellsForRunningPattern(resultCell, presyncPattern);
+        } else {
+          await this.#prepareCellsForRunningPattern(resultCell, presyncPattern);
+        }
       }
 
       if (setupRes?.needsStart && options?.start !== false) {
@@ -7416,7 +8035,7 @@ export class Runner {
       return this.#getDocKey(cell);
     }
     const { space, id, scope } = cell.getAsNormalizedFullLink();
-    const identity = cell.tx?.tx.scopeKeyIdentity ??
+    const identity = cellTx(cell)?.tx.scopeKeyIdentity ??
       this.#runtime.scopeKeyIdentity;
     return `${space}/${resolveScopeKey(scope, identity)}/${id}`;
   }
@@ -7623,7 +8242,7 @@ export class Runner {
       const candidateArgument = this.#runtime.getCellFromLink(
         candidateLink,
         undefined,
-        candidate.tx,
+        cellTx(candidate),
       );
       return valueEqual(candidateArgument.getRawUntyped(), argumentValue);
     };
@@ -7704,6 +8323,190 @@ export class Runner {
   }
 
   /**
+   * Loads a run's dependencies and fills absent actor instances of defaults
+   * that an accepted setup already declared. Each seed has a transaction of
+   * its own: binding the piece's other values must not label a constant
+   * default with their confidentiality, nor can one private seed label another.
+   * Returns whether every eligible default was verified or seeded; a stale
+   * declaration must not stand in for completed preparation in the run cache.
+   */
+  async #prepareCellsForRunningPattern(
+    resultCell: Cell<any>,
+    pattern: Pattern,
+    inputs?: any,
+    options: {
+      identity?: ScopeKeyIdentity;
+      isCurrent?: () => boolean;
+      onSyncError?: (error: unknown) => void;
+      allowReadOnly?: boolean;
+    } = {},
+  ): Promise<boolean> {
+    const sourceIdentity = options.identity ??
+      cellTx(resultCell)?.tx.scopeKeyIdentity;
+    const identity = sourceIdentity === undefined
+      ? undefined
+      : { ...sourceIdentity };
+    const epoch = this.#lifecycleEpoch;
+    const isCurrent = () =>
+      epoch === this.#lifecycleEpoch &&
+      !this.#runtime.writeTeardownSignal.aborted &&
+      (options.isCurrent?.() ?? true);
+    const instances: ResumePatternInstance[] = [];
+    let defaultsPrepared = true;
+    try {
+      await this.#syncCellsForRunningPattern(
+        resultCell,
+        pattern,
+        inputs,
+        identity,
+        instances,
+      );
+    } catch (error) {
+      if (options.onSyncError === undefined) throw error;
+      options.onSyncError(error);
+      return false;
+    }
+    const readOnlySpaces = new Map<MemorySpace, boolean>();
+    for (const instance of instances) {
+      for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
+        const resultLink = instance.resultCell.getAsNormalizedFullLink();
+        const derivedLink = getDerivedInternalCellLink(
+          instance.resultCell,
+          descriptor,
+        );
+        if (scopeRank(derivedLink.scope) <= scopeRank(resultLink.scope)) {
+          continue;
+        }
+        const schemaDefault = isObjectOrArray(descriptor.schema)
+          ? descriptor.schema.default
+          : undefined;
+        if (schemaDefault === undefined) continue;
+        if (!isCurrent()) return false;
+        if (options.allowReadOnly && !this.#runtime.servingPosture) {
+          let readOnly = readOnlySpaces.get(derivedLink.space);
+          if (readOnly === undefined) {
+            const acl = this.#runtime.getCellFromLink<ACL>({
+              space: derivedLink.space,
+              id: aclDocId(derivedLink.space) as URI,
+              path: [],
+            });
+            await this.#syncFamilyCell(acl, identity);
+            const readTx = this.#familyReadTx(identity);
+            markDurableReadTx(readTx);
+            const principal = this.#runtime.actingPrincipalFor(readTx);
+            readOnly = principal !== undefined &&
+              spaceReaderRole(acl.withTx(readTx).get(), principal) === "reader";
+            readOnlySpaces.set(derivedLink.space, readOnly);
+          }
+          // A confirmed READ member can resume persisted output and read a
+          // schema default without creating an actor instance. Unknown or
+          // invalid ACLs supply no exemption from ordinary write checks.
+          if (readOnly) {
+            defaultsPrepared = false;
+            continue;
+          }
+        }
+        const outcome = await this.#runtime.editWithRetry((tx) => {
+          if (!isCurrent()) {
+            defaultsPrepared = false;
+            return;
+          }
+          if (identity !== undefined) {
+            tx.tx.scopeKeyIdentity = identity;
+            if (identity.principal !== undefined) {
+              setCfcTrustSnapshot(
+                tx,
+                this.#runtime.trustSnapshotForPrincipal(identity.principal),
+              );
+            }
+          }
+          this.#runtime.stampServerRun(tx, {
+            actionId: `scoped-default/${derivedLink.id}`,
+            kind: "bookkeeping",
+            ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+          });
+          markDurableReadTx(tx);
+          const owner = this.#runtime.getCellFromLink(
+            resultLink,
+            undefined,
+            tx,
+          );
+          const current = getPatternIdentityRef(owner) ??
+            this.#sessionPatternPointer(owner);
+          const expected = this.#runtime.patternManager.getArtifactEntryRef(
+            instance.pattern,
+          );
+          // A fresh runtime has no pointer for a keyless piece. Its exact
+          // accepted manifest still vouches for this descriptor's default;
+          // a keyed piece needs its durable pointer as well.
+          if (
+            (current === undefined && expected !== undefined &&
+              !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
+            (current !== undefined && (expected === undefined ||
+              patternIdentityKey(current) !== patternIdentityKey(expected)))
+          ) {
+            defaultsPrepared = false;
+            return;
+          }
+          const manifest = convertibleJsFromFabricValue(
+            owner.getMetaRaw("internal", {
+              meta: ignoreReadForScheduling,
+            }),
+          );
+          const derived = getDerivedInternalCell(owner, descriptor, tx);
+          const expectedLink = derived.getAsWriteRedirectLink({
+            base: owner,
+            includeSchema: true,
+          });
+          if (
+            !Array.isArray(manifest) ||
+            !manifest.some((entry) =>
+              isObjectOrArray(entry) && "link" in entry &&
+              valueEqual(fabricFromConvertibleJsValue(entry.link), expectedLink)
+            )
+          ) {
+            defaultsPrepared = false;
+            return;
+          }
+          if (
+            derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
+              undefined
+          ) return;
+          // A default belongs to its owning piece, so it carries the label on
+          // the piece's root. The pattern pointer and the manifest read above
+          // are members of the piece's document, and reading a member
+          // consumes no label, so this read is what brings the root label
+          // into the seed. It is `nonRecursive`, which consumes the root
+          // entry alone: the labels on the piece's fields belong to other
+          // values, and a constant default does not derive from them.
+          tx.readValueOrThrow({ ...resultLink, path: [] }, {
+            nonRecursive: true,
+            meta: ignoreReadForScheduling,
+          });
+          // The graph has not enrolled its stores yet. This seed carries the
+          // same ownership claim as setup through the ordinary writer-fit gate.
+          recordRuntimeOwnedStore(tx, owner, derivedLink);
+          setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
+          const value = fabricFromConvertibleJsValue(schemaDefault);
+          derived.setRawUntyped(value);
+          tx.recordCfcWritePolicyInput({
+            kind: "initialization",
+            mode: "seed",
+            target: { ...derivedLink, path: [] },
+            value,
+          }, runtimeWritePolicyAuthorization);
+        });
+        if (outcome.error) {
+          throw new Error(
+            `Could not initialize scoped default ${derivedLink.id}: ${outcome.error.message}`,
+          );
+        }
+      }
+    }
+    return defaultsPrepared;
+  }
+
+  /**
    * Pre-syncs what a run of `pattern` on `resultCell` reads before it runs:
    * the result document, what each node's plan names under its read schema,
    * and the cells the pattern owns; on a fresh run the plans bind against an
@@ -7714,7 +8517,8 @@ export class Runner {
     resultCell: Cell<any>,
     pattern: Pattern,
     inputs?: any,
-    identity = resultCell.tx?.tx.scopeKeyIdentity,
+    identity = cellTx(resultCell)?.tx.scopeKeyIdentity,
+    preparedInstances?: ResumePatternInstance[],
   ): Promise<boolean> {
     const capturedIdentity = identity === undefined
       ? undefined
@@ -7727,6 +8531,7 @@ export class Runner {
           pattern,
           inputs,
           capturedIdentity,
+          preparedInstances,
         );
       } finally {
         // Resume-boot decomposition: this is the dependency pre-sync a fresh
@@ -7749,10 +8554,11 @@ export class Runner {
     pattern: Pattern,
     inputs?: any,
     identity?: ScopeKeyIdentity,
+    preparedInstances?: ResumePatternInstance[],
   ): Promise<boolean> {
     const resultSyncStart = performance.now();
     await this.#syncFamilyCell(resultCell, identity);
-    if (resultCell.tx?.status().status !== "ready") {
+    if (cellTx(resultCell)?.status().status !== "ready") {
       resultCell = resultCell.withTx(this.#familyReadTx(identity));
     }
     logger.time(resultSyncStart, "start", "resumeResultSync");
@@ -7795,8 +8601,8 @@ export class Runner {
         resultCell,
         argumentLink,
       );
-      cells.push(...planned.cells);
-      plans.push(...planned.plans);
+      for (const cell of planned.cells) cells.push(cell);
+      for (const plan of planned.plans) plans.push(plan);
       // The argument document itself, whole and under no schema: setup
       // reads it raw to write the argument over the slots it holds. The
       // node syncs above carry the narrower schemas the runs read through
@@ -7849,6 +8655,26 @@ export class Runner {
     ) {
       cells.push(resultCell.key(UI).asSchema(rendererVDOMSchema));
     }
+
+    // The policy manifests the pattern names. Where instantiation writes a
+    // value carrying a module policy, it reads the policy's manifest and
+    // installs it when the read finds nothing, so a manifest another
+    // participant installed that this replica has not loaded is installed
+    // again, and the commit is refused. Nothing the piece holds links to a
+    // manifest, so the walks above reach none. The manifest's schema brings
+    // in the rule documents it links.
+    const manifests = new Set<Cell<any>>();
+    for (const digest of modulePolicyDigestsOf(pattern)) {
+      const manifest = this.#runtime.getCellFromEntityId(
+        resultCell.space,
+        cfcPolicyManifestDocId(digest),
+        [],
+        CFC_POLICY_MANIFEST_DOC_SCHEMA,
+      );
+      manifests.add(manifest);
+      cells.push(manifest);
+    }
+
     // Per-cell spans: `n` in the timing stats is the number of cells this
     // resume pre-synced, total/max its round-trip cost (spans overlap, so the
     // wall cost is bounded by the enclosing `#syncCellsForRunningPattern()`
@@ -7856,9 +8682,22 @@ export class Runner {
     const cellSyncWaveStart = performance.now();
     await Promise.all(cells.map((c) => {
       const cellSyncStart = performance.now();
-      return this.#syncFamilyCell(c, identity).finally(() =>
+      const synced = this.#syncFamilyCell(c, identity).finally(() =>
         logger.time(cellSyncStart, "start", "resumeCellSync")
       );
+      // A start that writes nothing carrying the policy needs no manifest,
+      // and one that does reads it as absent and fails its commit loudly, so
+      // a manifest that cannot be loaded does not hold the start up.
+      return manifests.has(c)
+        ? synced.catch((error) => {
+          logger.warn("resume-pre-sync", () => [
+            "could not load a policy manifest the pattern names; starting " +
+            "without it",
+            c.getAsNormalizedFullLink().id,
+            error,
+          ]);
+        })
+        : synced;
     }));
     logger.time(cellSyncWaveStart, "start", "resumeCellSyncWave");
 
@@ -7900,6 +8739,10 @@ export class Runner {
       logger.time(argumentLinksStart, "start", "resumeArgumentLinksSync");
     }
 
+    if (preparedInstances !== undefined) {
+      for (const instance of instances) preparedInstances.push(instance);
+      for (const instance of listInstances) preparedInstances.push(instance);
+    }
     return true;
   }
 
@@ -7944,7 +8787,9 @@ export class Runner {
       // follows links from there the way a read does: as deep as the
       // declaration goes, through `asCell` positions, stopping at an opaque
       // one. What arrives is what the node's first run reads.
-      cells.push(...this.#cellsNodePlanReads(plan, resultCell));
+      for (const cell of this.#cellsNodePlanReads(plan, resultCell)) {
+        cells.push(cell);
+      }
       // What the node writes through, under the output binding's schema.
       for (const link of plan.writes) {
         cells.push(this.#runtime.getCellFromLink(link));
@@ -8081,8 +8926,8 @@ export class Runner {
             resultCell,
             argumentLink,
           );
-          cells.push(...planned.cells);
-          plans.push(...planned.plans);
+          for (const cell of planned.cells) cells.push(cell);
+          for (const plan of planned.plans) plans.push(plan);
           cells.push(
             this.#runtime.getCellFromLink({
               ...argumentLink,
@@ -8443,8 +9288,10 @@ export class Runner {
                     ),
                 );
               }
-              next.push(...nested);
-              namedInstances.push(...nested);
+              for (const instance of nested) {
+                next.push(instance);
+                namedInstances.push(instance);
+              }
             }
           }
         }
@@ -9001,19 +9848,25 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const outputs = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     return {
       inputs,
       outputs,
       writes: findAllWriteRedirectCells(outputs, resultCell, {
-        followRedirectChains: !usesLocalReads(resultCell.tx),
+        followRedirectChains: !usesLocalReads(cellTx(resultCell)),
       }),
       inputsCell: this.#runtime.getImmutableCell(
         resultCell.space,
@@ -9252,11 +10105,12 @@ export class Runner {
         (asCell.includes("cell") || asCell.includes("writeonly"))
       ) {
         if (shouldCollectPath(path)) {
-          links.push(
-            ...findAllWriteRedirectCells(currentValue, resultCell, {
-              followRedirectChains: !usesLocalReads(resultCell.tx),
-            }),
+          const redirectLinks = findAllWriteRedirectCells(
+            currentValue,
+            resultCell,
+            { followRedirectChains: !usesLocalReads(cellTx(resultCell)) },
           );
+          for (const link of redirectLinks) links.push(link);
         }
         return;
       }
@@ -9355,11 +10209,13 @@ export class Runner {
         const link = parseLink(currentValue, resultCell);
         links.push({
           ...link,
-          schema: link.schema ??
-            (schema === undefined ? undefined : cfcSchemaWithInheritedDefs(
+          schema: combineOptionalSchema(
+            schema === undefined ? undefined : cfcSchemaWithInheritedDefs(
               schema as JSONSchema,
               rootDefinitions,
-            )),
+            ),
+            link.schema,
+          ),
         });
         return;
       }
@@ -9613,6 +10469,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     inHandler: boolean,
     implementationIdentity?: ImplementationIdentity,
+    eventKey?: string,
   ): Frame {
     return pushFrameFromCause(cause, {
       unsafe_binding: {
@@ -9629,6 +10486,7 @@ export class Runner {
       // than through event dispatch (a test, an internal call) has no dispatched
       // time, so capture the clock once here; it stays frozen for that run.
       ...(inHandler ? { eventTime: tx.dispatchedEventTime ?? Date.now() } : {}),
+      ...(eventKey !== undefined ? { eventKey } : {}),
       runtime: this.#runtime,
       space: resultCell.space,
       tx,
@@ -10045,48 +10903,47 @@ export class Runner {
   }
 
   /**
-   * Resolves any `PatternFactory.inSpace("name")` targets that the just-finished
-   * handler/action referenced but whose space DID was not yet cached, then
-   * throws {@link RetryImmediately} so the scheduler re-runs the handler/action.
-   * On the re-run the names resolve synchronously from the runtime cache (see
-   * the pattern builder's resolveInSpaceTargetSpace), so the child results are
-   * routed into the correct spaces from the start — no link rewriting required.
+   * Resolves any `PatternFactory.inSpace(...)` targets that the just-finished
+   * handler or action referenced and that its space had not resolved yet, then
+   * throws {@link RetryImmediately} so the scheduler re-runs the handler or
+   * action. On the re-run each name resolves synchronously (see the pattern
+   * builder's resolveInSpaceTargetSpace), and the run records the allocation
+   * in the same commit as the writes that refer to it.
    *
-   * On a SERVING runtime the fresh space's genesis ACL must name the run's
-   * ACTING user as OWNER, so the acting principal is read from the run
-   * transaction's wave run context and threaded to
-   * {@link Runtime.resolveSpaceName} as the genesis owner. Read WITHOUT
-   * `homeSpacePrincipalFor`'s read-scope-ratchet side effect: resolving a
-   * provisioning target is not a scoped READ of the run. The ACTING user is the
-   * ONLY source: the genesis owner must be the same principal the provisioning
-   * crossing's grant probe and carriage carry, or replay's acl arm would probe
-   * a stranger — a demand-supplied `scopeKeyIdentity` is resolution scaffolding
-   * whose acting settles (possibly to NONE) at the seal, so a context carrying
-   * only it REFUSES here exactly like a bare one: its crossing would be refused
-   * carriage-less anyway, and registering the scaffolding principal would mint
-   * an orphaned genesis under an owner the wave never grants. On a client
-   * (`!servingPosture`) no owner is supplied and the genesis names the active
-   * user.
+   * Each space created for a name is owned by the owner
+   * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
+   * re-run's synchronous resolution asks for too.
+   *
+   * @throws If a serving runtime's run has no acting user to own a space.
    */
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
     tx?: IExtendedStorageTransaction,
   ): Promise<never> {
-    const names = [...(frame.pendingSpaceNames ?? [])];
-    let owner: DID | undefined;
-    if (this.#runtime.servingPosture && tx !== undefined) {
-      owner = waveRunContextOf(tx)?.acting?.user as DID | undefined;
+    const pending = [...(frame.pendingSpaceNames ?? [])];
+    const space = frame.space;
+    if (space === undefined) {
+      throw new Error("An inSpace target was named outside any space");
+    }
+    const owner = this.#runtime.actingPrincipalFor(tx);
+    if (owner === undefined) {
+      throw new Error(
+        "A served run resolves an inSpace() target only on behalf of an " +
+          "acting user, and this run has none",
+      );
     }
     await Promise.all(
-      names.map((name) =>
-        this.#runtime.resolveSpaceName(
-          name,
-          owner !== undefined ? { owner } : undefined,
-        )
+      pending.map(([name, grants]) =>
+        this.#runtime.resolveInSpaceName(space, name, {
+          owner,
+          ...(grants !== undefined ? { grants } : {}),
+        })
       ),
     );
     throw new RetryImmediately(
-      `Resolving in-space target spaces: ${names.join(", ")}`,
+      `Resolving in-space target spaces: ${
+        pending.map(([name]) => name).join(", ")
+      }`,
     );
   }
 
@@ -10249,6 +11106,10 @@ export class Runner {
     // line of defense rather than the first: `normalizeSandboxResult` runs on
     // every route here and already rejects a bare function at any depth, with
     // a better message than a hash could give.
+    //
+    // `resultPattern` is the builder's own (`patternFromFrame()`), and a
+    // pattern the builder made flattens to a `FabricValue`; see
+    // `flattenBuilderArtifacts()`.
     const resultPatternKey = hashStringOf(
       flattenBuilderArtifacts(resultPattern),
     );
@@ -10349,7 +11210,12 @@ export class Runner {
     const handlerResultCell = schedulerRehydration.viewLocalOnly
       ? resultCell.withTx()
       : resultCell;
-    const handler = (tx: IExtendedStorageTransaction, event: any) => {
+    // Each run gets a frame context of its own, so its frame, which stays
+    // pushed until an async result settles, is invisible to anything that runs
+    // while it awaits.
+    const handler = (tx: IExtendedStorageTransaction, event: any) =>
+      runInFrameContext(() => runHandler(tx, event));
+    const runHandler = (tx: IExtendedStorageTransaction, event: any) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? handlerResultCell.withTx(tx)
         : handlerResultCell;
@@ -10377,11 +11243,10 @@ export class Runner {
       // every id minted in this frame — derives from the durable event id, so
       // retries of the same event reuse the same ids and duplicate handlings
       // collide on the receipt. The fallback covers non-dispatch invocations
-      // (tests calling the handler directly).
-      const cause = {
-        ...causalInputs,
-        $event: tx.dispatchedEventId ?? crypto.randomUUID(),
-      };
+      // (tests calling the handler directly). The frame's event key derives
+      // from this same id, so it is as stable across retries as the cause is.
+      const eventId = tx.dispatchedEventId ?? crypto.randomUUID();
+      const cause = { ...causalInputs, $event: eventId };
       const policyFacingIdentity = resolvePolicyFacingImplementationIdentity(
         module,
         { implementation: fn },
@@ -10393,10 +11258,20 @@ export class Runner {
         tx,
         true,
         policyFacingIdentity,
+        deriveEventKey(
+          eventId,
+          this.#runtime.actingPrincipalFor(tx),
+          streamLink,
+        ),
       );
+      frame.trustedGesture = isTrustedGesture(event);
       if (policyFacingIdentity) {
-        tx.setCfcImplementationIdentity(policyFacingIdentity);
+        setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
+      // The principal invoked this handler, so the values the run initializes
+      // — the protected defaults of a piece it creates among them — are theirs
+      // to be represented by. No other run's initializations are.
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
 
       let popFrameAfterReturn = true;
       try {
@@ -10470,17 +11345,26 @@ export class Runner {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
-            const normalized = normalizeSandboxResult(result, name);
-            return this.#handleJavaScriptHandlerResult(
-              tx,
-              module.resultSchema,
-              normalized.value,
-              normalized.hasReactive,
-              frame,
-              resultCell,
-              addCancel,
-              cause,
-            );
+            const handleResult = () => {
+              const normalized = normalizeSandboxResult(result, name);
+              return this.#handleJavaScriptHandlerResult(
+                tx,
+                module.resultSchema,
+                normalized.value,
+                normalized.hasReactive,
+                frame,
+                resultCell,
+                addCancel,
+                cause,
+              );
+            };
+            // Access-list changes commit on their own, ahead of the handler's
+            // transaction: the memory server admits an access-list change
+            // only as a commit's single operation.
+            if ((frame.pendingSpaceAccessChanges?.size ?? 0) > 0) {
+              return commitSpaceAccessChanges(frame).then(handleResult);
+            }
+            return handleResult();
           } finally {
             logger.timeEnd("stream", "postRun");
           }
@@ -10546,7 +11430,7 @@ export class Runner {
     // dispatching the event. Steady-state this is ~free: covered selectors
     // resolve without a server round trip.
     const presyncInputs =
-      !usesLocalReads(resultCell.tx) && module.argumentSchema !== undefined
+      !usesLocalReads(cellTx(resultCell)) && module.argumentSchema !== undefined
         ? async (
           event: any,
           identity: ScopeKeyIdentity | undefined,
@@ -10689,7 +11573,10 @@ export class Runner {
       : resultCell;
     const action: Action & {
       ignoredSchedulingWrites?: NormalizedFullLink[];
-    } = (tx: IExtendedStorageTransaction) => {
+    } = (tx: IExtendedStorageTransaction) =>
+      // A frame context of its own, as for a handler.
+      runInFrameContext(() => runAction(tx));
+    const runAction = (tx: IExtendedStorageTransaction) => {
       const resultCell = schedulerRehydration.viewLocalOnly
         ? actionResultCell.withTx(tx)
         : actionResultCell;
@@ -10711,7 +11598,7 @@ export class Runner {
       );
       (action as Action & { lastFrame?: Frame }).lastFrame = frame;
       if (policyFacingIdentity) {
-        tx.setCfcImplementationIdentity(policyFacingIdentity);
+        setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
 
       const handleErrorOutput = (error: unknown) => {
@@ -10974,7 +11861,7 @@ export class Runner {
       ...staticRedirectWriteTargets,
     ]);
     const structuralMetaLinks = module.completeSchedulerScopeSummary === true
-      ? (["pattern", "argument", "result"] as const)
+      ? META_LINK_FIELDS
         .map((field) => getMetaLink(resultCell, field))
         .filter((link): link is NormalizedFullLink => link !== undefined)
       : [];
@@ -11053,7 +11940,7 @@ export class Runner {
       machineryRead,
       () =>
         findAllWriteRedirectCells(inputs, resultCell, {
-          followRedirectChains: !usesLocalReads(resultCell.tx),
+          followRedirectChains: !usesLocalReads(cellTx(resultCell)),
         }),
     );
     const { fn, name } = this.#resolveJavaScriptFunction(module);
@@ -11163,9 +12050,9 @@ export class Runner {
     // — no serializable body, so nothing could ever rehydrate them. The
     // transformer hoists every authored builder call to module scope; the
     // window makes a mint that slipped through fail loudly at creation time
-    // (see builder/action-context.ts) instead of producing an unrehydratable
-    // value. The window rides AsyncLocalStorage, so an async action's
-    // continuations stay covered past its awaits.
+    // (see builder/frame-context.ts) instead of producing an unrehydratable
+    // value. The window is kept on the action's frame context, so an async
+    // action's continuations stay covered past its awaits.
     return runInActionExecution(invoke);
   }
 
@@ -11278,13 +12165,19 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const mappedOutputBindings = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
 
     // For the list builtins, replace a pattern-valued input (the `op`) with a
@@ -11414,7 +12307,7 @@ export class Runner {
 
     const builtinIdentity = resolveBuiltinImplementationIdentity(module);
     if (builtinIdentity) {
-      tx.setCfcImplementationIdentity(builtinIdentity);
+      setCfcImplementationIdentity(tx, builtinIdentity);
     }
 
     const builtinFrame = builtinIdentity
@@ -11740,7 +12633,10 @@ export class Runner {
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const io = {
       child,
@@ -11874,7 +12770,16 @@ export class Runner {
     ]);
 
     const initialize = (instanceTx: IExtendedStorageTransaction) => {
-      if (childResultCell.space !== parentResultCell.space) {
+      const storedChild = childResultCell.withTx(instanceTx);
+      const crossSpace = childResultCell.space !== parentResultCell.space;
+      // An independently managed child owns its code and inputs, including
+      // after an owner detaches it. History keeps that fact after the origin
+      // is cleared; ordinary untracked nested children still bind inputs.
+      const resumeExisting = crossSpace &&
+        getPatternIdentityRef(storedChild) !== undefined &&
+        (getPatternSource(storedChild) !== undefined ||
+          getPieceSourceRevisions(storedChild).length > 0);
+      if (crossSpace && !resumeExisting) {
         // Cross-space child pattern: run it inline in a multi-space transaction
         // (child space committed first) rather than re-instantiating it in a
         // deferred second transaction, which would lose its verified-function
@@ -11894,18 +12799,11 @@ export class Runner {
         // the client committing the program under the user's own session;
         // without it the wave's accept gate refuses the crossing and the
         // child space's program never materializes.
-        const runContext = waveRunContextOf(instanceTx);
         this.#runtime.patternManager.replicatePatternToSpace(
           patternImpl,
           childResultCell.space,
           parentResultCell.space,
-          runContext?.acting !== undefined &&
-            runContext.capabilityRef !== undefined
-            ? {
-              acting: runContext.acting,
-              capabilityRef: runContext.capabilityRef,
-            }
-            : undefined,
+          delegatedCarriageOf(waveRunContextOf(instanceTx)),
         );
       }
       // Only a child in a space of its own claims one: an in-space nested
@@ -11913,22 +12811,49 @@ export class Runner {
       // parent's program on each release of the parent, so an origin of its
       // own would be followed twice; a cross-space child outlives the
       // program that made it and is what a release has to reach.
-      const sourceOrigin = childResultCell.space === parentResultCell.space
-        ? undefined
-        : this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl);
-      const childRun = this.#runWithStartOwnership(
-        instanceTx,
-        patternImpl,
-        inputs,
-        childResultCell.withTx(instanceTx),
-        {
-          awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
-            schedulerRehydration,
-          ),
-          parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
-          ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
-        },
-      );
+      const sourceOrigin = crossSpace && !resumeExisting
+        ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
+        : undefined;
+      const options = {
+        awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
+          schedulerRehydration,
+        ),
+        parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
+      };
+      const childRun: RunResult<unknown> = resumeExisting
+        ? this.#usesScopedPrograms(childResultCell)
+          ? {
+            resultCell: childResultCell,
+            installedCancel: this.#startWithTx(
+              instanceTx,
+              storedChild,
+              undefined,
+              options,
+            ),
+          }
+          : this.#resumeChildAfterCommit(instanceTx, childResultCell, options)
+        : this.#runWithStartOwnership(
+          instanceTx,
+          patternImpl,
+          inputs,
+          storedChild,
+          {
+            ...options,
+            ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
+          },
+        );
+      if (childRun.cancelDeferredStart !== undefined) {
+        // Each actor initializer may own a separate pending start. Register
+        // its exact token so parent teardown cannot stop a replacement run.
+        const cancel = childRun.cancelDeferredStart;
+        addCancel(() => {
+          if (
+            !this.#independentlyStartedResults.has(
+              this.#getDocKey(childResultCell),
+            )
+          ) cancel();
+        });
+      }
 
       if (sendToBindings) {
         sendValueToBinding(
@@ -11955,8 +12880,45 @@ export class Runner {
     addCancel(
       this.#usesScopedPrograms(childResultCell)
         ? this.retainChild(childResultCell)
-        : () => this.releaseChild(childResultCell, childRun.installedCancel),
+        : () => {
+          if (childRun.cancelDeferredStart === undefined) {
+            this.releaseChild(childResultCell, childRun.installedCancel);
+          }
+        },
     );
+  }
+
+  /** Resumes a child from its retained source after its parent's commit. */
+  #resumeChildAfterCommit<T>(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<T>,
+    options: StartAttempt["options"],
+  ): RunResult<T> {
+    const ownership = this.#createDeferredStartOwnership(resultCell);
+    tx.addCommitCallback((_committedTx, result) => {
+      if (result.error) {
+        ownership.cancel();
+        return;
+      }
+      if (ownership.isCancelled()) return;
+      const work = this.#startFromServedState(
+        resultCell.withTx(),
+        ownership,
+        options,
+      )
+        .then((started) => {
+          if (!started) ownership.cancel();
+        }).catch((error) => {
+          ownership.cancel();
+          this.#reportPieceStartCommitFailure(
+            `piece-start/${resultCell.sourceURI}`,
+            error,
+          );
+          throw error;
+        });
+      this.#runtime.scheduler.trackBackgroundTask(work);
+    });
+    return { resultCell, cancelDeferredStart: ownership.cancel };
   }
 }
 

@@ -29,6 +29,7 @@ import { defer } from "@commonfabric/utils/defer";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Cell, FactoryInput, JSONSchema } from "../src/builder/types.ts";
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
+import { cellRuntime } from "../src/cell.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { INJECTION_SAFE_ATOM } from "../src/cfc/schema-sanitization.ts";
 import { getMetaLink, parseLink } from "../src/link-utils.ts";
@@ -95,7 +96,7 @@ describe("generateObject with tools", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -1628,7 +1629,7 @@ describe("generateObject with tools", () => {
 
     runtime.run(tx, testPattern, {}, resultCell).sink(() => {});
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     await systemCaptured.promise;
     await runtime.idle();
@@ -1699,7 +1700,7 @@ describe("generateObject with tools", () => {
 
     runtime.run(tx, testPattern, {}, resultCell).sink(() => {});
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     await systemCaptured.promise;
     await runtime.idle();
@@ -1783,7 +1784,7 @@ describe("generateObject with tools", () => {
       );
       runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const generatedResult = patternOutputCell(resultCell, testPattern);
       await waitForLlmSettled(runtime, generatedResult);
@@ -2267,7 +2268,7 @@ describe("generateObject with tools", () => {
     );
     runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const generatedResult = patternOutputCell(resultCell, testPattern);
     await waitForLlmSettled(runtime, generatedResult);
@@ -2426,7 +2427,7 @@ function patternOutputCell(resultCell: Cell<any>, testPattern: any): Cell<any> {
   const resultLink = getMetaLink(liveResultCell, "result");
   const parentResultCell = resultLink === undefined
     ? undefined
-    : liveResultCell.runtime.getCellFromLink(resultLink);
+    : cellRuntime(liveResultCell).getCellFromLink(resultLink);
   const path = testPattern.result?.$alias?.path;
   if (parentResultCell === undefined || !Array.isArray(path)) {
     return liveResultCell;

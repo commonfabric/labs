@@ -1,5 +1,8 @@
 import ts from "typescript";
 
+import { isCellInternalMarkerName } from "./cell-brand.ts";
+import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
+
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
 const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS"] as const;
 const COMMON_FABRIC_KEY_NAME_SET = new Set<CommonFabricKeyName>(
@@ -63,13 +66,6 @@ function resolveAliasedSymbol(
   return symbol;
 }
 
-function isCommonFabricDeclarationSource(fileName: string): boolean {
-  const normalized = fileName.replace(/\\/g, "/");
-  return normalized.endsWith("/packages/api/index.ts") ||
-    normalized.includes("@commonfabric/api") ||
-    normalized.endsWith("commonfabric.d.ts");
-}
-
 function isUniqueSymbolKeySymbol(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
@@ -121,7 +117,7 @@ function resolveCommonFabricComputedKeyName(
     return undefined;
   }
 
-  if (isCommonFabricDeclarationSource(declaration.getSourceFile().fileName)) {
+  if (isCommonFabricDeclaration(declaration)) {
     return resolvedName;
   }
 
@@ -188,4 +184,14 @@ export function getPropertyNameText(
   }
 
   return undefined;
+}
+
+/**
+ * Whether schema generation leaves the member named `name` out of an object's
+ * schema whatever node the object is read through: a member keyed by a
+ * symbol, whose name the checker writes starting `__@`, or a cell's internal
+ * marker.
+ */
+export function isInternalMemberName(name: string): boolean {
+  return name.startsWith("__@") || isCellInternalMarkerName(name);
 }

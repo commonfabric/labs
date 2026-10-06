@@ -196,4 +196,18 @@ describe("policy", () => {
       }
     });
   });
+
+  describe("exclusionKind()", () => {
+    it("returns `size` for a member on the list for its size", () => {
+      expect(policy.exclusionKind("packages/runner")).toBe("size");
+    });
+
+    it("returns `source` for a member on the list for what measures it", () => {
+      expect(policy.exclusionKind("packages/cli")).toBe("source");
+    });
+
+    it("returns `undefined` for a member not on the list", () => {
+      expect(policy.exclusionKind("packages/memory")).toBeUndefined();
+    });
+  });
 });

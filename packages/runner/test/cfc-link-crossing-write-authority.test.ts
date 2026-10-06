@@ -6,6 +6,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const PRODUCER_MODULE = "producer-module-identity";
 const PRODUCER_FILE = "/patterns/producer.tsx";
@@ -99,10 +100,10 @@ describe("cfc-link-crossing-write-authority", () => {
       producerSchema,
       seedTx,
     );
-    seedTx.setCfcImplementationIdentity(asProducer);
+    setCfcImplementationIdentity(seedTx, asProducer);
     producer.set({ bio: "seed" });
     seedTx.prepareCfc();
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
     await rt.idle();
 
     const linkTx = rt.edit();
@@ -112,10 +113,10 @@ describe("cfc-link-crossing-write-authority", () => {
       consumerSchema,
       linkTx,
     );
-    linkTx.setCfcImplementationIdentity(asConsumer);
+    setCfcImplementationIdentity(linkTx, asConsumer);
     consumer.key("slot").set(producer.withTx(linkTx));
     linkTx.prepareCfc();
-    expect((await linkTx.commit()).error).toBeUndefined();
+    expect((await linkTx.commit().settled).error).toBeUndefined();
     await rt.idle();
 
     return rt;
@@ -138,10 +139,10 @@ describe("cfc-link-crossing-write-authority", () => {
       tx,
     );
     await consumer.sync();
-    tx.setCfcImplementationIdentity(identity);
+    setCfcImplementationIdentity(tx, identity);
     consumer.key("slot").key("bio").set(value);
     tx.prepareCfc();
-    const error = (await tx.commit()).error?.message;
+    const error = (await tx.commit().settled).error?.message;
     await rt.idle();
     return error;
   };

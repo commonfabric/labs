@@ -2,10 +2,18 @@
   "note": "Each atom's published generations, oldest first. The last is the identity the pattern index holds for that atom, and the one a new generation names as its priorPatternId, so a successor links what it supersedes. deno task seed-pattern-index reads this file and appends to it; see packages/cf-harness/scripts/seed-pattern-index.ts.",
   "atoms": {
     "amount-ledger": [
-      "DRCFljoU1NSWQ8pt8dvVa-mG5cld1tj5J46iq7L7-VE"
+      "DRCFljoU1NSWQ8pt8dvVa-mG5cld1tj5J46iq7L7-VE",
+      "BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs"
+    ],
+    "bills-this-month": [
+      "d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA"
+    ],
+    "budget-vs-actual": [
+      "tocW3dnw6gnwYRuaOotUo2hrVfbgt4pFqtHNKV7vh8Y"
     ],
     "check-list": [
-      "dZt8I5yIWD2g6NeftbKv-3ZouzZ2LGCSEhT8ij7wGV0"
+      "dZt8I5yIWD2g6NeftbKv-3ZouzZ2LGCSEhT8ij7wGV0",
+      "vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM"
     ],
     "counter": [
       "6gKBAa1h7f4mlD6AFkKws59l-TQECHWyFjw9BI7DqUg"
@@ -30,6 +38,9 @@
     "source-row-count": [
       "VJ5KgGwwX4DMIti2K6odXRXW08Y_ZImJEVsK9ppTl2c",
       "ZY9PB7jqhGSahwEXjaDr6cryRHzqPDwdWga8du0OmFI"
+    ],
+    "spend-by-category": [
+      "AVBtedLF7sb0Aq7JlCV6odH9h7LUtHmIPYmyDuJHORQ"
     ]
   }
 }

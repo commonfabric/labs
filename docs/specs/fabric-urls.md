@@ -70,10 +70,10 @@ Examples:
 
 ```text
 https://example.com/
-https://example.com/@common.tools
-https://example.com/@common.tools/welcome
+https://example.com/@commonfabric.com
+https://example.com/@commonfabric.com/welcome
 https://example.com/welcome
-https://example.com/@common.tools//of:fid1:ST7dtOTSpCwjrhPSeEsB-qhlAL4R5hmOGyQ2u2Zv1Bk
+https://example.com/@commonfabric.com//of:fid1:ST7dtOTSpCwjrhPSeEsB-qhlAL4R5hmOGyQ2u2Zv1Bk
 https://example.com/welcome/of:fid1:ST7dtOTSpCwjrhPSeEsB-qhlAL4R5hmOGyQ2u2Zv1Bk
 https://example.net/did:key:z6MkjTHbNeWo9Y3BYF3f78Y6V6bmwK67NheUfgkpEGCAhN3w/of:fid1:1rE7dWo5nKaKrEtqYmlAlTg7J_UFeflUOMmPUIlwhAI
 ```

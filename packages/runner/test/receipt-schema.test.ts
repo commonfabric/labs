@@ -1,5 +1,6 @@
 import { defer } from "@commonfabric/utils/defer";
 
+import { sendEvent } from "../src/cell.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { readResultSchemaMeta } from "../src/result-schema-meta.ts";
@@ -83,7 +84,7 @@ describe("receipt schema", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await root.pull();
     return root.key("verb") as Cell<unknown>;
@@ -100,7 +101,7 @@ describe("receipt schema", () => {
     eventId: string,
   ): Promise<Outcome> {
     const settled = defer<Outcome>();
-    stream.send(payload, (t: IExtendedStorageTransaction) => {
+    sendEvent(stream, payload, (t: IExtendedStorageTransaction) => {
       const status = t.status();
       settled.resolve({
         status: status.status,
@@ -316,7 +317,7 @@ describe("receipt schema", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await root.pull();
     const stream = root.key("verb") as Cell<unknown>;

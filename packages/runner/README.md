@@ -16,6 +16,16 @@ persistence.
 - **Dependency Injection**: No singleton patterns - all services are injected
   through a central Runtime instance
 
+## Transaction commits
+
+`runtime.edit()` returns a transaction whose `commit()` returns a synchronous
+receipt with explicit `verdict` and `settled` promises. Local readiness, remote
+outcomes, rejection repair, effects, and the multi-space and server-execution
+contracts are described in
+[Transaction commit stages](../../docs/features/transaction-commit.md).
+`Cell.pull()` demands reactive state; `pull({ awaitDurability: true })` also
+keeps that demand through the runtime-wide commit-aware barrier.
+
 ## Collection aggregates
 
 Array-valued `Cell` inputs support `count`, `sum`, `min`, `max`, `minBy`, and
@@ -89,6 +99,17 @@ authority, including checks answered from the preparation-local cover cache.
 counts their three child templates (`shape`, `value`, and `followRef`). These
 counters measure work before final entry coalescing; they do not count distinct
 persisted entries.
+
+## Parsing untrusted CFC labels
+
+`parseIfcLabel` from `@commonfabric/runner/cfc` is the public boundary for a
+standalone label received as untrusted JSON. It accepts object atoms and
+confidentiality `{ anyOf: [...] }` clauses, preserves extension atom type URIs,
+and returns a deeply detached `IFCLabel`.
+
+Malformed values throw `InvalidIfcLabelError` with a JSON-pointer-like `path`.
+Callers must treat the refusal as an invalid label, never as an unlabeled value.
+The parser checks grammar only; consumers remain responsible for policy meaning.
 
 ## Architecture
 
@@ -186,6 +207,9 @@ storage:
 - Schemas are based on JSON Schema with extensions for reactivity and references
 - Each Cell has an associated schema that validates its data
 - Schemas can define nested cells with `asCell: ["cell"]`
+- `@commonfabric/runner/scope` exposes the scope predicates, including
+  `isSchemaScope` for the closed `space`, `user`, `session`, and `any`
+  vocabulary.
 - Schema validation happens automatically when setting values
 
 ### Sigil-based Links
@@ -341,7 +365,8 @@ settingsCell.withTx(tx).set({ theme: "light", fontSize: 16 });
 // Work with nested properties
 const themeProperty = settingsCell.key("theme");
 themeProperty.withTx(tx).set("system");
-await tx.commit();
+tx.commit();
+await runtime.scheduler.idle();
 
 // Clean up subscription when done
 cleanup();
@@ -433,7 +458,7 @@ userCell.withTx(seed).set({
   tags: [],
   settings: { theme: "light", notifications: true },
 });
-await seed.commit();
+seed.commit();
 
 // Access the typed data
 const user = userCell.get();
@@ -447,7 +472,7 @@ console.log(settings.theme); // "light"
 // Update nested cells (mutations require a transaction)
 const tx = runtime.edit();
 settingsCell.withTx(tx).set({ theme: "dark", notifications: false });
-await tx.commit();
+tx.commit();
 
 // Re-read through the parent for the updated view — a nested-cell handle
 // obtained from an earlier get() keeps observing its earlier snapshot
@@ -523,18 +548,16 @@ const result = runtime.run(
   resultCell,
 );
 runtime.prepareTxForCommit(tx);
-await tx.commit();
+tx.commit();
 
-// Await the computation graph to settle, then pull the result cell's view
-await runtime.idle();
-await result.pull();
+// Demand the result through setup commit callbacks and computations.
+await result.pull({ awaitDurability: true });
 console.log(result.get()); // { result: 10 }
 
 // Update the input and watch the result change automatically
 const update = runtime.edit();
 input.withTx(update).set(10);
-await update.commit();
-await runtime.idle();
+update.commit();
 await result.pull();
 console.log(result.get()); // { result: 20 }
 
@@ -657,7 +680,7 @@ sourceCell.withTx(seed).set({
   metadata: { createdAt: "2023-01-01", type: "user" },
   tags: ["tag1", "tag2"],
 });
-await seed.commit();
+seed.commit();
 
 // Create a mapping cell that reorganizes the data by writing sigil LINKS
 // into it (setRaw writes the links themselves rather than link targets).
@@ -688,8 +711,7 @@ mappingCell.withTx(tx).setRaw({
   // Reference to first array element
   firstTag: sourceCell.key("tags").key(0).getAsLink(),
 });
-await tx.commit();
-await runtime.idle();
+tx.commit();
 
 // Reads resolve through the links to the source values
 await mappingCell.pull();
@@ -753,7 +775,7 @@ rootCell.withTx(seed).set({
   value: "root",
   current: { label: "nested" },
 });
-await seed.commit();
+seed.commit();
 
 // Subscribe to changes in the whole cell
 // This callback is called immediately with the current value,
@@ -784,7 +806,8 @@ rootCell.key("current").key("label").sink((value) => {
 // Changing values requires a transaction and triggers the callbacks
 const tx = runtime.edit();
 rootCell.key("current").key("label").withTx(tx).set("updated");
-await tx.commit();
+tx.commit();
+await runtime.scheduler.idle();
 // This will log (after the commit propagates):
 // "Nested value: { label: 'updated' }"
 // "Label value: updated"
@@ -909,6 +932,25 @@ components interact:
 This flow happens automatically once set up, allowing developers to focus on
 business logic rather than managing data flow manually.
 
+## Cross-space child source ownership
+
+A cross-space child with a recorded source origin or source revision history
+owns its stored pattern and arguments. Reinstantiating its parent resumes that
+stored state, including owner edits that detached the origin. Untracked nested
+children continue to take their pattern and inputs from the parent.
+
+This independent input ownership starts when the origin or history is recorded.
+A parent release's new literals and bindings do not replace the child's stored
+arguments. Existing links remain reactive to their original targets; moving or
+replacing a parent-internal target does not retarget the child. Preserve those
+targets or explicitly update the child's inputs as its owner, for example with
+`cf piece apply`, using the retained child's input contract.
+
+For a space-scoped child, resume waits for the parent transaction to commit and
+retains the parent demand root across cold loading. Parent teardown cancels only
+the start it owns; a replacement or independently started child keeps running.
+Scoped serving children resume through their per-actor program coordinator.
+
 ## Service Architecture
 
 The Runtime coordinates several core services:
@@ -938,6 +980,12 @@ enforcement, concurrent requests targeting different spaces register source and
 compiled closure replication into each requested space. Those writes participate
 in the runtime's durability barrier. With CFC disabled, compilation still uses
 the requested space for fabric imports but does not replicate closures.
+
+## Space access
+
+`ACLManager.grant(did, "READ" | "WRITE")` adds access monotonically inside the
+conflict-retried transaction, preserving existing WRITE or OWNER grants. Callers
+must not replay a grant after an independent revocation.
 
 ## Contributing
 

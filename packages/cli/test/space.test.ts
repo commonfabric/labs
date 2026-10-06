@@ -156,6 +156,55 @@ describe("cf space", () => {
     });
   });
 
+  it("names what a reset removed, apart from the space it restored", async () => {
+    // A pass that follows a link into another space leaves that space's store
+    // beside the working copy, and cell-derived databases sit there too. Both
+    // are the attempt's; `--json` keeps a store's DID and a cell database's file
+    // name in separate fields, so a script reading the DIDs reads only spaces.
+    await withFixture(async ({ snapshot, clone }) => {
+      expect(
+        (await cf(`space clone ${SPACE} --from ${snapshot} --to ${clone}`))
+          .code,
+      ).toBe(0);
+      const engineDir = workingCopy(clone).replace(/\/[^/]*$/, "");
+      const other = "did:key:z6MkCliOtherSpace";
+      new Database(`${engineDir}/${other}.sqlite`).close();
+      await Deno.writeTextFile(`${engineDir}/cell-abc123.sqlite`, "");
+
+      const reset = await cf(`space reset ${clone} --json`);
+      expect(reset.code).toBe(0);
+      const report = JSON.parse(reset.stdout.join("\n"));
+      expect(report.removedStores).toEqual([other]);
+      expect(report.removedCellDatabases).toEqual(["cell-abc123.sqlite"]);
+      expect(await exists(`${engineDir}/${other}.sqlite`)).toBe(false);
+      expect(await exists(`${engineDir}/cell-abc123.sqlite`)).toBe(false);
+    });
+  });
+
+  it("says when a clone predates fingerprint-scheme recording", async () => {
+    // A version-1 clone never recorded how its baseline was fingerprinted, so
+    // its verdict rests on an assumption the report has to state.
+    await withFixture(async ({ snapshot, clone }) => {
+      expect(
+        (await cf(`space clone ${SPACE} --from ${snapshot} --to ${clone}`))
+          .code,
+      ).toBe(0);
+      const manifestPath = `${clone}/clone.json`;
+      const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+      delete manifest.fingerprint.scheme;
+      await Deno.writeTextFile(
+        manifestPath,
+        JSON.stringify({ ...manifest, version: 1 }),
+      );
+
+      const verified = await cf(`space verify ${clone}`);
+      expect(verified.code).toBe(0);
+      expect(text(verified.stdout)).toContain(
+        "predates fingerprint-scheme recording",
+      );
+    });
+  });
+
   it("passes verification when only generated cells were rewritten", async () => {
     // A clean pattern update rotates generated cells and adds commits. If that
     // failed verification, every legitimate migration would look like data loss.
@@ -514,7 +563,8 @@ describe("cf space", () => {
       expect(cloned.code).toBe(0);
       const { manifest, paths } = JSON.parse(text(cloned.stdout));
       expect(manifest.space).toBe(SPACE);
-      expect(manifest.version).toBe(1);
+      expect(manifest.version).toBe(2);
+      expect(typeof manifest.fingerprint.scheme).toBe("number");
       // The reported path is absolute, so the printed serve line is a usable
       // file:// URL even when --to was relative.
       expect(paths.workingPath.startsWith("/")).toBe(true);

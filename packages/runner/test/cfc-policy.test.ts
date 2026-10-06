@@ -364,6 +364,20 @@ describe("CFC policy records (B2a)", () => {
         /needs an appliesTo pattern/,
       ],
       [
+        "appliesTo that is not a FabricValue",
+        () =>
+          buildCfcPolicySnapshot([
+            record({
+              rules: [{
+                ...spaceReaderRule,
+                // @ts-expect-error: a `Date` is not a `FabricValue`.
+                appliesTo: new Date(0),
+              }],
+            }),
+          ]),
+        /appliesTo is not a `FabricValue`/,
+      ],
+      [
         "unknown rule key (typo)",
         () =>
           buildCfcPolicySnapshot([
@@ -407,6 +421,20 @@ describe("CFC policy records (B2a)", () => {
             }),
           ]),
         /undefined pattern/,
+      ],
+      [
+        "guard pattern that is not a FabricValue",
+        () =>
+          buildCfcPolicySnapshot([
+            record({
+              rules: [{
+                ...spaceReaderRule,
+                // @ts-expect-error: a `Date` is not a `FabricValue`.
+                preCondition: { integrity: [new Date(0)] },
+              }],
+            }),
+          ]),
+        /contains a pattern that is not a `FabricValue`/,
       ],
       [
         "post with neither effect",

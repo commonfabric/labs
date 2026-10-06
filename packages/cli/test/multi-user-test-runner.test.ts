@@ -27,12 +27,20 @@ import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
-import { assertParticipantRung } from "../lib/multi-user-test-runner.ts";
+import {
+  assertParticipantRung,
+  multiUserDescriptorMeta,
+  participantAccess,
+} from "../lib/multi-user-test-runner.ts";
 import type {
   ParticipantInitResult,
+  WorkerLifetimeNotice,
   WorkerRequest,
   WorkerResponse,
 } from "../lib/multi-user-test-worker.ts";
@@ -57,6 +65,7 @@ function fixture(name: string): string {
 class ParticipantWorkerClient {
   readonly name: string;
   #worker: Worker;
+  #lifetimeLock?: string;
   #nextId = 1;
   #pending = new Map<
     number,
@@ -69,7 +78,13 @@ class ParticipantWorkerClient {
       new URL("../lib/multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `marker-wait:${name}` },
     );
-    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    this.#worker.onmessage = (
+      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+    ) => {
+      if ("lifetimeLock" in event.data) {
+        this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -99,7 +114,7 @@ class ParticipantWorkerClient {
 
   async close(): Promise<void> {
     await this.call("dispose").catch(() => {});
-    this.#worker.terminate();
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 }
 
@@ -164,7 +179,9 @@ describe(
       // goes out a round trip later — and alice's other marker wakes the wait
       // onto a document that still lacks the one it wants.
       const server = StandaloneMemoryServer.start();
-      const spaceName = crypto.randomUUID();
+      // This server enforces no ACL, so a DID nothing has written to is a space
+      // both participants may use.
+      const spaceDid = (await Identity.generate()).did();
       const names = ["alice", "bob"];
       const workers = new Map<string, ParticipantWorkerClient>();
       try {
@@ -177,7 +194,7 @@ describe(
           );
           await client.call("init", {
             identity: realmValueFromKeyPair(identity.keyPair),
-            spaceName,
+            spaceDid,
             apiUrl: server.url.href,
             // Any two-participant descriptor will do: the markers this test
             // announces and awaits are its own, not the fixture's steps.
@@ -237,7 +254,7 @@ describe(
         });
         return await client.call("init", {
           identity: realmValueFromKeyPair(identity.keyPair),
-          spaceName: crypto.randomUUID(),
+          spaceDid: (await Identity.generate()).did(),
           apiUrl: server.url.href,
           testPath: fixture("marker-barrier.test.tsx"),
           root: FIXTURES,
@@ -372,6 +389,48 @@ describe(
       }
     });
 
+    it("writes nothing into a caller-supplied store it refuses", async () => {
+      // The single-user runner writes a test's compiled closure into its
+      // space, which is the caller's store when one is supplied. A multi-user
+      // test is only recognized once compiled, and refuses that store, so the
+      // write has to wait until the test is known not to be one.
+
+      const identity = await Identity.fromPassphrase("multi-user untouched");
+      const storageManager = StorageManager.emulate({ as: identity });
+      const path = fixture("marker-barrier.test.tsx");
+      try {
+        const result = await runTestPattern(path, {
+          root: FIXTURES,
+          storageHost: { identity, storageManager },
+        });
+        expect(result.error).toContain("is a multi-user test");
+
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        try {
+          const program = await resolveLocalProgram(
+            (r) => runtime.harness.resolve(r),
+            { main: path, root: FIXTURES },
+          );
+          const evaluated = await runtime.patternManager
+            .compileAndRegisterModules(program);
+          const entry = [...evaluated.exportsByIdentity!].find((
+            [, exports],
+          ) => exports === evaluated.main)!;
+          const stored = await runtime.patternManager
+            .getPatternSourceProgramByIdentity(entry[0], identity.did());
+          expect(stored).toBeUndefined();
+          await storageManager.synced();
+        } finally {
+          await runtime.dispose({ closeStorage: false });
+        }
+      } finally {
+        await storageManager.close();
+      }
+    });
+
     it("reports a marker nobody announces as a deadlock", async () => {
       const { failed, results } = await runTests(
         fixture("unannounced-marker.test.tsx"),
@@ -380,6 +439,75 @@ describe(
       expect(failed).toBeGreaterThan(0);
       expect(results[0].error).toContain("Deadlock");
       expect(results[0].error).toContain(`bob awaits "never-announced"`);
+    });
+
+    describe("the shared space's access list", () => {
+      const pattern = () => {};
+
+      it("returns `OWNER` for the first participant's user and `WRITE` for an undeclared one", () => {
+        expect(participantAccess([
+          { name: "alice", user: "alice" },
+          { name: "bob", user: "bob" },
+        ])).toEqual(new Map([["alice", "OWNER"], ["bob", "WRITE"]]));
+      });
+
+      it("returns each level a user's participants declare, `none` included", () => {
+        expect(participantAccess([
+          { name: "alice", user: "alice" },
+          { name: "bob", user: "bob", access: "READ" },
+          { name: "bobAgain", user: "bob" },
+          { name: "carol", user: "carol", access: "none" },
+          { name: "dave", user: "dave", access: "OWNER" },
+        ])).toEqual(
+          new Map([
+            ["alice", "OWNER"],
+            ["bob", "READ"],
+            ["carol", "none"],
+            ["dave", "OWNER"],
+          ]),
+        );
+      });
+
+      it("throws when the first participant's user declares a level other than `OWNER`", () => {
+        expect(() =>
+          participantAccess([
+            { name: "alice", user: "alice" },
+            { name: "aliceAgain", user: "alice", access: "WRITE" },
+          ])
+        ).toThrow("so it cannot declare access `WRITE`");
+      });
+
+      it("throws when two participants of one user declare different levels", () => {
+        expect(() =>
+          participantAccess([
+            { name: "alice", user: "alice" },
+            { name: "bob", user: "bob", access: "READ" },
+            { name: "bobAgain", user: "bob", access: "WRITE" },
+          ])
+        ).toThrow("declare access both `READ` and `WRITE`");
+      });
+
+      it("reads a participant's declared `access` from the descriptor", () => {
+        expect(multiUserDescriptorMeta({
+          participants: {
+            alice: pattern,
+            bob: { pattern, access: "none" },
+          },
+        })).toEqual({
+          participants: [
+            { name: "alice", user: "alice" },
+            { name: "bob", user: "bob", access: "none" },
+          ],
+        });
+      });
+
+      it("throws on a declared `access` that is not a level", () => {
+        expect(() =>
+          multiUserDescriptorMeta({
+            participants: { bob: { pattern, access: "ADMIN" } },
+          })
+        ).toThrow('Participant `bob` declares access `"ADMIN"`');
+      });
     });
   },
 );

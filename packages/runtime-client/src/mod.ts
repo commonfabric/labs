@@ -2,6 +2,7 @@
  * Module for interacting with a runtime over some IPC, currently a web worker thread.
  */
 
+export * from "./authorship.ts";
 export * from "./cell-handle.ts";
 export * from "./piece-handle.ts";
 export * from "./runtime-client.ts";
@@ -18,5 +19,8 @@ export type {
   IntegratedOperation,
   OpCursor,
   OperationFieldSnapshot,
+  PresenceFacets,
+  PresenceRecord,
 } from "@commonfabric/memory/v2";
+export type { PresenceEvent } from "@commonfabric/memory/v2/client";
 export { CODEMIRROR_CHANGESET_CODEC } from "@commonfabric/memory/v2/operation-codec";

@@ -6,7 +6,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "../src/runtime.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
   TestStorageManager,
 } from "./memory-v2-test-utils.ts";
@@ -46,13 +46,7 @@ class WithheldCommitSessionFactory implements SessionFactory {
 }
 
 function makeServer(): MemoryV2Server.Server {
-  return new MemoryV2Server.Server({
-    authorizeSessionOpen(m) {
-      const p = (m.authorization as { principal?: unknown })?.principal;
-      return typeof p === "string" ? p : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  return newSharedServer();
 }
 
 Deno.test("runtime.dispose() resolves while a commit is withheld in flight", async () => {
@@ -86,7 +80,7 @@ Deno.test("runtime.dispose() resolves while a commit is withheld in flight", asy
   // tolerate the cancellation.
   const writeTx = runtime.edit();
   cell.withTx(writeTx).set({ value: 1 });
-  writeTx.commit().catch(() => {});
+  writeTx.commit().settled.catch(() => {});
   await clock.settle();
   // Guard the precondition: if the commit is not actually in flight, dispose
   // would not exercise the deadlock and the test would pass vacuously.

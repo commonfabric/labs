@@ -20,7 +20,10 @@ import {
   FileSystemHarnessArtifactStore,
   type HarnessArtifactStore,
 } from "../src/artifacts.ts";
-import type { HarnessTranscriptOmissions } from "../src/contracts/transcript-omissions.ts";
+import {
+  createHarnessTranscriptOmissions,
+  type HarnessTranscriptOmissions,
+} from "../src/contracts/transcript-omissions.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -34,6 +37,7 @@ import type {
 } from "../src/sandbox/types.ts";
 import { scrubBareFabricIdentifiers } from "../src/fabric-identifier-scrub.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 
 // Marks each prompt below as one a person typed. `run_pattern` and
@@ -179,9 +183,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-schema-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -190,8 +194,8 @@ describe("prompt-loop run_pattern model boundary", () => {
       const runId = "run-pattern-result-schema";
       const doublingSource = [
         "import { computed, pattern } from 'commonfabric';",
-        "export default pattern<{ n: number }, { doubled: number }>(",
-        "  ({ n }) => ({ doubled: computed(() => n * 2) }),",
+        "export default pattern<{ n: number }, { doubled: number; pending: boolean; error: string }>(",
+        "  ({ n }) => ({ doubled: computed(() => n * 2), pending: true, error: 'status-only-error-sentinel' }),",
         ");",
       ].join("\n");
       const requestBodies: unknown[] = [];
@@ -259,6 +263,11 @@ describe("prompt-loop run_pattern model boundary", () => {
         (message) => message.role === "tool",
       );
       expect(toolMessage?.content).not.toContain("resultRefSchema");
+      expect(toolMessage?.content).not.toContain("status-only-error-sentinel");
+      expect(JSON.parse(toolMessage!.content)).toMatchObject({
+        pending: true,
+        hasError: true,
+      });
     } finally {
       await fabricRuntime.dispose();
       await storageManager.close();
@@ -273,10 +282,7 @@ describe("prompt-loop run_pattern model boundary", () => {
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
-    const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
-      fabricRuntime,
-    );
+    const pieces = await openLegacySpace(signer, fabricRuntime, spaceName);
     await pieces.synced();
     try {
       // A real default pattern, so the space has a piece registry to join.
@@ -306,9 +312,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       await fabricRuntime.idle();
       await pieces.synced();
       const doublingSource = [
-        "import { computed, pattern } from 'commonfabric';",
+        "import { computed, pattern, UI } from 'commonfabric';",
         "export default pattern<{ n: number }, { doubled: number }>(",
-        "  ({ n }) => ({ doubled: computed(() => n * 2) }),",
+        "  ({ n }) => ({ doubled: computed(() => n * 2), [UI]: <div>{n * 2}</div> }),",
         ");",
       ].join("\n");
       let calls = 0;
@@ -375,11 +381,15 @@ describe("prompt-loop run_pattern model boundary", () => {
           }),
         );
       };
+      const artifactStore = new RecordingArtifactStore(
+        "run-pattern-registration",
+      );
       const loop = new CfHarnessPromptLoop({
         apiKey: "test-key",
         engine: new CfHarnessEngine({
           sandboxRuntime: new FakeSandboxRuntime(),
           runId: "run-pattern-registration",
+          artifactStore,
           model: "gpt-5.4",
           fabricSessionFactory: () => Promise.resolve({ pieces }),
         }),
@@ -406,6 +416,27 @@ describe("prompt-loop run_pattern model boundary", () => {
       expect(registered.length).toBe(1);
       expect(toolMessage?.content).not.toContain(registered[0].id);
       expect(toolMessage?.content).not.toContain("pieceId");
+      expect(
+        artifactStore.toolOutputs.find((entry) =>
+          entry.toolId === "assign_slug"
+        )?.output,
+      )
+        .toMatchObject({ slug: "doubling-report", pieceId: registered[0].id });
+      const named = result.runState.toolOutputs.find((entry) =>
+        entry.toolId === "assign_slug"
+      );
+      const omissions = createHarnessTranscriptOmissions(result.transcript);
+      expect(
+        omissions.results.find((entry) => entry.outputId === named?.outputId)
+          ?.rules,
+      )
+        .toEqual([{
+          rule: "artifact-only",
+          locations: [{
+            artifactPath: named?.artifactPath,
+            jsonPointer: "/pieceId",
+          }],
+        }]);
     } finally {
       await fabricRuntime.dispose();
       await storageManager.close();
@@ -485,9 +516,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-scrub-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -589,9 +620,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-collapse-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -761,9 +792,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-source-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -892,9 +923,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-batch-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -1013,9 +1044,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-batch-final-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -1109,9 +1140,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-no-store-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );

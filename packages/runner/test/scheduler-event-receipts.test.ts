@@ -2,8 +2,10 @@ import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
+  cellTx,
   markRuntimeInjectedEventKeys,
   sanitizeRuntimeInjectedEventKeys,
+  sendEvent,
 } from "../src/cell.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { scopeCallerEventId } from "../src/scheduler/event-identity.ts";
@@ -249,7 +251,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -318,7 +320,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -399,7 +401,7 @@ describe("scheduler event receipts", () => {
       },
       (_event, { target }) => {
         handlerInvocations++;
-        const handlerTx = target.tx;
+        const handlerTx = cellTx(target);
         if (handlerTx === undefined) {
           throw new Error("handler target must carry the dispatch transaction");
         }
@@ -424,7 +426,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, Root, { target }, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
     await runtime.scheduler.idleWithPendingCommits();
@@ -498,7 +500,7 @@ describe("scheduler event receipts", () => {
       const updateTx = runtime.edit();
       winningChild.key("state").withTx(updateTx).set(4);
       runtime.prepareTxForCommit(updateTx);
-      expect((await updateTx.commit()).error).toBeUndefined();
+      expect((await updateTx.commit().settled).error).toBeUndefined();
       await waitForSchedulerCondition(
         runtime,
         () => winningChild.key("doubled").get() === 8,
@@ -538,7 +540,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, Root, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -598,7 +600,7 @@ describe("scheduler event receipts", () => {
       const updateTx = runtime.edit();
       resultCell.key("state", "value").withTx(updateTx).set(3);
       runtime.prepareTxForCommit(updateTx);
-      expect((await updateTx.commit()).error).toBeUndefined();
+      expect((await updateTx.commit().settled).error).toBeUndefined();
       await waitForSchedulerCondition(
         runtime,
         () => resultCell.key("doubled").get() === 6,
@@ -634,7 +636,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -755,7 +757,7 @@ describe("scheduler event receipts", () => {
     );
     const root = runtime.run(tx, Root, { target }, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await root.pull();
 
@@ -795,7 +797,7 @@ describe("scheduler event receipts", () => {
       const contextTx = runtime.edit();
       root.key("current", "value").withTx(contextTx).set(2);
       runtime.prepareTxForCommit(contextTx);
-      expect((await contextTx.commit()).error).toBeUndefined();
+      expect((await contextTx.commit().settled).error).toBeUndefined();
 
       // The same event id now observes different captured context. Because the
       // first receipt is already confirmed and its wrapper is live locally,
@@ -831,7 +833,7 @@ describe("scheduler event receipts", () => {
       const tickTx = runtime.edit();
       survivingChild.key("ticks", "value").withTx(tickTx).set(3);
       runtime.prepareTxForCommit(tickTx);
-      expect((await tickTx.commit()).error).toBeUndefined();
+      expect((await tickTx.commit().settled).error).toBeUndefined();
       await waitForSchedulerCondition(
         runtime,
         () => Number(survivingChild.key("doubled").get()) === 6,
@@ -879,7 +881,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -948,7 +950,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1009,7 +1011,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1033,7 +1035,7 @@ describe("scheduler event receipts", () => {
       });
     };
     const streamCell = root.key("stream") as Cell<unknown>;
-    streamCell.send({}, record, { eventId, session });
+    sendEvent(streamCell, {}, record, { eventId, session });
     await waitForSchedulerCondition(
       runtime,
       () => handlerInvocations === 1 && outcomes.length === 1,
@@ -1042,7 +1044,7 @@ describe("scheduler event receipts", () => {
     // Same id, same session: the body re-runs (exactly-once is per commit)
     // but the create-only receipt collides, and the loser's callback still
     // carries the SAME receipt address — the winner's original outcome.
-    streamCell.send({}, record, { eventId, session });
+    sendEvent(streamCell, {}, record, { eventId, session });
     await waitForSchedulerCondition(
       runtime,
       () => handlerInvocations === 2 && outcomes.length === 2,
@@ -1101,7 +1103,7 @@ describe("scheduler event receipts", () => {
       { increment: unknown; decrement: unknown }
     >(space, "receipts cross-verb caller id root", undefined, tx);
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1119,7 +1121,7 @@ describe("scheduler event receipts", () => {
     // deduplicate onto the other.
     const eventId = "caller-shared-id";
     const session = "ses:cross-verb";
-    (root.key("increment") as Cell<unknown>).send({}, record, {
+    sendEvent(root.key("increment"), {}, record, {
       eventId,
       session,
     });
@@ -1128,7 +1130,7 @@ describe("scheduler event receipts", () => {
       () => incremented === 1 && outcomes.length === 1,
       "increment did not settle",
     );
-    (root.key("decrement") as Cell<unknown>).send({}, record, {
+    sendEvent(root.key("decrement"), {}, record, {
       eventId,
       session,
     });
@@ -1164,7 +1166,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1187,13 +1189,13 @@ describe("scheduler event receipts", () => {
     // invocation of one verb, and neither may deduplicate onto the other.
     const eventId = "add-comment-1";
     const streamCell = root.key("stream") as Cell<unknown>;
-    streamCell.send({}, record, { eventId, session: "ses:agent-one" });
+    sendEvent(streamCell, {}, record, { eventId, session: "ses:agent-one" });
     await waitForSchedulerCondition(
       runtime,
       () => handlerInvocations === 1 && outcomes.length === 1,
       "the first session's event did not settle",
     );
-    streamCell.send({}, record, { eventId, session: "ses:agent-two" });
+    sendEvent(streamCell, {}, record, { eventId, session: "ses:agent-two" });
     await waitForSchedulerCondition(
       runtime,
       () => handlerInvocations === 2 && outcomes.length === 2,
@@ -1225,7 +1227,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1233,7 +1235,9 @@ describe("scheduler event receipts", () => {
     // guessed the id, and the guarantee the id buys — a retry settling on
     // the original outcome — would be handed to whoever got there first.
     const streamCell = root.key("stream") as Cell<unknown>;
-    expect(() => streamCell.send({}, undefined, { eventId: "add-comment-1" }))
+    expect(() =>
+      sendEvent(streamCell, {}, undefined, { eventId: "add-comment-1" })
+    )
       .toThrow(/requires the `session`/);
     await runtime.idle();
     // Refused at the send, so no delivery was queued for the handler.
@@ -1257,7 +1261,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1318,7 +1322,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1415,7 +1419,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1483,7 +1487,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1542,7 +1546,7 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -1625,7 +1629,7 @@ describe("scheduler event receipts", () => {
         required: ["value"],
         additionalProperties: false,
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1673,7 +1677,7 @@ describe("scheduler event receipts", () => {
         required: ["value"],
         additionalProperties: false,
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1712,7 +1716,7 @@ describe("scheduler event receipts", () => {
         required: ["a", "b"],
         additionalProperties: false,
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1748,7 +1752,7 @@ describe("scheduler event receipts", () => {
         required: ["value"],
         additionalProperties: false,
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1796,7 +1800,7 @@ describe("scheduler event receipts", () => {
         undefined,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1807,7 +1811,8 @@ describe("scheduler event receipts", () => {
         // (convertCellsToLinks turns the cell into a link) and the marker
         // takes the real injection route (minted send option → queued event
         // → dispatch transaction).
-        streamCell.send(
+        sendEvent(
+          streamCell,
           { value: 7, result: resultHolder },
           (t: IExtendedStorageTransaction) => resolve(t.status().status),
           {
@@ -1842,7 +1847,7 @@ describe("scheduler event receipts", () => {
         undefined,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1854,7 +1859,8 @@ describe("scheduler event receipts", () => {
       const eventId = "evt:closed-unminted:0:closed-unminted-root";
       const streamCell = root.key("stream") as Cell<unknown>;
       const commitStatus = new Promise<string>((resolve) => {
-        streamCell.send(
+        sendEvent(
+          streamCell,
           { value: 7, result: holder },
           (t: IExtendedStorageTransaction) => resolve(t.status().status),
           {
@@ -1891,14 +1897,15 @@ describe("scheduler event receipts", () => {
         undefined,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
       const eventId = "evt:closed-declared:0:closed-declared-root";
       const streamCell = root.key("stream") as Cell<unknown>;
       const commitStatus = new Promise<string>((resolve) => {
-        streamCell.send(
+        sendEvent(
+          streamCell,
           { value: 7, result: declaredHolder },
           (t: IExtendedStorageTransaction) => resolve(t.status().status),
           {
@@ -1934,7 +1941,7 @@ describe("scheduler event receipts", () => {
         undefined,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -1946,7 +1953,8 @@ describe("scheduler event receipts", () => {
       const eventId = "evt:closed-forged:0:closed-forged-root";
       const streamCell = root.key("stream") as Cell<unknown>;
       const commitStatus = new Promise<string>((resolve) => {
-        streamCell.send(
+        sendEvent(
+          streamCell,
           { value: 7, result: smuggled },
           (t: IExtendedStorageTransaction) => resolve(t.status().status),
           { eventId, session: callerSession },
@@ -1972,7 +1980,7 @@ describe("scheduler event receipts", () => {
         properties: { value: { type: "number" } },
         required: ["value"],
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await root.pull();
 
@@ -2019,13 +2027,13 @@ describe("scheduler event receipts", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
     const receiptLinks: Array<unknown> = [];
     const streamCell = root.key("stream") as Cell<unknown>;
-    streamCell.send({}, (t: IExtendedStorageTransaction) => {
+    sendEvent(streamCell, {}, (t: IExtendedStorageTransaction) => {
       receiptLinks.push(t.handlingReceiptLink);
     }, {
       eventId: "evt:receipt-link-off:0:flag-off-root",
@@ -2088,7 +2096,7 @@ Deno.test("navigateTo handler results navigate once and deduplicate redelivery",
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await root.pull();
 
@@ -2137,7 +2145,7 @@ Deno.test("navigateTo handler results navigate once and deduplicate redelivery",
 
     expect(navigations.length).toBe(1);
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }

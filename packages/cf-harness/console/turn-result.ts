@@ -13,19 +13,29 @@ import {
 import { join } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type {
-  HarnessChatEventEnvelope,
-  HarnessChatStructuredEvent,
+import {
+  type HarnessChatEventEnvelope,
+  type HarnessChatStructuredEvent,
+  harnessChatTurnElapsedMs,
+  type HarnessChatTurnStatus,
 } from "../src/contracts/interactive-chat.ts";
 import {
   type HarnessTaskOutcome,
   readHarnessTaskOutcome,
 } from "../src/contracts/task-outcome.ts";
+import { readHarnessRunState } from "../src/artifacts.ts";
+import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
+import {
+  assertValidHarnessHandleTable,
+  returnReferentValues,
+} from "../src/handle-table.ts";
 import type {
   HarnessToolCall,
   HarnessToolTranscriptMessage,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
+import type { HarnessModelUsage } from "../src/model/client.ts";
+import { readHarnessModelUsage } from "../src/model/usage.ts";
 
 /** A named piece a completed console turn made openable. */
 export interface ConsoleTurnResultPiece {
@@ -64,6 +74,18 @@ export type ConsoleTurnResult = HarnessTaskOutcome & {
 
   /** Human-readable answer, question, or reason the task cannot proceed. */
   finalText: string;
+
+  /**
+   * What each return referent `finalText` names stands for, by token, for
+   * showing to the owner beside the text. Absent when it names none.
+   */
+  revealed?: Readonly<Record<string, string>>;
+
+  /** Reported usage for this turn, including research and delegated calls. */
+  usage?: HarnessModelUsage;
+
+  /** Wall time from the durable turn's start to its terminal event. */
+  elapsedMs?: number;
 };
 
 /** The console's completed SSE event with its external result attached. */
@@ -106,6 +128,9 @@ export interface ReadConsoleTurnResultOptions {
 
   /** Space this console is configured against. */
   spaceName: string;
+
+  /** Durable turn timestamps; absent when only legacy run artifacts are held. */
+  timing?: Pick<HarnessChatTurnStatus, "startedAt" | "endedAt">;
 }
 
 /** Characters the artifact store admits in one run directory name. */
@@ -136,7 +161,9 @@ interface TurnRunArtifacts {
   transcript: readonly HarnessTranscriptMessage[];
   currentTranscriptIndexes: ReadonlySet<number>;
   finalText: string;
+  revealed: Readonly<Record<string, string>>;
   taskOutcome: HarnessTaskOutcome;
+  usage?: HarnessModelUsage;
 }
 
 /** The first two occurrences suffice to establish uniqueness at any prefix. */
@@ -220,6 +247,30 @@ const currentTranscriptIndex = (
   return value.transcriptIndex;
 };
 
+/**
+ * The handle table the run state at `path` records, or `undefined` when the
+ * run left no state or recorded no table.
+ *
+ * @throws Error when the state cannot be read or its table does not validate,
+ * which makes the turn's artifacts malformed like any other that does not
+ * read back.
+ */
+const readRunHandleTable = async (
+  path: string,
+): Promise<HarnessHandleTable | undefined> => {
+  let table;
+  try {
+    table = (await readHarnessRunState(path)).handleTable;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      return undefined;
+    }
+    throw error;
+  }
+  if (table !== undefined) assertValidHarnessHandleTable(table);
+  return table;
+};
+
 /** Reads the transcript and its run boundary without admitting a path. */
 const readTurnRunArtifacts = async (
   artifactRoot: string,
@@ -232,17 +283,23 @@ const readTurnRunArtifacts = async (
   }
   try {
     const runRoot = join(artifactRoot, turnId);
-    const [transcriptValue, reportValue]: [unknown, unknown] = await Promise
-      .all(
-        [
-          Deno.readTextFile(join(runRoot, "transcript.json")).then((text) =>
-            JSON.parse(text)
-          ),
-          Deno.readTextFile(join(runRoot, "run-report.json")).then((text) =>
-            JSON.parse(text)
-          ),
-        ],
-      );
+    const [transcriptValue, reportValue, handleTable]: [
+      unknown,
+      unknown,
+      HarnessHandleTable | undefined,
+    ] = await Promise.all(
+      [
+        Deno.readTextFile(join(runRoot, "transcript.json")).then((text) =>
+          JSON.parse(text)
+        ),
+        Deno.readTextFile(join(runRoot, "run-report.json")).then((text) =>
+          JSON.parse(text)
+        ),
+        // The run state holds the handle table, which says what a return
+        // referent in the final text stands for.
+        readRunHandleTable(join(runRoot, "run-state.json")),
+      ],
+    );
     if (
       !Array.isArray(transcriptValue) ||
       !transcriptValue.every(isTranscriptMessage) ||
@@ -276,7 +333,17 @@ const readTurnRunArtifacts = async (
       transcript: transcriptValue,
       currentTranscriptIndexes,
       finalText: reportValue.finalAssistantText,
+      revealed: handleTable === undefined
+        ? {}
+        : returnReferentValues(reportValue.finalAssistantText, handleTable),
       taskOutcome,
+      usage: readHarnessModelUsage(
+        "totalUsage" in reportValue
+          ? reportValue.totalUsage
+          : "usage" in reportValue
+          ? reportValue.usage
+          : undefined,
+      ),
     };
   } catch {
     return undefined;
@@ -324,6 +391,10 @@ export const readConsoleTurnResult = async (
   if (artifacts === undefined) {
     return undefined;
   }
+  const elapsedMs = harnessChatTurnElapsedMs(
+    options.timing?.startedAt,
+    options.timing?.endedAt,
+  );
   const calls = indexCalls(artifacts);
   const membership = new Map<
     string,
@@ -392,5 +463,10 @@ export const readConsoleTurnResult = async (
     }),
     spaceName: options.spaceName,
     finalText: artifacts.finalText,
+    ...(Object.keys(artifacts.revealed).length > 0
+      ? { revealed: artifacts.revealed }
+      : {}),
+    ...(artifacts.usage === undefined ? {} : { usage: artifacts.usage }),
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
   };
 };

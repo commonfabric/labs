@@ -200,12 +200,6 @@ export interface ManifestEntry {
    * same corpus with replacement forever.
    */
   lastRun?: string;
-
-  /**
-   * Whether it has been shown to pass as the only test in its unit. Until
-   * it has, its siblings are not skipped and the unit is what runs.
-   */
-  independent?: boolean;
 }
 
 /**
@@ -254,19 +248,60 @@ export interface UnschedulableEntry {
   cost: number;
 }
 
+/**
+ * What one suite's batches were fitted to cost beyond what its tests take:
+ * the intercept, charged once per lane holding the suite; the slope on
+ * what its own tests take; and what one more of its units costs a batch
+ * already running others. What the suite's processes spend before their
+ * units begin is spread through these three.
+ */
+export interface SuiteFit {
+  overhead: number;
+  correction: number;
+  unitOverhead: number;
+
+  /**
+   * The same suite fitted with its processes' setup measured and taken
+   * out, where some batch started a process that marks when its units
+   * begin. A reader that knows it charges it in place of the three figures
+   * beside it, which stay what a reader that does not know it charges.
+   */
+  process?: ProcessFit;
+}
+
+/** What a suite costs where what its processes spend on setup is measured. */
+export interface ProcessFit {
+  /**
+   * Seconds each process a lane starts for the suite spends before its
+   * units begin, charged each time a lane starts one.
+   */
+  setup: number;
+
+  /**
+   * Seconds charged once per lane holding the suite, for what its batches
+   * spent beyond their setup, their tests, and their units.
+   */
+  overhead: number;
+  correction: number;
+  unitOverhead: number;
+}
+
 /** The fitted numbers a lane's own timing records produced. */
 export interface Calibration {
   /** Seconds each capability's setup takes. */
   setupCost: Record<string, number>;
 
+  /** Per suite, what its batches run without coverage cost. */
+  suites: Record<string, SuiteFit>;
+
   /**
-   * Per suite: the intercept, the slope on what its own tests take, and
-   * what one more of its units costs a batch already running others.
+   * Per suite, what its batches run with coverage on cost, which is
+   * fitted apart because instrumenting a run costs it time and how much
+   * is a property of the suite. A suite no lane has run with coverage on
+   * has no entry, and a manifest carrying no map at all is read as
+   * having no such suite.
    */
-  suites: Record<
-    string,
-    { overhead: number; correction: number; unitOverhead: number }
-  >;
+  suitesWithCoverage?: Record<string, SuiteFit>;
 
   /** Seconds a lane spends outside its batches. */
   prologue: number;
@@ -300,7 +335,7 @@ export interface CoverageBaseline {
   commit: string;
 
   /**
-   * When the run that measured it was created, ISO 8601. It decides one
+   * When the run that measured it started, ISO 8601. It decides one
    * thing: a publisher keeps a baseline while it is younger than the
    * window a manifest covers, and drops it once it is older than that.
    * Which baseline a comparison takes is decided by the order of their
@@ -309,6 +344,90 @@ export interface CoverageBaseline {
   createdAt: string;
 
   uncoveredLines: number;
+}
+
+/**
+ * How one suite's charges compared with what its batches spent, over the
+ * cost window, and what its charges came to in this manifest.
+ */
+export interface SuiteHealth {
+  /**
+   * Seconds a lane pays before it runs anything of the suite: its
+   * overhead, one unit's charge, the setup of the process its unit runs
+   * in where it names one, and the setup of every capability it needs.
+   */
+  fixed: number;
+
+  /** How many of its identities cost more than any lane can hold. */
+  tooLong: number;
+
+  /** Batches of it that recorded what the packer charged for them. */
+  batches: number;
+
+  /**
+   * What those batches spent over what they were charged, at the middle
+   * batch and at the ninetieth percentile. Absent where no batch
+   * recorded a charge.
+   */
+  ratio?: { median: number; p90: number };
+}
+
+/** A suite's charges in the manifest before the one carrying them. */
+export interface PreviousSuiteHealth {
+  fixed: number;
+  tooLong: number;
+}
+
+/**
+ * Whether the cost model a manifest carries still describes what lanes
+ * spend, from the lanes' own measurements over the cost window and from
+ * the manifest before it.
+ *
+ * Nothing obeys this. A manifest carrying none, or one this reader cannot
+ * read, is read as carrying none, rather than being refused: the packing
+ * does not depend on it.
+ */
+export interface CalibrationHealth {
+  /** Per suite, by suite identifier. */
+  suites: Record<string, SuiteHealth>;
+
+  /** Lanes that recorded their work whole, and how many ran long. */
+  lanes: {
+    /** Lanes that recorded their work, their projection and their bound. */
+    observed: number;
+
+    /** How many of those ran past their bound. */
+    pastBound: number;
+
+    /** How many of those the packer projected to finish inside it. */
+    projectedInside: number;
+
+    /** How many of those ran past it all the same. */
+    overran: number;
+  };
+
+  /**
+   * The same suites' charges in the manifest before this one, where the
+   * publisher could read one.
+   */
+  previous?: {
+    generatedAt: string;
+    suites: Record<string, PreviousSuiteHealth>;
+  };
+
+  /**
+   * The count of tests too long for any lane that this manifest's count is
+   * judged against, where there is a manifest before it: that manifest's
+   * count, or, while that count stood reported as grown, the count it was
+   * judged against.
+   */
+  tooLongBaseline?: number;
+
+  /**
+   * What the publisher found broken in the model, one sentence each,
+   * naming the suite and the figure. Empty for a model that holds.
+   */
+  alarms: string[];
 }
 
 /** One publisher run's whole output. */
@@ -341,6 +460,9 @@ export interface Manifest {
   known: { count: number; digest: string };
 
   coverageBaselines: CoverageBaseline[];
+
+  /** Absent from a manifest whose publisher did not measure it. */
+  health?: CalibrationHealth;
 }
 
 /**
@@ -447,11 +569,6 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
   ) {
     return undefined;
   }
-  if (
-    value.independent !== undefined && typeof value.independent !== "boolean"
-  ) {
-    return undefined;
-  }
   if (value.lastRun !== undefined && !isNonEmptyString(value.lastRun)) {
     return undefined;
   }
@@ -470,7 +587,6 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
     repeats: value.repeats,
   };
   if (value.lastRun !== undefined) entry.lastRun = value.lastRun;
-  if (value.independent !== undefined) entry.independent = value.independent;
   if (evidence !== undefined) entry.flakeEvidence = evidence;
   return entry;
 }
@@ -564,11 +680,23 @@ function parseCalibration(
   };
   const setupCost = numbers(value.setupCost);
   if (setupCost === undefined) return undefined;
-  if (!isRecord(value.suites)) return undefined;
   if (!isFiniteNumber(value.prologue) || value.prologue < 0) return undefined;
-  const suites: Calibration["suites"] = {};
-  for (const [suite, fitted] of Object.entries(value.suites)) {
-    if (!isRecord(fitted)) return undefined;
+  const suites = parseFits(value.suites, schema);
+  if (suites === undefined) return undefined;
+  if (value.suitesWithCoverage === undefined) {
+    return { setupCost, suites, prologue: value.prologue };
+  }
+  const suitesWithCoverage = parseFits(value.suitesWithCoverage, schema);
+  if (suitesWithCoverage === undefined) return undefined;
+  return { setupCost, suites, suitesWithCoverage, prologue: value.prologue };
+}
+
+/** Reads a map of suites to their fits, failing whole if any fails. */
+function parseFits(
+  value: unknown,
+  schema: number,
+): Record<string, SuiteFit> | undefined {
+  return parseSuites(value, (fitted) => {
     if (
       !isFiniteNumber(fitted.overhead) || fitted.overhead < 0 ||
       !isFiniteNumber(fitted.correction) || fitted.correction <= 0
@@ -590,13 +718,34 @@ function parseCalibration(
       ? 0
       : carried;
     if (!isFiniteNumber(unitOverhead) || unitOverhead < 0) return undefined;
-    suites[suite] = {
+    const process = fitted.process === undefined
+      ? undefined
+      : parseProcessFit(fitted.process);
+    if (fitted.process !== undefined && process === undefined) {
+      return undefined;
+    }
+    return {
       overhead: fitted.overhead,
       correction: fitted.correction,
       unitOverhead,
+      ...(process === undefined ? {} : { process }),
     };
+  });
+}
+
+/** Reads a suite's process fit, or `undefined` for one it cannot read. */
+function parseProcessFit(value: unknown): ProcessFit | undefined {
+  if (!isRecord(value)) return undefined;
+  const { setup, overhead, correction, unitOverhead } = value;
+  if (
+    !isFiniteNumber(setup) || setup < 0 ||
+    !isFiniteNumber(overhead) || overhead < 0 ||
+    !isFiniteNumber(correction) || correction <= 0 ||
+    !isFiniteNumber(unitOverhead) || unitOverhead < 0
+  ) {
+    return undefined;
   }
-  return { setupCost, suites, prologue: value.prologue };
+  return { setup, overhead, correction, unitOverhead };
 }
 
 function parseLane(value: unknown): LanePlan | undefined {
@@ -639,6 +788,105 @@ function parseBaseline(value: unknown): CoverageBaseline | undefined {
     commit: value.commit,
     createdAt: value.createdAt,
     uncoveredLines: value.uncoveredLines,
+  };
+}
+
+/** Whether a value is a count: a finite whole number of nothing or more. */
+function isCount(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+}
+
+/** Whether a value is a number of seconds, or a ratio of two of them. */
+function isAmount(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+/** Reads a map of suites through a parser, failing whole if any fails. */
+function parseSuites<T>(
+  value: unknown,
+  parse: (raw: Record<string, unknown>) => T | undefined,
+): Record<string, T> | undefined {
+  if (!isRecord(value)) return undefined;
+  const suites: Record<string, T> = {};
+  for (const [suite, raw] of Object.entries(value)) {
+    const parsed = isRecord(raw) ? parse(raw) : undefined;
+    if (parsed === undefined) return undefined;
+    suites[suite] = parsed;
+  }
+  return suites;
+}
+
+/** Reads a suite's charges in the manifest before, or `undefined`. */
+function parsePreviousSuite(
+  value: Record<string, unknown>,
+): PreviousSuiteHealth | undefined {
+  if (!isAmount(value.fixed) || !isCount(value.tooLong)) return undefined;
+  return { fixed: value.fixed, tooLong: value.tooLong };
+}
+
+/** Reads one suite's health figures, or `undefined`. */
+function parseSuiteHealth(
+  value: Record<string, unknown>,
+): SuiteHealth | undefined {
+  const charges = parsePreviousSuite(value);
+  if (charges === undefined || !isCount(value.batches)) return undefined;
+  if (value.ratio === undefined) {
+    return { ...charges, batches: value.batches };
+  }
+  const ratio = value.ratio;
+  if (!isRecord(ratio) || !isAmount(ratio.median) || !isAmount(ratio.p90)) {
+    return undefined;
+  }
+  return {
+    ...charges,
+    batches: value.batches,
+    ratio: { median: ratio.median, p90: ratio.p90 },
+  };
+}
+
+/**
+ * Reads a manifest's health, or returns `undefined` where it carries none
+ * this reader can read. A field this reader does not know is dropped.
+ */
+function parseHealth(value: unknown): CalibrationHealth | undefined {
+  if (!isRecord(value) || !isRecord(value.lanes)) return undefined;
+  const suites = parseSuites(value.suites, parseSuiteHealth);
+  const { observed, pastBound, projectedInside, overran } = value.lanes;
+  if (
+    suites === undefined || !isCount(observed) || !isCount(pastBound) ||
+    !isCount(projectedInside) || !isCount(overran) ||
+    // Lanes past their bound and lanes projected inside it are among the
+    // lanes observed, and lanes that overran are among both.
+    pastBound > observed || projectedInside > observed ||
+    overran > pastBound || overran > projectedInside
+  ) {
+    return undefined;
+  }
+  const alarms = value.alarms;
+  if (
+    !Array.isArray(alarms) ||
+    !alarms.every((alarm): alarm is string => typeof alarm === "string")
+  ) {
+    return undefined;
+  }
+  const baseline = value.tooLongBaseline;
+  if (baseline !== undefined && !isCount(baseline)) return undefined;
+  const health: CalibrationHealth = {
+    suites,
+    lanes: { observed, pastBound, projectedInside, overran },
+    ...(baseline === undefined ? {} : { tooLongBaseline: baseline }),
+    alarms,
+  };
+  if (value.previous === undefined) return health;
+  const previous = value.previous;
+  if (!isRecord(previous) || !isTimestamp(previous.generatedAt)) {
+    return undefined;
+  }
+  const before = parseSuites(previous.suites, parsePreviousSuite);
+  if (before === undefined) return undefined;
+  return {
+    ...health,
+    previous: { generatedAt: previous.generatedAt, suites: before },
   };
 }
 
@@ -712,6 +960,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
     if (seen.has(key)) return undefined;
     seen.add(key);
   }
+  const health = parseHealth(value.health);
   return {
     schema: MANIFEST_SCHEMA_VERSION,
     generatedAt: value.generatedAt,
@@ -727,6 +976,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
     lanes,
     known: { count: value.known.count, digest: value.known.digest },
     coverageBaselines,
+    ...(health === undefined ? {} : { health }),
   };
 }
 

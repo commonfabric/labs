@@ -1,10 +1,15 @@
-import type { JSONSchemaObj } from "@commonfabric/api";
+import type {
+  InSpaceGrants,
+  InSpaceOptions,
+  JSONSchemaObj,
+} from "@commonfabric/api";
 import {
   debugStr,
   hashStringOf,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isInertPlainObject } from "@commonfabric/utils/objects";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
@@ -16,7 +21,13 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 
 import { type AliasBinding } from "../alias-binding.ts";
-import { isCell, schemaCellScope, setCellUnlinkedSpace } from "../cell.ts";
+import {
+  exportCell,
+  isCell,
+  linkCellOutsideHandlerSpace,
+  schemaCellScope,
+  setCellUnlinkedSpace,
+} from "../cell.ts";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { defineAuthoredDebugAccessors } from "../harness/authored-debug-source.ts";
@@ -44,6 +55,12 @@ import {
   SUBPATTERN_ARGUMENT_BUILTIN_REFS,
 } from "./builtin-replayability.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
+import {
+  pushOntoFrameStack,
+  pushOntoRootFrameStack,
+  removeFromFrameStack,
+  topFrame,
+} from "./frame-context.ts";
 import { toJSONMethod } from "./json-member.ts";
 import { connectInputAndOutputs } from "./node-utils.ts";
 import { brandTrustedPattern, noteDerivedCopy } from "./pattern-metadata.ts";
@@ -51,6 +68,7 @@ import { reactive } from "./reactive.ts";
 import {
   type CellAliasResolver,
   moduleToEncodableForm,
+  moduleWithAliasBindings,
   patternToEncodableForm,
   withAliasBindings,
 } from "./to-encodable-form.ts";
@@ -275,7 +293,11 @@ function factoryFromPattern<T, R>(
     traverseValue(value, (value) => {
       if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
       if (isCell(value) && !allCells.has(value)) {
-        const { frame, nodes, path, scope, name } = value.export();
+        // A cell a handler pinned to another space takes its link here, with
+        // the handler's body finished, and no earlier: until the cell has a
+        // link, the handler may still name it with `.for()`.
+        linkCellOutsideHandlerSpace(value);
+        const { frame, nodes, path, scope, name } = exportCell(value);
         if (isReactive(value) && frame !== getTopFrame()) {
           throw new Error(
             closureCaptureErrorMessage({
@@ -301,7 +323,7 @@ function factoryFromPattern<T, R>(
 
   const usedNames = new Set<string>();
   allCells.forEach((cell) => {
-    const existingName = getStableInternalPathSegment(cell.export().name);
+    const existingName = getStableInternalPathSegment(exportCell(cell).name);
     if (typeof existingName === "string") usedNames.add(existingName);
   });
 
@@ -309,7 +331,7 @@ function factoryFromPattern<T, R>(
   if (isObjectOrArray(outputs) && !isCell(outputs)) {
     Object.entries(outputs).forEach(([key, value]: [string, unknown]) => {
       if (isCell(value)) {
-        const exported = value.export();
+        const exported = exportCell(value);
         if (
           !exported.path.length &&
           !exported.name &&
@@ -324,13 +346,13 @@ function factoryFromPattern<T, R>(
 
   // Then from assignments in nodes
   allCells.forEach((cell) => {
-    if (cell.export().path.length) return;
-    cell.export().nodes.forEach((node: NodeRef) => {
+    if (exportCell(cell).path.length) return;
+    exportCell(cell).nodes.forEach((node: NodeRef) => {
       if (isObjectOrArray(node.inputs)) {
         Object.entries(node.inputs).forEach(([key, input]) => {
           if (
-            isReactive(input) && input.export().cell === cell &&
-            !cell.export().name && !usedNames.has(key)
+            isReactive(input) && Object.is(exportCell(input).cell, cell) &&
+            !exportCell(cell).name && !usedNames.has(key)
           ) {
             cell.for(key, true); // allowIfSet=true to not override existing causes
             usedNames.add(key);
@@ -346,12 +368,12 @@ function factoryFromPattern<T, R>(
 
   const inputCell = isCell(inputs) ? inputs : getCellOrThrow(inputs);
   const selfRefCell = getCellOrThrow(selfRef);
-  const inputRootCell = inputCell.export().cell;
-  const selfRefRootCell = selfRefCell.export().cell;
+  const inputRootCell = exportCell(inputCell).cell;
+  const selfRefRootCell = exportCell(selfRefCell).cell;
   const cellNameForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): "argument" | "result" | undefined => {
-    const rootCell = cell.export().cell;
+    const rootCell = exportCell(cell).cell;
     return rootCell === inputRootCell
       ? "argument"
       : rootCell === selfRefRootCell
@@ -379,7 +401,7 @@ function factoryFromPattern<T, R>(
     return isStream ? { ...generated, $kind: "stream" } : generated;
   };
   allCells.forEach((cell) => {
-    const { cell: top, path, kind, name, external } = cell.export();
+    const { cell: top, path, kind, name, external } = exportCell(cell);
     if (
       external || path.length > 0 || cellNameForCell(cell) !== undefined ||
       assignedInternalPartialCauses.has(top)
@@ -416,7 +438,9 @@ function factoryFromPattern<T, R>(
   const cellReferenceForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): AliasBinding["$alias"] | undefined => {
-    const { cell: top, path, external, scope, schema, kind } = cell.export();
+    const { cell: top, path, external, scope, schema, kind } = exportCell(
+      cell,
+    );
     // If we have an external id, don't bother with all this
     if (external) return undefined;
 
@@ -451,7 +475,7 @@ function factoryFromPattern<T, R>(
     allCells,
   );
   allCells.forEach((cell) => {
-    const { cell: top, external } = cell.export();
+    const { cell: top, external } = exportCell(cell);
     if (!external && assignedInternalPartialCauses.has(top)) {
       allCellsAndInternalRoots.add(top);
     }
@@ -464,7 +488,9 @@ function factoryFromPattern<T, R>(
   allCellsAndInternalRoots.forEach((cell) => {
     // Only process roots of extra cells:
     if (cell === (inputs as unknown)) return;
-    const { cell: top, path, schema, scope, external, kind } = cell.export();
+    const { cell: top, path, schema, scope, external, kind } = exportCell(
+      cell,
+    );
     if (path.length > 0 || external) return;
 
     const cellReference = cellReferenceForCell(cell);
@@ -492,7 +518,7 @@ function factoryFromPattern<T, R>(
     serializationPath, // path where we encountered the cell
     ignoreSelfAliases,
   ) => {
-    const { cell: top } = cell.export();
+    const { cell: top } = exportCell(cell);
     const cellReference = cellReferenceForCell(cell);
     if (cellReference === undefined) return undefined;
     if (cellReference.cell !== undefined) {
@@ -529,7 +555,7 @@ function factoryFromPattern<T, R>(
       if (!deepEqual(partialCause, cellReference.partialCause)) {
         throw new Error(
           `Inconsistent partial cause for cell. This is a bug in the pattern serializer, please report it.\n` +
-            `Cell path: ${cell.export().path.join(".")}\n` +
+            `Cell path: ${exportCell(cell).path.join(".")}\n` +
             `Existing partial cause: ${JSON.stringify(partialCause)}\n` +
             `New partial cause: ${JSON.stringify(cellReference.partialCause)}`,
         );
@@ -581,11 +607,20 @@ function factoryFromPattern<T, R>(
   const resultSchema = resultSchemaArg ?? {};
 
   const serializedNodes = Array.from(allNodes).map((node) => {
-    const module = withAliasBindings(
-      node.module,
-      resolveCellAlias,
-      false,
-    ) as unknown as Module;
+    // A module binds through its members, once it is known to be an inert
+    // plain object; rebuilding any other one member by member would run a
+    // getter, or drop a symbol or non-enumerable key, so the value walk gets it
+    // and refuses it. A node whose module is a pattern or a reactive (the
+    // dynamic-module arm, which no builder makes yet) binds it as the value it
+    // is: a graph for a pattern, an alias for a reactive. The serialized
+    // `Node.module` type does not yet say so, hence the assertion.
+    const module = (isInertPlainObject(node.module) && isModule(node.module))
+      ? moduleWithAliasBindings(node.module, resolveCellAlias, false)
+      : withAliasBindings(
+        node.module,
+        resolveCellAlias,
+        false,
+      ) as unknown as Module;
     const inputs = withAliasBindings(
       node.inputs,
       resolveCellAlias,
@@ -615,6 +650,7 @@ function factoryFromPattern<T, R>(
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
+    spaceGrants?: InSpaceGrants,
   ): PatternFactory<T, R> => {
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
@@ -631,7 +667,11 @@ function factoryFromPattern<T, R>(
         const outputs = reactive<R>();
         const frame = getTopFrame();
         if (defaultSpace !== undefined) {
-          const targetSpace = resolveInSpaceTargetSpace(defaultSpace, frame);
+          const targetSpace = resolveInSpaceTargetSpace(
+            defaultSpace,
+            spaceGrants,
+            frame,
+          );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
@@ -668,12 +708,29 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace);
+      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
       noteDerivedCopy(derived, factory);
       return derived;
     };
-    factory.inSpace = (space?: string | unknown) => {
-      const derived = makePatternFactory(defaultScope, space ?? "");
+    factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
+      // Pattern code is not trusted to keep to the type: a created space's
+      // only owner is the identity the run acts for.
+      for (
+        const [principal, capability] of Object.entries(options?.grants ?? {})
+      ) {
+        if (capability !== "READ" && capability !== "WRITE") {
+          throw new Error(
+            `inSpace() grants READ or WRITE only, not ${
+              JSON.stringify(capability)
+            } to ${JSON.stringify(principal)}`,
+          );
+        }
+      }
+      const derived = makePatternFactory(
+        defaultScope,
+        space ?? "",
+        options?.grants,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -826,7 +883,7 @@ function assignComputedCellKinds(
     const roots = new Set<OpaqueCell<any>>();
     traverseValue(value as FactoryInput<unknown>, (item) => {
       if (isCellResultForDereferencing(item)) item = getCellOrThrow(item);
-      if (isCell(item)) roots.add(item.export().cell);
+      if (isCell(item)) roots.add(exportCell(item).cell);
       return item;
     });
     return roots;
@@ -905,7 +962,7 @@ function assignComputedCellKinds(
     if (isCell(target)) {
       // A cell bound where a deeper grant may exist: the handle the handler
       // obtains deeper in writes INTO this root.
-      out.add(target.export().cell);
+      out.add(exportCell(target).cell);
       return;
     }
     if (!isObjectOrArray(target)) return; // Primitives hold no roots.
@@ -1056,7 +1113,7 @@ function assignComputedCellKinds(
     if (writers === undefined || writers.length === 0) return;
     if (writers.some(writerDisqualifies)) return;
     if (disqualified.has(root)) return;
-    if (root.export().kind === "stream") return;
+    if (exportCell(root).kind === "stream") return;
     const descriptor = derivedInternalCells.find((candidate) =>
       deepEqual(candidate.partialCause, partialCause)
     );
@@ -1069,18 +1126,23 @@ function assignComputedCellKinds(
  * graph-construction time.
  *
  * - A DID string or a cell resolves synchronously.
- * - A named string (or the anonymous case below) is resolved from the runtime's
- *   space-name cache. On a cache miss the name is recorded on the frame as
- *   pending and `undefined` is returned; the runner resolves pending names after
- *   the run and re-runs the handler/action (RetryImmediately), at which point
- *   the cache hits and the target resolves synchronously.
+ * - A named string (or the anonymous case below) names a space as the frame's
+ *   space calls it, and resolves through that space's allocation record (see
+ *   `Runtime.resolveInSpaceNameSync`). When the name has not been resolved,
+ *   it is recorded on the frame as pending, with `grants`, and `undefined` is
+ *   returned; the runner resolves pending names after the run and re-runs the
+ *   handler or action (RetryImmediately), at which point the target resolves
+ *   synchronously. The first call to name a space in a run is the one whose
+ *   grants create it: a later call naming it reads the record that call
+ *   writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
- *   call site gets its own deterministic space that survives re-runs — mirroring
- *   how cell ids are derived from causes.
+ *   call site gets its own space that survives re-runs — mirroring how cell ids
+ *   are derived from causes.
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
+  grants: InSpaceGrants | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1093,15 +1155,23 @@ function resolveInSpaceTargetSpace(
     );
   }
   const runtime = frame?.runtime;
-  if (!runtime) return undefined;
+  const callingSpace = frame?.space;
+  const tx = frame?.tx;
+  if (!runtime || !callingSpace || !tx) return undefined;
   const name = typeof space === "string" && space.length > 0
     ? space
     : anonymousSpaceName(frame!);
-  const resolved = runtime.resolveSpaceNameSync(name);
+  const resolved = runtime.resolveInSpaceNameSync(
+    callingSpace,
+    name,
+    tx,
+    grants,
+  );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
-  (frame!.pendingSpaceNames ??= new Set<string>()).add(name);
+  const pending = frame!.pendingSpaceNames ??= new Map();
+  if (!pending.has(name)) pending.set(name, grants);
   return undefined;
 }
 
@@ -1153,27 +1223,51 @@ function anonymousSpaceName(frame: Frame): string {
   return toURI(createRef({ inSpace: ordinal }, frame.cause));
 }
 
-const frames: Frame[] = [];
-
+/**
+ * Pushes a frame that inherits the runtime, transaction, space and
+ * implementation identity of the frame beneath it, unless it is a
+ * module-evaluation frame. A module is evaluated whenever it is first needed,
+ * which can be while an action awaits with its own frame still on the stack; a
+ * module-evaluation frame inherits nothing from that frame, so the cells a
+ * pattern body mints are not bound to the waiting action's space or
+ * transaction.
+ */
 export function pushFrame(frame: Partial<Frame> = {}): Frame {
   const parent = getTopFrame();
+  const inherited = frame.moduleEvaluation ? undefined : parent;
 
   const result = {
     parent,
     reactives: new Set(),
     generatedIdCounter: 0,
-    ...(parent?.implementationIdentity && {
-      implementationIdentity: parent.implementationIdentity,
+    ...(inherited?.implementationIdentity && {
+      implementationIdentity: inherited.implementationIdentity,
     }),
-    ...(parent?.runtime && { runtime: parent.runtime }),
-    ...(parent?.tx && { tx: parent.tx }),
-    ...(parent?.space && { space: parent.space }),
+    ...(inherited?.runtime && { runtime: inherited.runtime }),
+    ...(inherited?.tx && { tx: inherited.tx }),
+    ...(inherited?.space && { space: inherited.space }),
     ...(parent?.moduleEvaluation && { moduleEvaluation: true as const }),
     ...frame,
   };
 
-  frames.push(result);
+  pushOntoFrameStack(result);
   return result;
+}
+
+/**
+ * Pushes `runtime`'s default frame onto the root frame stack, whatever context
+ * the call is made in, and returns it. It carries the runtime and nothing else:
+ * whatever frame is on top when a runtime is constructed belongs to someone
+ * else, and its space and transaction would outlive it on the root stack.
+ */
+export function pushRuntimeDefaultFrame(runtime: Runtime): Frame {
+  const frame: Frame = {
+    reactives: new Set(),
+    generatedIdCounter: 0,
+    runtime,
+  };
+  pushOntoRootFrameStack(frame);
+  return frame;
 }
 
 export function pushFrameFromCause(
@@ -1183,6 +1277,7 @@ export function pushFrameFromCause(
     inHandler?: boolean;
     frameKind?: "lift" | "handler";
     eventTime?: number;
+    eventKey?: string;
     implementationIdentity?: ImplementationIdentity;
     runtime?: Runtime;
     tx?: IExtendedStorageTransaction;
@@ -1195,6 +1290,7 @@ export function pushFrameFromCause(
     inHandler,
     frameKind,
     eventTime,
+    eventKey,
     runtime,
     tx,
     space,
@@ -1223,26 +1319,27 @@ export function pushFrameFromCause(
     ...(inHandler && { inHandler: true }),
     ...(frameKind && { frameKind }),
     ...(eventTime !== undefined && { eventTime }),
+    ...(eventKey !== undefined && { eventKey }),
     ...(unsafe_binding ? { unsafe_binding } : {}),
   };
-  frames.push(frame);
+  pushOntoFrameStack(frame);
   return frame;
 }
 
 /**
- * Removes `frame` from the stack, wherever on it the frame sits: disposing one
- * runtime while another has pushed a frame over it removes one from the middle.
- * A frame that is no longer on the stack is left alone.
+ * Removes `frame` from the current frame context's stack or the root stack,
+ * wherever on it the frame sits (see `removeFromFrameStack`).
  */
 export function popFrame(frame: Frame): void {
-  const index = frames.indexOf(frame);
-  if (index !== -1) {
-    frames.splice(index, 1);
-  }
+  removeFromFrameStack(frame);
 }
 
+/**
+ * Returns the innermost frame visible to the current code: the top of its own
+ * frame context's stack, else of the root stack (see `frame-context.ts`).
+ */
 export function getTopFrame(): Frame | undefined {
-  return frames.length ? frames[frames.length - 1] : undefined;
+  return topFrame();
 }
 
 /** The full type of the `pattern` function including all overloads. */

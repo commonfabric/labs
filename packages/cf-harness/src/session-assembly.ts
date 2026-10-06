@@ -20,8 +20,11 @@
  * nowhere else.
  */
 
+import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
+import type { HarnessLoomCommandsConfig } from "./loom-commands.ts";
+import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
 import type { CfHarnessEngine } from "./engine.ts";
 import type {
   HarnessFabricSessionConfig,
@@ -54,6 +57,7 @@ import {
 import { patternRefsContextMessage } from "./pattern-refs.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
 import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
@@ -86,6 +90,16 @@ export interface HarnessSessionConfig {
 
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
+
+  /**
+   * The runsc sandbox (`--sandbox-runtime runsc`): no Docker, sessions
+   * honoured. Absent means the docker sandbox.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
 
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
@@ -122,6 +136,12 @@ export interface HarnessSessionConfig {
   /** Explicit host-owned backing for durable Loom authoring. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
 
+  /** Explicit host-owned backing for read-only Loom retrieval. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /** Explicit host-owned broker for the commands the host admits. */
+  loomCommands?: HarnessLoomCommandsConfig;
+
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
 
@@ -135,7 +155,7 @@ export interface HarnessSessionConfig {
 
   /**
    * Connector handles every session on this console is granted, named by the
-   * CFC class the loom instance behind it declares for each.
+   * loom connection behind each and described by the CFC classes it declares.
    */
   connectorGrants: readonly HarnessConnectorGrantSpec[];
 
@@ -153,6 +173,10 @@ export interface HarnessSessionConfig {
   allowedSubagentProfiles: readonly HarnessSubagentProfile[];
   browserAccess?: HarnessBrowserAccessLease;
   reasoningEffort?: string;
+
+  /** Reasoning effort for the `research` tool's own model turns. */
+  researchReasoningEffort?: string;
+
   compactThreshold?: number;
   promptCacheMode?: "implicit" | "explicit";
 
@@ -171,6 +195,8 @@ export const harnessSessionToolBacking = (
 ): HarnessToolBackingAvailability => ({
   fabricSessionAvailable: config.fabricSession !== undefined,
   loomAuthoringAvailable: config.loomAuthoring !== undefined,
+  loomRetrievalAvailable: config.loomRetrieval !== undefined,
+  loomCommandsAvailable: config.loomCommands !== undefined,
   patternIndexAvailable: config.patternIndex !== undefined,
   skillsShSearchAvailable: config.skillsSh !== undefined,
   skillsShAcquisitionAvailable: config.skillsSh !== undefined,
@@ -268,6 +294,21 @@ export const harnessSessionEngineOptions = (
     ...(config.sandboxDockerRuntime !== undefined
       ? { sandboxDockerRuntime: config.sandboxDockerRuntime }
       : {}),
+    ...(config.sandboxRuntimeKind !== undefined
+      ? { sandboxRuntimeKind: config.sandboxRuntimeKind }
+      : {}),
+    ...(config.sandboxRootfs !== undefined
+      ? { sandboxRootfs: config.sandboxRootfs }
+      : {}),
+    ...(config.sandboxCfcPolicy !== undefined
+      ? { sandboxCfcPolicy: config.sandboxCfcPolicy }
+      : {}),
+    ...(config.sandboxRunscBinary !== undefined
+      ? { sandboxRunscBinary: config.sandboxRunscBinary }
+      : {}),
+    ...(config.sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
+      : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }
       : {}),
@@ -305,6 +346,12 @@ export const harnessSessionEngineOptions = (
     ...(config.loomAuthoring !== undefined
       ? { loomAuthoring: config.loomAuthoring }
       : {}),
+    ...(config.loomRetrieval !== undefined
+      ? { loomRetrieval: config.loomRetrieval }
+      : {}),
+    ...(config.loomCommands !== undefined
+      ? { loomCommands: config.loomCommands }
+      : {}),
     ...(config.patternIndex !== undefined
       ? { patternIndex: config.patternIndex }
       : {}),
@@ -322,6 +369,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.reasoningEffort !== undefined
       ? { reasoningEffort: config.reasoningEffort }
+      : {}),
+    ...(config.researchReasoningEffort !== undefined
+      ? { researchReasoningEffort: config.researchReasoningEffort }
       : {}),
     ...(config.compactThreshold !== undefined
       ? { compactThreshold: config.compactThreshold }
@@ -355,15 +405,16 @@ export interface EstablishHarnessSessionContextOptions {
 /**
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
- * skills, the well-known grants of the session's space, and the operator's
- * input cells and the guidance for selecting a piece target.
+ * skills, the well-known grants of the session's space, host-supplied input
+ * cells, the guidance for selecting a piece target, and, for a run whose host
+ * opted in to `weaver_action`, the guidance for using the Weaver's commands.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
  * connect is reported and the run continues, because a grant is an
- * entitlement the run did not ask for. Input cells are explicit operator
- * configuration, so one that cannot be minted fails the run rather than
- * starting it without what the operator attached.
+ * entitlement the run did not ask for. Input cells name task targets, whether
+ * attached by the operator or retained by the session, so one that cannot be
+ * minted fails the run rather than starting it without that target.
  *
  * This is the first thing the run's driver does, so it takes the run
  * (`running`) before anything else and, when a step throws, fails it as
@@ -427,14 +478,18 @@ const establishContextMessages = async (
       options.onGrantsUnavailable?.(error);
     }
   }
-  messages.push(
-    ...pieceTargetingContextMessages(await engine.establishInputCells()),
-  );
+  const inputCells = await engine.establishInputCells();
+  for (const message of pieceTargetingContextMessages(inputCells)) {
+    messages.push(message);
+  }
   const patternRefsMessage = patternRefsContextMessage(
     await engine.establishPatternRefs(),
   );
   if (patternRefsMessage !== undefined) {
     messages.push(patternRefsMessage);
+  }
+  if (engine.clientActionsAvailable) {
+    messages.push(WEAVER_COMMAND_GUIDANCE);
   }
   messages.push(REVISION_VERIFICATION_GUIDANCE);
   return messages;

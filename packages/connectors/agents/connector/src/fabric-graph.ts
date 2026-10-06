@@ -11,6 +11,7 @@ import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { addressKey } from "@commonfabric/runner/shared";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { stableFabricValue } from "./stable-fabric-value.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 export interface AgentFabricConnection {
   runtime: Runtime;
@@ -182,7 +183,7 @@ export async function pushStableCellGraph(
   }
 
   const tx = connection.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -247,7 +248,7 @@ export async function pushStableCellGraph(
     throw error;
   }
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) {
     throw new Error(commitErrorMessage(result.error), { cause: result.error });
   }
@@ -300,18 +301,17 @@ async function resolveStableGraphLinks(
       offset < value.length;
       offset += HYDRATION_BATCH_SIZE
     ) {
-      resolved.push(
-        ...await Promise.all(
-          value.slice(offset, offset + HYDRATION_BATCH_SIZE).map((child) =>
-            resolveStableGraphLinks(
-              connection,
-              child,
-              cache,
-              preserveLinkFields,
-            )
-          ),
+      const resolvedBatch = await Promise.all(
+        value.slice(offset, offset + HYDRATION_BATCH_SIZE).map((child) =>
+          resolveStableGraphLinks(
+            connection,
+            child,
+            cache,
+            preserveLinkFields,
+          )
         ),
       );
+      for (const resolvedChild of resolvedBatch) resolved.push(resolvedChild);
     }
     return resolved;
   }

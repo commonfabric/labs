@@ -100,9 +100,9 @@ describe("PiecesController", () => {
           apiUrl: new URL("http://toolshed.test"),
           storageManager: storage,
         });
-        session = await createSession({
+        session = createSession({
           identity: signer,
-          spaceName: crypto.randomUUID(),
+          spaceDid: await runtime.createSpace(),
         });
         pieces = new PiecesController(session, runtime);
         await pieces.synced();

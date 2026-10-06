@@ -152,11 +152,12 @@ describe("piece layer over a legacy-envelope default pattern (CT-1838)", () => {
   });
 
   it("T7: getPieceRegistry returns the registry and add succeeds after a pin bump", async () => {
-    const spaceName = "legacy-envelope-default-" + crypto.randomUUID();
-
     // Session 1: build the poisoned space.
     const runtime1 = newRuntime();
-    const session1 = await createSession({ identity: signer, spaceName });
+    const session1 = createSession({
+      identity: signer,
+      spaceDid: await runtime1.createSpace(),
+    });
     const pieces1 = new PiecesController(session1, runtime1);
     await pieces1.synced();
     const space = pieces1.getSpace();
@@ -176,7 +177,7 @@ describe("piece layer over a legacy-envelope default pattern (CT-1838)", () => {
       writeTx,
     );
     runtime1.prepareTxForCommit(writeTx);
-    expect((await writeTx.commit()).error).toBeUndefined();
+    expect((await writeTx.commit().settled).error).toBeUndefined();
 
     // Cold-load it (heals via tolerance) — the loaded pattern carries the
     // LEGACY `{identity, symbol}` ref, so the piece created from it points
@@ -222,7 +223,7 @@ describe("piece layer over a legacy-envelope default pattern (CT-1838)", () => {
     );
     try {
       const runtime2 = newRuntime();
-      const session2 = await createSession({ identity: signer, spaceName });
+      const session2 = createSession({ identity: signer, spaceDid: space });
       const pieces2 = new PiecesController(session2, runtime2);
       await pieces2.synced();
 

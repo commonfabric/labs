@@ -72,7 +72,8 @@ reported rather than written into the conversation.
 | `fetch-program` | URL | `{ pending, result?, error? }`; successful `result` contains source `files` and `main` | same | the durable cache is keyed by input hash; served outbox keys also name the cache document and resolved user or session instance |
 | `llm` (`generateText` / `generateObject`) | model, messages/prompt, schema, params | settled result only (protocol.md §6 — no partial commits in v2); `requestHash` on the result cell selects the pending request and accompanies its settled result or error | broker-held provider keys; grant from handle | temperature etc. are inputs, so nondeterminism is memo-stable by construction |
 | `llm-dialog` | dialog state + params | settled turns | same | multi-turn = new key per turn |
-| `sqlite*` | database link, statement, params, reader principal, the run's effective read ceiling (the serving runtime's option met with the ceiling of the session the run acts as — `WaveRunContext.readCeiling`, serving-loop.md §3c) | one cleared result cell per (query, reader) | read served under the reader's clearance and the run's ceiling | clearance = per-reader materialization (RULED 2026-08-02) — see below; a ceiling applies to a session-scoped result only, so two sessions of different ceilings hold different cells and different hashes |
+| `sqlite*` | database link, statement, params, reader principal, the run's effective read ceiling (the serving runtime's option met with the ceiling of the session the run acts as — `WaveRunContext.readCeiling`, serving-loop.md §3c) | one cleared result cell per (query, reader) | read served under the reader's clearance and the run's ceiling | clearance = per-reader materialization (RULED 2026-08-02) — see below; runtime ceilings filter session-scoped results, giving different sessions distinct cells and hashes; shared results retain their complete labels and each cell read enforces the observing run’s ceiling |
+| `agent` | task text, input links, result schema, `maxConfidentiality`, tool names | `{ pending, result?, error?, requestHash?, run?, host? }`; `result` and `run` are links, to the result document the run's harness wrote and to the `AgentRun` record | the requester's, held by the runner that claims the record | the outbox effect creates the `AgentRun` record (per user, in the requesting space) and indexes it in the requester's home space; the result cell derives from the record, so the memo is the record's existence, and a node that finds a `queued` record it did not stage indexes it again; behind the `agentBuiltin` flag |
 
 The shared `fetch.ts` builtins retain independent request lifecycles for each
 served result instance. The requesting run's identity resolves the outbox key
@@ -152,6 +153,40 @@ Parent binding publication follows the selected target separately from request
 state, so a scope change can return to an existing target. Settled in-memory
 instance state retires once no staging or dispatched work owns it; durable
 result cells retain memoization.
+
+`agent` differs from the rest of the table in what its effect does: nothing is
+sent. The post-commit effect writes an `AgentRun` record — the request fields,
+`state: queued` — in the requesting space under the requester's user instance,
+re-reading the request under its own transaction so the record carries that
+read's labels, and appends a `{run, host}` entry to the home-space index a
+runner process subscribes to. The record commits outside the wave, as an effect
+completion does. The index entry is a bookkeeping write that seals into the
+wave, and when the requester's home space is not the served space it crosses
+there on the delegated carriage of the run that staged the request
+(serving-loop.md §3d). A wave that drops the index write has it issued once
+more. A record whose index write is refused, dropped twice, or withdrawn with
+its wave for any other reason ends `refused`, unless it has been listed or has
+left `queued` by the time that refusal commits. The effect can fail to end the
+record too: its process can stop between the two writes, and a tenure that
+parks abandons the wave and disposes of the runtime that would write the
+refusal. Such a record stays `queued` with no index entry naming it. A node
+that finds a `queued` record it did not stage the request for therefore derives
+its result from the record as any memo hit does, and also enqueues an effect
+that makes the same index write, and the same refusal when that write fails.
+The index write adds an entry only for a record not already listed, so a record
+that is listed is left as it is. That effect passes the same sink gate as the
+request's first staging. A release check that refuses it after commit leaves the
+record as it is and the result cell following it, and the node's next run
+enqueues the effect again. The runner
+claims the record, runs the harness as the requester, and writes the terminal
+fields as an authored client. The builtin writes the record only to create it,
+or to end it while it is still `queued` and no index lists it, which is what
+keeps the runner's authored writes and the effect's derived writes from ever
+overlapping. Inputs reach the record as links, so what the sink gate measures is
+the task text plus the pointer label of each reference. A request whose
+consumed label exceeds its own `maxConfidentiality` settles with an error before
+it is staged, and one naming a tool the requester's registered runner does not
+offer settles with `INVALID_INPUT` before its record is created.
 
 Named queues retain their issued work when inputs are cleared. Queued
 `generateText` and `generateObject` publish each completion even when a later
@@ -324,8 +359,9 @@ stream is passed to other spaces, which then append intents to it.
 - `wish` home-space materialization under serving — LIFTED by Phase 5
   as **per-demanding-identity wish resolution** (RULED 2026-08-14;
   supersedes the (c)-ruled interim refusal): on a serving runtime the
-  wish's home-space targets (favorite hashtags and `#favorites`/`#journal`/`#profile`
-  family) resolve against the RUN's demanding identity — the
+  wish's home-space targets (favorite hashtags and the
+  `#favorites`/`#journal`/`#agent_queue`/`#profile` family) resolve against the
+  RUN's demanding identity — the
   demand-supplied instance identity (P2-F's run supply) or the
   event's stamped actor, read from the stamped run context — NEVER
   the service identity (`Runtime.homeSpacePrincipalFor`); a
@@ -334,9 +370,10 @@ stream is passed to other spaces, which then append intents to it.
   resolution backstop). Its home-space bootstrap writes ride
   protocol.md §2b's `.inSpace` sanctioned crossing — authored-class,
   foreign-first, under the demanding principal's acting identity +
-  grant, ADMITTED at the wave's accept gate because the target IS the
-  demander's own home space (the gate's owner-by-identity structural
-  grant, serving-loop.md §3d — carriage alone admits nothing). A
+  grant, ADMITTED at the wave's accept gate because the target's ACL
+  names the demander OWNER of their own home space (the gate's
+  structural grant, serving-loop.md §3d — carriage alone admits
+  nothing). A
   carriage-less or UNGRANTED foreign write — the lunch-wall class,
   and an actor reaching beyond its authority — still refuses at
   accumulation, action-scoped and counted (`foreignWriteRefusals`).

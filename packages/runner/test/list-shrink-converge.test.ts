@@ -14,7 +14,7 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -57,20 +57,13 @@ class SM extends StorageManager {
   private constructor(o: Options, s: MemoryV2Server.Server) {
     super(o, new F(() => s));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
 function runtime() {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  const server = newSharedServer();
   const sm = SM.make(signer, server);
   const rt = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -128,7 +121,7 @@ describe("list builtin steady-state shrink convergence", () => {
           { keep: true, label: "c" },
         ],
       }, rc);
-      await tx0.commit();
+      await tx0.commit().settled;
       for (let k = 0; k < 10; k++) {
         await rc.pull();
         await rt.idle();
@@ -142,7 +135,7 @@ describe("list builtin steady-state shrink convergence", () => {
       // b's predicate settles undefined -> b drops.
       const tx1 = rt.edit();
       rc.withTx(tx1).key("items").key(1).key("keep").set(undefined as never);
-      await tx1.commit();
+      await tx1.commit().settled;
       for (let k = 0; k < 10; k++) {
         await rc.pull();
         await rt.idle();
@@ -178,7 +171,7 @@ describe("list builtin steady-state shrink convergence", () => {
           { keep: true, n: 3 },
         ],
       }, rc);
-      await tx0.commit();
+      await tx0.commit().settled;
       for (let k = 0; k < 10; k++) {
         await rc.pull();
         await rt.idle();
@@ -188,7 +181,7 @@ describe("list builtin steady-state shrink convergence", () => {
       // The middle element's op settles undefined (skip) -> [1,3].
       const tx1 = rt.edit();
       rc.withTx(tx1).key("items").key(1).key("keep").set(false as never);
-      await tx1.commit();
+      await tx1.commit().settled;
       for (let k = 0; k < 10; k++) {
         await rc.pull();
         await rt.idle();

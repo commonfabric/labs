@@ -9,7 +9,11 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { Cell as BuilderCell } from "../../../runner/src/builder/types.ts";
-import { hashStringOf } from "@commonfabric/data-model";
+import {
+  type FabricPlainObject,
+  hashStringOf,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import {
@@ -57,7 +61,10 @@ function holderProgram(): RuntimeProgram {
       name: "/main.tsx",
       contents: [
         "import { NAME, pattern } from 'commonfabric';",
-        "export default pattern<{ title?: string; members?: unknown[] }>(",
+        "export default pattern<",
+        "  { title?: string; members?: unknown[] },",
+        "  { [NAME]: string; title?: string; members?: unknown[] }",
+        ">(",
         "  ({ title, members }) => ({",
         "    [NAME]: 'Holder',",
         "    title,",
@@ -447,9 +454,9 @@ describe("bulk-repair", () => {
         storageManager,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `bulk-repair-${crypto.randomUUID()}`,
+          spaceDid: await runtime.createSpace(),
         }),
         runtime,
       );
@@ -484,10 +491,14 @@ describe("bulk-repair", () => {
 
     async function rawInput(
       piece: PieceController,
-    ): Promise<Record<string, unknown>> {
+    ): Promise<FabricPlainObject> {
       const cell = await piece.input.getCell();
       await cell.pull();
-      return cell.getRaw({ lastNode: "value" }) as Record<string, unknown>;
+      const raw = cell.getRawUntyped({ lastNode: "value" });
+      if (!isFabricPlainObject(raw)) {
+        throw new Error("the member's stored input is not a plain object");
+      }
+      return raw;
     }
 
     it("reports the exact per-piece diff on a dry run, and writes nothing", async () => {

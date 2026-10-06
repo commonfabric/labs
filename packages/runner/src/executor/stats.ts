@@ -40,6 +40,12 @@ export type ServingLoopStats = {
   /** Exhausted cycles, including zero-delta cycles that close no wave. */
   wavesBudgetExhausted: number;
 
+  /** Exhausted cycles whose committed wave still advanced W, to the input
+   * head the cut settle had proven covered (serving-loop.md §3's prefix
+   * coverage). A subset of `wavesBudgetExhausted`: the rest carried no
+   * watermark movement. */
+  exhaustedAdvances: number;
+
   supersededWrites: number;
   authoredSeen: number;
   effectAcks: number;
@@ -252,10 +258,12 @@ export type ServingLoopStats = {
    * absolutely, since those counters reset on a fresh runtime);
    * `notCurrentRearms` (per-key not-current-for-pair re-arms, accumulated);
    * `demandPasses` the pass count and `demandPassMs` the pass's total WALL
-   * time (NOT pure reconcile cost: it INCLUDES the awaited structure-load
-   * segments — `ensurePieceRunning` / `#confirmNoPatternMeta` — for
-   * first-demand and pending ROOT keys, which dominate the early passes;
-   * the reconcile itself is the O(rows) map work — W1 review MINOR-3);
+   * time (NOT pure reconcile cost: it INCLUDES the pull of those keys' root
+   * documents — `structureRootsPreloaded` below — and the awaited
+   * structure-load segments after it — `ensurePieceRunning` /
+   * `#confirmNoPatternMeta` — for first-demand and pending ROOT keys, which
+   * dominate the early passes; the reconcile itself is map work over the
+   * keys whose rows changed — W1 review MINOR-3);
    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
    * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
    * the 300 ms grace coalesces them into a pending callback. A callback
@@ -277,6 +285,31 @@ export type ServingLoopStats = {
     notCurrentRearms: number;
     demandPasses: number;
     demandPassMs: number;
+
+    /** Instance keys the passes reconciled against the registry, accumulated
+     * over the passes whose reconcile completed; a pass that throws partway
+     * adds nothing. A pass reconciles the keys whose rows changed since the
+     * pass before it, and the warm keys captured since, and no others, so a
+     * pass over unchanged demand adds nothing; the first pass of a tenure,
+     * and the pass after one that threw partway, reconcile every key. */
+    demandKeysReconciled: number;
+
+    /** Root documents the pass pulled TOGETHER before its sequential
+     * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
+     * instance each demand names and, for every scoped demand, the space
+     * instance as well. A load syncs that space instance only when the scoped
+     * read finds no pattern pointer and starts nothing, so a scoped root
+     * whose own instance resolves has one address requested that its load
+     * never syncs. Issuing them in one pull is what lets the replica's refresh
+     * queue coalesce them into a single `session.watch.add` instead of one per
+     * address inside the wave's settle. Counted per address REQUESTED per
+     * pass, so a scoped root contributes two and a root whose load stays
+     * owed across passes counts again in each. Most requested addresses are
+     * ones the replica already watches, which `pull()` answers from its
+     * tracker without a round trip, so this runs well above the number of
+     * adds the pull saves. */
+    structureRootsPreloaded: number;
+
     pushGrowthWakes: number;
     watchWakes: number;
 
@@ -615,12 +648,28 @@ export type ServingLoopStats = {
     runs: number;
     failures: number;
   };
+
+  /**
+   * Serving runtimes kept across an idle park (serving-loop.md §1,
+   * "Parking"). `retained` counts runtimes kept as their tenure parked,
+   * `reused` those a successor tenure served with, and `discarded` those
+   * disposed unused: expired, evicted, tainted while parked, or turned
+   * down at a successor's activation because the store had moved. `held`
+   * is how many are kept now.
+   */
+  parkedRuntimes: {
+    retained: number;
+    reused: number;
+    discarded: number;
+    held: number;
+  };
 };
 
 export const emptyServingLoopStats = (): ServingLoopStats => ({
   activeSpaces: 0,
   waves: 0,
   wavesBudgetExhausted: 0,
+  exhaustedAdvances: 0,
   supersededWrites: 0,
   authoredSeen: 0,
   effectAcks: 0,
@@ -659,6 +708,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     notCurrentRearms: 0,
     demandPasses: 0,
     demandPassMs: 0,
+    demandKeysReconciled: 0,
+    structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,
     warmWakes: 0,
@@ -717,6 +768,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     failures: 0,
   },
   lifecycleVerbs: { runs: 0, failures: 0 },
+  parkedRuntimes: { retained: 0, reused: 0, discarded: 0, held: 0 },
 });
 
 type ActiveDeliveryCheckpointStat = {

@@ -136,8 +136,10 @@ views:
 - `attemptedWrites`: the maybe-write target set, sourced from tx
   `markReadAsAttemptedWrite` reads performed while deciding whether a diff
   results in a write
-- `writes`: the actual changed/final write set sourced from v2 transaction
-  internals
+- `writes`: the recorded write set sourced from v2 transaction internals:
+  every write the transaction recorded, including one whose value returned to
+  where it started and an authoritative write of an unchanged value. The
+  reactivity log's `writes` list only changed paths and are not this set
 
 Boundary checking uses `attemptedWrites ∪ writes` as the target set for
 relevance and conservative target-side policy checks. Persisted output label-map
@@ -228,9 +230,21 @@ The prepared digest is a stable hash of:
 - canonical consumed reads
 - canonical `attemptedWrites`
 - canonical `writes`
+- the ordered write-attempt log
+- dereference traces and trigger reads
 - canonical write-policy inputs
 - implementation identity
 - trust snapshot identity
+- module delegations
+- the policy snapshot
+- consulted grants and module-policy manifests
+- label-metadata observations
+- external-content observations admitted through opaque runtime receipts
+
+Optional sets are omitted when empty. In particular,
+`externalContentObservations: []` has the same digest spelling as an absent
+field, preserving the digest of a transaction that observed no external
+content.
 
 Any change to that material invalidates preparation.
 
@@ -350,19 +364,15 @@ therefore carries its own guard:
   has rather than what any of them holds, so the read is `nonRecursive`, and the
   flow join keys on that: a recursive read consumes every label-map entry at or
   below the path it names, a `nonRecursive` one consumes only the entry at that
-  path, so this read consumes the document's root entry and nothing else.
-  Reading a meta member instead would consume the user data an entry of the same
-  name covers, because canonicalization strips a leading `value` and a document
-  with a user field named `slug` labels it at the logical path the raw
-  `["slug"]` member reads. The read carries no commit precondition, because a
-  precondition would turn a whole-document write into a read-modify-write, and
-  the blind root writes the runtime makes would lose the race against any
-  advance of the document they replace. What that leaves open is an erasure
-  racing the guard, never a forgery: the two shapes that name a field are
-  refused from the write itself, with no read at all. The refusal is also the
-  first of these guards to run, ahead of the ones keyed by target id, so which
-  document a write names cannot decide whether it is asked for an authorization.
-  Meta fields stay readable.
+  path, so this read consumes the document's root entry and nothing else. The
+  read carries no commit precondition, because a precondition would turn a
+  whole-document write into a read-modify-write, and the blind root writes the
+  runtime makes would lose the race against any advance of the document they
+  replace. What that leaves open is an erasure racing the guard, never a
+  forgery: the two shapes that name a field are refused from the write itself,
+  with no read at all. The refusal is also the first of these guards to run,
+  ahead of the ones keyed by target id, so which document a write names cannot
+  decide whether it is asked for an authorization. Meta fields stay readable.
 - The reserved siblings — the `cfc` label map and `source` — are the runtime's,
   and a write reaching either from outside the privileged persistence scope is
   recorded, with the commit boundary turning each record into a fail-closed
@@ -449,7 +459,10 @@ Storage rules:
 ### Path Canonicalization
 
 The canonical logical path format is `string[]` with the wrapper segment
-`"value"` stripped. Root is `[]`.
+`"value"` stripped. Root is `[]`, the payload root, which the document root `[]`
+also becomes. A document path outside `value` names one of the document's own
+members, such as `source` or `slug`, and has no logical path: it is never
+matched as a payload path (spec §4.6.5).
 
 When we need deterministic hashing or ordering, encode that canonical path as a
 JSON Pointer string derived from the segment array.
@@ -471,9 +484,12 @@ selector schema seen during prepare.
 
 The root document `schemaHash` names may be self-contained or carry
 `$ref: cid:` members — a decomposed write
-(`RuntimeOptions.cfcDecomposedEnvelopes`), or the root a reference-form
-declared schema leaves behind. One read policy covers both: every external
-reference a stored root carries resolves (space-first with content
+(`RuntimeOptions.cfcDecomposedEnvelopes`), the root a reference-form
+declared schema leaves behind, or the references a confidential merge mints
+to keep a definition bound to the document that declared it. A root with a
+definition map of its own is the inline spelling and is read as stored; a
+decomposed root is recomposed. One read policy covers all of them: every
+external reference a stored root carries resolves (space-first with content
 verification, the hash-verified realm registry supplying what the space
 does not hold) or the envelope is unreadable (fail closed), and the
 storage commit boundary validates the whole closure at write time. A
@@ -1007,9 +1023,18 @@ Implementation notes for spec update:
       untrusted embedders cannot hide or obscure embedded trusted UIs; future
       spec work should define opaque trusted UI islands and a non-forgeable
       pattern identity token beyond DOM data attributes
-- [x] Event-integrity labels are collected from the event target ancestry, so a
-      trusted pattern can later bind rendered integrity-bearing data into the
-      event attestation without introducing a parallel helper-specific policy
+- [x] Event-integrity labels are collected from the UI ancestry, so a trusted
+      pattern can later bind rendered integrity-bearing data into the event
+      attestation without introducing a parallel helper-specific policy
+- [x] All of a trusted event's UI provenance is read from the element the
+      handler is bound to and its ancestors, never from nodes between it and the
+      event target: a click on a trusted surface vouches only for handlers bound
+      on or inside it, and a handler above the clicked control gets the
+      surface's pattern and labels but not the control's `data-ui-action`
+- [x] A click vouches only for handlers on or inside the innermost trusted
+      surface it lands in: a handler above an element carrying
+      `data-ui-pattern` between it and the event target gets no UI provenance,
+      even when its own element carries the same markers
 - [x] Render-time label disclosure now has a generic `cf-cfc-label` UI
       primitive: it takes a bound `$value` and optional `atom`/`kind` filters,
       asks the trusted runtime IPC layer for that cell's CFC label view, and

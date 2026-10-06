@@ -43,9 +43,10 @@ permanently growing implementation plan.
   parent/model-facing artifact references.
 - Carry handle state across interactive sessions so tokens survive an
   interactive restart.
-- Decide whether parallel children are a product requirement; if so, specify
-  scheduling, budget, cancellation, event ordering, and context isolation before
-  implementing them.
+- A turn's delegations run together, apart from a `browser` delegation, which
+  holds the calls after it, and its other calls run in order; specify budget and
+  cancellation across turns, and the workspace isolation of children that share
+  the parent's sandbox, before scheduling more than that.
 - Extend resume only where external side-effect replay semantics can be made
   explicit and testable.
 
@@ -74,8 +75,8 @@ permanently growing implementation plan.
   stopped-but-never-deleted piece whose source-history revision is a
   storage-retention root the piece list does not reveal — a piece `register`
   named is as retained as one it did not, so registration changes findability
-  and not retention — and handle-table entries accumulate per run with no
-  expiry.
+  and not retention — and handle-table entries accumulate per run, and across
+  every turn of an interactive session, with no expiry.
 - Add an outbound CFC flow check on compiled pattern source. The current
   space-equality gate covers inbound input links only; nothing checks what a
   compiled pattern's own code sends out of the session space.

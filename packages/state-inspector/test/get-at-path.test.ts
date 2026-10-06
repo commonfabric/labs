@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import { getAtPath, selectAtPath } from "../reconstruct.ts";
 
@@ -49,6 +50,16 @@ describe("getAtPath()", () => {
       found: false,
       value: undefined,
     });
+  });
+
+  it("reports nothing found within `null`, a number, or a `FabricSpecialObject`", () => {
+    const notFound = { found: false, value: undefined };
+    expect(selectAtPath({ n: null }, ["n", "x"])).toEqual(notFound);
+    expect(selectAtPath(5, ["x"])).toEqual(notFound);
+
+    // `FabricBytes` has a `length`, and it is not an own property.
+    const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
+    expect(selectAtPath({ bytes }, ["bytes", "length"])).toEqual(notFound);
   });
 
   it("distinguishes stored undefined from a missing property", () => {

@@ -9,12 +9,14 @@ import type { CfcConfClause } from "@commonfabric/runner/cfc";
 
 import type { HarnessFabricSessionConfig } from "./config.ts";
 import { readCeilingFromInput } from "./contracts/run-manifest.ts";
+import { parseHarnessForeignSpaces } from "./foreign-spaces.ts";
 
 /** Options which configure a Fabric session and its read posture. */
 export const HARNESS_FABRIC_SESSION_OPTION_NAMES = [
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
+  "fabric-foreign-spaces",
   "fabric-cfc-enforcement-mode",
   "fabric-cfc-flow-labels",
   "fabric-cfc-posture",
@@ -35,6 +37,7 @@ export const resolveHarnessFabricSessionConfig = (
       | "fabric-api-url"
       | "fabric-identity"
       | "fabric-space"
+      | "fabric-foreign-spaces"
       | "fabric-cfc-enforcement-mode"
       | "fabric-cfc-flow-labels"
       | "fabric-cfc-posture",
@@ -60,6 +63,10 @@ export const resolveHarnessFabricSessionConfig = (
     "fabric-space",
     env.CF_HARNESS_FABRIC_SPACE,
   );
+  const foreignSpaces = parseHarnessForeignSpaces(fabricSessionFlagValue(
+    "fabric-foreign-spaces",
+    env.CF_HARNESS_FABRIC_FOREIGN_SPACES,
+  ));
   const fabricCfcEnforcementMode = fabricSessionFlagValue(
     "fabric-cfc-enforcement-mode",
     env.CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE,
@@ -145,6 +152,7 @@ export const resolveHarnessFabricSessionConfig = (
       apiUrl: fabricApiUrl!,
       identityKeyPath: resolve(cwd, fabricIdentity!),
       space: fabricSpace!,
+      ...(foreignSpaces !== undefined ? { foreignSpaces } : {}),
       ...(fabricCfcEnforcementMode !== undefined
         ? { cfcEnforcementMode: fabricCfcEnforcementMode }
         : {}),
@@ -164,6 +172,10 @@ export const resolveHarnessFabricSessionConfig = (
   ) {
     throw new Error(
       "--fabric-cfc-enforcement-mode, --fabric-cfc-flow-labels, and --fabric-cfc-posture configure the fabric session's runtime and need --fabric-api-url, --fabric-identity, and --fabric-space",
+    );
+  } else if (foreignSpaces !== undefined) {
+    throw new Error(
+      "`--fabric-foreign-spaces` needs `--fabric-api-url`, `--fabric-identity`, and `--fabric-space`",
     );
   } else if (maxConfidentiality !== undefined) {
     // A ceiling with no session bounds nothing, and one accepted here would

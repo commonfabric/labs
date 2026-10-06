@@ -146,7 +146,7 @@ export async function resolveWish(
   // re-running it on later source changes and retaining its cells.
   try {
     runtime.prepareTxForCommit(tx);
-    const setup = await tx.commit();
+    const setup = await tx.commit().settled;
     if (setup.error) {
       throw new Error(
         `Cannot set up the headless read of "${spec.query}": ${
@@ -181,7 +181,9 @@ export async function resolveWish(
     // only one of the two is an absent result: the matched one still has an
     // address, which is the whole of what a marked position asks for.
     const matched = resolved.getRaw() !== undefined;
-    const value: unknown = resolved.get();
+    const value: unknown = spec.schema === undefined
+      ? resolved.get()
+      : resolved.resolveAsCell().asSchema(spec.schema).get();
 
     return {
       // `?? null` covers the matched-but-unset target a caller selected

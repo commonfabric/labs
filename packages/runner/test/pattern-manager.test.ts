@@ -83,7 +83,7 @@ describe("PatternManager program persistence", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose({ closeStorage: false });
     await storageManager?.close();
   });
@@ -151,10 +151,74 @@ describe("PatternManager program persistence", () => {
       tx,
     );
     const result = runtime.run(tx, loaded!, { value: 3 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.getAsQueryResult()).toEqual({ result: 6 });
+  });
+
+  it("names the modules of a program for its main module, and for no other", async () => {
+    // A release adopts only stamps of the program it installs, which setup
+    // reads here for the pattern's defining module. A pattern defined in a
+    // module that no evaluation ran as its main (a nested piece defined in a
+    // dependency) has no program recorded, so its release adopts nothing:
+    // fail closed. A default re-exported from another file is indexed under
+    // the main module that re-exports it, which does name the program.
+    const defined = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [
+        { name: "/util.ts", contents: "export const one = 1;" },
+        {
+          name: "/main.tsx",
+          contents: [
+            "import { pattern } from 'commonfabric';",
+            "import { one } from './util.ts';",
+            "export default pattern<{ value: number }>(({ value }) => ({",
+            "  value, one,",
+            "}));",
+          ].join("\n"),
+        },
+      ],
+    });
+    const entry = runtime.patternManager.getArtifactEntryRef(defined)!;
+    const program = runtime.patternManager.programModuleIdentities(
+      entry.identity,
+    )!;
+    expect(program.has(entry.identity)).toBe(true);
+    const dependencies = [...program].filter((identity) =>
+      identity !== entry.identity
+    );
+    expect(dependencies.length).toBeGreaterThan(0);
+    for (const dependency of dependencies) {
+      expect(runtime.patternManager.programModuleIdentities(dependency))
+        .toBeUndefined();
+    }
+
+    const reexported = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/inner.tsx",
+          contents: [
+            "import { pattern } from 'commonfabric';",
+            "export default pattern<{ value: number }>(({ value }) => ({",
+            "  value,",
+            "}));",
+          ].join("\n"),
+        },
+        {
+          name: "/main.tsx",
+          contents: "export { default } from './inner.tsx';",
+        },
+      ],
+    });
+    const reexportedEntry = runtime.patternManager.getArtifactEntryRef(
+      reexported,
+    )!;
+    expect(
+      runtime.patternManager.programModuleIdentities(reexportedEntry.identity)
+        ?.size,
+    ).toBe(2);
   });
 
   it("rejects cross-space recovery of confidential stored source", async () => {
@@ -186,7 +250,7 @@ describe("PatternManager program persistence", () => {
       type: "application/json",
       path: [],
     }, {
-      value: sourceCell.get(),
+      value: sourceCell.getRawUntyped(),
       cfc: {
         version: 1,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
@@ -199,7 +263,7 @@ describe("PatternManager program persistence", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     await storageManager.synced();
 
     const inspect = runtime.edit();
@@ -209,7 +273,7 @@ describe("PatternManager program persistence", () => {
     });
     expect(storedMetadata?.labelMap.entries).toHaveLength(1);
     expect(sourceCfcMetadataProhibitsCrossSpaceCopy(storedMetadata)).toBe(true);
-    await inspect.commit();
+    await inspect.commit().settled;
 
     const destinationSpace = (await Identity.fromPassphrase(
       "pattern source destination",
@@ -269,7 +333,7 @@ describe("PatternManager.loadPatternByIdentity single-flight", () => {
         .getArtifactEntryRef(compiled)!;
       // Make the closure durable before runtime B reads it.
       await runtimeA.patternManager.flushCompileCacheWrites();
-      await txA.commit();
+      await txA.commit().settled;
       await storageManager.synced();
 
       // Runtime B shares the storage but has cold in-memory indexes, so the
@@ -376,7 +440,7 @@ describe("PatternManager.compileOrGetPattern", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose({ closeStorage: false });
     await storageManager?.close();
   });

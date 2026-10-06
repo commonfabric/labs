@@ -16,10 +16,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime, UI } from "@commonfabric/runner";
 import type { Cell } from "@commonfabric/runner";
-import {
-  type CfcLabelView,
-  cfcLabelViewSymbol,
-} from "@commonfabric/runner/cfc";
+import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -32,7 +29,9 @@ import type { WorkerRenderNode, WorkerVNode } from "../src/worker/types.ts";
 function createOpsCollector() {
   const allOps: VDomOp[] = [];
   return {
-    onOps: (ops: VDomOp[]) => allOps.push(...ops),
+    onOps: (ops: VDomOp[]) => {
+      for (const op of ops) allOps.push(op);
+    },
     getOps: () => allOps,
     clear: () => {
       allOps.length = 0;
@@ -102,21 +101,37 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
   class MockCell extends (CellImplConstructor as any) {
     value: any;
     #subscribers = new Set<(value: any) => void>();
+    /** A mock's read consumes no labels, which a sink may ask to be told. */
+    static readonly consumed = {
+      confidentiality: [],
+      integrity: [],
+      modulePolicySpaces: new Map(),
+      sources: [],
+    };
 
-    constructor(value: any) {
+    constructor(value: any, labelView?: CfcLabelView) {
       // Pass dummy args to super to satisfy it
-      // CellImpl(runtime, tx, link, synced, causeContainer, kind)
-      super(runtime, undefined, undefined, false, undefined, "cell");
+      // CellImpl(runtime, tx, link, synced, causeContainer, kind, labelView)
+      super(runtime, undefined, undefined, false, undefined, "cell", labelView);
       this.value = value;
     }
 
-    sink(callback: (value: any) => void) {
-      this.#subscribers.add(callback);
+    sink(
+      callback: (value: any, label?: undefined, consumed?: unknown) => void,
+      options?: { includeConsumedLabel?: boolean },
+    ) {
+      const deliver = (value: any) =>
+        callback(
+          value,
+          undefined,
+          options?.includeConsumedLabel ? MockCell.consumed : undefined,
+        );
+      this.#subscribers.add(deliver);
       // A real cell's `sink()` publishes the current value synchronously at
       // subscription, and the reconciler renders from that first delivery.
-      callback(this.value);
+      deliver(this.value);
       return () => {
-        this.#subscribers.delete(callback);
+        this.#subscribers.delete(deliver);
       };
     }
 
@@ -135,8 +150,17 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
      * Returns `undefined`: a mock carries no metadata, and the inherited read
      * throws on a link-less cell.
      */
-    getMetaRaw(): undefined {
+    getMetaRaw(_field?: string): unknown {
       return undefined;
+    }
+
+    /**
+     * Returns the inherited link. A step that needs another overrides it on
+     * the instance, which it can do because this class, and not the frozen
+     * cell prototype, defines it.
+     */
+    getAsNormalizedFullLink() {
+      return super.getAsNormalizedFullLink();
     }
 
     /**
@@ -175,7 +199,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
             title.withTx(tx).set(value);
             props.withTx(tx).set({ title: value });
             children.withTx(tx).set([value]);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             await runtime.idle();
             await t.settle();
           };
@@ -257,7 +281,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       const seed = runtime.edit();
       title.withTx(seed).set("first title");
       children.withTx(seed).set(["first child"]);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await runtime.idle();
 
       const root = new MockCell({
@@ -307,7 +331,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         const update = runtime.edit();
         title.withTx(update).set("second title");
         children.withTx(update).set(["second child"]);
-        expect((await update.commit()).error).toBeUndefined();
+        expect((await update.commit().settled).error).toBeUndefined();
         await runtime.idle();
         await t.settle();
         expect(collector.getOpsOfType("set-prop")).toContainEqual({
@@ -335,7 +359,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         const afterReplacement = runtime.edit();
         title.withTx(afterReplacement).set("ignored title");
         children.withTx(afterReplacement).set(["ignored child"]);
-        expect((await afterReplacement.commit()).error).toBeUndefined();
+        expect((await afterReplacement.commit().settled).error).toBeUndefined();
         await runtime.idle();
         await t.settle();
         expect(collector.getOps()).toEqual([]);
@@ -2205,24 +2229,25 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         path: [],
         scope: "space",
       });
-      const resolvedOutputCell = {
-        getAsNormalizedFullLink: () => ({
+      // The resolved output is a cell of its own, which carries the denied
+      // label while it is the denied output.
+      outputCell.resolveAsCell = () => {
+        const resolvedOutputCell = new MockCell(
+          undefined,
+          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
+        );
+        resolvedOutputCell.getAsNormalizedFullLink = () => ({
           id: resolvedOutputId,
           space: signer.did(),
           path: [],
           scope: "space",
-        }),
-        resolveAsCell() {
-          return this;
-        },
-        getMetaRaw: (field: string) =>
+        });
+        resolvedOutputCell.getMetaRaw = (field: string) =>
           field === "patternIdentity"
             ? { identity: "nested-pattern", symbol: "default" }
-            : undefined,
-        [cfcLabelViewSymbol]: () =>
-          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
-      } as unknown as Cell<unknown>;
-      outputCell.resolveAsCell = () => resolvedOutputCell;
+            : undefined;
+        return resolvedOutputCell;
+      };
 
       const rootCell = new MockCell(
         {

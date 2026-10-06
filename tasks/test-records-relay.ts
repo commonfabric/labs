@@ -29,6 +29,7 @@ import {
   createObject,
   type Environment,
   gzipText,
+  isSeed,
   parseRecordLine,
   readEnv,
   RECORD_SCHEMA_VERSION,
@@ -137,6 +138,7 @@ interface ArtifactFacts {
   os?: string;
   arch?: string;
   denoVersion?: string;
+  shuffleSeed?: number;
 }
 
 function artifactFactsOf(value: unknown): ArtifactFacts {
@@ -157,6 +159,7 @@ function artifactFactsOf(value: unknown): ArtifactFacts {
     const v = raw[field];
     if (typeof v === "string" && v.length > 0) facts[field] = v;
   }
+  if (isSeed(raw.shuffleSeed)) facts.shuffleSeed = raw.shuffleSeed;
   return facts;
 }
 
@@ -198,6 +201,9 @@ export function composeCiContext(
     startedAt: run.runStartedAt,
   };
   if (run.headBranch !== undefined) context.branch = run.headBranch;
+  if (artifact.shuffleSeed !== undefined) {
+    context.shuffleSeed = artifact.shuffleSeed;
+  }
   if (artifact.shard !== undefined) context.ci!.shard = artifact.shard;
   if (run.event === "pull_request") {
     context.ci!.headCommit = artifact.headCommit ?? run.headSha;

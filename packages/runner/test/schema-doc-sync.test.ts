@@ -77,7 +77,7 @@ describe("schema-doc-sync", () => {
         value,
       );
     }
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   const writeDocs = async (
@@ -630,9 +630,9 @@ describe("schema-doc-sync", () => {
     const cancelThrowingCoverage = replica.subscribeLocalCoverage(() => {
       throw new Error("Coverage observer failed");
     });
-    const cancelCoverage = replica.subscribeLocalCoverage((addresses) =>
-      covered.push(...addresses.map((address) => address.id))
-    );
+    const cancelCoverage = replica.subscribeLocalCoverage((addresses) => {
+      for (const address of addresses) covered.push(address.id);
+    });
     try {
       // The frame is malformed on purpose, so it declares itself a frame only
       // where it is handed over.

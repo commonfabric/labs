@@ -28,7 +28,7 @@
 
 import { ValidationError } from "@cliffy/command";
 import type { CellScope } from "@commonfabric/api";
-import { createSession, type Session } from "@commonfabric/identity";
+import { legacySpaceDid, type Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import {
   isPieceHandle,
@@ -110,8 +110,7 @@ export async function validateEmbeddedSpaces(
   for (const embedded of embeddedSpaces ?? []) {
     const embeddedDid = isDID(embedded)
       ? embedded
-      : (await createSession({ identity: session.as, spaceName: embedded }))
-        .space;
+      : await legacySpaceDid(embedded);
     if (embeddedDid !== session.space) {
       throw spaceMismatchError(embedded, session.space);
     }

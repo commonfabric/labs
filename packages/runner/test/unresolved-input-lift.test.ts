@@ -134,7 +134,7 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
       const tx = readerRuntime.edit();
       readerRuntime.run(tx, compiled, argument, result);
       readerRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     return { argument, result };
   };
@@ -157,7 +157,7 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
     {
       const seed = readerRuntime.edit();
       arg.withTx(seed).key("ref").set(target as never);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     await readerRuntime.idle();
     await readerRuntime.storageManager.synced();
@@ -187,7 +187,7 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
       await writerTarget.sync();
       const tx = writer.edit();
       writerTarget.withTx(tx).set("hello\nworld");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await writer.idle();
       await writer.storageManager.synced();
     }
@@ -224,7 +224,7 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
       const seed = readerRuntime.edit();
       target.withTx(seed).set(null);
       arg.withTx(seed).key("ref").set(target as never);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     await readerRuntime.idle();
     await readerRuntime.storageManager.synced();

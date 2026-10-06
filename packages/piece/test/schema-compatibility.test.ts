@@ -312,6 +312,65 @@ describe("piece schema compatibility", () => {
     ).not.toThrow();
   });
 
+  describe("a `writePolicyAnyOf` list", () => {
+    // Each member of the list is a writer claim beside its contract, and the
+    // list is compared member by member as a lone claim is: the recompile
+    // volatility normalized out of each writer, everything else held fixed.
+
+    const listResult = (
+      moduleIdentity: string,
+      editAction = "EditFlag",
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        flag: {
+          type: "boolean",
+          ifc: {
+            writePolicyAnyOf: [
+              {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: { ...baselineIdentity, moduleIdentity },
+                },
+                uiContract: baselineUiContract,
+              },
+              {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    ...baselineIdentity,
+                    path: ["editFlag"],
+                    moduleIdentity,
+                  },
+                },
+                uiContract: { ...baselineUiContract, action: editAction },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    it("accepts a recompile that only changes each member's moduleIdentity", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern({ type: "object" }, listResult("UVJh2ChHuLkknYrVet0Iu")),
+          pattern({ type: "object" }, listResult("DCTZZ89BogydamlP301Qx")),
+        )
+      ).not.toThrow();
+    });
+
+    it("rejects a change to one member's action", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern({ type: "object" }, listResult("UVJh2ChHuLkknYrVet0Iu")),
+          pattern(
+            { type: "object" },
+            listResult("UVJh2ChHuLkknYrVet0Iu", "RetitleFlag"),
+          ),
+        )
+      ).toThrow("result.flag: ifc changed");
+    });
+  });
+
   // A floored path is authored to mint the atom it floors, because the write
   // floor tests the integrity of the value being written and a mint on the
   // entries below the path does not reach a floor declared on the path itself.
@@ -3461,6 +3520,198 @@ describe("piece schema compatibility", () => {
     });
   });
 
+  describe("type lists inside alternatives", () => {
+    // A `type` list and the `anyOf` spelling of the same union describe the
+    // same values, and a list wrapped in a one-branch `anyOf` describes what
+    // the bare list does. The proof splits a list into one branch per named
+    // type wherever it is written, so none of those spellings decides a
+    // verdict on its own.
+    const spellings = (list: JSONSchema): [string, JSONSchema][] => [
+      ["bare", list],
+      ["inside `anyOf`", { anyOf: [list] }],
+      ["nested in `anyOf`", { anyOf: [{ anyOf: [list] }] }],
+    ];
+
+    for (
+      const [name, list, target, compatible] of [
+        [
+          "widening a list to the union spelling",
+          { type: ["boolean", "string"] },
+          { anyOf: [{ type: "boolean" }, { type: "string" }] },
+          true,
+        ],
+        [
+          "dropping a listed type",
+          { type: ["boolean", "string"] },
+          { anyOf: [{ type: "boolean" }] },
+          false,
+        ],
+        [
+          "a sibling constraint the target keeps",
+          { type: ["string", "number"], maxLength: 3 },
+          { anyOf: [{ type: "string", maxLength: 3 }, { type: "number" }] },
+          true,
+        ],
+        [
+          "a sibling constraint the target tightens",
+          { type: ["string", "number"], maxLength: 3 },
+          { anyOf: [{ type: "string", maxLength: 2 }, { type: "number" }] },
+          false,
+        ],
+        [
+          "a list naming `object`",
+          { type: ["object", "string"] },
+          { anyOf: [{ type: "object" }, { type: "string" }] },
+          true,
+        ],
+        [
+          // `unknown` admits every value, so no branch of the target covers it.
+          "a list naming `unknown`",
+          { type: ["unknown", "string"] },
+          { anyOf: [{ type: "boolean" }, { type: "string" }] },
+          false,
+        ],
+        [
+          // `object` admits every `FabricPrimitive`, so the primitive name adds
+          // no branch of its own and the runtime's `required` check is kept.
+          "a list naming `object` beside a `FabricPrimitive` and `required`",
+          {
+            type: ["object", "FabricBytes"],
+            properties: { k: { type: "string" } },
+            required: ["k"],
+          },
+          {
+            anyOf: [
+              {
+                type: "object",
+                properties: { k: { type: "string" } },
+                required: ["k"],
+              },
+              { type: "FabricBytes" },
+            ],
+          },
+          true,
+        ],
+      ] satisfies [string, JSONSchema, JSONSchema, boolean][]
+    ) {
+      it(`proves ${name} the same way wherever the list is spelled`, () => {
+        for (const [, source] of spellings(list)) {
+          if (compatible) {
+            expect(() => assertSchemaSubset(source, target)).not.toThrow();
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(source, target),
+                pattern(target, source),
+              )
+            ).not.toThrow();
+          } else {
+            expect(() => assertSchemaSubset(source, target)).toThrow();
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(source, true),
+                pattern(target, true),
+              )
+            ).toThrow(/argument:/);
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(true, target),
+                pattern(true, source),
+              )
+            ).toThrow(/result:/);
+          }
+        }
+      });
+    }
+
+    it("keeps a type list beside an unresolved reference whole", () => {
+      // The reference resolves with the branch's keywords laid over the
+      // referenced schema, so the list overrides the referenced `string`: the
+      // source admits every value. Splitting it would drop `type` from the
+      // untyped branch and let `string` return, proving only strings and
+      // objects against a target that rejects the rest.
+      const branch: JSONSchema = {
+        $ref: "#/$defs/value",
+        type: ["object", "unknown"],
+      };
+      const target: JSONSchema = {
+        anyOf: [{ type: "object" }, { type: "string" }],
+      };
+      for (
+        const source of [
+          { $defs: { value: { type: "string" } }, anyOf: [branch] },
+          {
+            $defs: { value: { type: "string" } },
+            anyOf: [{ anyOf: [branch] }],
+          },
+        ] satisfies JSONSchema[]
+      ) {
+        for (const value of [42, false, null]) {
+          expect(validateSchemaValue(source, value, source)).toBeUndefined();
+          expect(validateSchemaValue(target, value, target)).toBeDefined();
+        }
+        expect(() => assertSchemaSubset(source, target)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(source, true),
+            pattern(target, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, target),
+            pattern(true, source),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
+    it("re-spells a generated scalar branch without breaking the contract", () => {
+      // `JsonValue` as the generator emits it: a scalar `type` list as one
+      // branch of the union (`agent-sessions-debug/main.tsx`).
+      const union = (scalars: JSONSchema[]): JSONSchema => ({
+        anyOf: [
+          ...scalars,
+          { type: "boolean" },
+          { type: "array", items: { type: "unknown" } },
+        ],
+      });
+      const listed = union([{
+        type: ["null", "number", "string", "undefined"],
+      }]);
+      for (
+        const respelled of [
+          union([
+            { type: "null" },
+            { type: "number" },
+            { type: "string" },
+            { type: "undefined" },
+          ]),
+          union([{ type: ["null", "number"] }, {
+            type: ["string", "undefined"],
+          }]),
+        ]
+      ) {
+        expect(() => assertSchemaSubset(listed, respelled)).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(listed, respelled),
+            pattern(respelled, listed),
+          )
+        ).not.toThrow();
+      }
+
+      // Dropping a member of the list is still a break, however it is spelled.
+      const narrowed = union([{ type: ["null", "number", "string"] }]);
+      expect(() => assertSchemaSubset(listed, narrowed)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(listed, true),
+          pattern(narrowed, true),
+        )
+      ).toThrow(/argument:/);
+    });
+  });
+
   describe("finite literal subsets", () => {
     it("does not throw for listed values excluded by the source's declared type", () => {
       for (
@@ -5070,6 +5321,85 @@ describe("piece schema compatibility", () => {
     expect(() =>
       assertPatternSchemasBackwardCompatible(previousTyped, compatibleTyped)
     ).not.toThrow();
+  });
+
+  it("admits any new result field under an unconstrained additionalProperties", () => {
+    // A TypeScript index signature `[key: string]: unknown` records
+    // `{ type: "unknown" }`, which its readers treat the same as `true`.
+    const resultSchema = (
+      additionalProperties: JSONSchema,
+      addedProperty?: JSONSchema,
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        ...(addedProperty === undefined ? {} : { addValue: addedProperty }),
+      },
+      additionalProperties,
+    });
+    const stream: JSONSchema = { type: "object", asCell: ["stream"] };
+    for (
+      const additionalProperties of [
+        {},
+        { type: "unknown" },
+        { type: "unknown", description: "Anything." },
+      ] as JSONSchema[]
+    ) {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            oldPattern.argumentSchema,
+            resultSchema(additionalProperties),
+          ),
+          pattern(
+            oldPattern.argumentSchema,
+            resultSchema(additionalProperties, stream),
+          ),
+        )
+      ).not.toThrow();
+    }
+
+    // A marker beside `type: "unknown"` is a constraint readers rely on.
+    const cells: JSONSchema = { type: "unknown", asCell: ["cell"] };
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        pattern(oldPattern.argumentSchema, resultSchema(cells)),
+        pattern(oldPattern.argumentSchema, resultSchema(cells, stream)),
+      )
+    ).toThrow(/result\.addValue: asCell changed/);
+  });
+
+  it("admits a new optional argument field under an unconstrained additionalProperties", () => {
+    const argumentSchema = (
+      additionalProperties: JSONSchema,
+      addedProperty?: JSONSchema,
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        ...(addedProperty === undefined ? {} : { label: addedProperty }),
+      },
+      additionalProperties,
+    });
+    for (
+      const additionalProperties of [
+        { type: "unknown" },
+        { type: ["unknown", "object"] },
+      ] as JSONSchema[]
+    ) {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            argumentSchema(additionalProperties),
+            oldPattern.resultSchema,
+          ),
+          pattern(
+            argumentSchema(additionalProperties, { type: "string" }),
+            oldPattern.resultSchema,
+          ),
+        )
+      ).not.toThrow();
+    }
   });
 
   it("checks new named fields against prior patternProperties", () => {

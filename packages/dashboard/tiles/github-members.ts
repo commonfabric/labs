@@ -60,7 +60,9 @@ async function loadHistory(
 ): Promise<void> {
   try {
     const data = JSON.parse(await Deno.readTextFile(file));
-    if (Array.isArray(data)) state.points.push(...data.filter(isPoint));
+    if (Array.isArray(data)) {
+      for (const point of data) if (isPoint(point)) state.points.push(point);
+    }
   } catch { /* an absent or unreadable file starts an empty history */ }
 }
 
@@ -114,14 +116,12 @@ export async function organizationUserIds(
 export function createGithubMembers(): Tile {
   const history: HistoryState = { loaded: false, points: [] };
   return {
-    id: "github-members",
+    label: "github users",
     intervalMs: 3_600_000,
     async collect(ctx): Promise<TileView> {
-      const label = "github users";
       const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
       if (!token) {
         return {
-          label,
           status: "unknown",
           value: "—",
           sub: "set GH_TOKEN (needs org Members read)",
@@ -149,7 +149,6 @@ export function createGithubMembers(): Tile {
         );
         return {
           ...drill,
-          label,
           status: "unknown",
           value: "—",
           sub: friendlyError(message),
@@ -204,7 +203,6 @@ export function createGithubMembers(): Tile {
 
       return {
         ...drill,
-        label,
         status: "good",
         value: String(people),
         extra: subline + chart,

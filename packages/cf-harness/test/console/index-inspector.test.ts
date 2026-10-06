@@ -95,6 +95,32 @@ describe("console/index-inspector", () => {
   });
 
   describe("eventBadges", () => {
+    it("keeps two authors of the same verdict separate", () => {
+      expect(eventBadges({ thumbs_up: 3, thumbs_down: 1 }, {
+        thumbs_up: { "did:key:zRun": 2, "did:key:zConsole": 1 },
+        thumbs_down: { "did:key:zRun": 1 },
+      })).toEqual([
+        { eventType: "thumbs_down", count: 1, did: "did:key:zRun" },
+        { eventType: "thumbs_up", count: 1, did: "did:key:zConsole" },
+        { eventType: "thumbs_up", count: 2, did: "did:key:zRun" },
+      ]);
+    });
+
+    it("keeps the unattributed remainder separate from a known author", () => {
+      expect(eventBadges({ thumbs_up: 4 }, {
+        thumbs_up: { "did:key:zRun": 2 },
+      })).toEqual([
+        { eventType: "thumbs_up", count: 2, did: "did:key:zRun" },
+        { eventType: "thumbs_up", count: 2 },
+      ]);
+    });
+
+    it("returns an unattributed total when author counts exceed it", () => {
+      expect(eventBadges({ thumbs_up: 1 }, {
+        thumbs_up: { "did:key:zRun": 2 },
+      })).toEqual([{ eventType: "thumbs_up", count: 1 }]);
+    });
+
     it("answers one badge per counted event type, by type", () => {
       expect(eventBadges({ thumbs_up: 2, instantiated: 5 })).toEqual([
         { eventType: "instantiated", count: 5 },

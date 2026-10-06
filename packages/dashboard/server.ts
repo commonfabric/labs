@@ -23,18 +23,34 @@
  *   GH_TOKEN                          GitHub tiles; read access to the
  *                                     organization's members also powers the
  *                                     organization-users tile
+ *   GH_BILLING_TOKEN                  optional dedicated token for GitHub
+ *                                     organization or enterprise billing
  */
 
+import { minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { CI_WORKFLOW, PORT, REPO } from "./config.ts";
+import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { TILES } from "./registry.ts";
 import { makeCtx } from "./ctx.ts";
-import { escapeHtml, friendlyError, githubOperationsInProgress } from "./lib.ts";
+import {
+  escapeHtml,
+  friendlyError,
+  githubOperationsInProgress,
+} from "./lib.ts";
 import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
 import { renderTile, shell } from "./render.ts";
-import type { Ctx, Run, RunSource, Tile, TileView } from "./types.ts";
-import { dashboardVersion } from "./version.ts";
+import {
+  type Ctx,
+  type Run,
+  runSource,
+  type RunSource,
+  runSourceKey,
+  type Tile,
+  type TileView,
+} from "./types.ts";
+import { livePages } from "./live-page.ts";
+import { SERVING_VERSION } from "./version.ts";
 import {
   DASHBOARD_MESSAGE_MAX_LENGTH,
   type DashboardMessage,
@@ -77,7 +93,7 @@ export function nextFaviconRedSince(
 function updateFaviconRedSince(now: number, recoveryIsSettled = true): void {
   const status = faviconStatus(
     TILES.flatMap((tile) => {
-      const view = views.get(tile.id);
+      const view = views.get(tile.label);
       return view ? [activeTileView(tile, view).status] : [];
     }),
   );
@@ -102,15 +118,9 @@ function dashboardUpdate(currentViews: ReadonlyMap<string, TileView> = views): D
   const wide: string[] = [];
   const statuses: TileView["status"][] = [];
   for (const t of TILES) {
-    const v = activeTileView(
-      t,
-      currentViews.get(t.id) ?? {
-        label: t.label ?? t.id,
-        status: "unknown" as const,
-      },
-    );
+    const v = activeTileView(t, currentViews.get(t.label) ?? { status: "unknown" });
     statuses.push(v.status);
-    (t.wide ? wide : grid).push(renderTile(v, t.id, t.wide));
+    (t.wide ? wide : grid).push(renderTile(t.label, v, t.wide));
   }
   const now = Date.now();
   const ageSeconds = lastChange
@@ -120,7 +130,7 @@ function dashboardUpdate(currentViews: ReadonlyMap<string, TileView> = views): D
     gridHtml: grid.join(""),
     wideHtml: wide.join(""),
     ageSeconds,
-    shellVersion: SHELL_VERSION,
+    shellVersion: SERVING_VERSION,
     faviconStatus: faviconStatus(statuses),
     faviconRedSince,
     faviconRedAgeMs: faviconRedSince === null
@@ -167,15 +177,14 @@ export const broadcast = (update: DashboardUpdate) => send(encodeUpdate(update))
 let beats = 0;
 export const heartbeat = () => send(enc.encode(`event: ping\ndata: ${++beats}\n\n`));
 
-const runSourceKey = (source: RunSource): string => `${source.repo} ${source.workflow}`;
-const runSourceTileKey = (source: RunSource, tile: Tile): string => `${runSourceKey(source)} ${tile.id}`;
+const runSourceTileKey = (source: RunSource, tile: Tile): string => `${runSourceKey(source)} ${tile.label}`;
 
 function beginTileUpdate(tile: Tile, startedAt: number): void {
-  const active = activeTileUpdates.get(tile.id);
+  const active = activeTileUpdates.get(tile.label);
   if (active) {
     active.count++;
   } else {
-    activeTileUpdates.set(tile.id, {
+    activeTileUpdates.set(tile.label, {
       count: 1,
       startedAt,
       stale: false,
@@ -184,9 +193,104 @@ function beginTileUpdate(tile: Tile, startedAt: number): void {
 }
 
 function finishTileUpdate(tile: Tile): void {
-  const active = activeTileUpdates.get(tile.id);
-  if (!active || active.count === 1) activeTileUpdates.delete(tile.id);
+  const active = activeTileUpdates.get(tile.label);
+  if (!active || active.count === 1) activeTileUpdates.delete(tile.label);
   else active.count--;
+}
+
+// How many collections of each tile have started, and the number of the
+// latest one whose view was published. A collection's view is published only
+// while no collection of the same tile that started after it has been, so a
+// slow collection never replaces what a later one showed.
+const collectionsStarted = new Map<string, number>();
+const collectionsPublished = new Map<string, number>();
+
+function startCollection(tile: Tile): number {
+  const collection = (collectionsStarted.get(tile.label) ?? 0) + 1;
+  collectionsStarted.set(tile.label, collection);
+  return collection;
+}
+
+function claimPublication(tile: Tile, collection: number): boolean {
+  if (collection < (collectionsPublished.get(tile.label) ?? 0)) return false;
+  collectionsPublished.set(tile.label, collection);
+  return true;
+}
+
+// The snapshots a source's collection read, numbered in the order they were
+// taken, and the context the tiles collected from them read them through.
+interface SnapshotsTaken {
+  taken: number;
+  base: Ctx;
+  snapshots: ReadonlyMap<string, Run[]>;
+  errors: ReadonlyMap<string, string>;
+}
+let snapshotsTaken = 0;
+
+// The newest snapshots each tile that reads run sources was published beside
+// its neighbours from, by label.
+const publishedFrom = new Map<string, SnapshotsTaken>();
+
+function rememberPublishedFrom(tile: Tile, from: SnapshotsTaken): void {
+  const held = publishedFrom.get(tile.label);
+  if (!held || held.taken < from.taken) publishedFrom.set(tile.label, from);
+}
+
+// Tiles to collect again once they are no longer being collected, by label:
+// ones that asked to be while a collection of theirs was under way, and ones
+// left out of a source's collection because they were busy.
+const collectAgainWhenIdle = new Map<string, Tile>();
+
+// Collects a tile that reads run sources again, from the snapshots it was
+// last published from, without fetching them again, so its view describes the
+// same runs as its neighbours. A tile being collected already is collected
+// again once that collection's view is out.
+function collectAgain(tile: Tile): void {
+  if (activeTileUpdates.has(tile.label)) {
+    collectAgainWhenIdle.set(tile.label, tile);
+    return;
+  }
+  collectFromPublished(tile).catch((error) =>
+    console.error(`tile "${tile.label}" could not be collected again:`, error)
+  );
+}
+
+// Starts the collections asked for of those of `tiles` no longer being
+// collected. Called once a collection's views are published.
+function collectAgainIfIdle(tiles: readonly Tile[]): void {
+  for (const tile of tiles) {
+    if (
+      collectAgainWhenIdle.has(tile.label) && !activeTileUpdates.has(tile.label)
+    ) {
+      collectAgainWhenIdle.delete(tile.label);
+      collectAgain(tile);
+    }
+  }
+}
+
+async function collectFromPublished(tile: Tile): Promise<void> {
+  const from = publishedFrom.get(tile.label);
+  if (!from) return;
+  const collection = startCollection(tile);
+  beginTileUpdate(tile, Date.now());
+  let view: TileView;
+  try {
+    view = withSourceHealth(
+      tile,
+      await collectView(
+        tile,
+        snapshotCtx(from.base, from.snapshots, from.errors, tile),
+      ),
+      from.snapshots,
+      from.errors,
+    );
+  } finally {
+    finishTileUpdate(tile);
+  }
+  if (claimPublication(tile, collection)) {
+    publishViews([{ tile, view }], allUpdatesSettled());
+  }
+  collectAgainIfIdle([tile]);
 }
 
 function allUpdatesSettled(): boolean {
@@ -197,9 +301,9 @@ const STALE_UPDATE_MS = 60_000;
 const STALE_UPDATE_SUB = "refresh still pending";
 
 function activeTileView(tile: Tile, view: TileView): TileView {
-  const badge = activityBadges.get(tile.id);
+  const badge = activityBadges.get(tile.label);
   if (badge) view = { ...view, aside: badge + (view.aside ?? "") };
-  if (!activeTileUpdates.get(tile.id)?.stale) return view;
+  if (!activeTileUpdates.get(tile.label)?.stale) return view;
   return tile.showOnlyCompletedViews
     ? { ...view, sub: STALE_UPDATE_SUB }
     : { ...view, status: "unknown", sub: STALE_UPDATE_SUB };
@@ -207,10 +311,10 @@ function activeTileView(tile: Tile, view: TileView): TileView {
 
 function grayStaleTileUpdates(now: number): void {
   const newlyStale: string[] = [];
-  for (const [tileId, active] of activeTileUpdates) {
+  for (const [label, active] of activeTileUpdates) {
     if (active.stale || now - active.startedAt < STALE_UPDATE_MS) continue;
     active.stale = true;
-    newlyStale.push(`${tileId} (${Math.max(0, now - active.startedAt)} ms)`);
+    newlyStale.push(`"${label}" (${Math.max(0, now - active.startedAt)} ms)`);
   }
   if (newlyStale.length) {
     const sources = [...activeRunSourceUpdates];
@@ -233,6 +337,15 @@ interface RunSourceGroup {
   tiles: Tile[];
 }
 
+// A source due for a fetch: the tiles to collect from it, and the tiles due
+// that are still being collected. Those count as collected with it, so they
+// stay on its schedule rather than falling due on their own and fetching the
+// source for themselves, and they are collected from its snapshots once their
+// collection under way is published.
+interface DueSource extends RunSourceGroup {
+  busy: Tile[];
+}
+
 function groupRunSources(tiles: Tile[]): RunSourceGroup[] {
   const groups = new Map<string, RunSourceGroup>();
   for (const tile of tiles) {
@@ -249,26 +362,24 @@ function groupRunSources(tiles: Tile[]): RunSourceGroup[] {
   return [...groups.values()];
 }
 
-function snapshotCtx(base: Ctx, snapshots: ReadonlyMap<string, Run[]>): Ctx {
-  const runsFor = (repo: string, workflow: string) =>
-    Promise.resolve(snapshots.get(runSourceKey({ repo, workflow })) ?? []);
+function snapshotCtx(
+  base: Ctx,
+  snapshots: ReadonlyMap<string, Run[]>,
+  errors: ReadonlyMap<string, string>,
+  tile: Tile,
+): Ctx {
+  const runsFor = (source: RunSource) =>
+    Promise.resolve(snapshots.get(runSourceKey(source)) ?? []);
   return {
-    runs: () => runsFor(REPO, CI_WORKFLOW),
+    runs: () => runsFor(runSource(REPO, CI_WORKFLOW, "main")),
     runsFor,
+    runSourceProblem: (source) => {
+      const key = runSourceKey(source);
+      return errors.get(key) ?? (snapshots.has(key) ? undefined : "pending");
+    },
+    collectAgain: () => collectAgain(tile),
     env: base.env,
   };
-}
-
-// When the newest run in a snapshot started, for comparing one fetch of a source
-// against the last one that was kept. A snapshot with no readable start times
-// counts as having no runs at all.
-function newestRunAt(runs: readonly Run[] | undefined): number {
-  let newest = -Infinity;
-  for (const run of runs ?? []) {
-    const at = Date.parse(run.created_at);
-    if (Number.isFinite(at) && at > newest) newest = at;
-  }
-  return newest;
 }
 
 function sourceLabel(source: RunSource): string {
@@ -281,6 +392,7 @@ function withSourceHealth(
   snapshots: ReadonlyMap<string, Run[]>,
   errors: ReadonlyMap<string, string>,
 ): TileView {
+  if (tile.reportsSourceProblems) return view;
   const problems: string[] = [];
   for (const source of tile.runSources ?? []) {
     const key = runSourceKey(source);
@@ -312,28 +424,40 @@ async function collectView(
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`tile ${tile.id} failed:`, msg);
-    const prev = views.get(tile.id);
+    console.error(`tile "${tile.label}" failed:`, msg);
+    const prev = views.get(tile.label);
     return prev
       ? { ...prev, status: "unknown", sub: friendlyError(msg) }
-      : { label: tile.label ?? tile.id, status: "unknown", value: "—", sub: friendlyError(msg) };
+      : { status: "unknown", value: "—", sub: friendlyError(msg) };
   }
 }
 
 function publishViews(collected: { tile: Tile; view: TileView }[], recoveryIsSettled: boolean): void {
   const now = Date.now();
   for (const { tile, view } of collected) {
-    views.set(tile.id, view);
-    lastRun.set(tile.id, now);
+    views.set(tile.label, view);
+    lastRun.set(tile.label, now);
   }
   lastChange = now;
   updateFaviconRedSince(now, recoveryIsSettled);
   broadcast(dashboardUpdate());
 }
 
+// A tile publishes an intermediate view when one part of its data is ready
+// ahead of the rest, and a chart is drawn from the part that takes longest.
+// The view replaces the whole tile, so one that carries no chart keeps the
+// chart already on the tile instead of leaving it bare until the collection
+// finishes. A completed view carries every part and is taken as it stands,
+// so a chart its collection no longer draws leaves the tile.
+function withChartOnTile(previous: TileView | undefined, view: TileView): TileView {
+  if (view.extra !== undefined || previous?.extra === undefined) return view;
+  const { extra, duration, alignChartBottom } = previous;
+  return { ...view, extra, duration, alignChartBottom };
+}
+
 function publishIntermediateView(tile: Tile, view: TileView): void {
   const now = Date.now();
-  views.set(tile.id, view);
+  views.set(tile.label, withChartOnTile(views.get(tile.label), view));
   lastChange = now;
   updateFaviconRedSince(now, false);
   broadcast(dashboardUpdate());
@@ -341,7 +465,6 @@ function publishIntermediateView(tile: Tile, view: TileView): void {
 
 // One ticker collects every tile that is due (respecting each tile's interval).
 // Later ticks skip work that is still running and collect the other due tiles.
-const TICK_MS = 15_000;
 export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   const now = Date.now();
   grayStaleTileUpdates(now);
@@ -350,25 +473,31 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   const activeAtTickStart = new Set(activeTileUpdates.keys());
   const dueTiles = tiles.filter((tile) =>
     !sourceTiles.has(tile) &&
-    !activeAtTickStart.has(tile.id) &&
-    now - (lastRun.get(tile.id) ?? 0) >= tile.intervalMs
+    !activeAtTickStart.has(tile.label) &&
+    now - (lastRun.get(tile.label) ?? 0) >= tile.intervalMs
   );
   const dueSources = sourceGroups.flatMap((group) => {
     if (activeRunSourceUpdates.has(runSourceKey(group.source))) return [];
     const due = group.tiles.filter((tile) =>
-      !activeAtTickStart.has(tile.id) &&
       now - (lastSourceTileRun.get(runSourceTileKey(group.source, tile)) ?? 0) >= tile.intervalMs
     );
-    return due.length ? [{ source: group.source, tiles: due }] : [];
+    const free = due.filter((tile) => !activeAtTickStart.has(tile.label));
+    return free.length
+      ? [{
+        source: group.source,
+        tiles: free,
+        busy: due.filter((tile) => activeAtTickStart.has(tile.label)),
+      }]
+      : [];
   });
   const dueActivity = tiles.filter((tile) =>
-    tile.collectActivity && !activeActivityUpdates.has(tile.id) &&
-    now - (lastActivityRun.get(tile.id) ?? 0) >= tile.intervalMs
+    tile.collectActivity && !activeActivityUpdates.has(tile.label) &&
+    now - (lastActivityRun.get(tile.label) ?? 0) >= tile.intervalMs
   );
   if (!dueTiles.length && !dueSources.length && !dueActivity.length) return;
 
   for (const tile of dueTiles) beginTileUpdate(tile, now);
-  for (const tile of dueActivity) activeActivityUpdates.add(tile.id);
+  for (const tile of dueActivity) activeActivityUpdates.add(tile.label);
   for (const group of dueSources) {
     activeRunSourceUpdates.add(runSourceKey(group.source));
     for (const tile of group.tiles) beginTileUpdate(tile, now);
@@ -402,41 +531,29 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
         escapeHtml(friendlyError(String(error)))
       }">activity unknown</span>`;
     } finally {
-      activeActivityUpdates.delete(tile.id);
-      lastActivityRun.set(tile.id, Date.now());
+      activeActivityUpdates.delete(tile.label);
+      lastActivityRun.set(tile.label, Date.now());
     }
-    activityBadges.set(tile.id, badge);
+    activityBadges.set(tile.label, badge);
     lastChange = Date.now();
     broadcast(dashboardUpdate());
   };
 
   // Source fetches and dependent collections run independently. Each tile
-  // retains the completed view with the highest snapshot revision.
-  let sourceRevision = 0;
-  const publishedTileRevision = new Map<string, number>();
-  const refreshSource = async (group: RunSourceGroup) => {
+  // keeps the view of the collection that started last.
+  const refreshSource = async (group: DueSource) => {
     let released = false;
     try {
       let runs: Run[] | undefined;
       let error: string | undefined;
       try {
-        runs = await sourceCtx.runsFor(group.source.repo, group.source.workflow);
+        runs = await sourceCtx.runsFor(group.source);
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
         console.error(`run source ${runSourceKey(group.source)} failed:`, error);
       }
 
       const key = runSourceKey(group.source);
-      // A repository's newest run on main only ever moves forward. A fetch that
-      // comes back with an older newest run than the one already held read a
-      // stale view of the workflow, and publishing it would age the whole tile
-      // family backwards without saying so. Keep what is held and name the
-      // source stale; the next fetch that reaches a current view clears it.
-      if (runs && newestRunAt(runs) < newestRunAt(runSnapshots.get(key))) {
-        error = "newest run older than the one already collected";
-        console.error(`run source ${key} stale:`, error);
-        runs = undefined;
-      }
       if (runs) {
         runSnapshots.set(key, runs);
         runSourceErrors.delete(key);
@@ -445,39 +562,48 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
       }
       const snapshots = new Map(runSnapshots);
       const errors = new Map(runSourceErrors);
-      const currentCtx = snapshotCtx(sourceCtx, snapshots);
-      const revision = ++sourceRevision;
-      const publishIntermediate = (tile: Tile, view: TileView) => {
-        if (revision < (publishedTileRevision.get(tile.id) ?? 0)) return;
-        publishedTileRevision.set(tile.id, revision);
-        publishIntermediateView(
-          tile,
-          withSourceHealth(tile, view, snapshots, errors),
-        );
+      const from: SnapshotsTaken = {
+        taken: ++snapshotsTaken,
+        base: sourceCtx,
+        snapshots,
+        errors,
       };
-      const collected = await Promise.all(group.tiles.map(async (tile) => ({
-        tile,
-        view: withSourceHealth(
+      const collected = await Promise.all(group.tiles.map(async (tile) => {
+        const collection = startCollection(tile);
+        const view = await collectView(
           tile,
-          await collectView(
-            tile,
-            currentCtx,
-            (intermediate) => publishIntermediate(tile, intermediate),
-          ),
-          snapshots,
-          errors,
-        ),
-      })));
-      const current = collected.filter(({ tile }) => revision >= (publishedTileRevision.get(tile.id) ?? 0));
-      for (const { tile } of current) publishedTileRevision.set(tile.id, revision);
+          snapshotCtx(sourceCtx, snapshots, errors, tile),
+          (intermediate) => {
+            if (!claimPublication(tile, collection)) return;
+            publishIntermediateView(
+              tile,
+              withSourceHealth(tile, intermediate, snapshots, errors),
+            );
+          },
+        );
+        return {
+          tile,
+          collection,
+          view: withSourceHealth(tile, view, snapshots, errors),
+        };
+      }));
+      const current = collected.filter(({ tile, collection }) =>
+        claimPublication(tile, collection)
+      );
       const completedAt = Date.now();
-      for (const tile of group.tiles) {
+      for (const tile of [...group.tiles, ...group.busy]) {
         lastSourceTileRun.set(runSourceTileKey(group.source, tile), completedAt);
+      }
+      for (const { tile } of current) rememberPublishedFrom(tile, from);
+      for (const tile of group.busy) {
+        rememberPublishedFrom(tile, from);
+        collectAgainWhenIdle.set(tile.label, tile);
       }
       activeRunSourceUpdates.delete(runSourceKey(group.source));
       for (const tile of group.tiles) finishTileUpdate(tile);
       released = true;
       publishViews(current, allUpdatesSettled());
+      collectAgainIfIdle([...group.tiles, ...group.busy]);
     } finally {
       if (!released) {
         activeRunSourceUpdates.delete(runSourceKey(group.source));
@@ -493,8 +619,35 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   ]);
 }
 
+/**
+ * Clears everything the board has collected — its views, run times, run
+ * snapshots, activity badges, and red streak — so that a test sees none of what
+ * an earlier test collected. Connected clients and the dashboard message are
+ * left as they are. Throws while a collection is still running, because that
+ * collection would publish into the board after the reset.
+ */
+export function resetBoardForTest(): void {
+  if (!allUpdatesSettled() || activeActivityUpdates.size) {
+    throw new Error("the board cannot be reset while a collection is running");
+  }
+  views.clear();
+  lastRun.clear();
+  activityBadges.clear();
+  lastActivityRun.clear();
+  runSnapshots.clear();
+  runSourceErrors.clear();
+  lastSourceTileRun.clear();
+  collectionsStarted.clear();
+  collectionsPublished.clear();
+  publishedFrom.clear();
+  collectAgainWhenIdle.clear();
+  lastChange = 0;
+  faviconRedSince = null;
+}
+
 // Collect drill-down routes declared by tiles.
 const routes = TILES.flatMap((t) => t.routes ?? []);
+const pages = livePages(routes);
 
 // How often the page actually updates, which the client colors the "updated"
 // indicator against (fresh up to this, then stale). The server broadcasts when a
@@ -502,8 +655,7 @@ const routes = TILES.flatMap((t) => t.routes ?? []);
 // interval elapses (and collection latency pushes that to the tick after that), so
 // the real cadence for the fastest tile is its interval plus a tick, not the bare
 // interval.
-const REFRESH_MS = Math.min(...TILES.map((t) => t.intervalMs)) + TICK_MS;
-const SHELL_VERSION = dashboardVersion();
+const REFRESH_MS = minOf(TILES.map((t) => t.intervalMs)) + TICK_MS;
 
 export function page(currentViews: ReadonlyMap<string, TileView> = views): string {
   const update = dashboardUpdate(currentViews);
@@ -512,7 +664,7 @@ export function page(currentViews: ReadonlyMap<string, TileView> = views): strin
     update.wideHtml,
     update.ageSeconds,
     REFRESH_MS,
-    SHELL_VERSION,
+    SERVING_VERSION,
     update.faviconStatus,
     update.faviconRedSince,
     update.faviconRedAgeMs,
@@ -571,6 +723,9 @@ export async function handle(req: Request): Promise<Response> {
     broadcast(dashboardUpdate());
     return Response.json(dashboardMessage);
   }
+  if (url.pathname === "/events" && url.searchParams.has("page")) {
+    return pages.open(url);
+  }
   if (url.pathname === "/events") {
     await refreshDashboardMessage();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -596,13 +751,14 @@ export async function handle(req: Request): Promise<Response> {
 }
 
 // One turn of the server's clock: tell every connected browser the server is
-// still there, then collect whatever tiles are due.
+// still there, then collect whatever tiles are due while every open live page
+// is rendered again.
 export async function serveTick(
   collect: () => void | Promise<void> = tick,
 ): Promise<void> {
   heartbeat();
   if (await refreshDashboardMessage()) broadcast(dashboardUpdate());
-  await collect();
+  await Promise.all([collect(), pages.tick()]);
 }
 
 // The side effects: collect once, keep collecting, and serve. Running the file

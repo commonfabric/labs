@@ -57,8 +57,10 @@ influence on subsequent model-authored invocation inputs. Opaque or denied
 observations MUST NOT be accumulated as if their content were visible.
 
 **AH-CFC-8.** Explicit trusted input labels and derived prompt-influence labels
-MUST remain distinguishable. Influence is not integrity and does not authorize a
-side effect.
+MUST remain distinguishable. Prompt-slot influence is recorded as
+`PromptSlotInfluence`, a provenance-class integrity atom (CFC spec §15.4): it
+says which inputs the bound prompt shaped, adds no confidentiality, and does not
+authorize a side effect.
 
 ## 4. Side effects
 

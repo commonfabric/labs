@@ -58,8 +58,12 @@ first run does without.
    `Warning Ignored build scripts for packages: npm:fuse-native@2.2.6` box on
    stderr. It is noise; the command's output is on stdout.
 
-2. **Docker with the `runsc-cfc` runtime.** Every tool the model runs executes
-   in a container under that runtime. On macOS, follow the gVisor
+2. **Docker with the `runsc-cfc` runtime.** By default the console runs every
+   sandboxed tool in a container under that runtime. Every entrypoint, the
+   console included, can instead invoke `runsc` directly, with no Docker, where
+   `CF_HARNESS_SANDBOX_RUNTIME` selects it; the package README's
+   [Sandbox runtimes](README.md#sandbox-runtimes) covers that driver, and this
+   walkthrough follows the Docker one. On macOS, follow the gVisor
    [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);
    it owns installation and registration. Confirm the result:
 
@@ -597,8 +601,11 @@ is a real problem.
 
 ## 8. Run the CLI path instead
 
-The batch CLI and the console resolve the same session configuration. The CLI
-refuses an enforcing run unless both runsc-cfc transports are named:
+The batch CLI and the console resolve the same session configuration, and the
+same sandbox runtime selection: the CLI from `--sandbox-runtime` or
+`CF_HARNESS_SANDBOX_RUNTIME`, the console from the variable alone. On the Docker
+driver, which is the default, the CLI refuses an enforcing run unless both
+runsc-cfc transports are named:
 
 ```sh
 cd <labs>/packages/cf-harness
@@ -652,12 +659,15 @@ records, and the offline audit are usable now.
 
 The boundaries that affect this onboarding are:
 
-- CT-2175: a `run_pattern` call without `resultSchema` receives the result
-  handle without consulting the ceiling. If the ceiling refuses requested
-  values, the call still receives the handle, with `value` withheld, a
-  `valueError` that explains why and names the input carrying the label, and
-  `policyRefusal` as structured data. Declassification by policy — releasing a
-  value under one policy and refusing it under another — remains open.
+- CT-2175: a successful `run_pattern` capture receives its result handle and
+  host-computed `pending`/`hasError` flags when their release fit admits them. A
+  refused host-only status fit silently omits the flags and keeps the handle.
+  `resultSchema` requests computed values beyond those flags. If the ceiling
+  refuses those requested values, the call still receives the handle, with
+  `value` withheld, a `valueError` that explains why and names the input
+  carrying the label, and `policyRefusal` as structured data. Declassification
+  by policy — releasing a value under one policy and refusing it under another —
+  remains open.
 - CT-2187 and CT-2191: the audit's known findings in section 7.
 - CT-2155 clause 5: the console's web routes carry no credential. The `Host`
   allowlist is the whole of the request gate, and the network the console is

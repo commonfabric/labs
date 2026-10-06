@@ -14,6 +14,7 @@ With `Writable<T>` in your signature:
 | `.set(value)` | Replace entire value |
 | `.update({ key: value })` | Partial update (objects) |
 | `.push(...items)` | Append to an array (mergeable — see below) |
+| `.pushAll(items)` | Append every item of a list, however long, as one `push` (mergeable) |
 | `.addUnique(...items)` | Append each item only if not already present (mergeable) |
 | `.increment(by?)` | Add a number (default `+1`, may be negative) to a number cell (mergeable) |
 | `.remove(item)` | Remove first `item` from array |
@@ -44,9 +45,9 @@ value the handler happened to read. The methods also drop the reads they make
 for themselves from the commit's conflict set, so two of them touching the same
 collection do not conflict with each other. The practical effect:
 
-- `push` / `addUnique`: concurrent appends from different users all land. With
-  `addUnique`, adding an item that is already present is a no-op (deduplicated
-  on the server too), so re-adding the same item is safe.
+- `push` / `pushAll` / `addUnique`: concurrent appends from different users
+  all land. With `addUnique`, adding an item that is already present is a no-op
+  (deduplicated on the server too), so re-adding the same item is safe.
 - `increment`: concurrent increments sum instead of clobbering. A missing value
   counts as zero, so a counter needs no initialization; a zero amount is
   rejected.
@@ -68,6 +69,27 @@ conflict and retry — the protection an unconditional mergeable write gives up.
 Rely on that: keep the explicit `.get()` for a content-dependent condition. If
 the condition is uniqueness, prefer `addUnique`, which the server enforces
 without a retry. Otherwise keep a read-modify-write `set`.
+
+A mergeable method that follows a `set()` of the same value in one handler is
+not mergeable either. `list.set([])` and then `list.push(item)` says the list
+holds exactly that one item, so the commit carries the list as the handler
+left it and replaces whatever the server held, where an append would have
+added to it. The same goes for a `set()` of an object and then a `push` into a
+list inside it, and for `count.set(10)` and then `count.increment(1)`. Such a
+write conflicts and retries like any whole-value write. Setting a different
+field, or one element of the list, changes nothing on a document that already
+exists: a `push` beside those is still mergeable. On a document the handler
+is the first to write, a `push` and any other write to that document are
+committed together as its whole value.
+
+That holds for any write to a document the handler saw as absent, a plain
+`set()` of one field included: the commit carries the whole document, and is
+refused, and the handler run again, if another user created the document in
+the meantime. The exception is a mergeable method that is the handler's only
+write to it, which lands on whatever is there.
+
+A `push` or `addUnique` onto a list that does not exist yet, or that was set
+to `undefined`, starts the list with what it adds.
 
 ## Addressing one array element: `elementById`
 

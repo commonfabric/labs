@@ -96,13 +96,15 @@ describe("cfc-posture", () => {
       expect(record.flowLabels.rung).toBe("observe");
     });
 
-    it("publishes the llm sinks as deviations under the bundle", () => {
+    it("publishes every ungated sink as a deviation under the bundle", () => {
+      // The four llm-class sinks and `sqliteQuery`, each carrying the owner
+      // AH-CFC-15 asks a published deviation for.
       const record = harnessFabricSessionPosture({
         ...SESSION,
         cfcPosture: "max-enforcement",
       });
       expect(record.deviations.map((deviation) => deviation.owner.length > 0))
-        .toEqual([true, true, true, true]);
+        .toEqual([true, true, true, true, true]);
     });
   });
 

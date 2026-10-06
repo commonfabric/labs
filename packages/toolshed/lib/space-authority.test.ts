@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "@commonfabric/runner";
 import {
@@ -36,11 +37,12 @@ describe("isExplicitSpaceOwner", () => {
     expect(isExplicitSpaceOwner({ [ALICE]: "READ" }, ALICE)).toBe(false);
   });
 
-  it("refuses a principal covered only by the `*: WRITE` genesis default", () => {
-    // THE load-bearing case. The genesis default for a named space is `{ owner:
-    // "OWNER", "*": "WRITE" }`, so every authenticated principal holds WRITE. A
-    // proof-of-write ceremony (the rejected Option A) would admit Mallory here;
-    // the OWNER predicate must not.
+  it("refuses a principal covered only by a `*: WRITE` grant", () => {
+    // THE load-bearing case. A space whose ACL is `{ owner: "OWNER", "*":
+    // "WRITE" }` gives every authenticated principal WRITE. Legacy named spaces
+    // carry that document from their creation, and an owner can grant it to
+    // any space. A proof-of-write ceremony (the rejected Option A) would admit
+    // Mallory here; the OWNER predicate must not.
 
     const acl = { [ALICE]: "OWNER", "*": "WRITE" } as const;
     expect(isExplicitSpaceOwner(acl, ALICE)).toBe(true);
@@ -155,7 +157,7 @@ describe("authorizeSpaceOwner against real ACL enforcement", () => {
   });
 
   it("admits the explicit owner and refuses a wildcard-WRITE stranger", async () => {
-    // The genesis default shape for a named space.
+    // A space open to every authenticated writer, as a legacy named space is.
     await genesisAcl(factory, spaceIdentity, {
       [alice.did()]: "OWNER",
       "*": "WRITE",
@@ -227,6 +229,93 @@ describe("authorizeSpaceOwner against real ACL enforcement", () => {
     expect((await authorizeSpaceWriter(deps(), space, mallory.did())).ok).toBe(
       false,
     );
+  });
+
+  it("authorizes private-space writers from the hosted ACL without granting the process access", async () => {
+    const writer = await Identity.fromPassphrase(
+      "space-authority-private-writer",
+    );
+    await genesisAcl(factory, spaceIdentity, {
+      [alice.did()]: "OWNER",
+      [writer.did()]: "WRITE",
+      [mallory.did()]: "READ",
+    });
+    const trusted = {
+      ...deps(),
+      readAcl: async (target: string) => {
+        const document = await server.readDocument(target, aclDocId(target));
+        return document?.value;
+      },
+    };
+    expect((await authorizeSpaceWriter(trusted, space, alice.did())).ok).toBe(
+      true,
+    );
+    expect((await authorizeSpaceWriter(trusted, space, writer.did())).ok).toBe(
+      true,
+    );
+    expect((await authorizeSpaceWriter(trusted, space, mallory.did())).ok).toBe(
+      false,
+    );
+    expect((await authorizeSpaceWriter(trusted, space, operator.did())).ok)
+      .toBe(false);
+    expect((await authorizeSpaceWriter(deps(), space, alice.did())).ok).toBe(
+      false,
+    );
+    const owner = await factory.create(spaceIdentity.did(), alice);
+    try {
+      await owner.session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: aclDocId(space),
+          value: { value: { [alice.did()]: "OWNER" } },
+        }],
+      });
+    } finally {
+      await owner.client.close();
+    }
+    expect((await authorizeSpaceWriter(trusted, space, writer.did())).ok).toBe(
+      false,
+    );
+    let reads = 0;
+    expect(
+      (await authorizeSpaceWriter(
+        {
+          ...trusted,
+          hostsSpace: () => false,
+          readAcl: () => {
+            reads++;
+            return Promise.resolve(undefined);
+          },
+        },
+        space,
+        alice.did(),
+      )).ok,
+    ).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it("refuses absent and malformed hosted ACLs without exposing their contents", async () => {
+    for (
+      const value of [undefined, null, "private malformed ACL", {
+        [alice.did()]: "WRITE",
+      }, { [alice.did()]: "SUPERUSER" }]
+    ) {
+      const result = await authorizeSpaceWriter(
+        {
+          ...deps(),
+          readAcl: () => Promise.resolve(value),
+        },
+        space,
+        alice.did(),
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        kind: "not-owner",
+        message: NOT_WRITER_MESSAGE,
+      });
+    }
   });
 
   it("admits every caller as a writer where the deployment enforces no ACL", async () => {

@@ -1,21 +1,31 @@
 /**
- * Reports the median wall-clock time of recent completed CI runs, with a trend
- * sparkline. One factory builds both the labs and loom instances against their
- * own repository and workflow, and both drill down to that repository's
- * history on /bench. The labs instance owns the Gantt image route, whose view
- * exposes the scripts/ci-gantt.ts controls for both repositories.
+ * Reports the median wall-clock time of recent successful pull request CI
+ * runs, with a trend sparkline. One factory builds the labs, loom, and weaver
+ * instances against their own repository and workflow. The labs and loom
+ * instances drill down to that repository's main-run history on /bench. The
+ * labs instance owns the Gantt image route, whose view exposes the
+ * scripts/ci-gantt.ts controls for both repositories.
  */
 
 import { fromFileUrl } from "@std/path";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   type Route,
   type Run,
   runSource,
+  type RunSource,
   type Status,
   type Tile,
   type TileView,
 } from "../types.ts";
-import { escapeHtml, friendlyError, median, sparkline } from "../lib.ts";
+import { CompletedAttempts } from "../completed-attempts.ts";
+import {
+  ciDurationSub,
+  escapeHtml,
+  friendlyError,
+  median,
+  sparkline,
+} from "../lib.ts";
 import {
   CI_WORKFLOW,
   DUR_GOOD,
@@ -25,6 +35,8 @@ import {
   LOOM_CI_WORKFLOW,
   LOOM_REPO,
   REPO,
+  WEAVER_CI_WORKFLOW,
+  WEAVER_REPO,
 } from "../config.ts";
 import {
   ciCommitGanttProgressResponse,
@@ -55,6 +67,9 @@ const CIGANTT = fromFileUrl(
   new URL("../../../scripts/ci-gantt.ts", import.meta.url),
 );
 const GANTT_REFRESH_MS = 30 * 60_000;
+// How many job listings a duration tile requests at once. Its first
+// collection reads one for each counted run in its snapshot.
+const JOB_LISTING_CONCURRENCY = 8;
 
 // Writes the renderer's input to `destination` and reports how many runs it
 // holds. The chart is written a run at a time rather than returned, so a
@@ -658,60 +673,87 @@ const ganttRoutes: Route[] = [
   },
 ];
 
+interface PassedRun {
+  run: Run;
+  createdAt: number;
+  durationMins: number;
+}
+
+/**
+ * The runs among `runs` that succeeded on their first attempt and did work,
+ * each with how long it took from creation to finish, in the order of `runs`.
+ * A run that passed only on a rerun is left out, because its span includes
+ * the wait before someone asked for the rerun. A run that ran no job did
+ * nothing, and one that ran one job and skipped the rest did nothing beyond
+ * reporting its status, as weaver's run for a draft pull request does, so
+ * both are left out too. Rejects when a run's job listing cannot be read.
+ */
+async function passedRuns(
+  runs: readonly Run[],
+  attempts: CompletedAttempts,
+): Promise<PassedRun[]> {
+  const spans = runs.flatMap((run) => {
+    if (
+      run.status !== "completed" || run.conclusion !== "success" ||
+      run.run_attempt !== 1
+    ) {
+      return [];
+    }
+    const createdAt = Date.parse(run.created_at);
+    const finishedAt = Date.parse(run.updated_at);
+    if (
+      !Number.isFinite(createdAt) || !Number.isFinite(finishedAt) ||
+      finishedAt <= createdAt
+    ) {
+      return [];
+    }
+    return [{ run, createdAt, durationMins: (finishedAt - createdAt) / 60_000 }];
+  });
+  attempts.observe(spans.map(({ run }) => run));
+  const worked = new Set<number>();
+  for (let at = 0; at < spans.length; at += JOB_LISTING_CONCURRENCY) {
+    await Promise.all(
+      spans.slice(at, at + JOB_LISTING_CONCURRENCY).map(async ({ run }) => {
+        const { ran, skipped } = await attempts.jobCounts(run);
+        if (ran > 1 || (ran === 1 && skipped === 0)) worked.add(run.id);
+      }),
+    );
+  }
+  return spans.filter(({ run }) => worked.has(run.id));
+}
+
 function makeCiDuration(
   opts: {
-    id: string;
     label: string;
-    repo: string;
-    workflow: string;
-    href: string;
-    hint: string;
+    source: RunSource;
+    link?: { href: string; hint: string };
     routes?: Route[];
   },
 ): Tile {
+  const attempts = new CompletedAttempts(opts.source.repo);
   return {
-    id: opts.id,
-    intervalMs: 30_000,
-    runSources: [runSource(opts.repo, opts.workflow)],
+    label: opts.label,
+    intervalMs: 5 * 60_000,
+    runSources: [opts.source],
     routes: opts.routes,
     async collect(ctx): Promise<TileView> {
       let runs: Run[];
       try {
-        runs = await ctx.runsFor(opts.repo, opts.workflow);
+        runs = await ctx.runsFor(opts.source);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
-          label: opts.label,
           status: "unknown",
           value: "—",
           sub: friendlyError(message),
-          href: opts.href,
-          hint: opts.hint,
+          ...opts.link,
         };
       }
-      // Only complete, successful push runs with a usable landing-to-finish
-      // span contribute to the duration.
-      const passed = runs.flatMap((run) => {
-        if (
-          run.event !== "push" || run.status !== "completed" ||
-          run.conclusion !== "success"
-        ) {
-          return [];
-        }
-        const landedAt = Date.parse(run.created_at);
-        const finishedAt = Date.parse(run.updated_at);
-        if (
-          !Number.isFinite(landedAt) || !Number.isFinite(finishedAt) ||
-          finishedAt <= landedAt
-        ) {
-          return [];
-        }
-        return [{ landedAt, durationMins: (finishedAt - landedAt) / 60_000 }];
-      });
+      const passed = await passedRuns(runs, attempts);
       // Median window = the successful runs in the last DUR_MAX_AGE_HOURS, or the
       // most recent DUR_MIN_RUNS — whichever has more runs.
       const cutoff = Date.now() - DUR_MAX_AGE_HOURS * 3_600_000;
-      const inTimeCount = passed.filter((run) => run.landedAt >= cutoff).length;
+      const inTimeCount = passed.filter((run) => run.createdAt >= cutoff).length;
       const usingTime = inTimeCount >= DUR_MIN_RUNS; // time window wins when it has enough runs
       // A count-based prefix (not the filter set itself) so the median runs are
       // always the newest slice of passed — which is what the sparkline
@@ -726,9 +768,9 @@ function makeCiDuration(
       // trend.
       const series = [...passed].reverse().map((run) => run.durationMins);
       // How long the sparkline spans (oldest to newest run), for the corner label.
-      const times = passed.map((run) => run.landedAt);
+      const times = passed.map((run) => run.createdAt);
       const spanMs = times.length >= 2
-        ? Math.max(...times) - Math.min(...times)
+        ? maxOf(times) - minOf(times)
         : 0;
       const s: Status = window.length === 0
         ? "unknown"
@@ -738,38 +780,35 @@ function makeCiDuration(
         ? "warn"
         : "bad";
       return {
-        label: opts.label,
         status: s,
         value: window.length === 0 ? "—" : `${medianMins}m`,
-        sub: usingTime
-          ? `median · ${window.length} passing runs in the last ${DUR_MAX_AGE_HOURS}h`
-          : `median · last ${window.length} passing runs`,
+        sub: ciDurationSub(
+          window.length,
+          usingTime ? DUR_MAX_AGE_HOURS : undefined,
+        ),
         extra: sparkline(series, CHART_LINE, {
           count: window.length,
           color: CHART_HIGHLIGHT,
         }, true),
         duration: spanMs,
-        href: opts.href,
-        hint: opts.hint,
+        ...opts.link,
       };
     },
   };
 }
 
 export const labsCiDuration = makeCiDuration({
-  id: "ci-duration",
   label: "labs ci duration",
-  repo: REPO,
-  workflow: CI_WORKFLOW,
-  href: "/bench?view=ci&repo=labs",
-  hint: "history ↗",
+  source: runSource(REPO, CI_WORKFLOW, "pull requests"),
+  link: { href: "/bench?view=ci&repo=labs", hint: "main run history ↗" },
   routes: ganttRoutes,
 });
 export const loomCiDuration = makeCiDuration({
-  id: "loom-ci-duration",
   label: "loom ci duration",
-  repo: LOOM_REPO,
-  workflow: LOOM_CI_WORKFLOW,
-  href: "/bench?view=ci&repo=loom",
-  hint: "history ↗",
+  source: runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+  link: { href: "/bench?view=ci&repo=loom", hint: "main run history ↗" },
+});
+export const weaverCiDuration = makeCiDuration({
+  label: "weaver ci duration",
+  source: runSource(WEAVER_REPO, WEAVER_CI_WORKFLOW, "pull requests"),
 });

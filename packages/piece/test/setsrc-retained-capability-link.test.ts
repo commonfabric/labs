@@ -120,9 +120,9 @@ describe("setsrc over a retained injected sqlite capability link", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "setsrc-e2e-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -273,9 +273,9 @@ describe("setsrc over a retained injected sqlite capability link", () => {
     //    storage must load the updated piece and still read through the
     //    retained link — i.e. the durable state setsrc left behind is
     //    coherent, not just the in-memory one.
-    const freshSession = await createSession({
+    const freshSession = createSession({
       identity: signer,
-      spaceName: pieces.getSpaceName()!,
+      spaceDid: pieces.getSpace(),
     });
     const freshRuntime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),

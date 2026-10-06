@@ -12,18 +12,27 @@ import {
   type DiffLineKind,
   parseDiff,
 } from "../lib/view/diff.ts";
-import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  diffLanguages,
+  type DiffWorkspace,
+} from "../lib/view/diffdoc.ts";
 import {
   decodeLanguageInput,
   languageForName,
   languageForSource,
   languageIds,
+  prepareLanguages,
 } from "../lib/view/languages/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
 import {
   type HighlightEvidence,
   VIEW_LANGUAGE_FIXTURES,
 } from "./fixtures/view-language/corpus.ts";
+
+// Every fixture is parsed through its language's synchronous entry points,
+// which show plain text until the language's parser has loaded.
+await prepareLanguages(languageIds().map((id) => languageForName(id)!));
 
 const UNAVAILABLE_WORKSPACE: DiffWorkspace = {
   resolve: () => null,
@@ -125,11 +134,24 @@ function reconstructDiffSide(
 
 describe("view language fixture corpus", () => {
   it("covers every registered text language", () => {
+    // A language may have several fixtures, one per surveyed repository; what
+    // the corpus owes is one for each registered text language.
     const textLanguageIds = languageIds().filter((id) =>
       languageForName(id)?.input.kind === "text"
     );
-    expect(VIEW_LANGUAGE_FIXTURES.map((fixture) => fixture.languageId)).toEqual(
-      textLanguageIds,
+    expect([
+      ...new Set(VIEW_LANGUAGE_FIXTURES.map((fixture) => fixture.languageId)),
+    ]).toEqual(textLanguageIds);
+  });
+
+  it("records every language's selection routes on one of its fixtures", () => {
+    const withSelection = VIEW_LANGUAGE_FIXTURES.filter((fixture) =>
+      fixture.selection !== undefined
+    ).map((fixture) => fixture.languageId);
+
+    expect(withSelection).toEqual([...new Set(withSelection)]);
+    expect(new Set(withSelection)).toEqual(
+      new Set(VIEW_LANGUAGE_FIXTURES.map((fixture) => fixture.languageId)),
     );
   });
 
@@ -151,21 +173,53 @@ describe("view language fixture corpus", () => {
       const after = Deno.readTextFileSync(fixture.after);
       const incomplete = Deno.readTextFileSync(fixture.incomplete);
 
-      it("selects the language from representative filenames, aliases, and shebangs", () => {
-        for (const fileName of fixture.selection.filenames) {
-          expect(languageForSource(fileName, after).id).toBe(
-            fixture.languageId,
-          );
-        }
-        for (const alias of fixture.selection.aliases) {
-          expect(languageForName(alias)?.id).toBe(fixture.languageId);
-        }
-        for (const shebang of fixture.selection.shebangs ?? []) {
-          expect(languageForSource(undefined, `${shebang}\n${after}`).id).toBe(
-            fixture.languageId,
-          );
-        }
+      it("selects the language from its own surveyed path", () => {
+        expect(languageForSource(fixture.surveyPath, after).id).toBe(
+          fixture.languageId,
+        );
       });
+
+      const selection = fixture.selection;
+      if (selection !== undefined) {
+        it("selects the language from representative filenames, aliases, and shebangs", () => {
+          for (const fileName of selection.filenames) {
+            expect(languageForSource(fileName, after).id).toBe(
+              fixture.languageId,
+            );
+          }
+          for (const alias of selection.aliases) {
+            expect(languageForName(alias)?.id).toBe(fixture.languageId);
+          }
+          for (const shebang of selection.shebangs ?? []) {
+            expect(languageForSource(undefined, `${shebang}\n${after}`).id)
+              .toBe(fixture.languageId);
+          }
+        });
+
+        it("selects the language in a diff from representative filenames and shebangs", () => {
+          const diffs = [
+            ...selection.filenames.map((fileName) =>
+              wholeFileDiff(fileName, before, after)
+            ),
+            ...(selection.shebangs ?? []).map((shebang) =>
+              wholeFileDiff(
+                "script",
+                `${shebang}\n${before}`,
+                `${shebang}\n${after}`,
+              )
+            ),
+          ];
+          for (const diff of diffs) {
+            const languages = diffLanguages(diff, parseDiff(diff)!);
+            expect(
+              languages.flatMap(({ oldLanguage, newLanguage }) => [
+                oldLanguage.id,
+                newLanguage.id,
+              ]),
+            ).toEqual([fixture.languageId, fixture.languageId]);
+          }
+        });
+      }
 
       it("uses highlighting evidence specific to the language adapter", () => {
         expectLanguageSpecificEvidence(

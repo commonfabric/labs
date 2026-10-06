@@ -20,7 +20,7 @@ function createOpsCollector() {
   return {
     onOps: (ops: VDomOp[]) => {
       const batchId = nextBatchId++;
-      allOps.push(...ops);
+      for (const op of ops) allOps.push(op);
       batchIds.push(batchId);
       return batchId;
     },
@@ -994,7 +994,7 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
           children: [],
         });
         runtime.prepareTxForCommit(tx);
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const rootVDOMCell = runtime.getCell(
@@ -1075,7 +1075,7 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
           children: [linkedChild.getAsLink({ keepAsCell: KeepAsCell.All })],
         });
         runtime.prepareTxForCommit(tx);
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const rootVDOMCell = runtime.getCell(
@@ -1144,7 +1144,7 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
           }],
         });
         runtime.prepareTxForCommit(tx);
-        const commitResult = await tx.commit();
+        const commitResult = await tx.commit().settled;
         assertEquals(commitResult.ok !== undefined, true);
 
         const rootVDOMCell = runtime.getCell(
@@ -1546,7 +1546,7 @@ Deno.test(
         tx,
       );
       output.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       let eventSeen: unknown;

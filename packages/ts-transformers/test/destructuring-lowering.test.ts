@@ -1,10 +1,13 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import ts from "typescript";
 
-import type { TransformationContext } from "../src/core/mod.ts";
+import {
+  CrossStageState,
+  type TransformationContext,
+} from "../src/core/mod.ts";
 import {
   collectDestructureBindings,
-  createKeyCall,
+  createPathRead,
   type DefaultDestructureBinding,
   type DestructureBinding,
   getStaticDefaultTypeNode,
@@ -49,9 +52,7 @@ function testContext(checker: ts.TypeChecker): TransformationContext {
     checker,
     factory: ts.factory,
     options: {},
-    state: {
-      typeRegistry: new WeakMap<ts.Node, ts.Type>(),
-    },
+    state: new CrossStageState(),
     cfHelpers: {
       getHelperExpr: (name: string) => ts.factory.createIdentifier(name),
     },
@@ -283,7 +284,7 @@ Deno.test("destructuring lowering collects array and object bindings", () => {
 Deno.test("destructuring lowering creates key calls for static and dynamic paths", () => {
   const { sourceFile } = createProgram("const dynamic = keyName;");
   const dynamic = findVariable(sourceFile, "dynamic").initializer!;
-  const call = createKeyCall(
+  const call = createPathRead(
     ts.factory.createIdentifier("input"),
     ["profile", dynamic],
     ts.factory,
@@ -301,5 +302,30 @@ Deno.test("destructuring lowering creates key calls for static and dynamic paths
       sourceFile,
     ),
     'input.key("profile", keyName)',
+  );
+});
+
+Deno.test("destructuring lowering reads a leading SELF segment as an element access", () => {
+  const { sourceFile } = createProgram("");
+  const self = () =>
+    ts.factory.createPropertyAccessExpression(
+      ts.factory.createIdentifier("__cfHelpers"),
+      "SELF",
+    );
+  const print = (path: Parameters<typeof createPathRead>[1]) =>
+    ts.createPrinter({ newLine: ts.NewLineKind.LineFeed }).printNode(
+      ts.EmitHint.Expression,
+      createPathRead(ts.factory.createIdentifier("input"), path, ts.factory),
+      sourceFile,
+    );
+
+  assertEquals(print([self()]), "input[__cfHelpers.SELF]");
+  assertEquals(
+    print([self(), "items", "0"]),
+    'input[__cfHelpers.SELF].key("items", "0")',
+  );
+  assertEquals(
+    print(["items", self()]),
+    'input.key("items", __cfHelpers.SELF)',
   );
 });

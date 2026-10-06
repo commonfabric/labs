@@ -20,7 +20,14 @@ does two things before it reaches the CFC enforcement ladder:
    - **Probe flow-label relevance.** `flowLabelWorkExists`
      ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)) asks whether the
      transaction observed or wrote a document carrying stored labels. A
-     transaction that did is marked relevant.
+     transaction that did is marked relevant. A write counts whatever value
+     it leaves: every write the transaction recorded is an attempted write
+     under spec §8.10.2.1, including one whose value returned to where it
+     started and an authoritative write of an unchanged value, which the
+     reactivity log's `writes` leave out. A write elided as equal to the
+     current value is never recorded, so it marks nothing here. Nor does a
+     write that ended where it started make the document's stored labels
+     self-minted: it minted nothing.
    - **Probe the sink-request ceiling.** `gatedSinkRequestExists` asks whether
      the transaction assembled a request for a sink that declares a
      confidentiality ceiling.
@@ -89,6 +96,33 @@ transaction is skipped so that both call sites reach the same answer about
 one — `commit()` takes none of the step for a read-only transaction — and a
 transaction that admits no writes has nothing to stamp in any case.
 
+## Cooperative preparation for asynchronous completions
+
+`Runtime.editWithRetry` accepts an optional owner `AbortSignal`. With one, it
+awaits `prepareForCommitCooperatively` before committing. The synchronous and
+cooperative entry points run the same boundary checks; the cooperative driver
+uses `CooperativeYield` between target documents and within staged-reference
+label derivation, including derivation for integrity floors, so cancellation
+can reach the event loop. The reference walk suspends between recursive calls
+and label-map construction phases. Cancellation aborts the uncommitted
+transaction and ends retries. No target is omitted from a successful
+preparation.
+
+The privileged write scope covers each synchronous verification step and ends
+before a yield. If the transaction's activity epoch changes during that yield,
+the attempt aborts rather than sealing candidates collected before the change.
+The caller must await preparation before committing. Initial collections,
+individual flat label-map operations, other verification, and final ceiling,
+grant, and digest work remain synchronous. Suspension points do not impose a
+transaction-size limit or a hard bound on event-loop latency.
+
+`sqliteQuery` supplies its builtin lifetime signal to completion and error
+writebacks. Stopping the builtin cancels preparation; a later activation can
+reissue its stored pending query. This does not cancel the shared runtime or an
+already submitted storage commit. Callers without an owner signal retain
+synchronous preparation, including scheduler fan-out, whose instance ordering
+does not permit an intervening macrotask.
+
 ## Read-only renderer subscriptions
 
 The worker VDOM reconciler subscribes through the internal `readOnly` option
@@ -121,7 +155,7 @@ every write it makes lands on an id beginning with `cid:`. The flow derivation
 consults no `cid:` document on any of its three channels:
 
 - a write target whose id begins with `cid:` is skipped by `valueWriteTargets`;
-- a read of one is skipped by `flowReadExcluded`;
+- a read of one is skipped by `forEachFlowObservation`;
 - a trigger read naming one is skipped by `forEachFlowObservation`, on top of
   the same filter applied when trigger reads are recorded;
 - a link written into a labeled document that names a `cid:` source records
@@ -148,13 +182,22 @@ the commit.
 
 ## Where this is pinned
 
+- [cfc/preparation-cancellation.test.ts](../../packages/runner/test/cfc/preparation-cancellation.test.ts)
+  — cancellation during preparation, label and refusal parity, and changes to
+  the transaction during a yield.
+- [sqlite-query-cancellation.test.ts](../../packages/runner/test/sqlite-query-cancellation.test.ts)
+  — stopping a piece discards its query writeback; restarting reissues the
+  pending query.
 - [cfc-commit-preparation.test.ts](../../packages/runner/test/cfc-commit-preparation.test.ts)
   — a transaction that turns relevant after the caller prepared it still
   commits prepared; an `editWithRetry` action runs once for a CFC verdict on a
   transaction nothing prepared; a read-only transaction is left unprepared
   where a writable one is prepared; a child-cell wrapper prepares the
   transaction it wraps; materialization stages `cid:` ids alone; a labeled
-  `cid:` document leaves a transaction unprepared.
+  `cid:` document leaves a transaction unprepared; a write returned to its
+  starting value, and an authoritative write of an unchanged value, each make
+  a labeled target relevant; a reverted path's derived label is replaced
+  whether or not another document in its space changed.
 - [runtime-prepare-tx-for-commit.test.ts](../../packages/runner/test/runtime-prepare-tx-for-commit.test.ts)
   — the settled-transaction and aborted-transaction cases.
 - [cfc-flow-probe-memo.test.ts](../../packages/runner/test/cfc-flow-probe-memo.test.ts)

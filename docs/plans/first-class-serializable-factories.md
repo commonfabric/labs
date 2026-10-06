@@ -231,7 +231,7 @@ Expected implementation and test files:
 - [ ] Update `packages/data-model/src/valueEqual.ts` to compare canonical codec
   state rather than function identity, before any same-reference shortcut that
   could accidentally admit an arbitrary function.
-- [ ] Update `packages/data-model/src/value-hash.ts` to hash the `Factory@1` tag
+- [ ] Update `packages/data-model/src/value-hash/ValueHasher.ts` to hash the `Factory@1` tag
   and recursively hashed canonical state.
 - [ ] Ensure all of these paths call the shared state/codec visitor rather than
   independently enumerating hidden fields.
@@ -249,7 +249,7 @@ Focused tests:
 - `packages/data-model/test/shallowMutableClone.test.ts`
 - `packages/data-model/test/value-clone.test.ts`
 - `packages/data-model/test/valueEqual.test.ts`
-- `packages/data-model/test/value-hash.test.ts`
+- `packages/data-model/test/value-hash/impl.test.ts`
 
 Each suite must cover all three factory kinds, nested factory state, independent
 but equal decoded shells, pre-seal failure, and arbitrary-function rejection.

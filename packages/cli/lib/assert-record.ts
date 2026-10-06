@@ -7,7 +7,8 @@
  */
 
 import type { AssertPart, AssertRecord } from "@commonfabric/api";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
+import { maxOf } from "@commonfabric/utils/math";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -53,7 +54,7 @@ export function formatAssertRecord(record: AssertRecord): string {
       : "Expected true, got false";
   }
 
-  const width = Math.max(...record.parts.map((part) => part.src.length));
+  const width = maxOf(record.parts.map((part) => part.src.length));
   const lines = record.parts.map((part) =>
     `  ${part.src.padEnd(width)} = ${part.rendered}`
   );
@@ -79,6 +80,6 @@ export function assertionOutcome(
   }
   return {
     passed: false,
-    error: `Expected true, got ${toCompactDebugString(value)}`,
+    error: debugStr`Expected true, got $quote,long${value}`,
   };
 }

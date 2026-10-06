@@ -37,8 +37,12 @@
  * - lift()/handler() inside pattern: ERROR (move to module scope)
  * - Local computed()/lift() aliases used as plain values in the same
  *   callback: ERROR (use a nested computed()/lift())
+ * - `x[SELF]` where it is `undefined`: inside computed(), action(), lift(), a
+ *   handler or a collection callback, or on anything but the pattern's input
+ *   parameter: ERROR (read `input[SELF]` in the pattern body)
  */
 
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
 import { reportNestedCollectionScans } from "../diagnostics/nested-collection-scan.ts";
 import { COMMONFABRIC_REACTIVE_ORIGIN_BUILDER_NAMES } from "../core/commonfabric-runtime-registry.ts";
@@ -68,11 +72,13 @@ import {
   classifyUnsupportedExpressionSiteCallRoot,
   findInlineCallbackCarrierSite,
   findLowerableExpressionSite,
+  isArrayMethodOwnedExpressionSite,
 } from "./expression-site-policy.ts";
 import {
   isDeclaredWithinFunction,
   isModuleScopedDeclaration,
 } from "../ast/scope-analysis.ts";
+import { getCommonFabricKeyName } from "../utils/reactive-keys.ts";
 import type {
   CallbackBoundarySemantics,
   SupportedCallbackBoundaryKind,
@@ -261,6 +267,11 @@ export class PatternContextValidationTransformer
         }
       }
 
+      if (ts.isElementAccessExpression(node)) {
+        this.#validateSelfAccess(node, context);
+        this.#validateWellKnownKeyThroughSelf(node, context);
+      }
+
       // Check for .get() calls and lift/handler placement in reactive context
       if (ts.isCallExpression(node)) {
         // Check for lift/handler inside pattern
@@ -354,6 +365,200 @@ export class PatternContextValidationTransformer
         `Wrap the computation in computed(() => ...) instead.`,
       node,
     });
+  }
+
+  /**
+   * Validates that `x[SELF]` is read only where it names the pattern's own
+   * result. Only the reactive proxy a pattern body receives as its input knows
+   * that result, so `SELF` works on that input and nothing else: not on a
+   * value read off it (`input.items[SELF]`), not on another pattern's result,
+   * and not on the input as a callback sees it. Inside `computed()`,
+   * `action()`, `lift()` or a handler the callback sees a plain value, and
+   * inside a collection callback a captured reference to the input; `SELF` is
+   * `undefined` on all of them. A value the code built itself from an object
+   * literal holds whatever keys it was given, and is not reported, nor is
+   * anything in a standalone function, which is ordinary code over whatever it
+   * is handed.
+   */
+  #validateSelfAccess(
+    node: ts.ElementAccessExpression,
+    context: TransformationContext,
+  ): void {
+    if (
+      getCommonFabricKeyName(node.argumentExpression, context.checker) !==
+        "SELF"
+    ) {
+      return;
+    }
+    const receiver = unwrapExpression(node.expression);
+    if (this.#isBuiltFromObjectLiteral(receiver, context.checker)) {
+      return;
+    }
+
+    const reactiveContext = context.getReactiveContext(node);
+    if (reactiveContext.owner === "standalone") {
+      return;
+    }
+    const inCallback = reactiveContext.kind === "compute" ||
+      isArrayMethodOwnedExpressionSite(node, context);
+    if (inCallback) {
+      context.reportDiagnostic({
+        severity: "error",
+        type: "pattern-context:self-access",
+        message: `\`${getNodeText(node)}\` reads \`SELF\` off a plain ` +
+          `value, where it is \`undefined\`. Inside \`computed()\`, ` +
+          `\`action()\`, \`lift()\` or a handler the pattern's input is a ` +
+          `plain value, and inside a collection callback such as ` +
+          `\`.map()\` it is a captured reference; \`SELF\` names the ` +
+          `pattern's own result only on the input the pattern body ` +
+          `receives. Read it in the pattern body instead, as ` +
+          `\`const self = input[SELF]\` or by destructuring \`[SELF]: self\` ` +
+          `in the pattern's parameter, and capture \`self\` here, or pass ` +
+          `it to the handler as part of its state.`,
+        node,
+      });
+      return;
+    }
+
+    if (
+      reactiveContext.kind === "pattern" &&
+      !this.#isPatternInputParameter(receiver, context)
+    ) {
+      context.reportDiagnostic({
+        severity: "error",
+        type: "pattern-context:self-access",
+        message: `\`${getNodeText(node)}\` reads \`SELF\` off something ` +
+          `other than the pattern's input parameter itself. \`SELF\` names ` +
+          `the pattern's own result only when read directly off that ` +
+          `parameter: not off a value read from it (\`input.items[SELF]\`), ` +
+          `not off another pattern's result, and not off a local that holds ` +
+          `the input, which is not followed back to the parameter. Write ` +
+          `\`input[SELF]\`, or destructure \`[SELF]: self\` in the ` +
+          `pattern's parameter, and read the rest of the path off that, as ` +
+          `in \`input[SELF].items\`.`,
+        node,
+      });
+    }
+  }
+
+  /**
+   * Validates that a well-known key other than `SELF` (`NAME`, `UI`, `FS`) is
+   * not read through `input[SELF]` in a pattern body, as in
+   * `input[SELF][NAME]`. That read is lifted and runs against a plain value,
+   * where it is `undefined`; the same key read off a local bound to
+   * `input[SELF]` lowers in place.
+   */
+  #validateWellKnownKeyThroughSelf(
+    node: ts.ElementAccessExpression,
+    context: TransformationContext,
+  ): void {
+    const keyName = getCommonFabricKeyName(
+      node.argumentExpression,
+      context.checker,
+    );
+    if (keyName === undefined || keyName === "SELF") {
+      return;
+    }
+    const reactiveContext = context.getReactiveContext(node);
+    if (
+      reactiveContext.kind !== "pattern" ||
+      isArrayMethodOwnedExpressionSite(node, context)
+    ) {
+      return;
+    }
+
+    let current = unwrapExpression(node.expression);
+    while (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      if (
+        ts.isElementAccessExpression(current) &&
+        getCommonFabricKeyName(current.argumentExpression, context.checker) ===
+          "SELF" &&
+        this.#isPatternInputParameter(
+          unwrapExpression(current.expression),
+          context,
+        )
+      ) {
+        context.reportDiagnostic({
+          severity: "error",
+          type: "pattern-context:self-access",
+          message: `\`${getNodeText(node)}\` reads \`${keyName}\` through ` +
+            `\`input[SELF]\`, where it is \`undefined\`: that read is not ` +
+            `lowered in place. Bind the pattern's result to a local in the ` +
+            `pattern body first, as in \`const me = input[SELF];\`, and ` +
+            `read the rest of the path off that, as in \`me[${keyName}]\`.`,
+          node,
+        });
+        return;
+      }
+      current = unwrapExpression(current.expression);
+    }
+  }
+
+  /**
+   * Whether `expression` is an object literal, or a name a `const`
+   * declaration initializes with one. A `let` or `var` binding could hold
+   * anything by the time it is read, so it does not count.
+   */
+  #isBuiltFromObjectLiteral(
+    expression: ts.Expression,
+    checker: ts.TypeChecker,
+  ): boolean {
+    if (ts.isObjectLiteralExpression(expression)) {
+      return true;
+    }
+    if (!ts.isIdentifier(expression)) {
+      return false;
+    }
+    const declaration = checker.getSymbolAtLocation(expression)
+      ?.valueDeclaration;
+    return !!declaration && ts.isVariableDeclaration(declaration) &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+      !!declaration.initializer &&
+      ts.isObjectLiteralExpression(unwrapExpression(declaration.initializer));
+  }
+
+  /**
+   * Whether `expression` names the input parameter of the `pattern()`
+   * callback it appears in: the first parameter, bound to a plain name and not
+   * a rest parameter, of a callback that is a `pattern()` callback's or of a
+   * standalone function definition, which is how a callback held in a `const`
+   * reads.
+   */
+  #isPatternInputParameter(
+    expression: ts.Expression,
+    context: TransformationContext,
+  ): boolean {
+    if (!ts.isIdentifier(expression)) {
+      return false;
+    }
+    const declaration = context.checker.getSymbolAtLocation(expression)
+      ?.valueDeclaration;
+    if (
+      !declaration || !ts.isParameter(declaration) ||
+      !ts.isIdentifier(declaration.name) || declaration.dotDotDotToken
+    ) {
+      return false;
+    }
+    const callback = declaration.parent;
+    if (
+      !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ||
+      callback.parameters[0] !== declaration
+    ) {
+      return false;
+    }
+    if (isStandaloneFunctionDefinition(callback)) {
+      return true;
+    }
+    const semantics = getCallbackBoundarySemantics(
+      callback,
+      context.checker,
+      context,
+    );
+    return semantics.decision.kind === "supported" &&
+      semantics.decision.boundaryKind === "pattern-builder";
   }
 
   /**
@@ -1318,13 +1523,10 @@ export class PatternContextValidationTransformer
     return false;
   }
 
-  #isCallableTypeNode(type: ts.TypeNode): boolean {
+  #isCallableTypeNode(node: ts.TypeNode): boolean {
+    const type = unwrapTypeParentheses(node);
     if (ts.isFunctionTypeNode(type) || ts.isConstructorTypeNode(type)) {
       return true;
-    }
-
-    if (ts.isParenthesizedTypeNode(type)) {
-      return this.#isCallableTypeNode(type.type);
     }
 
     if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {

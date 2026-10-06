@@ -11,11 +11,15 @@ import { isPlainObject } from "./types.ts";
  * should be treated the same as an omitted property. The `FabricValue` layer
  * preserves `undefined`-valued properties, so callers that need this
  * normalization must apply it directly.
+ *
+ * The result's members keep the member type `V`, which is accurate for any
+ * `V` that still admits a plain object once some of its `undefined`-valued
+ * properties are removed. `FabricValue` is one such type.
  */
-export function stripUndefinedProps(
-  value: Record<string, unknown>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+export function stripUndefinedProps<V>(
+  value: Readonly<Record<string, V>>,
+): Record<string, V> {
+  const out: Record<string, V> = {};
   for (const [key, val] of Object.entries(value)) {
     if (val === undefined) continue;
     // Use `defineProperty` rather than `out[key] = ...` so that a special

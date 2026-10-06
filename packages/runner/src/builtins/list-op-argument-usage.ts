@@ -8,6 +8,22 @@ export type ListOpArgumentUsage = {
   usesParams: boolean;
 };
 
+/**
+ * The run-input fields a list operation fills with a link to a cell that exists
+ * already: the entry, and the list it belongs to.
+ */
+export const LIST_OP_REFERENCED_ARGUMENT_FIELDS: readonly string[] = [
+  "element",
+  "array",
+];
+
+/**
+ * The run-input field a list operation fills with the bindings its callback
+ * captures from the enclosing pattern: a record holding a write redirect to
+ * each captured cell, and any values captured beside them.
+ */
+export const LIST_OP_CAPTURED_ARGUMENT_FIELDS: readonly string[] = ["params"];
+
 const usageCache = new WeakMap<object, ListOpArgumentUsage>();
 
 function hasArgumentSchema(

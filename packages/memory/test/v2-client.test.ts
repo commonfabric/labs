@@ -306,7 +306,7 @@ Deno.test("memory v2 client observes cancellation after session open", async () 
     const tracked = trackAbortListeners(
       controller,
       (removals) => {
-        if (removals === 2) controller.abort(testCase.reason);
+        if (removals === 1) controller.abort(testCase.reason);
       },
     );
     try {
@@ -2367,6 +2367,7 @@ class ControlledReconnectTransport implements Transport {
   #receiver: (payload: string) => void = () => {};
   #closeReceiver: (error?: Error) => void = () => {};
   #allowHello = true;
+  #helloAccepted = false;
 
   setReceiver(receiver: (payload: string) => void): void {
     this.#receiver = receiver;
@@ -2385,7 +2386,13 @@ class ControlledReconnectTransport implements Transport {
   }
 
   disconnect(): void {
+    this.reset();
     this.#closeReceiver(new Error("disconnect"));
+  }
+
+  /** Discards the scripted connection's accepted handshake. */
+  reset(): void {
+    this.#helloAccepted = false;
   }
 
   send(payload: string): Promise<void> {
@@ -2401,6 +2408,10 @@ class ControlledReconnectTransport implements Transport {
           queueMicrotask(() => this.#closeReceiver(new Error("offline")));
           return Promise.resolve();
         }
+        if (this.#helloAccepted) {
+          throw new Error("scripted connection already accepted hello");
+        }
+        this.#helloAccepted = true;
         this.#receiver(encodeMemoryBoundary(HELLO_OK));
         return Promise.resolve();
       case "session.open":
@@ -3899,6 +3910,68 @@ Deno.test("memory v2 client rejects outstanding commits when session ID changes 
       "the client must reject the orphaned commit instead of replaying it on the replacement session",
     );
     assertEquals(transport.transactSessionIds, ["session-A"]);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("memory v2 client refuses root expectations without server capability", async () => {
+  const client = await connect({
+    transport: handshakeTransport({
+      ...HELLO_OK,
+      flags: { ...HELLO_OK.flags, genesisRoot: false },
+    }),
+  });
+  try {
+    await assertRejects(
+      () =>
+        client.mount("did:key:unsupported-root-host", {
+          genesisRoot: {
+            source: "system:loom/main.tsx",
+            cause: "expected-root",
+          },
+        }),
+      Error,
+      "does not support a custom root intent",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("memory v2 client retains its original root intent across caller mutation and reopen", async () => {
+  const transport = handshakeTransport({
+    ...HELLO_OK,
+    flags: { ...HELLO_OK.flags, genesisRoot: true },
+  });
+  const send = transport.send.bind(transport);
+  const roots: unknown[] = [];
+  transport.send = (payload) => {
+    const message = decodeMemoryBoundary(payload) as {
+      type: string;
+      session?: { genesisRoot?: unknown };
+    };
+    if (message.type === "session.open") {
+      roots.push(message.session?.genesisRoot);
+    }
+    return send(payload);
+  };
+  const client = await connect({ transport });
+  const root = {
+    source: "system:loom/main.tsx",
+    cause: "retained-root",
+    argument: { title: "Original" },
+    sourceRoots: ["system:loom/main.test.tsx"],
+  };
+  try {
+    const session = await client.mount("did:key:retained-root", {
+      genesisRoot: root,
+    });
+    root.argument.title = "Mutated";
+    root.sourceRoots.push("system:unrelated.test.tsx");
+    await session.restore();
+    assertEquals(roots.length, 2);
+    assertEquals(roots[1], roots[0]);
   } finally {
     await client.close();
   }

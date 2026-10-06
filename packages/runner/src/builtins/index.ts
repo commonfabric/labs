@@ -1,4 +1,5 @@
 import type {
+  BuiltInAgentParams,
   BuiltInGenerateObjectParams,
   BuiltInGenerateTextParams,
 } from "@commonfabric/api";
@@ -6,6 +7,7 @@ import type {
 import type { Cell } from "../cell.ts";
 import { raw } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
+import { agent } from "./agent.ts";
 import { aggregate, aggregateNode } from "./aggregate.ts";
 import { cellFromUrl } from "./cell-from-url.ts";
 import { collectionIndex } from "./collection-index.ts";
@@ -111,6 +113,19 @@ export function registerBuiltins(runtime: Runtime) {
       partial: Cell<string | undefined>;
       requestHash: Cell<string | undefined>;
     }>(generateText),
+  );
+  // `agent` stages a sink request and creates its run record after commit;
+  // the result cell derives from that record, so it is scheduled as a
+  // computation and effectful only through the outbox, like `generateObject`.
+  moduleRegistry.addModuleByRef(
+    "agent",
+    raw<BuiltInAgentParams, {
+      pending: Cell<boolean>;
+      result: Cell<unknown>;
+      error: Cell<string | undefined>;
+      requestHash: Cell<string | undefined>;
+      run: Cell<unknown>;
+    }>(agent),
   );
   moduleRegistry.addModuleByRef(
     "navigateTo",

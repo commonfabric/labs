@@ -4,7 +4,18 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  BRIDGE_READ_REFUSED,
+  type FabricBridge,
+  FabricBridgeHost,
+  IPC,
+} from "@commonfabric/iframe-sandbox";
+import {
+  connectFabric,
+  type FabricClient,
+} from "@commonfabric/iframe-sandbox/guest";
+import {
   $conn,
+  $onCellRefused,
   $onCellUpdate,
   CellHandle,
   type CellRef,
@@ -76,12 +87,15 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const bridge = createCellContextBridge(context);
@@ -93,6 +107,7 @@ describe("cf-iframe cell bridge", () => {
     await count.cell!.set!(3);
     expect(requests).toEqual([{
       type: RequestType.CellPull,
+      awaitDurability: false,
       cell: {
         ...ref,
         path: ["count"],
@@ -163,16 +178,19 @@ describe("cf-iframe cell bridge", () => {
           return Promise.resolve();
         },
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, itemsRef, {
-      items: [{ title: "A" }],
+      value: {
+        items: [{ title: "A" }],
+      },
     });
     const items = createCellContextBridge(context).resources.items.cell!;
 
     const positionalTitle = items.key!(0).key!("title");
-    const cancel = positionalTitle.sink!(() => {});
+    const cancel = positionalTitle.sink!(() => {}, () => {});
     expect(subscriptions.at(-1)?.path).toEqual(["items", "0", "title"]);
     cancel();
 
@@ -189,7 +207,7 @@ describe("cf-iframe cell bridge", () => {
       path: [],
     });
     await expect(stable.key!("title").pull()).resolves.toBe("A");
-    await items.push!({ title: "B" });
+    await items.push!([{ title: "B" }]);
 
     expect(
       requests.find(({ type }) => type === RequestType.CellPull)?.cell,
@@ -208,6 +226,7 @@ describe("cf-iframe cell bridge", () => {
         request: () => Promise.reject(new Error("request should not be used")),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -255,6 +274,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -265,7 +285,7 @@ describe("cf-iframe cell bridge", () => {
     const context = new CellHandle<Record<string, unknown>>(
       runtime,
       lateRef,
-      {},
+      { value: {} },
     );
     const bridge = createCellContextBridge(context);
 
@@ -385,6 +405,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -524,6 +545,7 @@ describe("cf-iframe cell bridge", () => {
           if (demandedSource === cell) demandedSource = undefined;
           return Promise.resolve();
         },
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -583,6 +605,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -612,12 +635,15 @@ describe("cf-iframe cell bridge", () => {
         request: () => Promise.reject(new Error("write refused")),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const count = createCellContextBridge(context).resources.count;
@@ -634,10 +660,13 @@ describe("cf-iframe cell bridge", () => {
             : Promise.resolve({}),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
-    const context = new CellHandle(runtime, ref, { locked: "fixed" });
+    const context = new CellHandle(runtime, ref, {
+      value: { locked: "fixed" },
+    });
 
     const locked = createCellContextBridge(context).resources.locked;
 
@@ -657,21 +686,368 @@ describe("cf-iframe cell bridge", () => {
           return Promise.resolve();
         },
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
     const count = createCellContextBridge(context).resources.count;
     const changes: unknown[] = [];
 
-    const unsubscribe = count.cell!.sink!((value) => changes.push(value));
+    const unsubscribe = count.cell!.sink!(
+      (value) => changes.push(value),
+      () => {},
+    );
     subscribed?.[$onCellUpdate](2);
 
     expect(changes).toEqual([1, 2]);
     unsubscribe();
+  });
+
+  describe("a read the worker refuses", () => {
+    // A guest is told of a refused read with an error of its own code, never
+    // handed an empty value: one that read the refusal as empty would show
+    // nothing for a cell that holds something, or initialize over it.
+    const refusal = { refusedBy: "display-ceiling" } as const;
+
+    /** A runtime that answers every read with a refusal, keeping requests. */
+    const refusing = () => {
+      let subscribed: CellHandle<unknown> | undefined;
+      const requests: { type: RequestType }[] = [];
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType }) => {
+            requests.push(request);
+            return Promise.resolve({ refused: refusal });
+          },
+          subscribe: (cell: CellHandle<unknown>) => {
+            subscribed = cell;
+            return Promise.resolve();
+          },
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      return { runtime, requests, subscribed: () => subscribed };
+    };
+
+    it("tells a sink of a refusal as a failure, and hands it no value", () => {
+      const { runtime, subscribed } = refusing();
+      const context = new CellHandle(runtime, ref, { value: { count: 1 } });
+      const count = createCellContextBridge(context).resources.count;
+      const values: unknown[] = [];
+      const failures: { code: string }[] = [];
+
+      const cancel = count.cell!.sink!(
+        (value) => values.push(value),
+        (error) => failures.push(error),
+      );
+      const before = values.length;
+      subscribed()?.[$onCellRefused](refusal);
+
+      expect(values.length).toBe(before);
+      expect(failures).toEqual([
+        expect.objectContaining({ code: BRIDGE_READ_REFUSED }),
+      ]);
+      cancel();
+    });
+
+    for (const operation of ["pull", "initialize", "set", "push"] as const) {
+      it(`rejects a guest's \`${operation}()\` with the refusal's own code`, async () => {
+        const { runtime, requests } = refusing();
+        const context = new CellHandle(runtime, ref, { value: { count: 1 } });
+        const count = createCellContextBridge(context).resources.count.cell!;
+        if (operation === "set" || operation === "push") {
+          // A read refused first, as a guest learns it before it writes.
+          await expect(count.pull()).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          requests.length = 0;
+        }
+
+        const attempt = operation === "pull"
+          ? count.pull()
+          : operation === "initialize"
+          ? count.initialize!(0)
+          : operation === "set"
+          ? count.set!(2)
+          : count.push!([2]);
+
+        await expect(attempt).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        if (operation === "set" || operation === "push") {
+          expect(requests).toEqual([]);
+        }
+      });
+    }
+
+    it("resolves a refused context to the resources its schema declares", async () => {
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) =>
+            Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: request.cell }
+                : { refused: refusal },
+            ),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      const bridge = await resolveCellContextBridge(context, {
+        database: "cell",
+      });
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(
+        ["count", "database", "events", "locked"],
+      );
+    });
+
+    it("resolves a refused context with an interned schema to the fields the worker lists", async () => {
+      const interned: CellRef = {
+        ...ref,
+        schema: { $ref: "cid:fid1:interned-context-schema" },
+      };
+      const listed = (name: string): CellRef => ({
+        id: ref.id,
+        space: ref.space,
+        scope: ref.scope,
+        path: [name],
+      });
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) =>
+            Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: request.cell }
+                : request.type === RequestType.CellFields
+                ? { fields: { notes: listed("notes"), count: listed("count") } }
+                : { refused: refusal },
+            ),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(
+        runtime,
+        interned,
+      );
+
+      const bridge = await resolveCellContextBridge(context);
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(["count", "notes"]);
+    });
+
+    /**
+     * Serves `bridge` to a guest, as `cf-iframe` does, and runs `use` with the
+     * guest's client.
+     */
+    const asGuest = async (
+      bridge: FabricBridge,
+      use: (client: FabricClient) => Promise<void>,
+    ) => {
+      const channel = new MessageChannel();
+      const host = new FabricBridgeHost(bridge, channel.port1);
+      const client = connectFabric();
+      globalThis.dispatchEvent(
+        new MessageEvent("message", {
+          data: IPC.GUEST_PORT_HANDOFF,
+          ports: [channel.port2],
+        }),
+      );
+      try {
+        await use(client);
+      } finally {
+        client.disconnect();
+        host.disconnect();
+      }
+    };
+
+    for (const reached of ["by name", "resolved"] as const) {
+      for (const answer of ["admitted", "refused"] as const) {
+        it(`computes no write from a field of a refused context, reached ${reached}, until the worker answers its read, which it ${answer}`, async () => {
+          // The field's handle has read nothing: its context's refusal says
+          // nothing of the field. Before, the guest was handed that nothing
+          // as a value, and an increment of it wrote 1.
+          const writes: unknown[] = [];
+          const asked = Promise.withResolvers<RequestType>();
+          const pulled = Promise.withResolvers<unknown>();
+          const runtime = runtimeStub({
+            [$conn]: () => ({
+              request: (request: {
+                type: RequestType;
+                cell: CellRef;
+                value?: unknown;
+              }) => {
+                if (request.type === RequestType.CellResolveAsCell) {
+                  return Promise.resolve({ cell: request.cell });
+                }
+                asked.resolve(request.type);
+                if (request.type === RequestType.CellSet) {
+                  writes.push(request.value);
+                  return Promise.resolve({});
+                }
+                return pulled.promise;
+              },
+              subscribe: () => Promise.resolve(),
+              unsubscribe: () => Promise.resolve(),
+              peersOf: () => [],
+              signal: { aborted: false },
+            }),
+          });
+          const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+          context[$onCellRefused](refusal);
+
+          await asGuest(createCellContextBridge(context), async (client) => {
+            const named = client.cell<number | undefined>("count");
+            const count = reached === "by name" ? named : await named.resolve();
+            const stop = count.sink(() => {});
+            // Behind the sink's opening, so anything it delivers has arrived.
+            await client.describe();
+
+            const updated = count.update((current) => (current ?? 0) + 1);
+
+            // The worker is asked for the field's value before anything is
+            // written, and nothing is written while it has not answered.
+            expect(await asked.promise).toBe(RequestType.CellPull);
+            expect(writes).toEqual([]);
+
+            pulled.resolve(
+              answer === "admitted" ? { value: 4 } : { refused: refusal },
+            );
+            if (answer === "admitted") {
+              await updated;
+              expect(writes).toEqual([5]);
+            } else {
+              await expect(updated).rejects.toMatchObject({
+                code: BRIDGE_READ_REFUSED,
+              });
+              expect(writes).toEqual([]);
+            }
+            stop();
+          });
+        });
+      }
+    }
+
+    for (const built of ["named", "resolved"] as const) {
+      it(`refuses a guest's write through a path whose read was refused, in a ${built} context`, async () => {
+        const requests: { type: RequestType }[] = [];
+        const runtime = runtimeStub({
+          [$conn]: () => ({
+            request: (request: { type: RequestType; cell: CellRef }) => {
+              requests.push(request);
+              return Promise.resolve(
+                request.type === RequestType.CellResolveAsCell
+                  ? { cell: request.cell }
+                  : { refused: refusal },
+              );
+            },
+            subscribe: () => Promise.resolve(),
+            unsubscribe: () => Promise.resolve(),
+            peersOf: () => [],
+            signal: { aborted: false },
+          }),
+        });
+        const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+        const bridge = built === "named"
+          ? createCellContextBridge(context)
+          : await resolveCellContextBridge(context, { database: "cell" });
+
+        await asGuest(bridge, async (client) => {
+          const detail = client.cell<Record<string, unknown>>("count").key(
+            "detail",
+          );
+          await expect(detail.pull()).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          requests.length = 0;
+
+          await expect(detail.set("written blind")).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          expect(requests).toEqual([]);
+        });
+      });
+    }
+
+    it("refuses a guest's write through a refused path when a refusal of the context changes the cell that answers for it", async () => {
+      const writes: CellRef[] = [];
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (request.type === RequestType.CellSet) {
+              writes.push(request.cell);
+              return Promise.resolve({});
+            }
+            return Promise.resolve({ refused: refusal });
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+      // While the context is admitted, `count`, which its schema declares,
+      // is the cell the link it holds names.
+      context[$onCellUpdate]({
+        count: {
+          "/": {
+            "link@1": {
+              id: "of:counter",
+              space: ref.space,
+              scope: "space",
+              path: [],
+            },
+          },
+        },
+      });
+      const bridge = createCellContextBridge(context);
+
+      await asGuest(bridge, async (client) => {
+        const detail = client.cell<Record<string, unknown>>("count").key(
+          "detail",
+        );
+        await expect(detail.pull()).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+
+        // One rise of a label refuses the context too, so `count` is now
+        // reached through the context rather than through its link: another
+        // handle, which has read nothing.
+        context[$onCellRefused](refusal);
+
+        await expect(detail.set("written blind")).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        expect(writes).toEqual([]);
+      });
+    });
+
+    it("names the resources a refused context's schema declares", () => {
+      const { runtime } = refusing();
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      const bridge = createCellContextBridge(context);
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(
+        ["count", "database", "events", "locked"],
+      );
+    });
   });
 
   it("reports a stream event the runtime refuses", async () => {
@@ -680,12 +1056,15 @@ describe("cf-iframe cell bridge", () => {
         request: () => Promise.reject(new Error("event refused")),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const events = createCellContextBridge(context).resources.events;
@@ -718,12 +1097,15 @@ describe("cf-iframe cell bridge", () => {
           return Promise.resolve();
         },
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const database = createCellContextBridge(context).resources.database;
@@ -791,11 +1173,14 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      database: { id: "db-1" },
+      value: {
+        database: { id: "db-1" },
+      },
     });
     const query = createCellContextBridge(context).resources.database.methods!
       .query;

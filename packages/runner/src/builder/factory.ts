@@ -3,6 +3,7 @@
  */
 
 import {
+  debugStr,
   FabricInstance,
   FabricPrimitive,
   toCompactDebugString,
@@ -19,6 +20,7 @@ import {
   fabricPrimitiveClassesByName,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import {
   all as rowLabelAll,
   any as rowLabelAny,
@@ -43,6 +45,7 @@ import {
   type UnsafeHostTrust,
 } from "../unsafe-host-trust.ts";
 import {
+  agent,
   cellFromUrl,
   compileAndRun,
   fetchBinary,
@@ -68,7 +71,9 @@ import {
   wish,
 } from "./built-in.ts";
 import { tagCollectionKey } from "./collection-key.ts";
+import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
+import { eventKey } from "./event-key.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
 import {
   action,
@@ -82,6 +87,9 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
+import { principalOf, principalsOf } from "./principal-of.ts";
+import { spaceAccess } from "./space-access.ts";
+import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
   BuilderFunctionsAndConstants,
   ToSchemaFunction,
@@ -219,6 +227,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     llmDialog,
     generateObject,
     generateText,
+    agent,
     fetchBinary,
     cellFromUrl,
     renderCellReference,
@@ -266,6 +275,12 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     navigateTo,
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
+    currentPrincipal,
+    principalOf,
+    principalsOf,
+    eventKey,
+    // The DID Core syntax guard the runtime itself decides by.
+    isWellFormedDID,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):
@@ -291,6 +306,11 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
 
     // Environment
     getPatternEnvironment,
+
+    // Access
+    spaceAccess,
+    grantSpaceAccess,
+    revokeSpaceAccess,
 
     // Entity utilities
     getEntityId,
@@ -346,9 +366,11 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     FabricLink,
     FabricError,
 
-    // Debug stringifiers (helpers exposed for pattern code)
+    // Debug stringifiers, and the tag that composes a message around one
+    // (helpers exposed for pattern code)
     toCompactDebugString,
     toIndentedDebugString,
+    debugStr,
 
     // Value comparison helper exposed for pattern code
     valueEqual,

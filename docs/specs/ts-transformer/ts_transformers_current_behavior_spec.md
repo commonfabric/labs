@@ -137,6 +137,18 @@ present; no stage handles a missing one.
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
+   - `printedFrom` — for a type node printed from a type, that type. Both
+     printers record it: `typeToTypeNodeWithRegistry()`, including the
+     `unknown` it puts in place of a type the checker will not print, and the
+     `typeToTypeNode()` behind `typeToSchemaTypeNode()`. SchemaGeneration hands
+     the lookup to the schema generator as its `printedFrom` option, and a
+     printed node is read as its type and never as a node (§12). It is a plain
+     identity lookup with **no** `getOriginalNode` fallback, since a node
+     derived from a printed one says whatever its deriving changed.
+   - `printedWithin` — for a node the printer built below the root of a
+     print, that root; a node the printer reused from the source is authored
+     syntax and is not marked. `printPieceIn()` finds one held outside its
+     root, which SchemaGeneration refuses (§12). Same identity lookup.
 3. **Marker family** — node/symbol-keyed `WeakSet`s whose membership checks fall
    back through `getOriginalNode`, and whose mutators are coupled to the
    context's reactive-analysis cache invalidation (invalidation is a
@@ -374,8 +386,12 @@ capability-bearing positions: a cell-like wrapper takes the capability the
 body's usage earns (writable where it writes, read-only where it reads,
 comparable where it only compares, OPAQUE where it never touches the
 position), and an identity-only comparison of a plain-declared position adds
-the comparable marker the runtime materializes it through. A named reference
-whose subtree holds no cell-like position passes through untouched; one
+the comparable marker the runtime materializes it through. A reference to a
+type alias that takes no type parameters is walked as the node the alias
+names, so a cell declared through an alias takes its capability the way the
+wrapper the alias names does; an alias met again inside its own expansion — a
+recursive event type — stays the reference it is. A named reference whose
+subtree holds no cell-like position passes through untouched; one
 expands only when a capability inside it must change, and a self-referential
 type ends that expansion at the cycle with the node kept as authored — the
 accepted residual, since a literal cannot spell its own recursion. Observed
@@ -398,30 +414,53 @@ therefore retains its value type and cell capability when captured by `computed`
 or `assert`, even when the wrapper has a method with the same name. Inline
 object values in optional cell handles and optional stored values retain their
 requested fields and read-only capability while preserving nullish alternatives.
+Those alternatives join the cell's value, so where the value is a scope wrapper
+they go inside it: an optional `Writable<PerUser<T>>` read as `cell?.get()` is
+captured as `ReadonlyCell<PerUser<T | undefined>>`, and a scope wrapper reached
+through an alias is printed as the wrapper around its payload. A scope wrapper
+may not be a union member, since the write path reads a slot's scope only from
+the top level of its schema (`type-shrinking.ts`,
+`moveNullishIntoScopeWrapper()`; `captured-cell-field-names.test.ts`).
 A `.get()` whose result is not resolved to a specific member path retains the
 receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
 read.
 
-A cell reached through a type alias — `type ProfileCell = Writable<...>` —
-gives the transformer no authored node for its value, so the value type is
-printed inside the inferred capability wrapper. Schema generation can read
-some prints only from the type behind them: `import("./mod.ts").T` for a name
-the emitting module does not import, and the brand arm of an expanded
-`Default`. A skipped computed brand marks the node-driven schema as incomplete
-even when the remaining union and intersection members can be read, so the
-resolved value supplies the default metadata.
-Where the cell is a property, schema generation reads the value from the
-property's resolved type; where the cell is the whole argument there is no
-such type, so the printed node is registered in `typeRegistry` with the value
-type it was printed from. An aliased cell therefore emits the value schema the
-same wrapper emits written inline, under every inferred capability, for a
-generic alias, and for an alias imported from another module. One shape
-differs: `T | Default<V>` where `V` is an object type assignable to `T`.
-Inline, the authored `Default` node shows that `T` already covers `V`, and the
-schema is `T` with the default. Through an alias the resolved union keeps `V`
-as a member of its own, and the schema is `anyOf: [T, V]` with the default.
-`aliased-cell-value-schema.test.ts` pins these.
+A cell's value type is read from the node its author wrote. The wrapper is
+found through parentheses and through references to type aliases that take no
+type parameters (`getAuthoredCellValueTypeNode`, which reads with
+`readAuthoredTypeNode` from `@commonfabric/schema-generator/type-node`), in
+every position a cell is declared: a builder's argument and a property of it,
+a handler's state and event and a property of each, and a closure's capture.
+A cell declared as `type ProfileCell = Writable<...>`, or as
+`(Writable<...>)`, therefore emits the value schema the same wrapper emits
+written in place, under every inferred capability and for an alias imported
+from another module, and a `Default` the value type does not admit fails
+compilation the same way. A reference is a cell wrapper where its name
+resolves, through its import binding, to a cell wrapper `commonfabric`
+declares (`namesCellWrapper`), under whatever name it was imported as:
+`import { Cell as Writable }` and `import { Writable as MyCell }` are cells,
+and a type of the author's own named `Writable`, written in place or reached
+through an alias, is that type and not a cell. A node the transformer builds,
+which the checker cannot resolve, is read by its spelling.
+
+A cell reached through a generic alias — `type MyCell<T> = Writable<...>` —
+has no authored node for its value, since the node the alias names is written
+in the alias's own type parameters, so the value type is printed inside the
+inferred capability wrapper. Schema generation can read some prints only from
+the type behind them: `import("./mod.ts").T` for a name the emitting module
+does not import, and the brand arm of an expanded `Default`. A skipped
+computed brand marks the node-driven schema as incomplete even when the
+remaining union and intersection members can be read, so the resolved value
+supplies the default metadata. Where the cell is a property, schema generation
+reads the value from the property's resolved type; where the cell is the whole
+argument there is no such type, so the printed node is registered in
+`typeRegistry` with the value type it was printed from. The print keeps a
+default's value as a member of its own: `T | Default<V>`, with `V` an object
+type `T` covers, emits `anyOf: [T, V]` with the default, where the same wrapper
+written in place emits `T` with the default.
+`aliased-cell-value-schema.test.ts` and `parenthesized-cell-type.test.ts` pin
+these.
 
 The type-driven shrink also guards its descent on (type, requested-paths): a
 pair already on the path falls back to the named type reference — no
@@ -629,6 +668,51 @@ Diagnostics emitted in all modes:
     `wish(...)`, or reactive collection aliases and their property accesses
   - message instructs the author to move the use into a nested
     `computed(() => ...)` or module-scope `lift()`
+- **Error** `pattern-context:self-access`
+  - enforces the target-language matrix row "`x[SELF]` inside an explicit
+    computation callback, inside a reactive collection callback, or on anything
+    but the pattern's own input parameter" (Unsupported)
+  - an element access keyed by `SELF` (`x[SELF]`) inside a compute callback —
+    `computed(...)`, `action(...)`, `lift(...)`, a `handler(...)` body, an
+    inline JSX event handler — or inside a reactive collection callback such as
+    `items.map((item) => ...)`
+  - in pattern context, an `x[SELF]` whose receiver is not the pattern's input
+    parameter: a value read off the input (`input.sub[SELF]`), another
+    pattern's result (`child[SELF]`), or a local bound to `input[SELF]`
+    (`self[SELF]`). The input parameter is the first parameter, bound to a
+    plain name and not a rest parameter, of a `pattern(...)` callback or of a
+    standalone function definition. The receiver must be that parameter
+    itself: a local holding the input (`const i = input; i[SELF]`) is not
+    followed back to it, and the message says so rather than calling the read
+    `undefined`
+  - in pattern context, a well-known key other than `SELF` (`NAME`, `UI`,
+    `FS`) read through `input[SELF]` on the input parameter, as in
+    `input[SELF][NAME]`: the data-flow analyzer
+    counts only `SELF` among those keys as static, so the read is lifted and
+    is `undefined` against the plain value the lift sees. The message suggests
+    `const me = input[SELF]` and reading the key off `me`, which lowers in
+    place
+  - `SELF` names the pattern's own result only on the reactive proxy a
+    `pattern(...)` body receives as its input. A compute callback sees plain
+    values, a reactive collection callback sees a captured reference to the
+    input, and a value read off the input is not the input, so `[SELF]` on any
+    of them is `undefined` at runtime, and the link it would make names a cell
+    that never holds a value
+  - not reported: a receiver built from an object literal (`{ [SELF]: 1 }`,
+    or a name a `const` declaration initializes with one; a `let` or `var`
+    could hold anything by the time it is read), which holds whatever keys it
+    was given; anything in a standalone function definition, which is ordinary
+    code over whatever it is handed, and which a `pattern(...)` callback held
+    in a `const` also is; and `input[SELF]` read directly in the pattern body,
+    in its JSX, in a plain array callback, or bound into a handler's state
+    (`poke({ room: input[SELF] })`), which the matrix row for `input[SELF]`
+    makes Supported (§9.7)
+  - the message names the access. Inside a callback it instructs the author to
+    read `const self = input[SELF]` in the pattern body, or destructure
+    `[SELF]: self` in the pattern's parameter, and capture `self`, or hand it
+    to the handler as state; on another receiver it instructs the author to
+    read `input[SELF]` first and the rest of the path off it
+  - `test/pattern-input-self.test.ts`
 - **Error** `pattern-context:optional-chaining`
   - optional property / element access that appears outside a supported
     lowerable expression site — including inside a lowered array-method
@@ -728,16 +812,51 @@ structurally representable.
   expressions
 - direct top-level `any` / `unknown` result inference emits
   `pattern:any-result-schema`
-- individual inferred-result **fields** whose type is `unknown` emit **Error**
-  `pattern-result:unknown-type`, naming the offending paths — the schema would
+- individual inferred-result **fields** whose type is `unknown`, at any depth of
+  object types, array elements, tuple elements, `readonly` types, and the
+  members of a union, emit **Error** `pattern-result:unknown-type`, naming the
+  offending paths (`a.b`, `items[]`, `pair[0]`, and `pair[1...]` for a tuple's
+  rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
-  (`schema-injection.ts:2621`)
+  (`reportUnknownPatternResult()` in `schema-injection.ts`). Under
+  `TransformationOptions.storedSource` it reports as a **Warning**: a reload of
+  stored source reconstructs what was admitted when it was deployed, which may
+  hold a shape this check covers only since
 - authors who intentionally want a permissive/opaque output boundary must make
   it explicit with `pattern<Input, Output>(...)`
 
 This inference runs through `collectFunctionSchemaTypeNodes` via
-`inferReturnType`, object-literal recovery, and direct projection recovery.
+`inferReturnType`, object-literal recovery, and direct projection recovery. The
+inferred return type is printed under the flags §10.1 names, so a result type
+holding `[]` anywhere is printed whole. A result type the checker prints no node
+for, such as the instance type of an anonymous class expression, and that no
+recovery reads, stands as an `unknown` placeholder recorded as printed from it,
+as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
+as that type (§12). Both checks above read such a placeholder by its type:
+whether the type is `any` or `unknown`, and which of its fields are `unknown`.
+The field walk descends each object type with no name, each instance of a class
+expression with no name, each array element, each tuple element, and each
+member of a union, as the node walk descends a printed type literal, array,
+tuple, union, and `readonly` operand. It skips a member schema generation leaves
+out of an object's schema, a symbol-keyed member or a cell's internal marker
+(`isInternalMemberName()` in the schema generator), since no consumer receives
+it as a field. It stops at a type it is already inside, since a type with no
+name can hold itself through `typeof`, and walks a type reached again by
+another path under that path.
+
+Neither walk descends a named type: an alias, whether it names an object, an
+array, a tuple, or a union; an interface; a class; or an instance of a named
+class. A named type is a declaration, and `unknown` in a declaration is the form
+for a reference to another piece
+([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)). So an
+`unknown` reached only through a name is the declaration's, and the check
+leaves it alone. A pattern that returns another pattern's instance, whose
+declared result holds such references, passes them on without a report. The
+schema carries `{ type: "unknown" }` at those fields as it does at any
+reference. An alias of `unknown` itself is the exception: the checker keeps no
+name on `unknown`, so a field declared through `type Ref = unknown` is `unknown`
+to both walks, and is reported.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -826,16 +945,29 @@ the wrapper that hid it.
 `WriteAuthorizedByValidationTransformer` separately validates writer-binding
 claims.
 
-It scans `toSchema<T>()` (one type arg) and `pattern<I, R>()` (the result type
-arg) for `WriteAuthorizedBy<T, typeof binding>` references, resolving through
-local type aliases and type-parameter substitution
+It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
+arg), and cell constructors (every type argument, since a constructed cell's
+policy is written there; a foreign constructor such as `new Map<…>()` is not
+scanned) for `WriteAuthorizedBy<T, typeof binding>` references — recognized
+by the spelled name or by the declared name behind a renamed import or a
+namespace import (`cf.WriteAuthorizedBy`), as the schema generator reads them.
+It runs after
+the stages that lower expressions, so it resolves type declarations and
+bindings through the checker rather than by scanning the rewritten file. It
+resolves through type aliases and interfaces wherever they are declared (this
+file, an import, or a declaration file; the schema generator resolves a
+reference the same way, so a policy any alias carries must be validated too)
+and type-parameter substitution
 (`findWriteAuthorizedByReferences`). For each reference it emits
 **`cfc-write-authorized-by`** when usage is malformed:
 
 - the second type argument is not a `typeof` binding (`TypeQueryNode`)
 - the `typeof` target is not a simple identifier
-- the bound name is not a supported origin — a local `handler()` / `module()` /
-  `requireEventIntegrity()` initializer, or a local function declaration
+- the bound name is not a supported origin — a `handler()` / `module()` /
+  `requireEventIntegrity()` initializer, or a function declaration, declared in
+  an authored module (this one or an import, through any re-export; a
+  declaration file declares no writer). The claim carries the declaring
+  module's identity, which is what the runtime verifies the writer against.
 
 Well-formed `WriteAuthorizedBy` usage passes validation; the base schema
 lowers as `T` plus the writer-identity claim (`ifc.writeAuthorizedBy` carrying
@@ -989,6 +1121,58 @@ report these through the same collector (deduplicated via §2.2's
   schema use.
   Repeated reports for that source range collapse to one. See §7 of the
   schema-generator mapping spec and `test/default-empty-record-schema.test.ts`.
+- **Warning** `schema-type:unread` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a schema accepts any value in place of a type
+  node-based analysis could not read and no wrapper recovered from a resolved
+  type, such as a name the emitting module does not resolve or an
+  `import("…")` type it does not resolve; the node-based analyzer's section of
+  the schema-generator mapping spec states what it reads. One warning per
+  generated schema names each such type once; compilation continues. It points
+  to the local schema use, since the unread node is a print with no source
+  position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
+  the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
+- **Error** `cfc-schema:recursion-limit` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a CFC alias chain reaches its recursion limit
+  and compilation refuses the schema: the unread remainder could
+  discard confidentiality or write policies. This includes recursive arguments
+  whose types settle but whose writer-query syntax keeps growing. See
+  `test/recursive-writer-schema.test.ts`.
+- **Error** `cfc-write-authorized-by:unread` (`schema-generator.ts`,
+  `writer-binding-diagnostics.ts`) — a `WriteAuthorizedBy` or
+  `TrustedActionWrite*` policy written through another alias whose writer
+  binding the schema generator cannot read: one passed through a parameter a
+  conditional alias checks, say, or a conditional alias with more than one
+  branch other than `never`, or an alias for `typeof writer` passed as the
+  binding. Its schema would carry no write restriction, so
+  compilation fails. It fails over stored source (`storedSource`) too: unlike
+  the authoring-shape gates, which that mode demotes to warnings, it guards a
+  write restriction, and a reload that cannot read one does not run without
+  it. A binding node that is not a direct `typeof` of an identifier is reported
+  even when the policy is written directly. A direct path
+  (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
+  type argument) that mints its own claim gives the generator no binding node
+  and is not reported here; the validator above checks its spelling. A schema
+  read from a type alone has no reference and is not reported either, including
+  a declaration parameter bound to an argument with no syntax. See §11 of the
+  schema-generator mapping spec,
+  rule 8 of `cfc_authoring_contract.md`, and
+  `test/protected-cell-policy.test.ts`.
+- **Warning** `cfc-label:unread` (`common-fabric-formatter.ts`,
+  `unread-label-diagnostics.ts`) — a CFC label list (`confidentiality`,
+  `integrity`, `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, or a
+  UI contract's `requiredEventIntegrity`, the trusted pattern it requires
+  when it writes none, and the same lists inside a `Cfc<T, M>` payload, its UI
+  contract's included) that the lowering could not read in full: the argument
+  is not a tuple, or something in an atom is not a literal, an object literal,
+  `AnyOf<…>`, or `PolicyOf<typeof …>`, whether the atom itself, a field of an
+  object atom, or an alternative of an `AnyOf` clause (a union of literals,
+  say). The schema carries what it could not read as no label, as an atom that
+  serializes as `null` (an unread value, not an authored `null`), or as a field
+  left out; compilation continues. It names the label as written, a label substitution built
+  included, or its type when it was read from a type alone, and points to the
+  label argument when it has a source position, otherwise to the local schema
+  use. See §11 of the schema-generator mapping spec and
+  `packages/schema-generator/test/schema/cfc-authoring.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
   (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked
@@ -996,8 +1180,9 @@ report these through the same collector (deduplicated via §2.2's
 - **Error** `pattern-context:inline-reactive-root-access`
   (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
   reactive-root read at a position that stage cannot lower
-- **Error** `pattern-result:unknown-type` (`schema-injection.ts:2621`) — see
-  §6.6
+- **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
+  `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
+  `TransformationOptions.storedSource`
 - **Error** `pattern-result:opaque-reserved-key`
   (`reserved-result-keys.ts`, called from `schema-generator.ts`) — a pattern's
   own result declares one of the framework's reserved keys `unknown` at its
@@ -1275,6 +1460,74 @@ Capture analysis:
 - captures nested callback closures with filtering for outer locals/params
 - builds hierarchical capture trees by root path
 
+Input-bound expression wrappers also capture enclosing function locals used
+inside nested callbacks. Parameters and locals declared within the wrapped
+expression stay inside it, including when the wrapper belongs to a reactive
+collection callback. Module bindings remain lexical references.
+
+A capture's type is inferred from its expression, with literal types widened.
+One case reads the declaration instead. Inside a pattern body, a binding
+destructured from the callback parameter has its `Default` and scope wrappers
+(`PerSpace`, `PerUser`, `PerSession`, `PerAny`) stripped from its type. A
+binding whose declared property type carries one — as the type itself, as a
+member of a union or an intersection, or as the argument of `Writable` — is
+therefore emitted from the type node its author wrote
+(`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
+name counts only where it resolves to the declaration `commonfabric` exports: a
+type of the author's own named `Default` is an ordinary type, and its binding is
+typed by inference. At any of those positions, and in the argument of a scope
+wrapper, a reference to a non-generic type alias whose type carries a wrapper
+is replaced by the type the alias names, so
+`type Draft = Writable<string | Default<"">>` captures with the schema of the
+wrapper written in place, including when the alias is imported from another
+module and when it is scoped, as `PerSession<Draft>`. A reference to an alias
+that carries no wrapper stays a reference, which schema generation emits under
+the alias's name. A reference to a generic alias also stays as written, and when
+nothing else in the declared type carries a wrapper the capture is typed by
+inference.
+
+A property of a generic input is declared in terms of the input's type
+parameters. The pattern builder's type argument supplies the caller's arguments,
+before callback normalization strips defaults and scopes; inherited properties
+and nested or renamed destructuring follow that type. A parameter that sits in a
+union, an intersection, parentheses, or a wrapper is replaced by a node printed
+from its argument, which gives the schema of the concrete type written in place.
+That holds where the printed argument reads the same wherever it is emitted:
+keywords, literals, type literals, and a name without type arguments that names
+the argument's own type where the binding is declared. The printer writes a bare
+name without asking what it resolves to there, so the name is checked against
+the symbols the argument's type mentions. Every other generic binding — a
+parameter inside another type expression such as `Box<T>`, `T[K]`, or `T[]`, or
+an argument that prints as a reference with type arguments, as `import("…").T`,
+as `typeof x`, or as a name that is out of scope there or names another type —
+is emitted as its instantiated declared type. That keeps the wrapper and the
+complete value type, and keeps a default's value as a member of the union:
+`anyOf: [T, V]` with the default, where the concrete type written in place emits
+`T` with the default. The pattern body's view of such a binding is not used,
+because stripping `Default<{}>` from `T | {}` lets the union reduce to `{}`.
+When the builder's type argument cannot be found, as when
+`pattern<Input<number>>` is bound to a name before it is called, the only
+instantiated type on hand is the pattern body's view, and the binding is emitted
+with its concrete value type and without its default.
+
+A union of two instantiations of one generic input gives a type parameter two
+arguments. No node stands for both, so such a parameter is not substituted and
+the binding takes its instantiated declared type, which holds every branch.
+
+Pattern result inference reads returned input bindings through the same
+function when a returned binding carries a scope wrapper. Scope detection reads
+the emitted node, and a node printed from a type names the scope wrapper that
+type carries. A node printed from a type is registered with that
+type rather than with the type at the expression, which is the pattern body's
+view: the names a printed node spells
+resolve to nothing where it is emitted, so schema generation reads it by the
+type behind it. An authored node keeps the view's type, and so keeps being
+emitted in place rather than under the name of whatever alias the declared
+type carries.
+
+`aliased-binding-declared-type.test.ts` and
+`ast/getPreservedBindingTypeNode.test.ts` pin these.
+
 ### 9.2 Handler strategy
 
 Transforms inline JSX event handlers:
@@ -1343,6 +1596,10 @@ Transform eligibility:
   `map-paren-wrapped-callback` pins the emission)
 - transformed callbacks are marked in `mapCallbackRegistry` and become
   pattern-callback contexts for downstream classification
+- a collection chain consumed by a terminal operation such as `slice` or
+  `join` runs its callbacks as plain JavaScript inside the chain's lift. This
+  computation boundary takes precedence over an enclosing reactive collection
+  callback; nested array calls do not inherit that outer pattern context
 - synthetic compute-owned array-method nodes assert that stale pattern ownership
   is not retained after earlier rewrites
 
@@ -1357,8 +1614,45 @@ Result shape:
   method calls
 - callback schema includes `{ element, index?, array? }` and adds `params` only
   when captures exist
+- `element` is the element of the receiver's list. A receiver that is itself
+  a list — an array, a tuple, or a type indexed by number, as an interface
+  extending `Array<T>` is — has its own element: a row of a `T[][]`, the union
+  of a tuple's positions. A cell-like receiver wraps the list type, and the
+  element is read through a union or an intersection around the list —
+  `T[] | Default<[]>`, `Default<T[], V>`, `T[] | undefined`,
+  `Cfc<T[], Meta>` — so the callback schema is the same with or without an
+  explicit annotation on the pattern parameter (`ast/type-inference.ts`;
+  `test/array-method-element-schema.test.ts`)
 - computed destructuring keys are stabilized with generated key constants and
   lift-applied wrappers where needed
+- a spread of a capture, in the callback body outside any function nested in
+  it, is written out as the properties it copies when the capture is a `const`
+  declared outside module scope whose keys are known where it is declared
+  (`staticKeysOfInitializer`): an object literal whose properties all have
+  static keys (identifiers, string literals, or numeric literals, a numeric
+  one read under its decimal name; no method, accessor, or computed key), a
+  spread inside that literal of another such object, or a `const` that names
+  one, at any depth, an object two spreads share being read each time. The
+  operand is read through any parentheses, `as`, `satisfies`, or `!` around
+  it. A `__proto__:` assignment
+  sets the prototype and contributes no key; the shorthand `{ __proto__ }`
+  makes an own property and is written back as `["__proto__"]`:
+  `{ ...records, id: item.id }` ->
+  `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
+  callback reads a capture as an opaque reference, which has no keys to spread;
+  those keys are exactly what the spread copies where `records` is declared
+  (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
+  `closures/map-captured-object-spread.expected.jsx`). A spread of any other
+  capture — a `const` initialized by a function call, a literal with a
+  computed key — is left as written and reported as an error,
+  `pattern-context:computation`: "Spread of the captured value `records`
+  copies nothing…" (`reportUnexpandedSpread`). The report is made once per
+  spread: the pattern-context check of §9.7 reports the same spread when the
+  capture is a tracked opaque value, and both go through `reportSpreadError`
+  (`reportDiagnosticOnce`), where the earlier report stands. Only spread
+  reports share that key, so two different computation errors on one node, a
+  non-static default and a rest element of one parameter say, are each made
+  (`test/closures/captured-object-spread.test.ts`)
 
 ### 9.5 Lift-applied strategy
 
@@ -1442,6 +1736,34 @@ Primary behaviors:
   nested blocks) also receive `.key(...)` lowering
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
+- reads `input[SELF]` in place, as the destructured `[SELF]: self` binding is
+  read: the data-flow analyzer counts a `SELF` element key as static on any
+  receiver (`isSelfElementAccess` in `src/ast/dataflow.ts`), so the access is
+  not lifted. Outside a standalone function definition, validation has
+  already rejected every receiver but the pattern's input parameter (§6.5). A
+  `pattern(...)` callback held in a `const` is read as a standalone
+  definition, so there an `x[SELF]` on another receiver is not reported, and
+  lowers as written.
+  Every lowering that reads a path off a reactive value builds the read with
+  one helper, `createPathRead()` in
+  `src/transformers/destructuring-lowering.ts`: the pattern-body lowering,
+  the destructuring prologue, and the receiver of a lowered collection method.
+  It emits `input[__cfHelpers.SELF]` for a leading `SELF` segment and keys the
+  rest of the path off it, so `input[SELF].title` becomes
+  `input[__cfHelpers.SELF].key("title")` and `input[SELF].items.map(fn)`
+  becomes `input[__cfHelpers.SELF].key("items").mapWithPattern(...)`. A
+  `SELF` segment in any other position is keyed like any other segment, which
+  only a program §6.5 has rejected can reach. `const self = input[SELF]` and
+  `const { [SELF]: self } = input` in the body both lower to
+  `const self = input[__cfHelpers.SELF]`. A computation over the read, such as
+  `input[SELF].title + "!"`, lifts with the keyed read as its capture; a
+  receiver-method call over it, such as `input[SELF].title.toUpperCase()`,
+  lifts with the authored `input[SELF].title` as its capture, read off the
+  reactive input when the lift is applied (golden
+  `closures/pattern-input-self-index`). Other well-known keys (`UI`, `NAME`,
+  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` would lift
+  and read `undefined`; §6.5 reports it instead, and a local bound to
+  `input[SELF]`, or a destructured `[SELF]: self`, reads `[NAME]` in place
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for
@@ -1488,6 +1810,16 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - otherwise infers from signatures/contextual types
 - `_param` convention implies `never` schema for that parameter
 - failed inference falls back to `unknown`
+- every print of a type as a type node allows the empty tuple, without which
+  the checker prints nothing at all for a type holding `[]` anywhere, so an
+  inferred result holding an alias given `readonly []` reads as its
+  instantiation. The shared flag set is `TYPE_NODE_FLAGS`
+  (`src/ast/type-inference.ts`); `DEFAULT_TYPE_NODE_FLAGS` adds
+  `UseAliasDefinedOutsideCurrentScope` to it for an annotation printed into
+  the output, and `typeToTypeNodeWithRegistry()` adds `AllowEmptyTuple` to
+  whatever flags its caller passes. `test/type-node-print-flags.test.ts`
+  checks that every raw `checker.typeToTypeNode()` call in the package names
+  `AllowEmptyTuple` or one of the two sets
 - `typeRegistry` is consulted first for synthetic nodes/types
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
@@ -1562,11 +1894,19 @@ If schemas are not already present via type args:
   recovery (`x => x.foo`, `x => x["foo"]`)
 - direct projection recovery can reuse result types recovered from local
   `lift(...)` initializer aliases registered in `typeRegistry`
+- a result type the checker prints no node for, and that no recovery reads, is
+  carried as an `unknown` placeholder recorded as printed from it, so the
+  result schema is generated from the type (§6.6)
 - unresolved generic helper-definition-site type parameters degrade to
   `{ type: "unknown" }` when schemas are injected from explicit builder type
   arguments
 
 ### 10.5 Cell factories and related APIs
+
+Inferred schema types are retained through `typeToTypeNodeWithRegistry()`,
+including its placeholder when the checker cannot print the type. Schema
+generation reads that placeholder through its `printedFrom` record, so an
+expanded array default keeps both its element schema and `default: []`.
 
 Injected behaviors:
 
@@ -1577,17 +1917,42 @@ Injected behaviors:
     expressions before falling back to the direct value type
   - direct semantic `any` values emit `true`
   - direct semantic `unknown` values emit `{ type: "unknown" }`
+  - contextual array defaults preserve the element schema and `default: []`,
+    together with any scope such as `PerUser<Writable<T[] | Default<[]>>>`
   - if the value type at a generic helper definition site is an uninstantiated
     type parameter, CTS degrades the emitted schema to `{ type: "unknown" }`
     instead of leaking `{}` or omitting the schema
 - `Cell.for(...)`-style calls:
   - wrap with `.asSchema(schema)` unless already wrapped
+  - contextual `Writable<Default<T[], []>>` and
+    `Writable<T[] | Default<[]>>` both preserve the array's element schema and
+    `default: []`
 - `wish(...)`:
   - append schema as second argument if missing
+  - the schema describes `T`, the requested resource, never the `WishState<T>`
+    the call returns (the runtime wraps it in that state). Without a type
+    argument, `T` is the one TypeScript infers for the call from its contextual
+    type: `const s: WishState<X> = wish(...)` gets `X`'s schema, and a call in a
+    pattern's returned object, whose context names no `T`, gets
+    `{ type: "unknown" }`, as `wish<unknown>(...)` does. A call with no
+    contextual type gets no schema
+  - contextual `WishState<Default<T[], []>>` and
+    `WishState<T[] | Default<[]>>` both inject the array's element schema and
+    `default: []`
   - explicit or contextual unresolved generic type parameters degrade to
     `{ type: "unknown" }`
 - `generateObject(...)`:
-  - ensure options object has `schema` property (merge/spread as needed)
+  - inject a missing `schema` property into the options object (merge/spread as
+    needed). An authored schema takes precedence over the generated schema,
+    including schemas supplied through variables, spreads, quoted keys, or
+    computed keys
+  - the schema describes `T`, the generated value. Without a type argument, use
+    the `T` TypeScript infers for the resolved call from its contextual type:
+    `const s: BuiltInLLMGenerateObjectState<X> = generateObject(...)` gets `X`'s
+    schema, without adding the optionality of the state's `result` field. A
+    call with no contextual type, or whose inferred `T` is `any`, gets no
+    inferred schema. This includes destructuring or a pattern's returned object
+    when its context supplies no result type
   - explicit or contextual unresolved generic result types degrade to
     `{ type: "unknown" }`
 - `sqliteQuery<Row>(...)`:
@@ -1637,6 +2002,17 @@ adjustments:
   are retained the original TypeReference is kept for schema fidelity.
 - pattern boundaries apply defaults-only mode to preserve broad shape continuity
   while still applying extracted static defaults
+- on the input parameter of a `pattern(...)` callback, capability analysis
+  records nothing for a use under `SELF`: no path, and no flag such a path
+  would set, so a `SELF` read leaves an otherwise identity-only input
+  identity-only. `input[SELF]` there names the pattern's own result, not any
+  of the input's data, so it asks nothing of the input schema and draws no
+  `schema:path-not-in-type` error. The analysis is told which function is a
+  pattern callback (the `patternCallback` option), and pattern-callback
+  lowering sets it for every callback it lowers, whether the `pattern(...)`
+  call holds the callback inline or names it through a `const`. On any other
+  function's parameter, `x[SELF]` is recorded as the path `$SELF`
+  (`test/policy/capability-analysis.test.ts`, `test/pattern-input-self.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
@@ -1651,7 +2027,10 @@ adjustments:
 - reads inside an inline array-method callback count as reads of the enclosing
   builder's parameter: the element parameter is bound to the receiver's item
   path, so `table.find((row) => equals(self, row.topic))` records
-  `table[].topic` and, through the capture, `self`. The left operand of a `??`
+  `table[].topic` and, through the capture, `self`. That binding survives
+  `slice()`, both in a receiver chain and through a local holding the sliced
+  array, so a later callback retains the fields it reads without retaining
+  unread item fields. The left operand of a `??`
   / `||` fallback resolves to a single source ref, which reaches a root through
   a member/call spine and consumes nothing else; an operand whose spine passes
   through a call is therefore walked as well, covering that call's callback and
@@ -1706,6 +2085,108 @@ adjustments:
 - node-driven shrinking can still shrink the inner type of cell-like wrappers
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
+- a node the type-driven shrink builds keeps the scope wrapper and the default
+  of the type it stands for, at every level it retains. A scope wrapper wraps
+  the shrunk value as `__cfHelpers.PerUser<...>` (or the wrapper of its scope)
+  whether the type's alias names it or the type carries only its scope brand,
+  as a wrapper reached through an alias of the author's own does
+  (`type Rec = PerUser<Inner>`, which the checker reports as `Rec`). A brand
+  the checker distributed over a union is read from its members, each shrunk on
+  its own and wrapped as one union, except that a union of every literal of one
+  type — `boolean`, held as `false | true` — is wrapped as the type it was
+  written as. A brand over an alternative the checker flattened into several
+  intersection members restores no scope, having no type of its own to shrink:
+  the branded type is no substitute, since the node built from it carries the
+  brand into the wrapper, where schema generation refuses the scope it then
+  reads twice. A default the type
+  carries in its `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`,
+  with `V` printed from the brand's payload. Branded members that disagree on
+  the value restore no default. A scope wrapper around a cell is not restored:
+  schema generation reads the wrapper by the scoped type it is registered with,
+  which would undo the capability narrowing of the cell inside it. A default
+  restored on a value that a union also lets be `undefined` or `null` wraps the
+  whole union, since the runtime reads a missing property's default only from
+  the top of the property's schema. A restored `Default` does not count toward
+  the preference for the node-driven candidate, which applies where only that
+  candidate holds an authored `Default` (`getScopeWrapper` and
+  `restoreDefault` in `transformers/type-shrinking.ts`;
+  `test/shrunk-capture-wrappers.test.ts`)
+- a node built from part of a value keeps the value's CFC labels. The literal a
+  property chain builds, each node a type-driven or node-driven shrink builds,
+  and a node the narrowing of cells rebuilds is recorded as narrowing the value
+  it stands for, through the `narrowedFrom` schema hint, with the node the
+  value's declaration writes where one is at hand; schema generation adds the
+  labels that value's own formatting attaches at its top (the schema-generator
+  mapping spec's §13). A capture leaf printed from its type stands for the value
+  its declaration spells, which the print may not, as with a `typeof` binding in
+  a label. A leaf written as a shorthand property (`{ x }`) has the declaration
+  of the binding `x` names, not that of the object literal's property. A node
+  built from the type of a member whose declaration writes that type, by the
+  type-driven shrink, narrows the value the declaration spells
+  (`readMemberAnnotation`), as a field read out of a wished result does. A
+  constructed cell's node, written with its constructor's type arguments
+  (`getConstructedCellTypeNode`, §12), records itself as the value it spells
+  where it is built (`expressionToTypeNode`), and a node a later pass rebuilds
+  it into from its type, which prints a `typeof` writer binding among those
+  arguments as a structural type, narrows that value. A node built from part of
+  a narrowed node or of such a print, rebuilt from one by a later pass, or built
+  from the type of one narrows the same value, its parts matched by property
+  name, array element, and the one value member of a union beside nullish
+  members (`recordNarrowedFrom` and `recordDeclaredValue` in
+  `core/cross-stage-state.ts`; `recordNarrowing` and `carryNarrowing` in
+  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`,
+  `test/protected-cell-policy.test.ts`). A rest binding (`{ ...rest }`), and a
+  binding under a computed key, reads no one property, so no property's
+  declaration spells its value
+- a capture leaf printed from its type is read as the annotation of the member
+  or binding it holds the value of, where that annotation denotes the type at
+  hand and names a value binding, as `PolicyOf<typeof rules>` does
+  (`namesValueBinding` in `ast/type-building.ts`). The print spells the binding
+  as the structural type of the value it names, from which schema generation
+  could not tell the binding. The leaf records the annotation as its `spelledBy`
+  schema hint, and a print of the same type that a later pass rebuilds it into
+  keeps the hint; schema generation reads the node as the annotation spells the
+  type at hand (the schema-generator mapping spec's §13). A value captured whole
+  thus keeps a label that names a binding, as a part of it does
+  (`buildTypeElementsFromCaptureTree` in `ast/type-building.ts`;
+  `carryNarrowing` in `transformers/type-shrinking.ts`;
+  `test/printed-type-node-schema.test.ts`). Distinct policy bindings on union
+  alternatives survive even when their identical declared types cause the
+  checker to collapse the alternatives into one semantic member. The schema
+  generator reads each written CFC alternative for both whole and narrowed
+  captures, with or without a nullable member (the schema-generator mapping
+  spec's §8; `test/narrowed-capture-labels.test.ts` and the runner's
+  `test/cfc-narrowed-capture-floor.test.ts`)
+- a pass that reads the structure of a node printed from a type reads the
+  print's unfolding in its place: a node of the print's own kind built from the
+  type it was printed from, each type node below it printed afresh from its own
+  type (`unfoldPrint` in `transformers/type-shrinking.ts`). Node-driven
+  shrinking and the application of identity-only paths unfold a literal, a union
+  (into one print for each of its members), an array (`T[]` or `readonly T[]`,
+  as the printer writes one), and a cell reference. The narrowing of cells to
+  their observed capability unfolds a literal, and reads the value of a printed
+  cell, or of each cell in a printed nullable union, printed from the type
+  arguments its wrapper was given. A union carrying a `Default` brand, and an
+  object with a property keyed by a symbol, say something only as a whole and do
+  not unfold; a print of any other kind does not either. A print that does not
+  unfold is kept whole. A print thus goes through each pass as the authored node
+  for its type would, every part a pass keeps is read by its type, and no pass
+  builds a node from a piece of a print
+  (`test/printed-type-node-schema.test.ts`). A scoped cell
+  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt when
+  the narrowing of cells reaches its scope wrapper directly: its cell, printed
+  afresh, is narrowed inside a rebuilt scope wrapper registered with the scoped
+  cell's type, through which node-driven shrinking and identity-only paths then
+  reach the cell. Schema generation reads the scope from the wrapper's name and
+  the cell from the node inside it. Capability narrowing does not reach a scoped
+  cell through the printed union of an optional member, so that cell keeps its
+  authored capability and value shape. Node-driven shrinking keeps the print of
+  a scoped cell whole. Two rules keep what a print says through the unfolding: a
+  narrowed wrapper around a nullable cell's value alternatives is not registered
+  with the union's type, which schema generation would read in the wrapper's
+  place; and the declared members of a generic declaration, written in terms of
+  parameters an instantiation binds, do not shrink that instantiation
+  (`resolveMembersFromDeclaration`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
 - after shrinking, `validateShrinkCoverage` checks that all requested property
@@ -2046,6 +2527,43 @@ carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
 
+Cell constructors whose authored type arguments name a `typeof` value binding
+retain those arguments when their result is lowered into a lift or captured
+(`getConstructedCellTypeNode`), whether the cell is made by `new` or by the
+constructor's static `of()`. Recovery follows `.for()`, unannotated `const`
+aliases, and a binding an unannotated `const` destructures straight out of an
+object literal, and also preserves the declaration in an inferred
+object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
+writer instead of an inferred structural function type. Explicit variable
+annotations remain authoritative; mutable aliases, and a property of an object
+held elsewhere, which a write can replace, are not followed. Two writers of the
+same signature give a policy one type, so a cell reached any other way has no
+syntax that names its writer.
+Pattern-local object value aliases retain their definitions in each generated
+schema.
+
+An argument names a binding (`namesValueBinding`) when a `typeof` is written in
+it, in anything it holds, or in a type alias or interface it refers to by name,
+through any import binding and without substituting a generic alias's
+parameters. Only declarations in authored modules are followed: a declaration
+file's `typeof`, such as a brand key, names no writer. The schema generator
+reads the type arguments of the reference that carries a policy through
+parentheses and plain aliases (`readAuthoredTypeNode`), so a pattern-local
+`type Name = Owned<string, typeof setName>` names the writer that the same
+syntax written in place names. Pattern-local generic policy aliases also retain
+their writer bindings: each reference's arguments and defaults are substituted
+from its authored declaration, even when TypeScript reports the resolved type
+under an inner alias's name. A generic alias may name its policy through a
+namespace import (`cf.WriteAuthorizedBy<T, typeof setName>`) at module scope or
+inside the pattern, including through alias chains and nested policy wrappers.
+An outer alias and an imported alias may share a name: the chain is followed
+by declaration identity, so `type Owned<T> = ns.Owned<T, typeof save>` retains
+the imported policy and writer.
+The binding itself stays a direct `typeof`
+(§6.8): `type Binding = typeof setName` is refused, on a constructor's type
+arguments as on a declared field. `protected-cell-policy.test.ts` pins the
+generated schemas and the refusals.
+
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.
 
@@ -2083,11 +2601,28 @@ Behavior:
 
 Special path:
 
+- a node printed from a type is read as that type and never as a node. The
+  transformer passes `CrossStageState.printedFrom()` to the generator as its
+  `printedFrom` option, and wherever a printed node appears (the whole type
+  argument, a member of a node the transformer built, or a union member) the
+  generator reads the caller's own type at that position when it carries
+  something, and the type the node was printed from when the caller's is
+  `any`, `unknown`, or an unbound type parameter. Schema hints attached to the
+  node still apply. A name the node writes that the emitting module cannot
+  resolve, an `import("…")` type, or the brand of an expanded `Default` never
+  reaches node analysis, and a type the checker will not print is read from
+  that type rather than from its `unknown` placeholder
+  (`test/printed-type-node-schema.test.ts`). A type argument holding a type
+  node the printer built below a print, outside that print, is refused with an
+  error: the generator would read it as a node, and it says only part of what
+  the type does (`CrossStageState.printPieceIn()`; §10.7 says how the passes
+  that read inside a print avoid building one).
 - the generator uses its node-based path when the resolved type is `any` and
-  the type-argument node is synthetic (`pos=-1,end=-1`), or when a
-  real-position type argument contains any `any` / `unknown` keyword. The
-  latter avoids letting the checker recover a wider semantic type and erase
-  the authored unknown boundary.
+  the type-argument node is synthetic (`pos=-1,end=-1`), or when a type
+  argument, synthetic or not, contains an `any` or `unknown` keyword anywhere,
+  a printed node included. The keyword cases keep the checker from recovering
+  a wider semantic type, and the `unknown` case keeps the authored unknown
+  boundary. A printed node inside such an argument is still read as its type.
 - synthetic union handling preserves `undefined` members (for example
   `string | undefined` retains an explicit `undefined` branch in generated
   schema).
@@ -2136,7 +2671,12 @@ Special path:
   aliases lower to `ifc.*` metadata through the schema generator;
   `AnyOf<...>` becomes an IFC `anyOf` atom, and `PolicyOf<typeof policy>`
   becomes a policy-reference marker that `SchemaGeneratorTransformer`
-  resolves to module identity, symbol, and digest. `WriteAuthorizedBy`
+  resolves to module identity, symbol, and digest. Qualified references to
+  these metadata types follow Common Fabric import and re-export provenance,
+  including the `commonfabric/cfc` companion module, renamed exports, and
+  namespace re-exports. Authored types sharing their names retain their own
+  declarations. `test/qualified-cfc-metadata.test.ts` pins both input and output
+  schemas against the shipped library types. `WriteAuthorizedBy`
   rehydrates as `ifc.writeAuthorizedBy.__ctWriterIdentityOf = { file, path }`
   (plus a mint-time `moduleIdentity` stamp when the compiler was given
   `moduleIdentities` — see §17.3 file normalization),
@@ -2144,6 +2684,40 @@ Special path:
   pinned by `test/cfc-authoring.test.ts`,
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
+- Plain generic declarations read members under their argument bindings,
+  including inherited interface and class members, merged interface
+  declarations and structural alias bodies.
+  Member defaults, scope wrappers and `Default` union validation use those
+  bindings. Default validation recovers instantiated compound arguments and
+  anonymous members from the checker's union members and type arguments.
+  Printed captures bind checker-created argument types when authored
+  argument nodes are unavailable. Mapped views such as
+  `Readonly<Input<number>>` retain the input declaration's member bindings;
+  synthetic generic references resolve and bind their declarations from module
+  scope. Optional declared members stay outside `required` and retain the
+  checker's `undefined` alternative beside the bound value; explicitly written
+  `undefined` remains. Pinned by
+  `test/generic-pattern-input.test.ts`, `test/aliased-binding-declared-type.test.ts`
+  and schema-generator `test/typescript/type-arguments.test.ts`; binding terms
+  are defined in the mapping spec §4.1.
+- Authored writer identities also survive plain generic interfaces, classes and
+  structural aliases, forwarded aliases, inherited members, tuples, literal index
+  signatures, array and nullable alias bodies, and `Record` value arguments,
+  in both pattern input and explicit output schemas. A whole
+  `WriteAuthorizedBy` can be passed as a type argument, or a member can apply it
+  to a writer parameter supplied as a direct `typeof` query. Defaults read under
+  preceding parameters. Recursive `$defs` preserve the declaration identity of
+  each writer even when two handlers have identical types. Unread authored
+  bindings remain fatal; secondary type-only reads retain the exemption
+  described in §6.8. An indexed access or conditional generic member whose
+  instantiated carrier retains a writer policy but loses its binding syntax
+  also reports `cfc-write-authorized-by:unread`, including on stored-source
+  compilation. Pinned by `test/generic-writer-policy.test.ts` and
+  `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
+  mapping spec §§4.1 and 11 describe the binding rules. The library syntax
+  branch follows named aliases to reachable writer queries, so
+  `Readonly<Protected>` retains a policy written in `Protected`; ordinary value
+  queries such as `Partial<typeof value>` retain checker semantics.
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 
@@ -2274,9 +2848,14 @@ A qualifying call, per `detectCallKind` (§5) — as of this writing:
   reactive values in its argument object still get property causes (test:
   "does not add root causes to pattern factory outputs" pins the absence of
   `.for("child", true)` alongside `.for(["child", "value"], true)`).
-- Variable position only, as a last resort: a call whose resolved type is
-  cell-like (`isCellLikeType` via `getTypeAtLocationWithFallback`, consulting
-  the cross-stage `typeRegistry`).
+- Variable position only, as a last resort: a call whose resolved type is a
+  cell in every arm a value can take (`isCellByType`: `isCellLikeType` of the
+  type, or of each member of a union apart from `undefined`, `null`, and
+  `void`; the type via `getTypeAtLocationWithFallback`, consulting the
+  cross-stage `typeRegistry`). A union with a plain-value arm, such as
+  `Writable<string> | string`, gets no cause: the `.for()` would throw on the
+  string (`ast-transform/handler-cell-or-value-call.expected.jsx`). A nullish
+  arm instead makes the access optional (§13.5).
 
 Suppression: if the receiver chain of the (visited) initializer already
 contains a `.for(...)` call — property access `.for` or element access
@@ -2338,10 +2917,34 @@ export default pattern((state) => ({
 
 Inside object-literal properties (only there), a *reference* to an existing
 reactive value is re-caused at its result location: after visiting, a bare
-identifier whose type is a branded cell or cell-like — or, absent type
-information, is a reactive value expression (`isReactiveValueExpression`) —
-gets `.for(<path>, true)` appended (`shouldRetargetReactiveReference`). The
-cause names the property, not the referenced binding:
+identifier whose type is a cell in every arm a value can take (`isCellByType`,
+as for the variable-position fallback in §13.2) — or, absent type information,
+is a reactive value expression (`isReactiveValueExpression`) — gets
+`.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
+identifier whose type has a plain-value arm beside a cell arm is re-rooted
+only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+a parameter of a reactive scope — the callback of a pattern builder call or
+of a reactive array method, through any parentheses or other transparent
+wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,
+`computed()`'s, or plain function's parameter is not one) — or a variable
+whose lowered initializer this stage classified as reactive
+(`isReactiveByConstruction`, recorded per run in `causedVariablesOf`), or a
+`const` initialized with a bare reference to one of those, at any depth,
+which is the same node under another name. That is the shape a hoisted `??`
+leaves:
+`const activeProfile = profile ?? profileWish.result` over a `Cell<Profile>`
+and a `Reactive<Profile>` read is typed `Profile | Cell<Profile> | undefined`
+and lowered to a lift, so `{ profile: activeProfile }` still re-roots it
+(`ast-transform/builder-arg-hoisted-nullish-selection.expected.jsx`); a
+pattern input `maybe: Writable<string> | string` is re-rooted in the pattern
+body — directly, through `const alias = maybe`, as the element of a reactive
+`.map()`, and under a parenthesized callback — and left alone in a handler
+that receives it as state and in a plain function that takes it as a
+parameter (`ast-transform/cell-or-value-parameter.expected.jsx`); and the
+same type on
+a handler-body `const` from a plain call gets no cause
+(`handler-cell-or-value-call`). The cause names the property, not the
+referenced binding:
 
 ```ts
 // Shown inside a pattern body.
@@ -2384,6 +2987,26 @@ The second argument is always the literal `true` — the runtime's `allowIfSet`
 flag: the synthetic cause is a *suggestion*, silently ignored if the cell
 already has a cause or link, whereas authored one-argument `.for(cause)`
 throws in that case (`packages/runner/src/cell.ts`, `for(cause, allowIfSet?)`).
+
+The access is optional, `?.for(<cause>, true)`, when the tagged expression may
+be nullish when it runs (`mayBeNullish`): an optional chain, or an identifier
+(§13.4) or a call that `detectCallKind` does not classify whose type admits
+`undefined`, `null`, or `void`. There is no cell to name in that case, and a
+plain `.for()` would throw on the absent value. A non-null assertion `!`
+around the expression keeps the plain access, over both the chain and the
+type. The other wrappers, `as` and `satisfies`, leave the question to the
+expression inside them: the type is read inside them, so `as unknown` does
+not hide a nullish arm (`satisfies` never changes a type, and a cast to a type
+that admits a cell is refused, §6). A call the runtime provides keeps the
+plain access, since it returns a cell whatever type the value in that cell has
+(`ast-transform/handler-nullable-cell-const.expected.jsx`:
+`const a = state.profile?.resolveAsCell()?.for("a", true)` in a handler,
+`{ profile: a?.for(["d", "profile"], true) }` re-rooting it,
+`(maybeCell(state.profile) as unknown)?.for("e", true)`, and
+`maybeCell(state.profile)!.for("g", true)`;
+`ast-transform/handler-cell-or-value-call.expected.jsx`:
+`state.profile?.resolveAsCell()!.for("d", true)`).
+
 Source-map ranges are
 preserved from the original initializer (`preserveNodeSourceMap`).
 
@@ -2673,11 +3296,29 @@ encloses the original expression, wrappers included:
     `void`, and unions/intersections thereof (`isPrimitiveSnapshotCall`,
     `isPrimitiveLikeType`);
   - any call whose callee is a property access (`receiver.method(...)`).
-- **`new` expressions.** Only `new Map(...)` and `new Set(...)`
-  (`CF_DATA_CONSTRUCTOR_NAMES`). Notably `new Proxy(...)` is left unwrapped —
-  "Proxy snapshots stay unsupported until Proxy is re-enabled in SES
-  compartments" (`test/transform.test.ts`, "wraps top-level data candidates
-  with __cfHelpers.__cf_data").
+- **`new` expressions.** `new Map(...)` and `new Set(...)`
+  (`CF_DATA_CONSTRUCTOR_NAMES`, by name), and a construction of a
+  `FabricPrimitive` such as `new FabricDurationNsec(600n)`, which the runtime
+  freezer keeps as it is (`SES_SANDBOXING_SPEC.md` §4.2.3). The class has to
+  be one `commonfabric` declares — under any import name, as a namespace
+  member (`cf.FabricDurationNsec`), or through a `const` bound to a bare
+  reference to one (`constructorNamedBy`, `isCommonFabricSymbol`) — and its
+  instance type has to carry the
+  `FabricPrimitive` brand (`constructsFabricPrimitive`;
+  `declaresFabricPrimitiveBrand` from
+  `@commonfabric/schema-generator/fabric-primitive-brand`, which reads the
+  brand by the name of its key and so is not enough alone). A class of the
+  author's own is not wrapped, whether it shares a primitive's name, declares
+  a member under a symbol named `FABRIC_PRIMITIVE_BRAND` or under the real
+  one, or extends a primitive, nor is a `const` bound to one, so the verifier refuses it before its
+  constructor runs (tests: "wraps a top-level fabric primitive construction
+  with __cfHelpers.__cf_data", "does not wrap a construction that only looks
+  like a fabric primitive"; `packages/runner/test/engine-ses.test.ts`, "keeps
+  a fabric primitive constructed at top level as it is", "refuses a top-level
+  construction that only looks like a fabric primitive"). Notably `new Proxy(...)` is left
+  unwrapped — "Proxy snapshots stay unsupported until Proxy is re-enabled in
+  SES compartments" (`test/transform.test.ts`, "wraps top-level data
+  candidates with __cfHelpers.__cf_data").
 - **Literals.** Regular-expression literals, object literals, and array
   literals are always wrapped.
 - Everything else — identifier references, primitive literals, template
@@ -2825,7 +3466,8 @@ verifier side (`packages/runner/src/sandbox/compiled-bundle-verifier.ts`):
 The verifier checks the wrapper boundary and call shape only — it does not
 interpret the payload; load-time enforcement is the runtime freezer, which
 admits the module-safe subset (plain objects, arrays, `Map`→`FrozenMap`,
-`Set`→`FrozenSet`, non-global/non-sticky RegExp, primitives/bigint) and throws
+`Set`→`FrozenSet`, non-global/non-sticky RegExp, primitives/bigint,
+`FabricPrimitive`s kept as they are) and throws
 `PlainDataValidationError` on everything else
 (`SES_SANDBOXING_SPEC.md` §4.2.3; `packages/runner/src/sandbox/plain-data.ts`).
 That classification runs on each per-module record body, through
@@ -2869,8 +3511,11 @@ stage gated on a harness-supplied option rather than on source content: its
 `filter` requires `TransformationOptions.patternCoverage` to be set and the
 file not to be a declaration file, and a filtered-out stage returns the source
 file untouched (`Transformer.toFactory`, `src/core/transformers.ts`). Nothing
-inside this package ever sets the option; it exists for the runner's `cf test`
-pattern-coverage mechanism described in `docs/development/COVERAGE.md`.
+inside this package ever sets the option; it exists for the authored-pattern
+coverage mechanism described in `docs/development/COVERAGE.md`. In the full
+run, that coverage comes from three suites: `pattern-unit`, through `cf test`,
+and `pattern-reload` and the arm of `pattern-integration` with server execution
+off, through the browser worker's runtime.
 
 ### 16.1 Enablement and plumbing
 
@@ -2885,10 +3530,15 @@ The option is constructed end-to-end by the runner/CLI chain:
 
 1. `cf test` resolves a coverage directory from the `--pattern-coverage-dir`
    flag, falling back to the `CF_PATTERN_COVERAGE_DIR` environment variable
-   (`packages/cli/commands/test.ts`). Per `docs/development/COVERAGE.md`, that
-   variable is read in exactly this one place — jobs running plain `deno test`
-   or talking to a Toolshed server never reach this code, so setting it there
-   has no effect.
+   (`packages/cli/commands/test-command.ts`). The browser-driven integration
+   suites do not run through `cf test`. Their harness,
+   `packages/integration/pattern-coverage.ts`, reads the same variable to turn
+   the browser worker's collector on. The worker's runtime takes its collector
+   through `RuntimeOptions.patternCoverage`, as `docs/development/COVERAGE.md`
+   describes. Two pattern integration tests also read it, since they run a
+   pattern in the test process: `recommend-a-book.test.ts` builds a collector
+   of its own, and `agent-book-inputs.test.ts` hands the directory to
+   `runTestPattern`.
 2. The test runner builds one `PatternCoverageCollector` per test file and
    passes it as the `patternCoverage` harness option to
    `engine.compileAndEvaluateModules` (`packages/cli/lib/test-runner.ts`; the
@@ -3119,16 +3769,16 @@ end_of_record
 `<url-encoded relative test path>[--<participant>].pattern-coverage.lcov`
 file per test into the coverage directory (`patternCoverageOutputPath`;
 `packages/cli/lib/test-runner.ts`). Per `docs/development/COVERAGE.md`, those
-files feed the CI coverage-debt gate as the sole source of covered-line data
-for authored pattern files (currently only the `pattern-unit-test` job), and
-`DA` records exist only for lines the instrumentation could name — the
-denominator caveat documented there.
+files feed the repository-wide coverage figure as a source of covered-line data
+for authored pattern files (the `pattern-unit` suite), and `DA` records exist
+only for lines the instrumentation could name — the denominator caveat
+documented there.
 
 Test inventory for this stage: transformer unit suite
 `test/pattern-coverage-transformer.test.ts`; end-to-end line mapping and LCOV
 `packages/runner/test/pattern-coverage.test.ts`; cache bypass
 `packages/runner/test/esm-engine.test.ts`; flag/env-var enablement
-`packages/cli/test/test-runner-pattern-coverage.test.ts`; stage order
+`packages/cli/test/test-runner-pattern-coverage.serial.test.ts`; stage order
 `test/pipeline-regressions.test.ts`. The `*.input.*`/`*.expected.*` fixture
 corpus (§20) never enables the option, so fixture expectations contain no
 counters.
@@ -3293,24 +3943,44 @@ The same stage stamps CFC **trusted bindings** with their authoring identity,
 so a `WriteAuthorizedBy` claim embedded in a schema can later be matched to
 the live handler that performs the write.
 
-**Which bindings are trusted.** `collectWriteAuthorizedByBindingNames` scans
-the stage-23 AST for type references to `WriteAuthorizedBy`,
-`TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` (binding position
-= type argument 1 for all three, seeded in
-`discoverWriteAuthorizedByBindingPositions`), plus any local type aliases
-that forward a type parameter into such a position (computed to a fixed
-point, so alias-of-alias works — `collectAliasBindingPositions`; exercised by
-`test/cfc-authoring.test.ts` "lowers alias-referenced trusted builder
-bindings"). Within each binding-position type argument, every `typeof x`
-type-query identifier contributes `x` to the trusted-name set
-(`collectTypeQueryIdentifiers`). Detection is purely name-based (no
-symbol/import resolution), and it sees only type references **still present
-after stages 15–17**: a reference that lived solely inside a
-`toSchema<WriteAuthorizedBy<…>>()` type argument was already replaced by the
-schema literal in stage 18 and contributes nothing (verified by direct
-pipeline run — such a module gets a plain `__cfHardenFn` wrap and no
-annotation), whereas references surviving in `interface`/type-alias
-declarations or un-lowered type arguments do.
+**Which bindings are trusted.** A binding is trusted in the module that
+DECLARES it, whichever module wrote the claim that names it: the schema names
+the declaring module (§12), and the runtime verifies a write against that
+module's binding identity, so a writer cited only from an importing module —
+`cfc-spec-gallery` binds the trusted surfaces' writers this way — must be
+stamped by its own module. The stage reads two sources and takes their union:
+
+- `collectTrustedBindingsByFile` (once per program, cached by `ts.Program`)
+  scans every non-declaration file of the program **as authored** for type
+  references to `WriteAuthorizedBy`, `TrustedActionWrite`, or
+  `TrustedActionWriteWithIntegrity` (binding position = type argument 1 for
+  all three) and to any type alias, in any of those files, that forwards a
+  type parameter into such a position (to a fixed point, so alias-of-alias
+  works — `discoverAliasBindingPositions` / `collectAliasBindingPositions`).
+  A reference to an alias resolves through the checker to its declaration, so
+  an alias imported from another module is read; one of the library's three
+  names counts as the library's type only when it is imported from a Common
+  Fabric module (through any chain of authored re-exports), so an authored
+  alias that borrows the name reads as what it declares and trusts nothing.
+  Every `typeof x` in a binding position is resolved
+  through the checker to the variable or function declaration it names
+  (`resolveWriterBinding`, `@commonfabric/schema-generator/writer-binding` —
+  the resolver the schema generator mints the claim with), and the DECLARED
+  name is indexed under the DECLARING file: `import { writer as save }` cited
+  as `typeof save` trusts `writer` in `writer.ts`. Because the program's
+  original files are read, a claim that lived solely inside a
+  `toSchema<WriteAuthorizedBy<…>>()` type argument counts too, although stage
+  18 has replaced it with a schema literal by the time this stage runs.
+- `collectWriteAuthorizedByBindingNames` scans this file's own stage-23 AST
+  the same way, by spelling and without resolution — for a claim an earlier
+  stage synthesized, which the original files do not hold.
+
+Exercised by `test/cfc-authoring.test.ts` "WriteAuthorizedBy lowers
+alias-referenced trusted builder bindings" and `test/protected-cell-policy.test.ts` "gives an imported
+writer its binding identity in its own module" (transform), and by
+`packages/runner/test/cfc-imported-writer-binding.test.ts` (a compiled
+two-module program: the identity is registered under the declared name and
+the importer's claim admits the write).
 
 **What is emitted.** For a trusted binding whose initializer is a call
 expression or a direct function (`isTrustedCallable`), the transformer emits
@@ -3669,6 +4339,12 @@ null when it does not apply. Current built-in behavior:
    unsupported — the problem is the unstorable function value, not the call
    syntax — but that classification is not yet surfaced as an authoring-time
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
+7. A spread, inside a reactive collection callback, of a capture that §9.4 does
+   not write out — a `const` initialized by a function call, say — copies
+   nothing, because the callback reads the capture as an opaque reference.
+   §9.4 reports it as an error rather than writing it out; the keys of such a
+   capture are not known when the code is compiled, so the spread itself
+   stays unsupported.
 
 ## 20. Test Coverage Snapshot
 
@@ -3738,7 +4414,7 @@ re-listing it. The enforced sources of truth:
 | Module-scope `__cf_data` wrap/exclusion name sets + verifier error strings (§15) | `TRUSTED_BUILDERS` / `TRUSTED_DATA_HELPERS` (`packages/utils/src/sandbox-contract.ts`); `CF_DATA_CONSTRUCTOR_NAMES` (`src/transformers/module-scope-cf-data.ts`); `TOP_LEVEL_CALL_RESULT_ERROR` (`packages/runner/src/sandbox/policy.ts`) | one module feeds both transformer and runner verifier — cross-package contract; runtime freezer semantics live in `packages/runner/src/sandbox/plain-data.ts` |
 | Coverage instrumentation + span schema (§16) | `PatternCoverageTransformer` (`src/transformers/pattern-coverage.ts`); `PatternCoverageSpan` / `PatternCoverageOptions` / `PATTERN_COVERAGE_GLOBAL` (`src/core/transformers.ts`) | line remapping pins the one-line helper prelude: `HELPERS_STMT` (`src/core/cf-helpers.ts`) ↔ `patternCoverageOptionsForCompile` (`packages/runner/src/harness/engine.ts`) — change them together |
 | Hardening/binding helper names, metadata field, canonical helper bodies (§17) | `FUNCTION_HARDENING_HELPER_NAME` / `BINDING_IDENTITY_HELPER_NAME` / `VERIFIED_BINDING_METADATA_FIELD` and `createFunctionHardeningHelperSource` / `createBindingIdentityHelperSource` (`packages/utils/src/sandbox-contract.ts`) | the runner verifier recognizes helper declarations by trivia-stripped byte equality to these sources (`CANONICAL_HARDENING_HELPER` in `packages/runner/src/sandbox/compiled-bundle-verifier.ts`); the transformer's AST-built twins (`createFunctionHardeningHelper` / `createBindingIdentityHelper` in `src/transformers/module-scope-function-hardening.ts`) must compile to exactly that text — drift fails every module load |
-| Trusted-binding type names + binding positions (§17.3) | seed map in `discoverWriteAuthorizedByBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
+| Trusted-binding type names + binding positions (§17.3) | seed map `LIBRARY_BINDING_POSITIONS`, extended by `discoverAliasBindingPositions` / `collectAliasBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
 
 A drift-resistant habit: when a section enumerates a set, cite the constant /
 function that defines it so a reader can confirm the live set, and keep prose

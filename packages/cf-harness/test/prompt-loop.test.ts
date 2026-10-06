@@ -1494,9 +1494,13 @@ describe("CfHarnessPromptLoop research handoff", () => {
       expect(modelOutput.guidance).toContain("Do not present or implement");
       expect(modelOutput.researchRecord).toBeUndefined();
       expect(modelOutput.cfc.coverage).toBe("incomplete");
-      expect(modelOutput.cfc.outputLabel.integrity).toBeUndefined();
-      expect(modelOutput.cfc.outputLabel.confidentiality).toHaveLength(1);
-      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(1);
+      expect(modelOutput.cfc.outputLabel).toEqual({});
+      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(2);
+      expect(modelOutput.cfc.sourceLabel.integrity).toContainEqual(
+        expect.objectContaining({
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+        }),
+      );
       expect(modelOutput.cfc.missingLabels).toEqual([{
         source: "handle-description",
         detail: `handle ${minted.token} metadata returned by describe_handle`,
@@ -1506,15 +1510,8 @@ describe("CfHarnessPromptLoop research handoff", () => {
         result.runState.researchRuns?.[0]?.kit.inputs[0]?.token,
       ).toBe(minted.token);
       expect(result.runState.researchRuns?.[0]?.cfc).toEqual(modelOutput.cfc);
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: "research-task",
-          toolId: "research",
-          outputId: toolMessage.resultRef?.outputId,
-          channels: ["output"],
-          label: modelOutput.cfc.outputLabel,
-        }),
-      ]);
+      // An output with no confidentiality adds nothing to the model context.
+      expect(result.runState.cfcModelContext).toBeUndefined();
       expect(result.totalUsage?.totalTokens).toBe(37);
 
       const outputRef = result.runState.toolOutputs.find((entry) =>
@@ -1885,6 +1882,183 @@ describe("CfHarnessPromptLoop research handoff", () => {
   });
 });
 
+/** Keeps every run report the loop persists, so a test can read what it recorded. */
+class ReportCapturingArtifactStore extends RecordingArtifactStore {
+  readonly runReports: Array<
+    Parameters<HarnessArtifactStore["persistRunReport"]>[0]
+  > = [];
+
+  override persistRunReport(
+    report: Parameters<HarnessArtifactStore["persistRunReport"]>[0],
+  ): Promise<string> {
+    this.runReports.push(report);
+    return Promise.resolve(`${this.runRoot}/run-report.json`);
+  }
+}
+
+describe("CfHarnessPromptLoop research reasoning effort", () => {
+  /** A research reply that finishes in one turn, citing nothing. */
+  const researchAnswer = () =>
+    Promise.resolve({
+      assistant: {
+        role: "assistant" as const,
+        content: JSON.stringify({
+          status: "incomplete",
+          summary: "Nothing established yet.",
+          inputs: [],
+          selectedPatternIds: [],
+          rules: [],
+          sourceIds: [],
+          missing: ["more evidence"],
+        }),
+      },
+    });
+  const toolCall = (id: string, name: string, args: unknown) => ({
+    assistant: {
+      role: "assistant" as const,
+      content: "",
+      toolCalls: [{
+        id,
+        type: "function" as const,
+        function: { name, arguments: JSON.stringify(args) },
+      }],
+    },
+  });
+  const docsEngine = async (root: string, runId: string) => {
+    const docsRoot = join(root, "docs");
+    await Deno.mkdir(docsRoot);
+    await Deno.writeTextFile(join(docsRoot, "api.md"), "# Contract\n\nText.\n");
+    const artifactStore = new ReportCapturingArtifactStore(
+      join(root, "artifacts"),
+      runId,
+    );
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-test",
+      artifactStore,
+      docsCorpus: {
+        type: "cf-harness.docs-corpus-record",
+        source: "configured",
+        roots: [docsRoot],
+      },
+    });
+    return { engine, artifactStore };
+  };
+
+  it("sends it on research's own calls, not the run's, and records it in the run report", async () => {
+    const root = await Deno.makeTempDir({
+      prefix: "cf-harness-research-effort-",
+    });
+    const runId = "run-research-effort";
+    try {
+      const { engine, artifactStore } = await docsEngine(root, runId);
+      const research: HarnessModelTurnRequest[] = [];
+      const outer: HarnessModelTurnRequest[] = [];
+      const modelClient: HarnessModelClient = {
+        providerId: "test-provider",
+        complete: (request) => {
+          if (request.runId.includes(":research:")) {
+            research.push(request);
+            return researchAnswer();
+          }
+          outer.push(request);
+          return Promise.resolve(
+            outer.length === 1
+              ? toolCall("research-call", "research", {
+                task: "Find the contract.",
+                purpose: "answer",
+              })
+              : { assistant: { role: "assistant" as const, content: "Done." } },
+          );
+        },
+      };
+      await new CfHarnessPromptLoop({
+        engine,
+        modelClient,
+        researchReasoningEffort: "high",
+        allowedToolIds: ["research"],
+      }).runPrompt({
+        prompt: "Research the contract.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(research.length).toBeGreaterThan(0);
+      expect(research.map((request) => request.reasoningEffort))
+        .toEqual(research.map(() => "high"));
+      expect(outer.every((request) => request.reasoningEffort === undefined))
+        .toBe(true);
+      expect(artifactStore.runReports.at(-1)?.researchReasoningEffort)
+        .toBe("high");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("hands it to a delegated child's research", async () => {
+    const root = await Deno.makeTempDir({
+      prefix: "cf-harness-research-effort-child-",
+    });
+    const runId = "run-research-effort-child";
+    try {
+      const { engine } = await docsEngine(root, runId);
+      const research: HarnessModelTurnRequest[] = [];
+      let parentTurns = 0;
+      let childTurns = 0;
+      const modelClient: HarnessModelClient = {
+        providerId: "test-provider",
+        complete: (request) => {
+          if (request.runId.includes(":research:")) {
+            research.push(request);
+            return researchAnswer();
+          }
+          if (request.runId === runId) {
+            parentTurns += 1;
+            return Promise.resolve(
+              parentTurns === 1
+                ? toolCall("delegate-call", "delegate_task", {
+                  goal: "Research the contract, then report.",
+                  profile: "pattern-author",
+                })
+                : {
+                  assistant: { role: "assistant" as const, content: "Done." },
+                },
+            );
+          }
+          childTurns += 1;
+          return Promise.resolve(
+            childTurns === 1
+              ? toolCall("child-research", "research", {
+                task: "Find the contract.",
+                purpose: "answer",
+              })
+              : {
+                assistant: { role: "assistant" as const, content: "Reported." },
+              },
+          );
+        },
+      };
+      await new CfHarnessPromptLoop({
+        engine,
+        modelClient,
+        researchReasoningEffort: "high",
+        allowedToolIds: ["delegate_task"],
+        allowedSubagentProfiles: ["pattern-author"],
+      }).runPrompt({
+        prompt: "Delegate the research.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(childTurns).toBeGreaterThan(0);
+      expect(research.length).toBeGreaterThan(0);
+      expect(research.map((request) => request.reasoningEffort))
+        .toEqual(research.map(() => "high"));
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 describe("CfHarnessPromptLoop opening research", () => {
   it("recovers an interrupted opening with no output exactly once across resumes", async () => {
     const runId = "opening-without-output";
@@ -2145,6 +2319,65 @@ describe("CfHarnessPromptLoop opening research", () => {
     missing: ["an exact implementation contract"],
   });
 
+  for (
+    const selection of [
+      "pattern id",
+      "piece slug",
+      "registry skill",
+      "local skill",
+    ]
+  ) {
+    it(`starts the parent immediately for a task naming an exact ${selection}`, async () => {
+      await using skills = await createPatternSkillsFixture();
+      const task = selection === "pattern id"
+        ? "Run cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s."
+        : selection === "piece slug"
+        ? "Revise pattern:demo-space/monthly-bills."
+        : selection === "registry skill"
+        ? "Use the named skill skill:commonfabric/labs/cf-spend-digest: run its script."
+        : "Use skill:pattern-dev to build a counter.";
+      const runId = `closed-task-${selection}`;
+      const requests: HarnessModelTurnRequest[] = [];
+      const engine = new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId,
+        model: "gpt-test",
+      });
+      await engine.persistSkillRegistry(
+        await discoverHarnessSkills({
+          skillsRoot: skills.skillsRoot,
+        }),
+      );
+      const loop = new CfHarnessPromptLoop({
+        engine,
+        allowedToolIds: ["research"],
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            requests.push(request);
+            return Promise.resolve({
+              assistant: { role: "assistant", content: "Ready to use it." },
+            });
+          },
+        },
+      });
+
+      const result = await loop.runPrompt({
+        prompt: task,
+        openingResearchTask: task,
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(requests.map((request) => request.runId)).toEqual([runId]);
+      expect(requests[0].tools.map((tool) => tool.toolId)).toContain(
+        "research",
+      );
+      expect(result.runState.openingResearch).toBeUndefined();
+      expect(result.runState.researchRuns).toBeUndefined();
+      expect(result.runState.toolOutputs).toEqual([]);
+    });
+  }
+
   it("researches a fresh root before its first parent turn with normal accounting", async () => {
     const root = await Deno.makeTempDir({
       dir: "/tmp",
@@ -2294,6 +2527,10 @@ describe("CfHarnessPromptLoop opening research", () => {
       expect(openingCfc?.missingLabels).toEqual([]);
       expect(openingCfc?.sourceLabel.integrity).toEqual([
         expect.objectContaining({
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+          role: "direct-command",
+        }),
+        expect.objectContaining({
           class: "CommonFabricHarnessOperatorProvisionedReference",
           subject: expect.stringMatching(/\/docs\/common$/),
         }),
@@ -2302,23 +2539,9 @@ describe("CfHarnessPromptLoop opening research", () => {
           subject: expect.stringMatching(/\/skills$/),
         }),
       ]);
-      expect(openingCfc?.sourceLabel.confidentiality).toHaveLength(1);
-      expect(
-        (openingCfc?.sourceLabel.confidentiality?.[0] as { type?: string })
-          ?.type,
-      ).toBe(CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE);
-      expect(openingCfc?.outputLabel).toEqual({
-        confidentiality: openingCfc?.sourceLabel.confidentiality,
-      });
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: `opening-research:${runId}`,
-          toolId: "research",
-          outputId: openingOutputId,
-          channels: ["output"],
-          label: openingCfc?.outputLabel,
-        }),
-      ]);
+      expect(openingCfc?.sourceLabel.confidentiality).toBeUndefined();
+      expect(openingCfc?.outputLabel).toEqual({});
+      expect(result.runState.cfcModelContext).toBeUndefined();
       expect(result.usage?.totalTokens).toBe(7);
       expect(result.totalUsage?.totalTokens).toBe(18);
 
@@ -2469,16 +2692,8 @@ describe("CfHarnessPromptLoop opening research", () => {
       expect(artifactOutput.rawCauseMessage).toBe("test corpus unavailable");
       expect(artifactOutput.cfc?.coverage).toBe("complete");
       expect(artifactOutput.cfc?.missingLabels).toEqual([]);
-      expect(artifactOutput.cfc?.outputLabel.confidentiality).toHaveLength(1);
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: `opening-research:${runId}`,
-          toolId: "research",
-          outputId: outputRef.outputId,
-          channels: ["output"],
-          label: artifactOutput.cfc?.outputLabel,
-        }),
-      ]);
+      expect(artifactOutput.cfc?.outputLabel).toEqual({});
+      expect(result.runState.cfcModelContext).toBeUndefined();
 
       const handoff = result.transcript.find((message) =>
         message.role === "user" &&
@@ -3155,6 +3370,475 @@ Deno.test("CfHarnessPromptLoop preserves custom abort reasons for local gateway 
   assert(caught === reason, "custom abort reason must be rethrown unchanged");
 });
 
+Deno.test("CfHarnessPromptLoop runs two delegations of one model turn together and joins their results in call order", async () => {
+  // Each child's first model request is held until the other child's has
+  // arrived, so the parent turn can only finish if both children are in
+  // flight at once; against a loop that ran them one after the other the
+  // first child would wait on a second that never starts, and the test
+  // fails on the pending promise. The child serving the second call answers
+  // first, so the transcript order below is the order the model wrote the
+  // calls, not the order the children finished.
+  const childRequests: string[] = [];
+  const bothChildRequestsSeen = Promise.withResolvers<void>();
+  const childAnswers = new Map<string, PromiseWithResolvers<void>>();
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    async complete(request) {
+      const childRunId = request.runId;
+      if (childRunId === "run-two-children") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: ["call-first", "call-second"].map((id) => ({
+                id,
+                type: "function" as const,
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({
+                    goal: `Inspect for ${id}.`,
+                    context: "Return only findings.",
+                  }),
+                },
+              })),
+            },
+          };
+        }
+        return { assistant: { role: "assistant", content: "Both returned." } };
+      }
+      const servesCall =
+        request.transcript.some((message) =>
+            message.role === "user" && message.content.includes("call-second")
+          )
+          ? "call-second"
+          : "call-first";
+      childRequests.push(childRunId);
+      if (childRequests.length === 2) bothChildRequestsSeen.resolve();
+      await bothChildRequestsSeen.promise;
+      const answer = Promise.withResolvers<void>();
+      childAnswers.set(servesCall, answer);
+      if (childAnswers.size === 2) {
+        childAnswers.get("call-second")?.resolve();
+      }
+      await answer.promise;
+      childAnswers.get("call-first")?.resolve();
+      return {
+        assistant: { role: "assistant", content: `${childRunId} done.` },
+      };
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "run-two-children",
+      model: "test-model",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Delegate two inspections.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "Both returned.");
+  assertEquals(childRequests.toSorted(), [
+    "run-two-children.subagent.1",
+    "run-two-children.subagent.2",
+  ]);
+  const toolMessages = result.transcript.filter((message) =>
+    message.role === "tool"
+  );
+  assertEquals(
+    toolMessages.map((message) => message.toolCallId),
+    ["call-first", "call-second"],
+  );
+  // A child is numbered when its delegation is admitted, which for two
+  // started together is not necessarily the order the model wrote them; what
+  // the record fixes is which child answered which call.
+  const childSummaries = toolMessages.map((message) =>
+    (JSON.parse(message.content) as {
+      subagent: { childRunId: string; status: string; summary: string };
+    }).subagent
+  );
+  assertEquals(
+    childSummaries.map((subagent) => subagent.childRunId).toSorted(),
+    ["run-two-children.subagent.1", "run-two-children.subagent.2"],
+  );
+  assertEquals(
+    childSummaries.map((subagent) => [subagent.status, subagent.summary]),
+    childSummaries.map((subagent) => [
+      "completed",
+      `${subagent.childRunId} done.`,
+    ]),
+  );
+  const pairs = (entries: readonly (readonly string[])[]) =>
+    entries.map((entry) => entry.join(" -> ")).toSorted();
+  assertEquals(
+    pairs(
+      (result.runState.subagentRuns ?? []).map((run) => [
+        run.parentToolCallId,
+        run.childRunId,
+      ]),
+    ),
+    pairs(
+      toolMessages.map((message, index) => [
+        message.toolCallId,
+        childSummaries[index].childRunId,
+      ]),
+    ),
+  );
+  // Decisions are logged as they are made, so their order is the order the
+  // calls finished; the activity sequence is what ties each to its call.
+  assertEquals(
+    (result.runState.policyDecisions ?? [])
+      .map((decision) =>
+        [
+          decision.toolCallId,
+          decision.toolActivitySequence,
+        ] as const
+      )
+      .toSorted((a, b) => a[1] - b[1]),
+    [["call-first", 1], ["call-second", 2]],
+  );
+});
+
+Deno.test("CfHarnessPromptLoop runs the calls around a delegation in order and does not hold the ones after it", async () => {
+  // The turn is a shell call, a delegation, and a second shell call. The
+  // child's only model request is held until the second shell call has
+  // reached the sandbox, so the turn finishes only if that call ran while
+  // the child was still out. The first call ends in a directory of its own,
+  // and the second must start there: two shell calls started together would
+  // both start from the directory the turn began in.
+  const sandbox = new FakeSandboxRuntime([
+    {
+      stdout: "before__CF_HARNESS_CWD__run-around-child:bash:1__/workspace/sub",
+      stderr: "",
+      exitCode: 0,
+    },
+    { stdout: "after", stderr: "", exitCode: 0 },
+  ]);
+  const secondShellSeen = Promise.withResolvers<void>();
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = (request) => {
+    if (request.command.includes("printf after")) secondShellSeen.resolve();
+    return runShell(request);
+  };
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    async complete(request) {
+      if (request.runId === "run-around-child") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                {
+                  id: "call-before",
+                  type: "function" as const,
+                  function: {
+                    name: "bash",
+                    arguments: JSON.stringify({ command: "printf before" }),
+                  },
+                },
+                {
+                  id: "call-child",
+                  type: "function" as const,
+                  function: {
+                    name: "delegate_task",
+                    arguments: JSON.stringify({
+                      goal: "Inspect while the shell works.",
+                      context: "Return only findings.",
+                    }),
+                  },
+                },
+                {
+                  id: "call-after",
+                  type: "function" as const,
+                  function: {
+                    name: "bash",
+                    arguments: JSON.stringify({ command: "printf after" }),
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return { assistant: { role: "assistant", content: "All three ran." } };
+      }
+      await secondShellSeen.promise;
+      return { assistant: { role: "assistant", content: "Child done." } };
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash", "delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: sandbox,
+      runId: "run-around-child",
+      model: "test-model",
+      cfcEnforcementMode: "observe",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Run the shell around a child.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "All three ran.");
+  assertEquals(
+    sandbox.shellRequests
+      .filter((request) => !request.command.includes(CAPABILITY_PROBE_SENTINEL))
+      .map((request) => request.cwd),
+    ["/workspace", "/workspace/sub"],
+  );
+  assertEquals(
+    result.transcript
+      .filter((message) => message.role === "tool")
+      .map((message) => message.toolCallId),
+    ["call-before", "call-child", "call-after"],
+  );
+  assertEquals(
+    (result.runState.subagentRuns ?? []).map((run) => run.status),
+    ["completed"],
+  );
+});
+
+Deno.test("CfHarnessPromptLoop aborts a delegation still out when a later call of its turn fails", async () => {
+  // The child's model request settles only when its signal aborts. The shell
+  // call written after the delegation fails run-fatally once that request is
+  // out, so the turn can end only if the failure reaches the child; and the
+  // run ends on the shell's error, not as canceled.
+  const childRequestOut = Promise.withResolvers<void>();
+  const sandbox = new FakeSandboxRuntime();
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = async (request) => {
+    if (!request.command.includes("printf boom")) return runShell(request);
+    await childRequestOut.promise;
+    throw new Error("sandbox went away");
+  };
+  let childSawAbort = false;
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-sibling-failure",
+    model: "test-model",
+  });
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete(request) {
+      if (request.runId === "run-sibling-failure") {
+        return Promise.resolve({
+          assistant: {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "call-child",
+                type: "function" as const,
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({ goal: "Wait for the shell." }),
+                },
+              },
+              {
+                id: "call-boom",
+                type: "function" as const,
+                function: {
+                  name: "bash",
+                  arguments: JSON.stringify({ command: "printf boom" }),
+                },
+              },
+            ],
+          },
+        });
+      }
+      return new Promise((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => {
+          childSawAbort = true;
+          reject(request.signal?.reason);
+        }, { once: true });
+        childRequestOut.resolve();
+      });
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash", "delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine,
+  });
+
+  await assertRejects(
+    () =>
+      loop.runPrompt({
+        prompt: "Delegate, then run a shell command.",
+        promptSlotBinding: directPromptSlotBinding,
+      }),
+    Error,
+    "sandbox went away",
+  );
+  assertEquals(childSawAbort, true);
+  assertEquals(engine.getRunState().status, "failed");
+});
+
+Deno.test("CfHarnessPromptLoop holds the calls after a browser delegation until its child returns", async () => {
+  // Browser children share one page, so a browser delegation is the one
+  // delegation that holds the calls after it. The child's request records
+  // whether the shell call written after it has reached the sandbox yet.
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "after", stderr: "", exitCode: 0 },
+  ]);
+  const shellCommands = () =>
+    sandbox.shellRequests
+      .map((request) => request.command)
+      .filter((command) => !command.includes(CAPABILITY_PROBE_SENTINEL));
+  let shellSeenAtChildRequest: boolean | undefined;
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete(request) {
+      if (request.runId === "run-browser-holds") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return Promise.resolve({
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                {
+                  id: "call-browser",
+                  type: "function" as const,
+                  function: {
+                    name: "delegate_task",
+                    arguments: JSON.stringify({
+                      goal: "Look at the page.",
+                      profile: "browser",
+                    }),
+                  },
+                },
+                {
+                  id: "call-after",
+                  type: "function" as const,
+                  function: {
+                    name: "bash",
+                    arguments: JSON.stringify({ command: "printf after" }),
+                  },
+                },
+              ],
+            },
+          });
+        }
+        return Promise.resolve({
+          assistant: { role: "assistant", content: "Both ran." },
+        });
+      }
+      shellSeenAtChildRequest ??= shellCommands().some((command) =>
+        command.includes("printf after")
+      );
+      return Promise.resolve({
+        assistant: { role: "assistant", content: "Page seen." },
+      });
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash", "delegate_task"],
+    allowedSubagentProfiles: ["browser"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: sandbox,
+      runId: "run-browser-holds",
+      model: "test-model",
+      cfcEnforcementMode: "observe",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Look at the page, then run a shell command.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "Both ran.");
+  assertEquals(shellSeenAtChildRequest, false);
+  assertEquals(shellCommands().some((c) => c.includes("printf after")), true);
+});
+
+Deno.test("CfHarnessPromptLoop starts no further call of a turn once a running call is aborted by the owner", async () => {
+  // The first shell call aborts the owner as it runs, so that call rejects
+  // and ends the turn. The second call of the turn must not start: it
+  // records no policy decision and reaches no sandbox.
+  const controller = new AbortController();
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "first", stderr: "", exitCode: 0 },
+    { stdout: "second", stderr: "", exitCode: 0 },
+  ]);
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = (request) => {
+    if (request.command.includes("printf first")) {
+      controller.abort(new Error("owner stopped the run"));
+    }
+    return runShell(request);
+  };
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-owner-abort-between-calls",
+    model: "test-model",
+    cfcEnforcementMode: "observe",
+  });
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete: () =>
+      Promise.resolve({
+        assistant: {
+          role: "assistant",
+          content: "",
+          toolCalls: ["first", "second"].map((word) => ({
+            id: `call-${word}`,
+            type: "function" as const,
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: `printf ${word}` }),
+            },
+          })),
+        },
+      }),
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash"],
+    engine,
+  });
+
+  await assertRejects(() =>
+    loop.runPrompt({
+      prompt: "Run two shell commands.",
+      promptSlotBinding: directPromptSlotBinding,
+      signal: controller.signal,
+    })
+  );
+  assertEquals(
+    (engine.getRunState().policyDecisions ?? []).map((decision) =>
+      decision.toolCallId
+    ),
+    ["call-first"],
+  );
+  assertEquals(
+    sandbox.shellRequests.some((request) =>
+      request.command.includes("printf second")
+    ),
+    false,
+  );
+});
+
 Deno.test("CfHarnessPromptLoop forwards abort signals to delegate_task child loops", async () => {
   const controller = new AbortController();
   const seenSignals: Array<RequestInit["signal"]> = [];
@@ -3223,8 +3907,70 @@ Deno.test("CfHarnessPromptLoop forwards abort signals to delegate_task child loo
   assertEquals(result.finalAssistantText, "Parent done.");
   assertEquals(seenSignals.length, 3);
   assertEquals(seenSignals[0], controller.signal);
-  assertEquals(seenSignals[1], controller.signal);
   assertEquals(seenSignals[2], controller.signal);
+  // The child is handed the turn's signal, which the owner's abort reaches
+  // and which a sibling call's failure can abort as well; that the owner's
+  // abort reaches it is the next test.
+  assert(seenSignals[1] instanceof AbortSignal);
+});
+
+Deno.test("CfHarnessPromptLoop aborts a delegate_task child's model request when the owner aborts", async () => {
+  const controller = new AbortController();
+  let childSignalAbortedByOwner: boolean | undefined;
+  let requests = 0;
+  const loop = new CfHarnessPromptLoop({
+    apiKey: "test-key",
+    engine: new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "run-loop-delegate-owner-abort",
+      model: "gpt-5.4",
+    }),
+    fetchFn: (_input, init) => {
+      requests += 1;
+      if (requests === 2) {
+        controller.abort(new Error("owner stopped the run"));
+        childSignalAbortedByOwner = init?.signal?.aborted;
+      }
+      const payload = requests === 1
+        ? {
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [{
+                id: "call-delegate",
+                type: "function",
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({ goal: "Inspect the workspace." }),
+                },
+              }],
+            },
+          }],
+        }
+        : {
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "Child done." },
+          }],
+        };
+      return Promise.resolve(
+        new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
+          status: 200,
+        }),
+      );
+    },
+  });
+
+  await assertRejects(() =>
+    loop.runPrompt({
+      promptSlotBinding: directPromptSlotBinding,
+      prompt: "Delegate a task.",
+      signal: controller.signal,
+    })
+  );
+  assertEquals(childSignalAbortedByOwner, true);
 });
 
 Deno.test("CfHarnessPromptLoop strips trusted-only CFC input labels from model tool args", async () => {
@@ -3306,15 +4052,22 @@ Deno.test("CfHarnessPromptLoop strips trusted-only CFC input labels from model t
   assert(toolRequest !== undefined);
   // The loop labels the command from the prompt slot it was given. The entry
   // the model wrote reaches neither the sandbox nor the recorded context.
-  const sandboxLabels = toolRequest.cfcInvocationContext?.cfcInputLabels;
-  assertEquals(sandboxLabels?.entries.map((entry) => entry.path), [[
-    "command",
-  ]]);
-  assertEquals(JSON.stringify(sandboxLabels).includes("did:key:forged"), false);
+  const sandboxContext = toolRequest.cfcInvocationContext;
+  assertEquals(sandboxContext?.cfcInputLabels, undefined);
   assertEquals(
-    JSON.stringify(
-      result.runState.cfcInvocationContexts?.[0]?.cfcInputLabels ?? null,
-    ).includes("did:key:forged"),
+    sandboxContext?.promptSlotInfluenceLabels?.entries.map((entry) =>
+      entry.path
+    ),
+    [["command"]],
+  );
+  assertEquals(
+    JSON.stringify(sandboxContext).includes("did:key:forged"),
+    false,
+  );
+  assertEquals(
+    JSON.stringify(result.runState.cfcInvocationContexts ?? null).includes(
+      "did:key:forged",
+    ),
     false,
   );
 });
@@ -3765,6 +4518,7 @@ Deno.test("CfHarnessPromptLoop advertises run_pattern in the default tool surfac
       "delegate_task",
       "run_pattern",
       "assign_slug",
+      "resolve_piece",
       "describe_handle",
       "finish_task",
       "research",
@@ -3966,6 +4720,7 @@ Deno.test("CfHarnessPromptLoop advertises the pattern-index tools in the default
       "delegate_task",
       "run_pattern",
       "assign_slug",
+      "resolve_piece",
       "describe_handle",
       "finish_task",
       "search_patterns",
@@ -4134,8 +4889,8 @@ Deno.test("CfHarnessPromptLoop withholds the pattern-index tools from the patter
 
 /**
  * A scripted loop that delegates once and then finishes: the child answers
- * its profile's own return contract, and the parent says it is done. The
- * request bodies are collected, so `requestBodies[1]` is the child's.
+ * its profile's own return contract, and the parent reports the missing piece.
+ * The request bodies are collected, so `requestBodies[1]` is the child's.
  */
 const delegateThenFinishFetch = (
   requestBodies: unknown[],
@@ -4166,7 +4921,21 @@ const delegateThenFinishFetch = (
         describes: "Counts things.",
       }),
     })
-    : assistant({ content: "Parent done." });
+    : assistant({
+      content: "",
+      tool_calls: [{
+        id: "call-finish",
+        type: "function",
+        function: {
+          name: "finish_task",
+          arguments: JSON.stringify({
+            outcome: "gave-up",
+            message:
+              "The counter was created, but it has no confirmed slug in this run.",
+          }),
+        },
+      }],
+    });
   return Promise.resolve(
     new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
       status: 200,
@@ -4230,7 +4999,21 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
               hashtags: ["counter"],
             }),
           })
-          : assistant({ content: "Parent done." });
+          : assistant({
+            content: "",
+            tool_calls: [{
+              id: "call-finish",
+              type: "function",
+              function: {
+                name: "finish_task",
+                arguments: JSON.stringify({
+                  outcome: "gave-up",
+                  message:
+                    "The counter was created, but it has no confirmed slug in this run.",
+                }),
+              },
+            }],
+          });
         return Promise.resolve(
           new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
             status: 200,
@@ -4248,6 +5031,7 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
   // The delegation reached a child rather than failing the run: a child given
   // an index and no session is a configuration the config layer refuses.
   assertEquals(result.runState.status, "completed");
+  expect(result.taskOutcome?.outcome).toBe("gave-up");
   assertEquals(result.runState.subagentRuns?.length, 1);
   assertEquals(
     result.runState.subagentRuns?.[0]?.manifest.allowedToolIds.includes(

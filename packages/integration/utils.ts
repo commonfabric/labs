@@ -296,12 +296,34 @@ function installWaiter(
     },
     deepText(root) {
       const parts: string[] = [];
-      const visit = (node: ParentNode) => {
+      const visited = new WeakSet<ParentNode>();
+      const scanned = new WeakSet<ParentNode>();
+
+      /** Discovers shadow roots once across overlapping light and slot paths. */
+      const scan = (node: ParentNode): void => {
+        if (scanned.has(node)) return;
+        scanned.add(node);
+        for (const child of node.children) {
+          if (child.shadowRoot) visit(child.shadowRoot);
+          scan(child);
+        }
+      };
+
+      /** Collects visible root and slotted text once per node. */
+      const visit = (node: ParentNode): void => {
+        if (visited.has(node)) return;
+        visited.add(node);
         if (node instanceof HTMLElement) {
+          // Hidden as drawn: a `hidden` attribute hides an element through
+          // the browser's `[hidden]` style, so a `display` that outranks it
+          // shows the element, and the computed style says which. A
+          // `hidden="until-found"` element keeps its display and hides its
+          // contents through `content-visibility`.
           const style = globalThis.getComputedStyle(node);
           const hidden = node instanceof HTMLStyleElement ||
-            node instanceof HTMLScriptElement || node.hidden ||
-            style.visibility === "hidden" || style.display === "none";
+            node instanceof HTMLScriptElement ||
+            style.visibility === "hidden" || style.display === "none" ||
+            style.contentVisibility === "hidden";
           if (!hidden) {
             const innerText = node.innerText ?? "";
             parts.push(
@@ -319,9 +341,7 @@ function installWaiter(
             if (child instanceof HTMLElement) visit(child);
           }
         }
-        for (const el of node.querySelectorAll("*")) {
-          if (el.shadowRoot) visit(el.shadowRoot);
-        }
+        scan(node);
       };
       visit(root);
       return parts.join(" ");

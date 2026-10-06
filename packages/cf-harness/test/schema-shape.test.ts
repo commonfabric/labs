@@ -10,6 +10,74 @@ import { schemaShapeOnly } from "../src/schema-shape.ts";
 
 describe("schema-shape", () => {
   describe("schemaShapeOnly", () => {
+    for (const scope of ["space", "user", "session", "any"] as const) {
+      it(`keeps the recognized scope ${scope}`, () => {
+        expect(schemaShapeOnly({ type: "object", scope })).toEqual({
+          type: "object",
+          scope,
+        });
+      });
+    }
+
+    it("keeps scopes through nested properties, items, definitions, and combinators", () => {
+      expect(schemaShapeOnly({
+        type: "object",
+        properties: {
+          matches: {
+            type: "array",
+            scope: "session",
+            items: { $ref: "#/$defs/Match", scope: "user" },
+          },
+        },
+        $defs: {
+          Match: {
+            scope: "space",
+            anyOf: [{ type: "string", scope: "any", default: "private" }],
+          },
+        },
+      })).toEqual({
+        type: "object",
+        properties: {
+          matches: {
+            type: "array",
+            scope: "session",
+            items: { $ref: "#/$defs/d0", scope: "user" },
+          },
+        },
+        $defs: {
+          d0: { scope: "space", anyOf: [{ type: "string", scope: "any" }] },
+        },
+      });
+    });
+
+    for (
+      const scope of [
+        undefined,
+        null,
+        true,
+        7,
+        "",
+        "inherit",
+        "private scope text",
+        "SESSION",
+        "session\n",
+        ["session"],
+        { value: "session" },
+      ]
+    ) {
+      it(`drops an unrecognized scope ${JSON.stringify(scope)}`, () => {
+        const schema: Record<string, unknown> = {
+          type: "object",
+          scope,
+          properties: { rows: { type: "array", scope } },
+        };
+        expect(schemaShapeOnly(schema)).toEqual({
+          type: "object",
+          properties: { rows: { type: "array" } },
+        });
+      });
+    }
+
     it("keeps property names, types, nesting, and required-ness", () => {
       expect(schemaShapeOnly({
         type: "object",

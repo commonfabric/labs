@@ -880,6 +880,7 @@ Two pairs of functions serve the cases a template does not fit.
 quote text of any content as a code span or a fenced block.
 `toCompactDebugString()` and `toIndentedDebugString()` from
 `@commonfabric/data-model` render a value where the rendering is handed on as
-a value rather than placed in a message.
+a value rather than placed in a message. Pattern code reaches the tag and
+both renderers through the `commonfabric` module instead.
 
 [survey]: #not-a-survey-of-the-rest-of-the-system

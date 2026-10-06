@@ -3,12 +3,10 @@ import { type Config } from "@commonfabric/felt";
 import ports from "@commonfabric/ports" with { type: "json" };
 
 import { computeCurrentCompilerVersion } from "../runner/src/compilation-cache/compiler-fingerprint.deno.ts";
-import { optionalPresenceUrl } from "./src/lib/presence-url.ts";
 
 const PRODUCTION = !!Deno.env.get("PRODUCTION");
 const ENVIRONMENT = PRODUCTION ? "production" : "development";
 const COMPILE_CACHE_RUNTIME_VERSION = await computeCurrentCompilerVersion();
-const PRESENCE_URL = optionalPresenceUrl(Deno.env.get("PRESENCE_URL"));
 
 const SHELL_PORT = parseInt(
   Deno.env.get("SHELL_PORT") || String(ports.shell),
@@ -57,10 +55,12 @@ const config: Config = {
     define: {
       "$ENVIRONMENT": ENVIRONMENT,
       "$API_URL": Deno.env.get("API_URL"),
-      "$PRESENCE_URL": PRESENCE_URL?.href,
       "$COMMIT_SHA": Deno.env.get("COMMIT_SHA"),
       "$EXPERIMENTAL_MODERN_CELL_REP": Deno.env.get(
         "EXPERIMENTAL_MODERN_CELL_REP",
+      ),
+      "$EXPERIMENTAL_AGENT_BUILTIN": Deno.env.get(
+        "EXPERIMENTAL_AGENT_BUILTIN",
       ),
       "$EXPERIMENTAL_COMPUTED_CELL_IDS": Deno.env.get(
         "EXPERIMENTAL_COMPUTED_CELL_IDS",
@@ -70,6 +70,9 @@ const config: Config = {
       ),
       "$EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION": Deno.env.get(
         "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+      ),
+      "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION": Deno.env.get(
+        "EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
       ),
       "$EXPERIMENTAL_SERVER_EXECUTION": Deno.env.get(
         "EXPERIMENTAL_SERVER_EXECUTION",

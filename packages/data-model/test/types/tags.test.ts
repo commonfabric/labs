@@ -23,8 +23,9 @@
  * whether the member is own or inherited.
  *
  * The plus cases hold an `isPlusType` predicate to its place in the order:
- * consulted only for a value no earlier question decides, never for one the
- * vocabulary already names, and fixing the `PlusType` in the type system.
+ * consulted only for a value no earlier question decides -- a function, a
+ * unique symbol, or a class instance outside the vocabulary -- never for one
+ * membership admits, and fixing the `PlusType` in the type system.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -35,32 +36,39 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   type ConvertibleJsValueTag,
+  FABRIC_CONTAINER_VALUE_TAGS,
   FABRIC_VALUE_PLUS_TAGS,
   FABRIC_VALUE_TAGS,
+  type FabricContainerValueTag,
   FabricPrimitive,
   type FabricValue,
   type FabricValuePlus,
   type FabricValuePlusLayer,
   type FabricValuePlusTag,
   type FabricValueTag,
+  isFabricContainerValueTag,
   isValidFabricConvertibleJsObject,
   isValidFabricValueLayer,
+  JS_PRIMITIVE_TYPE_VALUE_TAGS,
   JS_TYPE_VALUE_TAGS,
+  type JsPrimitiveTypeValueTag,
   type JsTypeValueTag,
   type PlusTypePredicate,
+  type PrimitiveValueTag,
   tagOfConvertibleJsValueElseNull,
   tagOfFabricPrimitive,
-  tagOfFabricPrimitiveElseNull,
   tagOfFabricValue,
   tagOfFabricValueElseNull,
   VALUE_TAGS,
   type ValueTag,
 } from "@";
-import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { VALUE_TAG } from "@/fabric-bases";
 import { FabricError, FabricMap } from "@/fabric-instances";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -71,75 +79,6 @@ import {
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
-
-/**
- * A `BaseFabricPrimitive` subclass whose reported tag is one the vocabulary
- * holds, though it is not the class the tag names: the dispatch reads the tag
- * and does not check it against the class.
- */
-class TaggedProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return FABRIC_PRIMITIVE_VALUE_TAGS.FabricHash;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/** A `BaseFabricPrimitive` subclass reporting a tag the vocabulary lacks. */
-class MistaggedProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return "Bogus" as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/**
- * A `BaseFabricPrimitive` subclass reporting a tag the vocabulary holds but
- * no primitive may report, which the getter's type refuses and a cast lets
- * through.
- */
-class NonPrimitiveTagProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return VALUE_TAGS.JsError as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/** A subclass of a production primitive that supplies no tag of its own. */
-class SubBytes extends FabricBytes {}
-
-/**
- * A `BaseFabricPrimitive` subclass reporting a name the vocabulary inherits
- * rather than declares, which a `tag in VALUE_TAGS` test would accept.
- */
-class InheritedNameProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return "toString" as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/** A `BaseFabricPrimitive` subclass reporting something that is no string. */
-class UntaggedProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return undefined as unknown as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
 
 /**
  * A direct `FabricPrimitive` subclass, bypassing `BaseFabricPrimitive`, which
@@ -157,6 +96,14 @@ class PlusProbe {}
 /** Predicate for `PlusProbe`. */
 const isPlusProbe: PlusTypePredicate<PlusProbe> = (value): value is PlusProbe =>
   value instanceof PlusProbe;
+
+/**
+ * A `PlusType` predicate accepting exactly the null-prototype objects, which
+ * the vocabulary does not name.
+ */
+const isNullPrototype: PlusTypePredicate<object> = (value): value is object =>
+  (typeof value === "object") && (value !== null) &&
+  (Object.getPrototypeOf(value) === null);
 
 /** A `PlusType` that is a function, which the JS-type branch has to admit. */
 type PlusFn = () => void;
@@ -301,6 +248,77 @@ describe("tags", () => {
     });
   });
 
+  describe("JS_PRIMITIVE_TYPE_VALUE_TAGS", () => {
+    it("is frozen", () => {
+      expect(Object.isFrozen(JS_PRIMITIVE_TYPE_VALUE_TAGS)).toBe(true);
+    });
+
+    it("holds the tag of each JS primitive type and nothing else", () => {
+      // The sample table is the domain only while it covers every type, so
+      // the two are held equal rather than the table being trusted.
+
+      expect(new Set(JS_PRIMITIVE_TAGS.map(([, , tag]) => tag))).toEqual(
+        new Set(Object.values(JS_PRIMITIVE_TYPE_VALUE_TAGS)),
+      );
+    });
+
+    it("is the JS type vocabulary less `function`, and with the `FabricPrimitive` tags is the primitive vocabulary, in the type system", () => {
+      const _js: Same<JsPrimitiveTypeValueTag | "function", JsTypeValueTag> =
+        true;
+      const _primitive: Same<
+        JsPrimitiveTypeValueTag | FabricPrimitiveValueTag,
+        PrimitiveValueTag
+      > = true;
+    });
+  });
+
+  describe("FABRIC_CONTAINER_VALUE_TAGS", () => {
+    it("is frozen", () => {
+      expect(Object.isFrozen(FABRIC_CONTAINER_VALUE_TAGS)).toBe(true);
+    });
+
+    it("maps each key to itself", () => {
+      for (const [key, tag] of Object.entries(FABRIC_CONTAINER_VALUE_TAGS)) {
+        expect(tag).toBe(key);
+      }
+    });
+
+    it("holds `Array`, `FabricInstance`, `Object`, and nothing else", () => {
+      expect(new Set(Object.values(FABRIC_CONTAINER_VALUE_TAGS))).toEqual(
+        new Set(["Array", "FabricInstance", "Object"]),
+      );
+    });
+
+    it("is, with the primitive tags, the whole `FabricValue` vocabulary, in the type system", () => {
+      const _same: Same<
+        FabricValueTag,
+        PrimitiveValueTag | FabricContainerValueTag
+      > = true;
+      const _disjoint: Same<
+        Extract<PrimitiveValueTag, FabricContainerValueTag>,
+        never
+      > = true;
+    });
+  });
+
+  describe("isFabricContainerValueTag()", () => {
+    const containerTags = new Set<ValueTag>(
+      Object.values(FABRIC_CONTAINER_VALUE_TAGS),
+    );
+
+    for (const tag of Object.values(VALUE_TAGS)) {
+      const expected = containerTags.has(tag);
+
+      it(`returns \`${expected}\` for the tag \`${tag}\``, () => {
+        expect(isFabricContainerValueTag(tag)).toBe(expected);
+      });
+    }
+
+    it("returns `false` for `null`", () => {
+      expect(isFabricContainerValueTag(null)).toBe(false);
+    });
+  });
+
   describe("FABRIC_VALUE_PLUS_TAGS", () => {
     it("is frozen", () => {
       expect(Object.isFrozen(FABRIC_VALUE_PLUS_TAGS)).toBe(true);
@@ -348,36 +366,22 @@ describe("tags", () => {
       );
     });
 
-    it("returns the parent's tag for a subclass that supplies none", () => {
-      // The getter is inherited like any other member. Whether that is what
-      // such a subclass means is the subclass's concern; the dispatch reads
-      // what it reports.
-
-      expect(tagOfFabricPrimitive(new SubBytes(new Uint8Array([1]))))
-        .toBe(FABRIC_PRIMITIVE_VALUE_TAGS.FabricBytes);
-    });
-
-    it("returns the tag a subclass reports, whatever its class", () => {
-      expect(tagOfFabricPrimitive(new TaggedProbe())).toBe(
-        VALUE_TAGS.FabricHash,
-      );
-    });
-
     it("throws for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {
       expect(() => tagOfFabricPrimitive(new RoguePrimitive())).toThrow(
-        "Not a valid `FabricPrimitive`",
+        "Detected counterfeit `FabricPrimitive`",
       );
     });
 
-    it("throws for a reported tag the vocabulary lacks", () => {
-      expect(() => tagOfFabricPrimitive(new MistaggedProbe())).toThrow(
-        "Not a valid `FabricPrimitive`",
-      );
-    });
+    it("throws for a proxy over a genuine primitive, whatever tag it reports", () => {
+      // A proxy passes `instanceof` and can report any tag at all, which is
+      // why a tag is read only from a value the type guard accepts.
 
-    it("throws for a reported tag outside the primitive subset", () => {
-      expect(() => tagOfFabricPrimitive(new NonPrimitiveTagProbe())).toThrow(
-        "Not a valid `FabricPrimitive`",
+      const lying = new Proxy(new FabricBytes(new Uint8Array([1])), {
+        get: (target, key) =>
+          (key === VALUE_TAG) ? "Bogus" : Reflect.get(target, key),
+      });
+      expect(() => tagOfFabricPrimitive(lying)).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
       );
     });
 
@@ -385,46 +389,8 @@ describe("tags", () => {
       expect(() => tagOfFabricPrimitive({} as FabricPrimitive)).toThrow(
         "Not a valid `FabricPrimitive`",
       );
-    });
-  });
-
-  describe("tagOfFabricPrimitiveElseNull()", () => {
-    for (const [value, tag] of FABRIC_PRIMITIVE_TAGS) {
-      it(`returns \`${tag}\` for a \`${value.constructor.name}\``, () => {
-        expect(tagOfFabricPrimitiveElseNull(value)).toBe(tag);
-      });
-    }
-
-    it("returns `null` for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {
-      expect(tagOfFabricPrimitiveElseNull(new RoguePrimitive())).toBe(null);
-    });
-
-    it("returns `null` for a reported tag the vocabulary lacks", () => {
-      expect(tagOfFabricPrimitiveElseNull(new MistaggedProbe())).toBe(null);
-    });
-
-    it("returns `null` for a reported tag outside the primitive subset", () => {
-      // `JsError` is a tag, but not one a primitive may report; a primitive
-      // reporting it would otherwise be rebuilt as an error by conversion.
-
-      expect(tagOfFabricPrimitiveElseNull(new NonPrimitiveTagProbe()))
-        .toBe(null);
-    });
-
-    it("returns `null` for a reported tag that is only an inherited name", () => {
-      expect(tagOfFabricPrimitiveElseNull(new InheritedNameProbe())).toBe(
-        null,
-      );
-    });
-
-    it("returns `null` for a reported tag that is no string", () => {
-      expect(tagOfFabricPrimitiveElseNull(new UntaggedProbe())).toBe(null);
-    });
-
-    it("returns `null` for a type lie", () => {
-      expect(tagOfFabricPrimitiveElseNull({} as FabricPrimitive)).toBe(null);
-      expect(tagOfFabricPrimitiveElseNull(null as unknown as FabricPrimitive))
-        .toBe(null);
+      expect(() => tagOfFabricPrimitive(null as unknown as FabricPrimitive))
+        .toThrow("Not a valid `FabricPrimitive`");
     });
   });
 
@@ -445,15 +411,6 @@ describe("tags", () => {
       expect(tagOfFabricValue({ a: 1 })).toBe(VALUE_TAGS.Object);
     });
 
-    it("returns `Object` for a null-prototype object", () => {
-      // The narrowing this rests on asks a shape question rather than the
-      // membership one, so a record membership refuses is still an `Object`
-      // here. That is the looseness the function's doc comment reserves.
-
-      const obj = Object.create(null) as FabricValue;
-      expect(tagOfFabricValue(obj)).toBe(VALUE_TAGS.Object);
-    });
-
     for (const [value, tag] of FABRIC_PRIMITIVE_TAGS) {
       it(`returns \`${tag}\` for a \`${value.constructor.name}\``, () => {
         expect(tagOfFabricValue(value)).toBe(tag);
@@ -472,6 +429,11 @@ describe("tags", () => {
         .toThrow("Not possibly a valid `FabricValue`");
     });
 
+    it("throws for a unique symbol", () => {
+      expect(() => tagOfFabricValue(Symbol("u") as unknown as FabricValue))
+        .toThrow("Not possibly a valid `FabricValue`");
+    });
+
     it("throws for a class instance outside the vocabulary", () => {
       expect(() => tagOfFabricValue(new Date() as unknown as FabricValue))
         .toThrow("Not possibly a valid `FabricValue`");
@@ -479,9 +441,18 @@ describe("tags", () => {
         .toThrow("Not possibly a valid `FabricValue`");
     });
 
-    it("throws for a primitive whose reported tag the vocabulary lacks", () => {
-      expect(() => tagOfFabricValue(new MistaggedProbe())).toThrow(
-        "Not possibly a valid `FabricValue`",
+    it("throws for a null-prototype object", () => {
+      // A record is `Object.prototype`-rooted, so an object holding the same
+      // properties with no prototype cannot possibly be one.
+
+      const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+      expect(() => tagOfFabricValue(obj))
+        .toThrow("Not possibly a valid `FabricValue`");
+    });
+
+    it("throws for a counterfeit `FabricPrimitive`", () => {
+      expect(() => tagOfFabricValue(new RoguePrimitive())).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
       );
     });
 
@@ -524,8 +495,23 @@ describe("tags", () => {
         );
       });
 
+      it("returns `PlusType` for a null-prototype object the predicate accepts", () => {
+        const obj = Object.assign(Object.create(null), { a: 1 });
+        expect(tagOfFabricValue(obj, isNullPrototype)).toBe(
+          VALUE_TAGS.PlusType,
+        );
+      });
+
       it("returns `PlusType` for a function the predicate accepts", () => {
         expect(tagOfFabricValue(() => {}, isPlusFn)).toBe(VALUE_TAGS.PlusType);
+      });
+
+      it("returns `PlusType` for a unique symbol the predicate accepts, consulting it once with the symbol itself", () => {
+        const { asked, isPlusType } = recordingPredicate();
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(tagOfFabricValue(value, isPlusType)).toBe(VALUE_TAGS.PlusType);
+        expect(asked).toEqual([value]);
       });
 
       it("consults the predicate once, with the value itself, for a value the vocabulary does not name", () => {
@@ -546,6 +532,14 @@ describe("tags", () => {
 
       it("throws for a function the predicate refuses", () => {
         const value = (() => {}) as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(() => tagOfFabricValue(value, isPlusProbe)).toThrow(
+          "Not possibly a valid `FabricValue`",
+        );
+      });
+
+      it("throws for a unique symbol the predicate refuses", () => {
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
 
         expect(() => tagOfFabricValue(value, isPlusProbe)).toThrow(
           "Not possibly a valid `FabricValue`",
@@ -603,6 +597,19 @@ describe("tags", () => {
         .toBe(null);
     });
 
+    it("returns `null` for a unique symbol", () => {
+      expect(tagOfFabricValueElseNull(Symbol("u") as unknown as FabricValue))
+        .toBe(null);
+    });
+
+    it("returns `null` for a null-prototype object", () => {
+      // A record is `Object.prototype`-rooted, so an object holding the same
+      // properties with no prototype cannot possibly be one.
+
+      const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+      expect(tagOfFabricValueElseNull(obj)).toBe(null);
+    });
+
     it("returns `null` for a class instance outside the vocabulary", () => {
       expect(tagOfFabricValueElseNull(new Date() as unknown as FabricValue))
         .toBe(null);
@@ -610,10 +617,10 @@ describe("tags", () => {
         .toBe(null);
     });
 
-    it("returns `null` for a primitive whose reported tag the vocabulary lacks", () => {
-      expect(tagOfFabricValueElseNull(new MistaggedProbe())).toBe(null);
-      expect(tagOfFabricValueElseNull(new NonPrimitiveTagProbe())).toBe(null);
-      expect(tagOfFabricValueElseNull(new RoguePrimitive())).toBe(null);
+    it("throws for a counterfeit `FabricPrimitive`", () => {
+      expect(() => tagOfFabricValueElseNull(new RoguePrimitive())).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
+      );
     });
 
     describe("given an `isPlusType` predicate", () => {
@@ -644,10 +651,27 @@ describe("tags", () => {
         );
       });
 
+      it("returns `PlusType` for a null-prototype object the predicate accepts", () => {
+        const obj = Object.assign(Object.create(null), { a: 1 });
+        expect(tagOfFabricValueElseNull(obj, isNullPrototype)).toBe(
+          VALUE_TAGS.PlusType,
+        );
+      });
+
       it("returns `PlusType` for a function the predicate accepts", () => {
         expect(tagOfFabricValueElseNull(() => {}, isPlusFn)).toBe(
           VALUE_TAGS.PlusType,
         );
+      });
+
+      it("returns `PlusType` for a unique symbol the predicate accepts, consulting it once with the symbol itself", () => {
+        const { asked, isPlusType } = recordingPredicate();
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(tagOfFabricValueElseNull(value, isPlusType)).toBe(
+          VALUE_TAGS.PlusType,
+        );
+        expect(asked).toEqual([value]);
       });
 
       it("consults the predicate once, with the value itself, for a value the vocabulary does not name", () => {
@@ -668,6 +692,12 @@ describe("tags", () => {
 
       it("returns `null` for a function the predicate refuses", () => {
         const value = (() => {}) as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(tagOfFabricValueElseNull(value, isPlusProbe)).toBe(null);
+      });
+
+      it("returns `null` for a unique symbol the predicate refuses", () => {
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
 
         expect(tagOfFabricValueElseNull(value, isPlusProbe)).toBe(null);
       });
@@ -727,9 +757,23 @@ describe("tags", () => {
       });
     }
 
+    for (
+      const [label, value] of refused.filter(([, v]) => !isObjectOrArray(v))
+    ) {
+      it(`tags ${label} as \`null\` from either side`, () => {
+        // A refused non-object is refused for what it is, not for what it
+        // carries, and the dispatches ask that question of a value directly.
+
+        expect(tagOfFabricValueElseNull(value as FabricValue)).toBe(null);
+        expect(tagOfConvertibleJsValueElseNull(value)).toBe(null);
+      });
+    }
+
     it("reaches values on both sides of membership", () => {
       expect(accepted.length).toBeGreaterThan(0);
       expect(refused.length).toBeGreaterThan(0);
+      expect(refused.filter(([, v]) => !isObjectOrArray(v)).length)
+        .toBeGreaterThan(0);
     });
   });
 
@@ -742,6 +786,10 @@ describe("tags", () => {
 
     it("returns `null` for a function", () => {
       expect(tagOfConvertibleJsValueElseNull(() => {})).toBe(null);
+    });
+
+    it("returns `null` for a unique symbol", () => {
+      expect(tagOfConvertibleJsValueElseNull(Symbol("u"))).toBe(null);
     });
 
     it("returns `null` for a function whatever its prototype names", () => {
@@ -809,8 +857,8 @@ describe("tags", () => {
       const severed = new Error("severed");
       Object.setPrototypeOf(severed, null);
 
-      // No reachable constructor, so the class-level lookup yields nothing and
-      // the `Error.isError()` fallback is what recognizes it.
+      // No prototype, so the class-level lookup yields nothing and the
+      // `Error.isError()` fallback is what recognizes it.
       expect((severed as { constructor?: unknown }).constructor).toBe(
         undefined,
       );
@@ -864,9 +912,13 @@ describe("tags", () => {
       expect(tagOfConvertibleJsValueElseNull(/abc/)).toBe(VALUE_TAGS.JsRegExp);
     });
 
-    it("returns `Object` tag for null-prototype objects (no constructor)", () => {
+    it("returns `null` for null-prototype objects", () => {
+      // Neither a `FabricPlainObject` nor a convertible class instance: a
+      // record is `Object.prototype`-rooted, and conversion refuses one that
+      // is not rather than re-rooting it.
+
       const obj = Object.create(null);
-      expect(tagOfConvertibleJsValueElseNull(obj)).toBe(VALUE_TAGS.Object);
+      expect(tagOfConvertibleJsValueElseNull(obj)).toBe(null);
     });
 
     it("returns `null` for class instances", () => {
@@ -901,13 +953,34 @@ describe("tags", () => {
         });
       }
 
-      it("reads an inherited `constructor`, which is the real one", () => {
-        // The counterpart: what the prototype says IS the answer, so a value
-        // whose class is reachable only through its prototype is tagged by it.
+      it("returns `JsMap` for a value whose prototype is `Map.prototype`", () => {
+        // The counterpart: the prototype is the answer, so a value whose class
+        // is reachable only through its prototype is tagged by it.
         expect(tagOfConvertibleJsValueElseNull(new Map())).toBe(
           VALUE_TAGS.JsMap,
         );
         expect(isValidFabricConvertibleJsObject(new Map())).toBe(true);
+      });
+    });
+
+    describe("the prototype decides the class, not the `constructor` it names", () => {
+      it("returns `null` for an object whose prototype names `Map`", () => {
+        const forged = Object.create({ constructor: Map });
+
+        expect(tagOfConvertibleJsValueElseNull(forged)).toBe(null);
+      });
+
+      it("returns `null` for an instance of a function-style `Date` subclass", () => {
+        // `LegacyDate.prototype` inherits its `constructor`, `Date`, from
+        // `Date.prototype`, so only the prototype itself tells the instance
+        // apart from a `Date`, as it does for a `class` extending `Date`.
+
+        function LegacyDate() {}
+        LegacyDate.prototype = Object.create(Date.prototype);
+        const instance = Reflect.construct(Date, [0], LegacyDate);
+
+        expect(instance.constructor).toBe(Date);
+        expect(tagOfConvertibleJsValueElseNull(instance)).toBe(null);
       });
     });
 
@@ -1071,6 +1144,8 @@ describe("tags", () => {
 
     const fabricClasses = [
       FabricBytes,
+      FabricDurationDay,
+      FabricDurationNsec,
       FabricEpochDay,
       FabricEpochNsec,
       FabricHash,

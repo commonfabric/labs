@@ -30,6 +30,17 @@ describe("wish state schema", () => {
     });
   });
 
+  it("wraps a `true` requested schema as a bare cell handle", () => {
+    const properties = stateProperties(wishStateSchemaForResult(true));
+    expect(properties.candidates).toEqual({
+      type: "array",
+      items: { asCell: ["cell"] },
+    });
+    expect(properties.result).toEqual({
+      anyOf: [{ type: "undefined" }, { asCell: ["cell"] }],
+    });
+  });
+
   it("moves state scope to the container without losing referenced definitions", () => {
     const definition = {
       type: "object",
@@ -49,5 +60,19 @@ describe("wish state schema", () => {
       type: "array",
       items: { $ref: "#/$defs/Resource", asCell: ["cell"] },
     });
+  });
+
+  it("keeps a requested schema's sparse default apart from one holding `undefined`", () => {
+    const requested = (defaultValue: unknown[]) =>
+      ({ type: "array", default: defaultValue }) as unknown as JSONSchema;
+    const sparse = wishStateSchemaForResult(requested(new Array(1)));
+    const dense = wishStateSchemaForResult(requested([undefined]));
+
+    expect(sparse).not.toBe(dense);
+    const [, resultSchema] = (stateProperties(sparse).result as {
+      anyOf: { default: unknown[] }[];
+    }).anyOf;
+    expect(resultSchema.default.length).toBe(1);
+    expect(Object.hasOwn(resultSchema.default, 0)).toBe(false);
   });
 });

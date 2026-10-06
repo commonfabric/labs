@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessResearchSourceRead } from "../../src/contracts/research.ts";
+import { researchKitGuidance } from "../../src/tools/research.ts";
 import {
   admitResearchKit,
   type RawResearchResult,
@@ -52,6 +53,37 @@ const candidate = (content: string): RawResearchResult => ({
 });
 
 describe("research admission", () => {
+  for (const kind of ["author", "compose", "direct-run"]) {
+    it(`reports a zero-example ${kind} implementation kit as incomplete to its caller`, async () => {
+      const proposed = candidate('{"patternId":"confirmed"}');
+      delete proposed.example;
+      proposed.recommendation = {
+        kind,
+        rationale: "Use the inspected contract.",
+      };
+      const kit = await admitResearchKit(
+        "Build the smallest useful piece",
+        proposed,
+        evidence,
+      );
+      expect(kit.status).toBe("incomplete");
+      expect(kit.example).toBeUndefined();
+      expect(kit.missing).toEqual([
+        kind === "direct-run"
+          ? "direct-run requires a complete run_pattern input example"
+          : `${kind} requires a complete pattern-source example`,
+      ]);
+      expect(kit.sources).toEqual([metadata]);
+      expect(kit.patterns.map((pattern) => pattern.patternId)).toEqual([
+        "confirmed",
+      ]);
+      expect(researchKitGuidance(kit)).toContain(
+        "This research is incomplete.",
+      );
+      expect(researchKitGuidance(kit)).not.toContain("passed host admission");
+    });
+  }
+
   describe("direct invocations", () => {
     for (
       const [name, content] of [

@@ -45,14 +45,15 @@ works at all, so they are worth knowing by name:
   toolshed reads `MEMORY_DIR` as; the console reads that variable as a directory
   to walk, so it is given the plain path. A `file://` URL there walks nothing
   and the console reads another store's cells as this space's.
-- **The `runsc-cfc` sidecar directories**, which are not loom's at all: the
-  Docker runtime registration names them in `--cfc-result-dir` and
-  `--cfc-invocation-context-dir`, and `docker info` reports what the running
-  daemon actually loaded. The harness asks only that they are named, so a
-  console pointed anywhere else starts cleanly and denies every observation of
-  the run. Fix a wrong one where the runtime is registered, then restart Docker
-  so the daemon reloads it — an edited `daemon.json` it has not read is not what
-  `docker info` reports, and the registration in force is the one that counts.
+- **The `runsc-cfc` sidecar directories**, on the Docker driver, which are not
+  loom's at all: the Docker runtime registration names them in
+  `--cfc-result-dir` and `--cfc-invocation-context-dir`, and `docker info`
+  reports what the running daemon actually loaded. The harness asks only that
+  they are named, so a console pointed anywhere else starts cleanly and denies
+  every observation of the run. Fix a wrong one where the runtime is registered,
+  then restart Docker so the daemon reloads it — an edited `daemon.json` it has
+  not read is not what `docker info` reports, and the registration in force is
+  the one that counts.
 
 The rest — the identity key at `defaults.identity`, the space at
 `defaults.local_space`, and the toolshed URL at `defaults.server_urls.toolshed`
@@ -88,11 +89,15 @@ deno task --cwd packages/cf-harness console:launch --instance <instance>
 
 It resolves the identity, the space and the toolshed URL from the instance's
 `pieces.json`, the store from `loom toolshed-store-dir`, and the two sidecar
-directories from the `runsc-cfc` registration `docker info` reports. It prints
-every value beside the record that decided it, and serves on 8135 — the port
-Weaver's harness console setting and loom's proxy both address. Read the
-printout before opening Weaver: a value that is wrong names where to fix it, and
-those are three different places.
+directories from the `runsc-cfc` registration `docker info` reports. A console
+whose environment selects the direct driver (`CF_HARNESS_SANDBOX_RUNTIME=runsc`,
+which a Loom that offers its native runtime sets for an instance that chose it)
+needs no sidecar directory and reads no Docker registration; the printout names
+its `runsc` binary, rootfs and CFC policy instead. It prints every value beside
+the record that decided it, and serves on 8135 — the port Weaver's harness
+console setting and loom's proxy both address. Read the printout before opening
+Weaver: a value that is wrong names where to fix it, and those are three
+different places.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
@@ -113,11 +118,12 @@ deno task --cwd packages/cf-harness console:launch --instance <instance> \
   -- --host-mount name=corpus,source=/absolute/corpus,target=/corpus
 ```
 
-**A console that cannot start does not take the fabric down.** It needs Docker
-and a connected model provider, and when either is missing the flag reports it
-in the script's output and in `packages/cf-harness/local-dev-console.log`, and
-the shell and toolshed keep running. That is the shape to expect: the pair is
-the fabric, and the console is a surface on it.
+**A console that cannot start does not take the fabric down.** It needs its
+sandbox runtime (Docker, unless the direct driver is selected) and a connected
+model provider, and when either is missing the flag reports it in the script's
+output and in `packages/cf-harness/local-dev-console.log`, and the shell and
+toolshed keep running. That is the shape to expect: the pair is the fabric, and
+the console is a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and
@@ -279,7 +285,13 @@ Mac. Then, in Weaver's settings under Services:
 - `/patterns <query>` lists index hits with their ids.
 - `/cf-harness <task>` starts a fresh session and places the live panel in the
   current loom. A turn runs for minutes; the panel streams throughout, and the
-  piece replaces it when the turn ends.
+  piece replaces it when the turn ends. On a console launched with
+  `--allow-browser-host`, which says so by listing `browser_host` in its
+  `GET /api/status`, the Weaver declares itself the turn's
+  [browser host](../console/README.md#browser-hosts), so the browser children of
+  a task that needs the web drive a page the Weaver shows the owner, who takes
+  it over when an agent hands it to them. Such a task may end with a Markdown
+  answer in the live panel instead of a piece.
 - `/feedback <patternId> up|down` records one vote on a pattern the index holds,
   signed with the console's fabric identity; the pill answers "recorded up for
   <patternId>" or the console's own refusal. An up vote is what promotes a
@@ -289,6 +301,12 @@ Mac. Then, in Weaver's settings under Services:
 
 ## 7. Demo tasks
 
+[Running the cf-harness demos](DEMOS.md) carries the four demos proven end to
+end, in the order to run them, with the preflight to check first and the slug
+sentence that makes a prompt repeatable across takes.
+[DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md) carries a proof status for each task
+below, including the ones kept off that page.
+
 Three tasks, typed into the pill as written, exercise the arrangement end to
 end. Each names what has to be true before it is typed and what a passing run
 looks like, so an agent can say whether it will work before it is tried. The
@@ -297,12 +315,13 @@ writes it to `packages/cf-harness/local-dev-console.log` under the labs checkout
 it vendors.
 
 A task over a connector needs the console to hold that connector's grant: the
-printout carries a line such as `grant gmail-work (email)` or
-`grant plaid-sim (finance)`, naming both connection and class. A line reading
-`(none: …)` is a handle the instance injected that the console could not name,
-for the reason it prints; a connector the instance has not injected has no line
-at all. Either way a task over that connector authors against nothing. Each task
-below names the grants it reads.
+printout carries a line such as `grant gmail-work (email)`,
+`grant gmail-work (message, call)` or `grant plaid-sim`, naming the connection,
+with every class the store's contract declares in parentheses, comma-separated,
+when it declares any. A line reading `(none: …)` is a handle the instance
+injected that the console could not name, for the reason it prints; a connector
+the instance has not injected has no line at all. Either way a task over that
+connector authors against nothing. Each task below names the grants it reads.
 
 ### Bills this month, from mail and bank together
 
@@ -328,12 +347,14 @@ loom's launch sets; a line reading `not run` means the child's script call is
 refused, so whatever piece the run goes on to build carries no budgets from the
 script and this demo cannot pass. And the pattern index must hold the seeded
 connector readers, which `deno task seed-pattern-index` publishes from
-`packages/patterns/primitives`; an index seeded from a reader that fails closed
-on the bank table's row-label rule yields a digest of zeros with an SQLite error
-in its alert, so a digest of zeros is a failed run, not an empty month. Passes
-when the five budgets from the script's output stand beside non-zero spend for
-the month. The skill id is the full `owner/repo/slug`; a bare slug is ambiguous
-and the run will not guess.
+`packages/patterns/primitives`; follow the
+[seeding guidance](../README.md#seeding-the-pattern-index) for raw readers and
+human-facing pieces. An index seeded from a reader that fails closed on the bank
+table's row-label rule yields a digest of zeros with an SQLite error in its
+alert, so a digest of zeros is a failed run, not an empty month. Passes when the
+five budgets from the script's output stand beside non-zero spend for the month.
+The skill id is the full `owner/repo/slug`; a bare slug is ambiguous and the run
+will not guess.
 
 ### Revise a piece in place
 

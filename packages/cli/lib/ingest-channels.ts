@@ -10,7 +10,7 @@
 // allowlisted path, so keeping the whole surface POST-only is what leaves room
 // for a future in-shell or in-pattern client.
 
-import { createSession } from "@commonfabric/identity";
+import { legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { loadIdentity } from "./identity.ts";
@@ -70,27 +70,16 @@ export interface MintedChannel {
 
 /**
  * Accept either a space DID or a space NAME, mirroring `cf acl`. A name is
- * resolved through the same derivation the rest of the CLI uses, so
- * `--space my-space` means the same space everywhere.
- *
- * PREFER A DID. Named spaces derive their key from a shared public passphrase
- * plus the name (`packages/identity/src/session.ts`), so anyone who knows the
- * name can sign AS that space, grant themselves OWNER, and mint channels into
- * it. That is a known temporary platform property, not something this command
- * introduces — but a minted token is durable and outlives any later fix, so it
- * is worth knowing which kind of space you are pointing at.
+ * resolved through the same legacy derivation the rest of the CLI uses, so
+ * `--space my-space` means the same space everywhere. Resolving opens and
+ * creates nothing, and needs no network.
  */
 export async function resolveSpaceDid(
-  identityPath: string,
+  _identityPath: string,
   space: string,
 ): Promise<string> {
   if (isDID(space)) return space;
-  const identity = await loadIdentity(identityPath);
-  // `session.space` is the derived space DID and is non-optional, unlike
-  // `session.spaceIdentity`, whose optionality is for the `spaceDid` form the
-  // branch above already handled.
-  const session = await createSession({ identity, spaceName: space });
-  return session.space;
+  return await legacySpaceDid(space);
 }
 
 async function call<T>(

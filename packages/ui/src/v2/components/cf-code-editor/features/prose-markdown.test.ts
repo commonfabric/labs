@@ -101,6 +101,18 @@ describe("buildProseDecorations", () => {
       expect(hasMark(nearDecos, 0, 7, "cm-prose-h1")).toBe(true);
     });
 
+    for (let level = 1; level <= 6; level++) {
+      for (const suffix of ["", " ", "  ", " #"]) {
+        it(`handles an unfinished level ${level} heading with suffix ${JSON.stringify(suffix)}`, () => {
+          const doc = `# Existing heading\n\n${"#".repeat(level)}${suffix}`;
+          const state = createState(doc);
+          const decos = buildProseDecorations(state, false);
+          expect(hasMark(decos, 2, 18, "cm-prose-h1")).toBe(true);
+          expect(() => Decoration.set(decos, true)).not.toThrow();
+        });
+      }
+    }
+
     it("maps heading levels to correct CSS classes", () => {
       const state = createState("## Second\n### Third", 18);
       const decos = buildProseDecorations(state, true);

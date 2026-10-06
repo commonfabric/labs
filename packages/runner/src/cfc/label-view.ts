@@ -1,52 +1,63 @@
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import {
+  cellRuntime,
+  cellTx,
+  getCarriedCfcLabelView,
+  isCell,
+} from "../cell.ts";
 import {
   isPrimitiveCellLink,
   type NormalizedFullLink,
   parseLink,
 } from "../link-utils.ts";
 import { resolveLink } from "../link-resolution.ts";
-import type { Runtime } from "../runtime.ts";
-import { readStoredCfcMetadata } from "./metadata.ts";
-import type { CfcMetadata } from "./types.ts";
+import {
+  readStoredCfcLabelsForReader,
+  type StoredCfcLabels,
+} from "./metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./observation.ts";
 import {
   type CfcLabelView,
   type CfcLabelViewEntry,
   cfcLabelViewFromMetadata,
-  getCarriedCfcLabelView,
+  cfcLabelViewOriginSpaces,
   mergeCfcLabelViews,
+  withCfcLabelViewOrigins,
 } from "./label-view-state.ts";
 
 export type { CfcLabelView, CfcLabelViewEntry };
 export {
+  cfcLabelViewForAddress,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
   cfcLabelViewFromMetadata,
-  cfcLabelViewSymbol,
   cloneCfcLabelView,
-  getCarriedCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
 } from "./label-view-state.ts";
+export { getCarriedCfcLabelView } from "../cell.ts";
 export { redactCaveatSourcesForDisplay } from "./label-view-core.ts";
 
 type LabelQueryableCell = {
   getAsNormalizedFullLink(): NormalizedFullLink;
-  runtime?: Runtime;
-  tx?: IExtendedStorageTransaction;
 };
 
 type LinkedValueMetadata = {
-  metadata: CfcMetadata;
+  metadata: StoredCfcLabels;
   path: readonly string[];
+  space: string;
 };
 
-// `readFailed` distinguishes a genuine metadata read error (fail closed) from a
-// cleanly-absent label (`readOrThrow` already maps NotFound/TypeMismatch to
-// undefined without throwing, so those are NOT failures).
+// `metadata` is what a reader of a document instance answers to
+// (`readStoredCfcLabelsForReader`): the instance's own envelope, joined, for a
+// scoped instance, with the confidentiality a value read of each broader
+// instance of the same id consumes. It is `undefined` only when none of those
+// instances stores a label. `readFailed` distinguishes a genuine metadata read
+// error on any of them (fail closed) from a cleanly-absent label (`readOrThrow`
+// already maps NotFound/TypeMismatch to undefined without throwing, so those
+// are NOT failures).
 type StoredMetadataResult = {
-  metadata: CfcMetadata | undefined;
+  metadata: StoredCfcLabels | undefined;
   readFailed: boolean;
 };
 
@@ -60,21 +71,32 @@ export type CfcLabelViewStatus = {
   readFailed: boolean;
 };
 
+/**
+ * {@link CfcLabelViewStatus}, plus the spaces of the documents whose stored
+ * labels the view was derived from — where a module policy the label selects
+ * has its manifest installed (spec §4.4.1). For a view carried on the cell,
+ * these are the spaces it was read from wherever it was first read, such as
+ * the document holding a link the cell was resolved through.
+ */
+export type CfcLabelViewSource = CfcLabelViewStatus & {
+  spaces: readonly string[];
+};
+
 const storedMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
 ): StoredMetadataResult => {
-  if (!cell.runtime) {
+  if (!isCell(cell)) {
     return { metadata: undefined, readFailed: false };
   }
   try {
     return {
-      metadata: readStoredCfcMetadata(
-        cell.runtime.readTx(cell.tx),
-        {
-          space: link.space,
-          id: link.id,
-        },
+      // A scoped instance of a document holds labels of its own, as it
+      // holds a value of its own, and answers to its broader instances'
+      // value-read confidentiality besides.
+      metadata: readStoredCfcLabelsForReader(
+        cellRuntime(cell).readTx(cellTx(cell)),
+        { space: link.space, id: link.id, scope: link.scope },
       ),
       readFailed: false,
     };
@@ -87,11 +109,11 @@ const linkedValueMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
 ): LinkedValueMetadataResult => {
-  if (!cell.runtime || link.path.length === 0) {
+  if (!isCell(cell) || link.path.length === 0) {
     return { linkedValue: undefined, readFailed: false };
   }
   try {
-    const tx = cell.runtime.readTx(cell.tx);
+    const tx = cellRuntime(cell).readTx(cellTx(cell));
     const value = tx.readValueOrThrow(link);
     if (!isPrimitiveCellLink(value)) {
       return { linkedValue: undefined, readFailed: false };
@@ -100,7 +122,9 @@ const linkedValueMetadataForCell = (
     if (target?.id === undefined || target.space === undefined) {
       return { linkedValue: undefined, readFailed: false };
     }
-    const metadata = readStoredCfcMetadata(tx, {
+    // The link's target answers by the same reader rule as the cell's own
+    // document: a scoped target joins its broader instances' confidentiality.
+    const metadata = readStoredCfcLabelsForReader(tx, {
       space: target.space,
       id: target.id,
       scope: target.scope,
@@ -108,7 +132,7 @@ const linkedValueMetadataForCell = (
     return {
       linkedValue: metadata === undefined
         ? undefined
-        : { metadata, path: target.path },
+        : { metadata, path: target.path, space: target.space },
       readFailed: false,
     };
   } catch {
@@ -125,35 +149,65 @@ const linkedValueMetadataForCell = (
 export const cfcLabelViewForCellWithStatus = (
   cell: unknown,
 ): CfcLabelViewStatus => {
+  const { view, readFailed } = cfcLabelViewSourceForCell(cell);
+  return { view, readFailed };
+};
+
+/**
+ * {@link cfcLabelViewForCellWithStatus}, also naming the spaces of the
+ * documents the view was derived from, the carried part included (see
+ * {@link CfcLabelViewSource}). A carried view that crossed a worker boundary
+ * or a persisted link names no space.
+ */
+export const cfcLabelViewSourceForCell = (
+  cell: unknown,
+): CfcLabelViewSource => {
   if (
     !isObjectOrArray(cell) ||
     typeof cell.getAsNormalizedFullLink !== "function"
   ) {
-    return { view: getCarriedCfcLabelView(cell), readFailed: false };
+    const view = getCarriedCfcLabelView(cell);
+    return {
+      view,
+      readFailed: false,
+      spaces: cfcLabelViewOriginSpaces(view),
+    };
   }
 
   let link: NormalizedFullLink;
   try {
     link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
   } catch {
-    return { view: getCarriedCfcLabelView(cell), readFailed: false };
+    const view = getCarriedCfcLabelView(cell);
+    return {
+      view,
+      readFailed: false,
+      spaces: cfcLabelViewOriginSpaces(view),
+    };
   }
 
   const stored = storedMetadataForCell(cell as LabelQueryableCell, link);
-  const metadataView = cfcLabelViewFromMetadata(stored.metadata, link.path);
-  const linked = linkedValueMetadataForCell(cell as LabelQueryableCell, link);
-  const linkedValueView = cfcLabelViewFromMetadata(
-    linked.linkedValue?.metadata,
-    linked.linkedValue?.path ?? [],
+  const metadataView = withCfcLabelViewOrigins(
+    cfcLabelViewFromMetadata(stored.metadata, link.path),
+    [link.space],
   );
-
+  const linked = linkedValueMetadataForCell(cell as LabelQueryableCell, link);
+  const linkedValueView = withCfcLabelViewOrigins(
+    cfcLabelViewFromMetadata(
+      linked.linkedValue?.metadata,
+      linked.linkedValue?.path ?? [],
+    ),
+    linked.linkedValue === undefined ? [] : [linked.linkedValue.space],
+  );
+  const view = mergeCfcLabelViews([
+    metadataView,
+    linkedValueView,
+    getCarriedCfcLabelView(cell),
+  ]);
   return {
-    view: mergeCfcLabelViews([
-      metadataView,
-      linkedValueView,
-      getCarriedCfcLabelView(cell),
-    ]),
+    view,
     readFailed: stored.readFailed || linked.readFailed,
+    spaces: cfcLabelViewOriginSpaces(view),
   };
 };
 
@@ -161,14 +215,29 @@ export const cfcLabelViewForCell = (
   cell: unknown,
 ): CfcLabelView | undefined => cfcLabelViewForCellWithStatus(cell).view;
 
+/** Options for a label read that resolves the cell's path through links. */
+export type ResolvedLabelReadOptions = {
+  /**
+   * Whether resolving the path kicks a sync of each hop target in another
+   * space. On by default. A reader that resolves a link its caller's value
+   * read has already resolved, and so already kicked, turns it off.
+   */
+  kickCrossSpaceTargets?: boolean;
+};
+
 type ResolvedMetadataResult = StoredMetadataResult & {
   /** The resolved doc's path, which the view is rebased against. */
   path: readonly string[];
 };
 
 /**
- * Stored metadata of the doc that actually HOLDS the value at `link`, found by
- * the runtime's own link resolution — the following `.get()` performs.
+ * The stored labels a reader of the doc that actually HOLDS the value at
+ * `link` answers to, that doc found by the runtime's own link resolution — the
+ * following `.get()` performs. They are read by the reader rule
+ * (`readStoredCfcLabelsForReader`): the doc's own envelope, joined, where the
+ * doc is a scoped instance, with the confidentiality a value read of each
+ * broader instance consumes. `metadata` is `undefined` only when none of those
+ * instances stores a label.
  *
  * `storedMetadataForCell` reads the doc the cell names, and
  * `linkedValueMetadataForCell` follows one link when the selected path lands ON
@@ -181,23 +250,28 @@ type ResolvedMetadataResult = StoredMetadataResult & {
 const resolvedMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
+  options: ResolvedLabelReadOptions,
 ): ResolvedMetadataResult => {
-  if (!cell.runtime) {
+  if (!isCell(cell)) {
     return { metadata: undefined, readFailed: false, path: link.path };
   }
   try {
-    const tx = cell.runtime.readTx(cell.tx);
+    const runtime = cellRuntime(cell);
+    const tx = runtime.readTx(cellTx(cell));
     // `markIfcCrossings` is what a read entry point passes. On the CLI's path
     // it changes nothing observable: the cell carries no transaction, so
     // `readTx` mints a throwaway that is never committed and the marks die
     // with it. It is here for a caller that hands in a cell with a LIVE
     // transaction, where an ifc-bearing link crossed to reach a label counts
     // against that transaction's accounting like any other crossing.
-    const resolved = resolveLink(cell.runtime, tx, link, "value", {
+    const resolved = resolveLink(runtime, tx, link, "value", {
       markIfcCrossings: true,
+      ...(options.kickCrossSpaceTargets === false
+        ? { kickCrossSpaceTargets: false }
+        : {}),
     });
     return {
-      metadata: readStoredCfcMetadata(tx, {
+      metadata: readStoredCfcLabelsForReader(tx, {
         space: resolved.space,
         id: resolved.id,
         scope: resolved.scope,
@@ -211,12 +285,66 @@ const resolvedMetadataForCell = (
 };
 
 /**
- * {@link cfcLabelViewForCellWithStatus}, plus the label stored on the doc the
- * selected path RESOLVES to.
+ * The labels a reader of the document that holds the value at `cell`'s path
+ * answers to ({@link resolvedMetadataForCell}), rebased onto that value, or
+ * undefined when `cell` names no document.
+ */
+const resolvedTargetLabelView = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions,
+): CfcLabelViewStatus | undefined => {
+  if (
+    !isObjectOrArray(cell) ||
+    typeof cell.getAsNormalizedFullLink !== "function"
+  ) {
+    return undefined;
+  }
+  let link: NormalizedFullLink;
+  try {
+    link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
+  } catch {
+    return undefined;
+  }
+  const resolved = resolvedMetadataForCell(
+    cell as LabelQueryableCell,
+    link,
+    options,
+  );
+  return {
+    view: cfcLabelViewFromMetadata(resolved.metadata, resolved.path),
+    readFailed: resolved.readFailed,
+  };
+};
+
+/**
+ * The labels a reader of the document that holds the value at `cell`'s path
+ * answers to, that document found by the runtime's own link resolution, rebased
+ * onto that value: the document's own envelope and, where it is a scoped
+ * instance, the confidentiality a value read of each broader instance of the
+ * same id consumes. Its integrity is the document's own alone.
  *
- * For an inspection surface that answers "what is the label here" about a path
- * a person typed, the one-hop read is not enough: a path that crosses a link
- * part way through reports no label for a value that plainly carries one. This
+ * It leaves out the labels of the documents the path passes through on the way
+ * there, and any view the cell carries. A label on a document that holds a
+ * link is about the link: what integrity it carries endorses the reference,
+ * not the current contents of its target (spec §3.7.2, §8.2.4). This is
+ * therefore the view that says what vouches for the value itself, which is what
+ * a check requiring integrity of the value reads. It is undefined when none of
+ * those instances stores a label, and when the read fails.
+ */
+export const cfcLabelViewForResolvedTarget = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions = {},
+): CfcLabelView | undefined => resolvedTargetLabelView(cell, options)?.view;
+
+/**
+ * {@link cfcLabelViewForCellWithStatus}, plus the labels of the doc the
+ * selected path RESOLVES to, as {@link cfcLabelViewForResolvedTarget} reads
+ * them.
+ *
+ * For an inspection or display surface that answers "what is the label here"
+ * about a path a person typed or a value a view is bound to, the one-hop read
+ * is not enough: a path that crosses a link part way through reports no label
+ * for a value that plainly carries one. This
  * merges the resolved doc's stored label into the same view, rebased so its
  * entries stay relative to the selected cell.
  *
@@ -229,31 +357,29 @@ const resolvedMetadataForCell = (
  */
 export const cfcLabelViewForResolvedCellWithStatus = (
   cell: unknown,
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelViewStatus => {
   const unresolved = cfcLabelViewForCellWithStatus(cell);
-  if (
-    !isObjectOrArray(cell) ||
-    typeof cell.getAsNormalizedFullLink !== "function"
-  ) {
-    return unresolved;
-  }
-
-  let link: NormalizedFullLink;
-  try {
-    link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
-  } catch {
-    return unresolved;
-  }
-
-  const resolved = resolvedMetadataForCell(cell as LabelQueryableCell, link);
+  const target = resolvedTargetLabelView(cell, options);
+  if (target === undefined) return unresolved;
   return {
-    view: mergeCfcLabelViews([
-      unresolved.view,
-      cfcLabelViewFromMetadata(resolved.metadata, resolved.path),
-    ]),
-    readFailed: unresolved.readFailed || resolved.readFailed,
+    view: mergeCfcLabelViews([unresolved.view, target.view]),
+    readFailed: unresolved.readFailed || target.readFailed,
   };
 };
+
+/**
+ * The label view a display surface shows for a cell: the view-only form of
+ * {@link cfcLabelViewForResolvedCellWithStatus}. A value bound to a label
+ * display is commonly reached across a link part way along its path, as a
+ * list element that links to the document holding the value, and the label
+ * that vouches for that value is stored on the linked document.
+ */
+export const cfcLabelViewForResolvedCell = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions = {},
+): CfcLabelView | undefined =>
+  cfcLabelViewForResolvedCellWithStatus(cell, options).view;
 
 /**
  * Fail-closed label acquisition for the LLM-observation egress path (audit 22),

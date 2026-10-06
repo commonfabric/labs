@@ -8,7 +8,13 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { deepFreeze, type FabricValue, hashStringOf, valueEqual } from "@";
+import {
+  deepFreeze,
+  type FabricValue,
+  hashStringOf,
+  valueEqual,
+  valueEqualByWalk,
+} from "@";
 import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
@@ -193,8 +199,6 @@ describe("value equality and content hashing", () => {
       const seed = 0x6969_0000 + sample;
       const draw = drawsFrom(seed);
       const [first, second] = pairFrom(draw, 1 + draw(4), sample % 3 === 0);
-      // Container equality follows encoded content. Primitive arguments have
-      // their separate Object.is contract, including lone-surrogate strings.
       const left = { value: first };
       const right = { value: second };
       const actual = valueEqual(left, right);
@@ -202,8 +206,26 @@ describe("value equality and content hashing", () => {
       if (expected) equal++;
       else unequal++;
       const context = `seed ${seed}`;
+      expect(valueEqual(first, second), `${context}, unwrapped`).toBe(
+        hashStringOf(first) === hashStringOf(second),
+      );
       expect(actual, `${context}, mutable`).toBe(expected);
       expect(valueEqual(right, left), `${context}, reversed`).toBe(expected);
+      expect(valueEqualByWalk(first, second), `${context}, walked`).toBe(
+        hashStringOf(first) === hashStringOf(second),
+      );
+      expect(valueEqualByWalk(right, left), `${context}, walked reversed`)
+        .toBe(expected);
+      // A revision shares whatever it did not edit, so the walk has to reach
+      // the same answer with some of each operand held in common.
+      const shared = pairFrom(draw, 1 + draw(3), false)[0];
+      expect(
+        valueEqualByWalk({ value: first, shared }, { value: second, shared }),
+        `${context}, walked with a shared subtree`,
+      ).toBe(
+        hashStringOf({ value: first, shared }) ===
+          hashStringOf({ value: second, shared }),
+      );
 
       hashStringOf(deepFreeze(left));
       expect(valueEqual(left, right), `${context}, one cached hash`).toBe(
@@ -211,6 +233,9 @@ describe("value equality and content hashing", () => {
       );
       hashStringOf(deepFreeze(right));
       expect(valueEqual(left, right), `${context}, both cached hashes`).toBe(
+        expected,
+      );
+      expect(valueEqualByWalk(left, right), `${context}, walked frozen`).toBe(
         expected,
       );
     }

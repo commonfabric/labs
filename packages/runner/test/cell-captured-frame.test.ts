@@ -13,7 +13,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { getTopFrame } from "../src/builder/pattern.ts";
-import { type Cell, CellImpl } from "../src/cell.ts";
+import { type Cell, CellImpl, exportCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { type JSONSchema } from "../src/builder/types.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -82,7 +82,7 @@ describe("cell-captured-frame", () => {
     it("throws from `export()` for a cell derived after the runtime is disposed", async () => {
       const { child } = await cellDerivedAfterDisposal("derived-export");
 
-      expect(() => child.export()).toThrow(
+      expect(() => exportCell(child)).toThrow(
         "Cannot export a cell with no frame",
       );
     });
@@ -103,7 +103,7 @@ describe("cell-captured-frame", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.dispose();
       await storageManager.close();
     });
@@ -111,7 +111,7 @@ describe("cell-captured-frame", () => {
     it("returns the runtime's own frame from `export()`", () => {
       const cell = runtime.getCell<number>(space, "exported", undefined, tx);
 
-      expect(cell.export().frame).toBe(getTopFrame());
+      expect(exportCell(cell).frame).toBe(getTopFrame());
     });
 
     it("throws naming the missing cause when it has no link to derive", () => {

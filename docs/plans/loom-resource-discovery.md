@@ -12,8 +12,8 @@ requesting a `Writable<PerUser<LoomResourcesV1>>` projection.
 The home space is the discovery point. Consumers need neither source-space DIDs
 nor database IDs in their startup configuration. The favorite carries the
 provider reference, including its original space. Require user-scoped discovery
-and selection for this path; SQL results remain `PerSession<>` where the inbox's
-read ceiling requires it.
+and selection for this path; SQL results use `PerSession<>` where the inbox needs row filtering under its
+runtime read ceiling.
 
 Start with `cf-person-inbox`. Keep its person selection and session view as
 explicit inputs. Resolve its environmental dependencies through the resources
@@ -299,7 +299,7 @@ Headless wish's shared resolver is limited to home-independent, space-scoped
 searches. Home-dependent wishes use the demanding transaction directly. The
 wish builder describes its actual `WishState` container, and internal derived
 cells retain declared user/session scope through child-path bindings. Scoped
-wish state also carries its owning result and pattern links for served demand.
+wish state also carries its owning result link for served demand.
 A final `PerUser<>` annotation alone is insufficient evidence of isolation;
 compiled and served regressions exercise the complete chain.
 

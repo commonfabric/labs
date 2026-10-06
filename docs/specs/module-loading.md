@@ -569,7 +569,11 @@ a parse of its contents, which is what lets a data file hold bytes that are not
 TypeScript. Both namespaces are reserved against authored imports. The compiled
 set carries the same data documents under `kind: "data"`, with the authored
 bytes as their `code`, so a warm load has everything the pattern needs without
-reading the source set. A compiled
+reading the source set. Cold recovery preserves source-package links on every
+module that owns them, including when the requested pattern is a child of that
+module. Recompilation resolves those attached sources and partitions those data
+files without moving their identity edges to the requested entry. The rebuilt
+compiled closure retains the same ownership for subsequent loads. A compiled
 document stores runtime edges only between emitted modules. It includes fabric
 edges needed by the self-contained compiled closure. The entry compiled
 document also uses synthetic [`ROOT_LINK_SPECIFIER`][c14] (`cf:cache-root/`)
@@ -939,7 +943,7 @@ index's restart-stable `action` column,
 [c10]: ../../packages/runner/src/sandbox/ses-runtime.ts
 [c11]: ../../packages/runner/src/builder/module.ts
 [c12]: ../../packages/runner/src/scheduler/run.ts
-[c13]: ../../packages/data-model/src/value-hash.ts
+[c13]: ../../packages/data-model/src/value-hash/impl.ts
 [c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
 [c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
 [c16]: ../../packages/runner/src/harness/authored-debug-source.ts

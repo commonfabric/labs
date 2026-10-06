@@ -17,16 +17,30 @@
  * this run was given has an entry, an address the model composed does not, and
  * only the first resolves. Without that check a handle field is a general read
  * of every cell in the run's space.
+ *
+ * A referent token (`cfh:v:`) resolves through {@link resolveReturnReferent}
+ * instead, in the browser tool's value fields, when it names a string a
+ * child's structured return sealed: that is how a parent hands one child's
+ * finding, a URL, say, to another child's tool without reading it. A field
+ * that takes an address refuses one.
  */
 
+import {
+  cfcObservationFitsCeiling,
+  type IFCLabel,
+} from "@commonfabric/runner/cfc";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
 
 import {
   handleRefAddressKey,
   resolveHandleRef,
   resolveHandleToken,
+  resolveReferentToken,
 } from "../handle-table.ts";
-import { ADDRESS_HANDLE_TOKEN_PREFIX } from "../contracts/handle-table.ts";
+import {
+  ADDRESS_HANDLE_TOKEN_PREFIX,
+  REFERENT_HANDLE_TOKEN_PREFIX,
+} from "../contracts/handle-table.ts";
 import type { HarnessToolContext } from "./types.ts";
 import type { HarnessHandleCapability } from "../contracts/handle-table.ts";
 
@@ -34,10 +48,15 @@ export type HandleValueResolution =
   | { value: string; error?: undefined }
   | { value?: undefined; error: string };
 
+/** A string a child's structured return sealed, and the label it carries. */
+export type ReturnReferentResolution =
+  | { value: string; label: IFCLabel; error?: undefined }
+  | { value?: undefined; label?: undefined; error: string };
+
 /** The part of the tool context a handle resolution reads. */
 export type HandleValueResolutionContext = Pick<
   HarnessToolContext,
-  "getFabricSession" | "handleTable"
+  "getFabricSession" | "handleTable" | "cfcReadMaxConfidentiality"
 >;
 
 const errorMessage = (error: unknown): string =>
@@ -61,6 +80,22 @@ export const httpOriginOf = (url: string): string | undefined => {
   }
   return parsed.origin;
 };
+
+/** The flag with which an operator allows a destination for a handle's value. */
+export const HANDLE_VALUE_ORIGIN_FLAG = "--handle-value-origin";
+
+/** Why a run that allows no destination sends a handle's value nowhere. */
+export const NO_HANDLE_VALUE_DESTINATION_MESSAGE =
+  `this run allows no destination for a handle's value; an operator allows one with ${HANDLE_VALUE_ORIGIN_FLAG} <origin>`;
+
+/**
+ * The refusal for a destination outside the allowlist. It names the origin
+ * and nothing else: the operator needs to know which origin to allow, and the
+ * path, query, and value that would have gone there are none of the model's
+ * business.
+ */
+export const originNotAllowedMessage = (origin: string): string =>
+  `${origin} is not an allowlisted destination for a handle's value; an operator allows one with ${HANDLE_VALUE_ORIGIN_FLAG} <origin>`;
 
 /**
  * The string value behind `handle`, or an explanation of why the run cannot
@@ -88,6 +123,11 @@ export const resolveHandleValue = async (
   const trimmed = handle.trim();
   if (trimmed === "") {
     return { error: `${label} requires a handle naming a value` };
+  }
+  if (trimmed.startsWith(REFERENT_HANDLE_TOKEN_PREFIX)) {
+    return {
+      error: `${label} takes an address handle (cfh:a:), not a referent`,
+    };
   }
   if (context.getFabricSession === undefined) {
     return {
@@ -178,4 +218,53 @@ export const resolveHandleValue = async (
     };
   }
   return { value };
+};
+
+/**
+ * The string a child's structured return sealed behind the referent token
+ * `handle`, with the label the child found it under, or an explanation of why
+ * the run cannot read one. `label` names the field being resolved and opens
+ * every message, which, as {@link resolveHandleValue}'s do, never render the
+ * referent.
+ */
+export const resolveReturnReferent = (
+  context: Pick<
+    HandleValueResolutionContext,
+    "handleTable" | "cfcReadMaxConfidentiality"
+  >,
+  handle: string,
+  label: string,
+): ReturnReferentResolution => {
+  const referent = context.handleTable === undefined
+    ? undefined
+    : resolveReferentToken(context.handleTable, handle.trim());
+  if (referent === undefined) {
+    return { error: `${label} does not name a handle this run holds` };
+  }
+  if (referent.kind !== "return") {
+    return {
+      error:
+        `${label} can only take a referent a child's return sealed; this one holds a ${referent.kind}`,
+    };
+  }
+  if (typeof referent.value !== "string") {
+    return {
+      error:
+        `${label} must name a string value; the referent holds a value of type ${typeof referent
+          .value}`,
+    };
+  }
+  // The child that found the value labeled it; a run whose ceiling it is
+  // above may not observe it, and so may not send it anywhere either.
+  if (
+    !cfcObservationFitsCeiling(
+      referent.label.confidentiality ?? [],
+      context.cfcReadMaxConfidentiality,
+    )
+  ) {
+    return {
+      error: `${label} names a value labeled above this run's read ceiling`,
+    };
+  }
+  return { value: referent.value, label: referent.label };
 };

@@ -2,7 +2,7 @@ import { Command } from "@cliffy/command";
 import { Table } from "@cliffy/table";
 import { isCapability } from "@commonfabric/memory/acl";
 
-import { getAcl, removeAclEntry, setAclEntry } from "../lib/acl.ts";
+import { getAcl, leaveAcl, removeAclEntry, setAclEntry } from "../lib/acl.ts";
 import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
 import { parseSpaceOptions } from "./piece.ts";
@@ -97,4 +97,25 @@ export const acl = new Command()
     const config = parseSpaceOptions(options);
     await removeAclEntry(config, did);
     render(`Removed ${did} from ACL`);
+  })
+  /* acl leave */
+  .command(
+    "leave",
+    "Remove your own identity from the space ACL, giving up the access it grants.",
+  )
+  .usage(spaceUsage)
+  .example(
+    cliText(
+      "cf acl leave --identity ./my.key --api-url https://api.example.com --space shared-space",
+    ),
+    "Leave shared-space",
+  )
+  .action(async (options) => {
+    const config = parseSpaceOptions(options);
+    const outcome = await leaveAcl(config);
+    render(
+      outcome === "left"
+        ? `Left ${config.space}`
+        : `Not in the ACL of ${config.space}; nothing to leave`,
+    );
   });

@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
 
@@ -22,6 +23,8 @@ import { discoverHarnessSkills } from "../src/skills/registry.ts";
 import {
   BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE,
   BASH_CWD_OUTSIDE_SANDBOX_PREFIX,
+  BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH,
+  BASH_SESSION_UNAVAILABLE_EXIT_CODE,
   BASH_TIMEOUT_EXIT_CODE,
   bashTool,
 } from "../src/tools/bash.ts";
@@ -37,6 +40,7 @@ import {
   createWebFetchTool,
   toModelFacingWebFetchOutput,
 } from "../src/tools/web-fetch.ts";
+import { parseIpAddress } from "../src/network-address.ts";
 import { viewImageTool } from "../src/tools/view-image.ts";
 import { writeFileTool } from "../src/tools/write-file.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
@@ -51,6 +55,11 @@ import type {
   SandboxRuntime,
   SandboxRuntimeDescription,
   SandboxShellRequest,
+} from "../src/sandbox/types.ts";
+import {
+  SANDBOX_SESSION_NAME_PATTERN,
+  SandboxSessionUnavailableError,
+  type SandboxSessionUnavailableReason,
 } from "../src/sandbox/types.ts";
 
 const ONE_PIXEL_PNG = decodeBase64(
@@ -566,7 +575,7 @@ Deno.test("bash tool denies curl to non-localhost targets before sandbox executi
     outputId: "run-1:bash:1",
     stdout: "",
     stderr:
-      "bash command denied: curl host example.com is not allowed from cf-harness bash; use localhost or host.docker.internal",
+      "bash command denied: curl host example.com is not allowed from cf-harness bash: curl may name only localhost, a 127.x or ::1 address, or host.docker.internal, and a service that does not answer at one of those is out of this sandbox's reach",
     exitCode: 126,
     cwd: "/workspace/new",
   });
@@ -670,7 +679,7 @@ Deno.test("web_fetch validates redirect targets before following them", async ()
     url: "https://example.com/login",
     code: "blocked_url",
     message:
-      "web_fetch redirect target denied: web_fetch host 127.0.0.1 is private and is not allowed",
+      "web_fetch redirect target denied: web_fetch host 127.0.0.1 is not on the open internet and is not allowed",
     finalUrl: "https://example.com/login",
     fetchedAt: "2026-05-01T17:54:00.000Z",
   });
@@ -698,7 +707,34 @@ Deno.test("web_fetch rejects DNS targets that resolve to private addresses befor
     url: "https://public.example/private",
     code: "blocked_url",
     message:
-      "web_fetch host public.example resolved to private address 10.0.0.7 and is not allowed",
+      "web_fetch host public.example resolved to 10.0.0.7, which is not on the open internet, and is not allowed",
+    fetchedAt: "2026-05-01T17:54:00.000Z",
+  });
+});
+
+Deno.test("web_fetch rejects a resolved address it cannot read", async () => {
+  const calls: string[] = [];
+  const tool = createWebFetchTool({
+    resolveHostAddresses: () => Promise.resolve(["0x7f.0.0.1"]),
+    fetchFn: (input) => {
+      calls.push(String(input));
+      return Promise.resolve(new Response("should not fetch"));
+    },
+  });
+  const context = createContext(new FakeSandboxRuntime());
+
+  const output = await tool.invoke(context, {
+    url: "https://odd.example/",
+  });
+
+  assertEquals(calls, []);
+  assertEquals(output, {
+    type: "cf-harness.web-fetch-error",
+    outputId: "run-1:web_fetch:1",
+    url: "https://odd.example/",
+    code: "blocked_url",
+    message:
+      "web_fetch host odd.example resolved to 0x7f.0.0.1, which is not an IP address",
     fetchedAt: "2026-05-01T17:54:00.000Z",
   });
 });
@@ -721,7 +757,7 @@ Deno.test("web_fetch rejects DNS rebinding between validation and connect", asyn
     url: "https://rebind.example/private",
     code: "blocked_url",
     message:
-      "web_fetch host rebind.example resolved to private address 10.0.0.7 and is not allowed",
+      "web_fetch host rebind.example resolved to 10.0.0.7, which is not on the open internet, and is not allowed",
     finalUrl: "https://rebind.example/private",
     fetchedAt: "2026-05-01T17:54:00.000Z",
   });
@@ -755,8 +791,142 @@ Deno.test("web_fetch rejects non-global IP literals before fetching", async () =
       throw new Error(`expected web_fetch error for ${url}`);
     }
     assertEquals(output.code, "blocked_url");
-    assertStringIncludes(output.message, "is private and is not allowed");
+    assertStringIncludes(
+      output.message,
+      "is not on the open internet and is not allowed",
+    );
   }
+});
+
+const localNetwork = (text: string, prefixLength: number) => {
+  const address = parseIpAddress(text);
+  if (address === undefined) {
+    throw new Error(`${text} did not parse`);
+  }
+  return { address, prefixLength };
+};
+
+const TEST_LOCAL_NETWORKS = [
+  localNetwork("2a02:8071:1234:5600::1", 64),
+  localNetwork("81.2.69.142", 24),
+  localNetwork("81.2.70.5", 0),
+];
+
+/**
+ * What web_fetch makes of `url` when `host.example` resolves to `resolved`
+ * and this device's interfaces are on `TEST_LOCAL_NETWORKS`: the URLs it
+ * fetched, and its output.
+ */
+const webFetchOnLocalNetworks = async (url: string, resolved: string) => {
+  const calls: string[] = [];
+  const tool = createWebFetchTool({
+    resolveHostAddresses: () => Promise.resolve([resolved]),
+    localNetworks: () => TEST_LOCAL_NETWORKS,
+    fetchFn: (input) => {
+      calls.push(String(input));
+      return Promise.resolve(
+        new Response("fetched", { headers: { "content-type": "text/plain" } }),
+      );
+    },
+  });
+  const output = await tool.invoke(createContext(new FakeSandboxRuntime()), {
+    url,
+  });
+  return { calls, output };
+};
+
+Deno.test("web_fetch rejects public addresses on this device's interface networks", async () => {
+  for (
+    const address of [
+      "2a02:8071:1234:5600::99",
+      "81.2.69.160",
+      "::ffff:81.2.69.160",
+      "81.2.70.5",
+    ]
+  ) {
+    const { calls, output } = await webFetchOnLocalNetworks(
+      "https://host.example/",
+      address,
+    );
+    assertEquals(calls, []);
+    if (output.type !== "cf-harness.web-fetch-error") {
+      throw new Error(`expected web_fetch error for ${address}`);
+    }
+    assertEquals(
+      output.message,
+      `web_fetch host host.example resolved to ${address}, which is not on the open internet, and is not allowed`,
+    );
+  }
+  for (
+    const url of [
+      "https://[2a02:8071:1234:5600::99]/",
+      "https://81.2.69.160/",
+      "https://[::ffff:81.2.69.160]/",
+    ]
+  ) {
+    const host = new URL(url).hostname;
+    const { calls, output } = await webFetchOnLocalNetworks(url, host);
+    assertEquals(calls, []);
+    if (output.type !== "cf-harness.web-fetch-error") {
+      throw new Error(`expected web_fetch error for ${url}`);
+    }
+    assertEquals(
+      output.message,
+      `web_fetch host ${host} is not on the open internet and is not allowed`,
+    );
+  }
+});
+
+Deno.test("web_fetch fetches public addresses outside this device's interface networks", async () => {
+  for (
+    const address of [
+      "2a02:8071:1234:5601::99",
+      "81.2.70.160",
+      "::ffff:81.2.70.160",
+      "81.2.70.6",
+    ]
+  ) {
+    const { calls, output } = await webFetchOnLocalNetworks(
+      "https://host.example/",
+      address,
+    );
+    assertEquals(calls, ["https://host.example/"]);
+    assertEquals(output.type, "cf-harness.web-fetch-result");
+  }
+  for (
+    const url of ["https://[2a02:8071:1234:5601::99]/", "https://81.2.70.160/"]
+  ) {
+    const { calls, output } = await webFetchOnLocalNetworks(
+      url,
+      new URL(url).hostname,
+    );
+    assertEquals(calls, [url]);
+    assertEquals(output.type, "cf-harness.web-fetch-result");
+  }
+});
+
+Deno.test("web_fetch reads this device's interface networks again when it connects", async () => {
+  const networkLists = [[], TEST_LOCAL_NETWORKS];
+  const tool = createWebFetchTool({
+    resolveHostAddresses: () => Promise.resolve(["81.2.69.160"]),
+    localNetworks: () => networkLists.shift() ?? TEST_LOCAL_NETWORKS,
+  });
+
+  const output = await tool.invoke(createContext(new FakeSandboxRuntime()), {
+    url: "https://joined.example/",
+  });
+
+  assertEquals(networkLists, []);
+  assertEquals(output, {
+    type: "cf-harness.web-fetch-error",
+    outputId: "run-1:web_fetch:1",
+    url: "https://joined.example/",
+    code: "blocked_url",
+    message:
+      "web_fetch host joined.example resolved to 81.2.69.160, which is not on the open internet, and is not allowed",
+    finalUrl: "https://joined.example/",
+    fetchedAt: "2026-05-01T17:54:00.000Z",
+  });
 });
 
 Deno.test("web_fetch rejects unsupported content types without returning the body", async () => {
@@ -3577,4 +3747,471 @@ Deno.test("view_image tool denies reserved artifact paths", async () => {
     },
   });
   assertEquals(sandbox.calls, []);
+});
+
+/** What the bash tool shows the model for a runtime without sessions. */
+const NO_SESSIONS_REFUSAL_TEXT =
+  "this sandbox runtime has no sessions; rerun the command without `session`";
+
+/** What the bash tool shows the model for a name that is not a session name. */
+const INVALID_SESSION_NAME_REFUSAL_TEXT =
+  "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`";
+
+Deno.test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
+  const sandbox = new FakeSandboxRuntime([{
+    stdout: "x\n",
+    stderr: "",
+    exitCode: 0,
+  }]);
+  const context = createContext(sandbox);
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    cwd: "repo",
+    session: "build",
+  });
+  // The whole of what the model is shown, so that nothing of the runtime's
+  // description, its mounts and host paths among it, is there beside it.
+  assertEquals(output, {
+    outputId: "run-1:bash:1",
+    stdout: "",
+    stderr: NO_SESSIONS_REFUSAL_TEXT,
+    exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+    cwd: "/workspace",
+  });
+  // Nothing ran: the model is told rather than silently given a fresh sandbox,
+  // and the working directory is the one it had, not the one it asked for.
+  assertEquals(sandbox.calls, []);
+  assertEquals(context.currentDir, "/workspace");
+});
+
+/**
+ * A runtime with sessions whose every shell call is refused with `refusal`.
+ */
+class RefusingSessionsRuntime extends FakeSandboxRuntime {
+  constructor(readonly refusal: SandboxSessionUnavailableError) {
+    super();
+  }
+  override describe(): SandboxRuntimeDescription {
+    return { ...super.describe(), kind: "runsc-cfc", sessions: true };
+  }
+  override runShell(): Promise<SandboxCommandResult> {
+    return Promise.reject(this.refusal);
+  }
+}
+
+/**
+ * A message of the kind a runtime writes for its operator: a host path, a
+ * container id and what `runsc` wrote to stderr, all in one.
+ */
+const RUNTIME_REFUSAL_MESSAGE =
+  'sandbox session "build" could not start: open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container; run without a session, or try again';
+
+/** What must not reach the model out of {@link RUNTIME_REFUSAL_MESSAGE}. */
+const RUNTIME_REFUSAL_LEAKS = [
+  "/Users/operator",
+  "s-run-1-0a1b2c3d-0001",
+  "runsc",
+  "FATAL",
+  "permission denied",
+  '"build"',
+];
+
+/** The text the bash tool shows the model for each reason, written out. */
+const SESSION_REFUSAL_TEXTS: Array<
+  [SandboxSessionUnavailableReason, string]
+> = [
+  ["invalid-name", INVALID_SESSION_NAME_REFUSAL_TEXT],
+  [
+    "enforcing-mode",
+    "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
+  ],
+  [
+    "session-lost",
+    "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`",
+  ],
+  [
+    "session-ended-during-call",
+    "the sandbox session ended while this call was in it and its state is lost: files outside the mounts and background processes are gone; the command may have run in whole or in part, and its output was not kept; check what it changed before running it again; the same `session` named again starts an empty session",
+  ],
+  [
+    "session-limit",
+    "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
+  ],
+  [
+    "start-failed",
+    "the sandbox session could not be started; the command did not run; rerun it without `session`; a start that failed is likely to fail again, so do not retry the session in a loop",
+  ],
+];
+
+Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(
+        RUNTIME_REFUSAL_MESSAGE,
+        "start-failed",
+      ),
+    ),
+  );
+  const contexts = countInvocationContexts(context);
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    cwd: "repo",
+    session: "build",
+  });
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(output.stdout, "");
+  assertStringIncludes(output.stderr, "could not be started");
+  // The call was handed to the runtime, so the run holds the record it was
+  // prepared with. Nothing ran, so the working directory is the one the run
+  // had and not the one the call asked for.
+  assertEquals(contexts.created, 1);
+  assertEquals(output.cwd, "/workspace");
+  assertEquals(context.currentDir, "/workspace");
+  assertEquals(logged.calls.length, 1);
+});
+
+Deno.test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
+  using _logged = stub(console, "error");
+  for (const [reason, text] of SESSION_REFUSAL_TEXTS) {
+    const context = createContext(
+      new RefusingSessionsRuntime(
+        new SandboxSessionUnavailableError(RUNTIME_REFUSAL_MESSAGE, reason),
+      ),
+    );
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      session: "build",
+    });
+    assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, reason);
+    assertEquals(output.stderr, text, reason);
+    for (const leak of RUNTIME_REFUSAL_LEAKS) {
+      assertEquals(output.stderr.includes(leak), false, `${reason}: ${leak}`);
+    }
+  }
+  // Every reason is covered, and no two read the same to the model.
+  assertEquals(
+    new Set(SESSION_REFUSAL_TEXTS.map(([, text]) => text)).size,
+    SESSION_REFUSAL_TEXTS.length,
+  );
+});
+
+Deno.test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
+  using _logged = stub(console, "error");
+  // A runtime is injected, and tests run unchecked: a reason outside the
+  // set, or none, can arrive whatever the type says. The last three are not
+  // strings, and each converts to the string of a reason in the set.
+  const reasons: unknown[] = [
+    undefined,
+    "out-of-memory",
+    "toString",
+    { toString: () => "session-lost" },
+    ["session-lost"],
+    new String("session-lost"),
+  ];
+  for (const reason of reasons) {
+    const context = createContext(
+      new RefusingSessionsRuntime(
+        new SandboxSessionUnavailableError(
+          RUNTIME_REFUSAL_MESSAGE,
+          reason as SandboxSessionUnavailableReason,
+        ),
+      ),
+    );
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      session: "build",
+    });
+    assertEquals(
+      output.exitCode,
+      BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+      String(reason),
+    );
+    assertEquals(
+      output.stderr,
+      "the sandbox runtime refused the `session` of this call; whether the command ran is not known, and no output of it was kept; check what it changed before running it again, and run it without `session`",
+      String(reason),
+    );
+  }
+});
+
+Deno.test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(
+        RUNTIME_REFUSAL_MESSAGE,
+        "start-failed",
+      ),
+    ),
+  );
+  await bashTool.invoke(context, { command: "echo hi", session: "build" });
+  assertEquals(logged.calls.length, 1);
+  const line = logged.calls[0].args.join(" ");
+  assertStringIncludes(line, "start-failed");
+  // The log renders the message quoted, so its parts are what is looked for.
+  assertStringIncludes(
+    line,
+    "open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container",
+  );
+});
+
+/**
+ * The one line the bash tool writes to the operator's log when a runtime
+ * refuses a session with `message`, for a call by the run `runId`.
+ */
+const loggedSessionRefusal = async (
+  message: string,
+  runId = "run-1",
+): Promise<string> => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(message, "start-failed"),
+    ),
+  );
+  context.runId = runId;
+  await bashTool.invoke(context, { command: "echo hi", session: "build" });
+  assertEquals(logged.calls.length, 1);
+  assertEquals(logged.calls[0].args.length, 1);
+  return String(logged.calls[0].args[0]);
+};
+
+/**
+ * Matches a character that must not reach the operator's log as itself: a
+ * control character, a line or paragraph separator, or a character that sets
+ * the direction text is laid out in.
+ */
+const RAW_IN_LOG_LINE =
+  // deno-lint-ignore no-control-regex
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
+
+Deno.test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
+  // The cause is what a runtime's message ends in, so the end is what is
+  // looked for.
+  const message =
+    `sandbox session "build" could not start: Failed to spawn '/opt/operator/toolchains/gvisor/bin/runsc': ${
+      "Permission denied (os error 13); ".repeat(20)
+    }the binary is not executable by uid 501, WHICH-IS-WHY`;
+  assertEquals(message.length > 600, true);
+
+  const line = await loggedSessionRefusal(message);
+
+  assertStringIncludes(line, "is not executable by uid 501, WHICH-IS-WHY");
+  assertStringIncludes(line, "sandbox session");
+  assertEquals(line.includes("length:"), false);
+});
+
+Deno.test("bash tool logs every line of a runtime's message of more than five lines", async () => {
+  const message = [
+    "sandbox session could not start:",
+    "line 2",
+    "line 3",
+    "line 4",
+    "line 5",
+    "line 6",
+    "the seventh line, WHICH-IS-WHY",
+  ].join("\n");
+
+  const line = await loggedSessionRefusal(message);
+
+  assertStringIncludes(line, "line 6\\nthe seventh line, WHICH-IS-WHY");
+  assertEquals(line.includes("length:"), false);
+});
+
+Deno.test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
+  const bound = BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH;
+  assertEquals(bound >= 4000, true);
+  const kept = `${"k".repeat(bound - 10)}KEPT-TAIL.`;
+  assertEquals(kept.length, bound);
+
+  // A message as long as the bound is carried whole, and a longer one is cut.
+  const whole = await loggedSessionRefusal(kept);
+  assertStringIncludes(whole, "KEPT-TAIL.");
+  assertEquals(whole.includes("length:"), false);
+
+  const cut = await loggedSessionRefusal(`${kept}CUT-TAIL${"c".repeat(3000)}`);
+  assertStringIncludes(cut, "KEPT-TAIL.");
+  assertEquals(cut.includes("CUT-TAIL"), false);
+  // The note of the cut gives the length of the whole message.
+  assertStringIncludes(cut, `length:${bound + "CUT-TAIL".length + 3000}`);
+  assertEquals(cut.length < bound + 500, true);
+});
+
+Deno.test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
+  const message =
+    "start\ncf-harness: FORGED LINE\r\x1b[2J\x1b]0;title\x07 c1:\u009b31m nel:\u0085 del:\x7f ls:\u2028 ps:\u2029 rlo:\u202eDESREVER lri:\u2066 end";
+
+  const line = await loggedSessionRefusal(message);
+
+  assertEquals(RAW_IN_LOG_LINE.exec(line), null);
+  // Each is there escaped, in the place it had.
+  assertStringIncludes(line, "start\\ncf-harness: FORGED LINE\\r\\u001b[2J");
+  assertStringIncludes(line, "\\u001b]0;title\\u0007 c1:\\u009b31m");
+  assertStringIncludes(line, "nel:\\u0085 del:\\u007f");
+  assertStringIncludes(line, "ls:\\u2028 ps:\\u2029");
+  assertStringIncludes(line, "rlo:\\u202eDESREVER lri:\\u2066 end");
+});
+
+Deno.test("bash tool escapes what a run id holds that would break the log line", async () => {
+  const line = await loggedSessionRefusal(
+    RUNTIME_REFUSAL_MESSAGE,
+    "run\ncf-harness: FORGED\u009b\u202e",
+  );
+
+  assertEquals(RAW_IN_LOG_LINE.exec(line), null);
+  assertStringIncludes(line, "run\\ncf-harness: FORGED\\u009b\\u202e");
+});
+
+Deno.test("bash tool logs nothing of the call's input for a refused session", async () => {
+  using logged = stub(console, "error");
+  const runtime = new RefusingSessionsRuntime(
+    new SandboxSessionUnavailableError(
+      RUNTIME_REFUSAL_MESSAGE,
+      "start-failed",
+    ),
+  );
+  const context = createContext(runtime);
+
+  const output = await bashTool.invoke(context, {
+    command: "echo MARKER-IN-COMMAND",
+    cwd: "MARKER-IN-CWD",
+    session: "MARKER-IN-SESSION",
+  });
+
+  // The call reached the runtime and the refusal was logged, so there is a
+  // line for the input to be absent from.
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(logged.calls.length, 1);
+  const written = logged.calls[0].args.map(String).join(" ");
+  assertStringIncludes(written, "FATAL ERROR: loading container");
+  assertEquals(written.includes("MARKER-IN-COMMAND"), false);
+  assertEquals(written.includes("MARKER-IN-SESSION"), false);
+  assertEquals(written.includes("MARKER-IN-CWD"), false);
+});
+
+Deno.test("bash tool names the run and the tool output in the log of a refused session", async () => {
+  // A run id the output id does not hold, so each is found by itself.
+  const line = await loggedSessionRefusal(
+    RUNTIME_REFUSAL_MESSAGE,
+    "run-of-the-operator",
+  );
+
+  assertStringIncludes(line, 'run `"run-of-the-operator"`');
+  assertStringIncludes(line, 'output `"run-1:bash:1"`');
+  assertStringIncludes(line, 'reason `"start-failed"`');
+});
+
+class SessionsFakeSandboxRuntime extends FakeSandboxRuntime {
+  override describe(): SandboxRuntimeDescription {
+    return { ...super.describe(), kind: "runsc-cfc", sessions: true };
+  }
+}
+
+/** Counts the invocation contexts a tool call asks the run to create. */
+const countInvocationContexts = (
+  context: HarnessToolContext,
+): { created: number } => {
+  const counter = { created: 0 };
+  const create = context.createCfcInvocationContext.bind(context);
+  context.createCfcInvocationContext = (options) => {
+    counter.created += 1;
+    return create(options);
+  };
+  return counter;
+};
+
+Deno.test("bash tool hands an accepted session to the runtime", async () => {
+  const sandbox = new SessionsFakeSandboxRuntime([{
+    stdout: "built\n",
+    stderr: "",
+    exitCode: 0,
+  }]);
+  const context = createContext(sandbox);
+  const contexts = countInvocationContexts(context);
+
+  const output = await bashTool.invoke(context, {
+    command: "make",
+    session: "build",
+  });
+
+  assertEquals(output.exitCode, 0);
+  assertEquals(sandbox.calls.length, 1);
+  assertEquals(sandbox.calls[0].type, "runShell");
+  assertEquals(sandbox.calls[0].request.session, "build");
+  assertEquals(contexts.created, 1);
+
+  // And a call that names none carries none, not an empty one.
+  await bashTool.invoke(context, { command: "make" });
+  assertEquals(sandbox.calls.length, 2);
+  assertEquals("session" in sandbox.calls[1].request, false);
+});
+
+Deno.test("bash tool accepts the longest session name the pattern allows", async () => {
+  const longest = "a".repeat(32);
+  assertEquals(SANDBOX_SESSION_NAME_PATTERN.test(longest), true);
+  const sandbox = new SessionsFakeSandboxRuntime();
+  const output = await bashTool.invoke(createContext(sandbox), {
+    command: "true",
+    session: longest,
+  });
+  assertEquals(output.exitCode, 0);
+  assertEquals(sandbox.calls[0]?.request.session, longest);
+});
+
+Deno.test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
+  const refused: Array<[string, unknown]> = [
+    ["a path separator", "a/b"],
+    ["a path that climbs out", "a/../../x"],
+    ["a leading climb", "../escape"],
+    ["a space", "a b"],
+    ["one character past the longest", "a".repeat(33)],
+    ["a valid name with a tail", "build;rm"],
+    ["a trailing newline", "build\n"],
+    ["a leading separator", "-build"],
+    ["an empty name", ""],
+    ["a number", 5],
+  ];
+  for (const [what, session] of refused) {
+    const sandbox = new SessionsFakeSandboxRuntime();
+    const context = createContext(sandbox);
+    const contexts = countInvocationContexts(context);
+
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      cwd: "repo",
+      session: session as string,
+    });
+
+    assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, what);
+    assertEquals(output.stdout, "", what);
+    // The text is the rule and nothing of the name that broke it.
+    assertEquals(output.stderr, INVALID_SESSION_NAME_REFUSAL_TEXT, what);
+    // Nothing ran and nothing was recorded for it.
+    assertEquals(sandbox.calls, [], what);
+    assertEquals(contexts.created, 0, what);
+    assertEquals(output.cwd, "/workspace", what);
+    assertEquals(context.currentDir, "/workspace", what);
+  }
+});
+
+Deno.test("bash tool refuses a session before it records an invocation", async () => {
+  // A runtime without sessions: the refusal is the whole of the call.
+  const sandbox = new FakeSandboxRuntime();
+  const context = createContext(sandbox);
+  const contexts = countInvocationContexts(context);
+
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    session: "build",
+  });
+
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(output.stderr, NO_SESSIONS_REFUSAL_TEXT);
+  assertEquals(sandbox.calls, []);
+  assertEquals(contexts.created, 0);
+
+  // The counter counts: the same call without the session records one.
+  await bashTool.invoke(context, { command: "echo hi" });
+  assertEquals(contexts.created, 1);
 });

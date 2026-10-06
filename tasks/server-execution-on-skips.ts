@@ -1,18 +1,24 @@
-#!/usr/bin/env -S deno run --allow-read
-
-// The EXPLICIT per-phase skip lists of the server-execution v2 ON arm
-// (docs/specs/server-side-execution/testing.md §2): in CI the integration
-// suites run twice — a default role (flag unset = the first-party default)
-// and an opposite role (the inverse explicitly selected in the server, test
-// processes, and baked browser shell). Whichever role resolves ON carries
-// this list. The ON arm may skip a test only by listing it here, with the plan
-// phase whose not-yet-landed surface it exercises and a reason. Never by silent
-// filtering: the CI step prints every skip from this file, and an empty
-// list means the ON arm runs the full suite — the OFF arm never skips.
-//
-// An entry retires when its phase lands (docs/plans/server-execution-v2.md);
-// a file listed here that no longer exists fails the run, so the lists
-// cannot go stale unnoticed.
+/**
+ * The explicit per-phase skip lists of the server-execution v2 ON arm
+ * (docs/specs/server-side-execution/testing.md §2). In CI the integration
+ * suites run twice: in a default role (flag unset, so the first-party
+ * default) and in an opposite role (the inverse selected explicitly in the
+ * server, the test processes, and the baked browser shell). Whichever role
+ * resolves ON reads these lists; the OFF role never skips.
+ *
+ * The ON arm skips a test only by listing it here, with the plan phase whose
+ * surface it exercises and a reason. The test topology (`tasks/test-topology/`)
+ * reads a whole-file entry as a unit the ON suite declares unavailable, and
+ * leaves the file out of that suite. A step entry leaves the file in; the file
+ * skips that one step itself through `serverExecutionOnStepSkip()`, and the
+ * topology declares only that leaf unavailable. An empty list means the ON
+ * arm runs the full suite.
+ *
+ * An entry retires when its phase lands (docs/plans/server-execution-v2.md).
+ * `validateServerExecutionOnSkips()` reports an entry that names a missing
+ * file, or a step its file does not bind, so the lists cannot go stale
+ * unnoticed.
+ */
 
 /** The integration suites that run an ON arm (testing.md §1–§2). */
 export type ServerExecutionSuite =
@@ -45,16 +51,15 @@ export type ServerExecutionOnSkip = {
   reason: string;
 
   /**
-   * STEP-LEVEL entry (Phase 7 fixer, 2026-08-16): the exact name of ONE
-   * `it`/step inside `file` that the ON arm skips while the REST of the
-   * file runs. The file is NOT dropped (`--ignore` / `--filter` leave it
-   * in); instead the test file itself guards that step with
-   * {@link serverExecutionOnStepSkip} — so the guard is BOUND to this entry
-   * (remove the entry and the step runs again) and the validator requires
-   * the file to name the step AND call the guard. For a one-file suite
-   * (runtime-client's `integration/client.test.ts`, 45 steps) this keeps
-   * the ON lane's coverage instead of turning the whole lane vacuous over
-   * one red step. Printed by the CI step like every other entry.
+   * The exact name of the one `it()` or step inside `file` that the ON arm
+   * skips while the rest of the file runs. The topology keeps the file in
+   * the ON suite and declares only this leaf unavailable; the test file
+   * itself guards the step with {@link serverExecutionOnStepSkip}, so the
+   * guard is bound to this entry (remove the entry and the step runs
+   * again), and the validator requires the file to name the step and call
+   * the guard. For a one-file suite (runtime-client's
+   * `integration/client.test.ts`) this keeps the ON lane's coverage rather
+   * than dropping the whole file over one red step.
    */
   step?: string;
 };
@@ -310,37 +315,6 @@ export const SERVER_EXECUTION_ON_SKIPS: Record<
   shell: [],
 };
 
-export const isServerExecutionSuite = (
-  value: string,
-): value is ServerExecutionSuite => value in SUITE_PACKAGE_DIR;
-
-/**
- * The `--ignore=` flag for a suite's `deno test`, or "" with no skips.
- *
- * BINDS ONLY WHEN DENO DISCOVERS THE FILES ITSELF (Phase 7 fixer,
- * 2026-08-16 — found while landing the two-browser entries): `deno test
- * --ignore=<file>` filters DISCOVERED modules (a directory argument, or a
- * glob Deno expands because it reached deno QUOTED), and silently ignores
- * nothing when the same file arrives as an EXPLICIT positional argument —
- * which is what a shell-expanded `./integration/*.test.ts` and the pattern
- * shards' `"${TEST_FILES[@]}"` both are. So the package `integration`
- * tasks (runner, runtime-client, shell) quote their glob, and the pattern
- * shards go through {@link serverExecutionOnFilterFiles} (`--filter`)
- * instead of this flag; the pins in the test file spawn deno on both
- * shapes. Before this fix every "skipped" entry since Phase 4 (topics-
- * navigation) actually RAN — unnoticed because the ON lanes ran a mixed
- * posture under which it passed.
- */
-export const serverExecutionOnIgnoreArg = (
-  suite: ServerExecutionSuite,
-): string => {
-  const skips = SERVER_EXECUTION_ON_SKIPS[suite].filter((skip) =>
-    skip.step === undefined
-  );
-  if (skips.length === 0) return "";
-  return `--ignore=${skips.map((skip) => skip.file).join(",")}`;
-};
-
 /**
  * The step-level guard a test FILE calls (see `ServerExecutionOnSkip.step`):
  * the entry for `step` in `file`, or undefined when the ON arm runs it.
@@ -358,53 +332,12 @@ export const serverExecutionOnStepSkip = (
     skip.file === file && skip.step === step
   );
 
-/** A candidate test path as the shard selector or a shell prints it
- * (`./integration/x.test.ts`, `integration/x.test.ts`), normalized to the
- * skip entries' package-relative form. */
-const normalizeCandidate = (file: string): string => file.replace(/^\.\//, "");
-
 /**
- * The EXPLICIT-FILE shape (the pattern shards): the candidate files minus
- * the suite's skip entries, in the input order, plus the entries that
- * were actually dropped from THIS list (so the run step can print what it
- * skipped here, not just the whole list). Files are compared after
- * normalizing a leading `./`.
+ * Reports each stale or unbound entry in `skipLists`: a duplicate, a file
+ * that does not exist, and a step entry whose file does not name the step
+ * or never calls {@link serverExecutionOnStepSkip}. An empty result means
+ * every entry is live.
  */
-export const serverExecutionOnFilterFiles = (
-  suite: ServerExecutionSuite,
-  candidates: readonly string[],
-): { files: string[]; skipped: ServerExecutionOnSkip[] } => {
-  const skips = SERVER_EXECUTION_ON_SKIPS[suite].filter((skip) =>
-    skip.step === undefined
-  );
-  const byFile = new Map(skips.map((skip) => [skip.file, skip]));
-  const files: string[] = [];
-  const skipped: ServerExecutionOnSkip[] = [];
-  for (const candidate of candidates) {
-    const skip = byFile.get(normalizeCandidate(candidate));
-    if (skip === undefined) files.push(candidate);
-    else if (!skipped.includes(skip)) skipped.push(skip);
-  }
-  return { files, skipped };
-};
-
-/** Human-readable report of a suite's skips, one line per entry. */
-export const serverExecutionOnSkipReport = (
-  suite: ServerExecutionSuite,
-): string => {
-  const skips = SERVER_EXECUTION_ON_SKIPS[suite];
-  if (skips.length === 0) {
-    return `[server-execution ON arm] ${suite}: no skips — full suite runs.`;
-  }
-  const lines = skips.map((skip) =>
-    skip.step === undefined
-      ? `[server-execution ON arm] ${suite}: SKIP ${skip.file} (until ${skip.phase}) — ${skip.reason}`
-      : `[server-execution ON arm] ${suite}: SKIP-STEP ${skip.file} :: ${skip.step} (until ${skip.phase}; the rest of the file runs) — ${skip.reason}`
-  );
-  return lines.join("\n");
-};
-
-/** Every listed file must exist; a vanished file is a stale entry. */
 export const validateServerExecutionOnSkips = async (
   repoRoot: URL,
   skipLists: Record<
@@ -464,75 +397,3 @@ export const validateServerExecutionOnSkips = async (
   }
   return problems;
 };
-
-/**
- * CLI body, split from the `import.meta.main` wrapper so tests can drive it
- * in-process (the same coverage-driven split as `tasks/test.ts`). The skip
- * report goes to `io.error` (stderr) so an `$( )` capture in a CI step picks
- * up only the payload from `io.log` (stdout); the step shows both.
- *
- * Two shapes:
- * - `<suite>` — prints the `--ignore=` flag (for a `deno test` that
- *   DISCOVERS its files: the package `integration` tasks' quoted glob);
- * - `<suite> --filter <file>...` — prints the candidate files minus the
- *   skips, one per line (for a `deno test` fed EXPLICIT files: the
- *   pattern shards), reporting on stderr which entries this list dropped.
- */
-export const main = async (
-  args: string[],
-  io: { log: (line: string) => void; error: (line: string) => void } = {
-    log: console.log,
-    error: console.error,
-  },
-  repoRoot: URL = new URL("../", import.meta.url),
-): Promise<number> => {
-  const suite = args[0] ?? "";
-  if (!isServerExecutionSuite(suite)) {
-    io.error(
-      `Unknown suite ${JSON.stringify(suite)}; expected one of: ${
-        Object.keys(SUITE_PACKAGE_DIR).join(", ")
-      }`,
-    );
-    return 1;
-  }
-  const problems = await validateServerExecutionOnSkips(repoRoot);
-  if (problems.length > 0) {
-    io.error(problems.join("\n"));
-    return 1;
-  }
-  io.error(serverExecutionOnSkipReport(suite));
-  if (args[1] === "--filter") {
-    const { files, skipped } = serverExecutionOnFilterFiles(
-      suite,
-      args.slice(2),
-    );
-    for (const skip of skipped) {
-      io.error(
-        `[server-execution ON arm] ${suite}: DROPPED ${skip.file} from this ` +
-          `file list (until ${skip.phase})`,
-      );
-    }
-    if (skipped.length === 0) {
-      io.error(
-        `[server-execution ON arm] ${suite}: no listed skip is in this ` +
-          "file list — every candidate runs.",
-      );
-    }
-    for (const file of files) io.log(file);
-    return 0;
-  }
-  if (args.length > 1) {
-    io.error(
-      `Unexpected arguments ${JSON.stringify(args.slice(1))}; expected ` +
-        "<suite> or <suite> --filter <file>...",
-    );
-    return 1;
-  }
-  const arg = serverExecutionOnIgnoreArg(suite);
-  if (arg !== "") io.log(arg);
-  return 0;
-};
-
-if (import.meta.main) {
-  Deno.exit(await main(Deno.args));
-}

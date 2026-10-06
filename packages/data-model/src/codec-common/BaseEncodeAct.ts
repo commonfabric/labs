@@ -119,9 +119,10 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
       return this.#encodeTagged(value, matched);
     } else if (Array.isArray(value)) {
       return this.encodeArray(value);
-    } else if (isPlainObject(value)) {
+    } else if (isPlainObject(value, false)) {
       // Note: `isPlainObject()` means what it says; notably, it returns `false`
-      // for `FabricSpecialObject`s.
+      // for `FabricSpecialObject`s. A record is `Object.prototype`-rooted, and
+      // a null-prototype object is refused below rather than written as one.
       return this.encodePlainObject(value);
     }
 
@@ -135,14 +136,21 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
         }.`,
       );
     } else {
-      // `value` is a primitive, a function, or a non-`FabricSpecialObject`
-      // instance (non-plain object). Distinguish them in the error message. The
-      // notable primitive case here is uninterned symbols (which are forbidden
-      // by the data model but cannot be forbidden in the type system). The
-      // instance and function cases are all almost certainly due to something
-      // upstream lying about the type of `value`.
+      // `value` is a primitive (`null` included, under a registry that does
+      // not claim it), a function, a null-prototype object, or a
+      // non-`FabricSpecialObject` instance (non-plain object). Distinguish them
+      // in the error message. The notable primitive case here is uninterned
+      // symbols (which are forbidden by the data model but cannot be forbidden
+      // in the type system). The object and function cases are all almost
+      // certainly due to something upstream lying about the type of `value`.
       const typeName = typeof value;
-      const label = (typeName === "object") ? "instance" : typeName;
+      const label = (typeName !== "object")
+        ? typeName
+        : (value === null)
+        ? "null"
+        : (Object.getPrototypeOf(value) === null)
+        ? "null-prototype object"
+        : "instance";
       throw new Error(
         debugStr`Cannot encode ${label} $quote${value}: no applicable codec.`,
       );
@@ -191,6 +199,11 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Refuses a key this runtime reserves on the way out.
    *
@@ -204,6 +217,13 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
    * @throws If `key` is one this runtime reserves.
    */
   protected static assertEncodableKey(key: string): void {
+    // TODO(danfuzz): Encode such a key, the format letting a record carry
+    // any key, once every boundary preserves both names: the copy loops
+    // rebuild records by assignment, which loses `__proto__`, and other
+    // boundaries refuse or drop `constructor`, which assignment copies
+    // faithfully. The cases
+    // `record with key __proto__` and `record with key constructor` in
+    // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
     if (isUnsafeObjectKey(key)) {
       throw new Error(
         `Cannot encode an object with a key this runtime reserves: ${

@@ -38,9 +38,9 @@ describe("PiecesController runtime diagnostics", () => {
         };
       },
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: `pieces-console-${crypto.randomUUID()}`,
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.ready;
@@ -182,7 +182,7 @@ describe("PiecesController runtime diagnostics", () => {
     );
     const tx = runtime.edit();
     argumentCell.withTx(tx).setRawUntyped(linkedCell.getAsLink());
-    assertEquals((await tx.commit()).error, undefined);
+    assertEquals((await tx.commit().settled).error, undefined);
 
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,

@@ -76,7 +76,7 @@ describe("memory v2 transaction path semantics", () => {
       nested: { value: 1 },
     });
 
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   it("returns undefined for a missing leaf but errors on a missing parent", async () => {
@@ -106,7 +106,7 @@ describe("memory v2 transaction path semantics", () => {
     });
     expect(missingParent.error?.name).toBe("NotFoundError");
 
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   it("reports a nested read of an absent document as NotFoundError naming the document", () => {
@@ -162,7 +162,7 @@ describe("memory v2 transaction path semantics", () => {
       id: "of:tracked-read-batch",
       path: [],
     }, { nested: { value: 1 }, label: "one" });
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     const addresses: IMemorySpaceAddress[] = [
       {
@@ -273,7 +273,7 @@ describe("memory v2 transaction path semantics", () => {
     seedTx.writeValueOrThrow({ ...address, path: [] }, {
       nested: { value: 1 },
     });
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     const recorder = new TraverseCaptureRecorder();
     const readTx = runtime.edit();
@@ -323,7 +323,7 @@ describe("memory v2 transaction path semantics", () => {
       },
     });
 
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   it("preserves siblings across mixed object and array path writes", async () => {
@@ -368,7 +368,7 @@ describe("memory v2 transaction path semantics", () => {
       },
     });
 
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   it("delete-of-nonexistent: an explicit delete at a missing path is a no-op (does not create intermediates)", () => {
@@ -500,7 +500,7 @@ describe("memory v2 transaction path semantics", () => {
 
     const seed = runtime.edit();
     seed.writeValueOrThrow(address, 0);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     tx.writeValueOrThrow(address, -0);
@@ -624,11 +624,9 @@ describe("memory v2 transaction path semantics", () => {
 
   it("nested write into a fresh doc materializes the doc value at the root", () => {
     // The whole doc value is what just came into existence; the activity
-    // path for subscribers watching the root should reflect that
-    // (regression for the `findMaterializedParentPath` "currentRoot is
-    // undefined" case, which previously failed to fire for path length 1
-    // -- the storage-boundary "value" prefix makes single-segment user
-    // writes hit that path length).
+    // path for subscribers watching the root should reflect that, for a
+    // path of length 1 too -- the storage-boundary "value" prefix makes a
+    // single-segment user write one.
     const tx = runtime.edit();
     tx.writeValueOrThrow({
       space,

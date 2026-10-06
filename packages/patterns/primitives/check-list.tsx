@@ -86,7 +86,14 @@ export const CheckList = pattern<CheckListInput, CheckListOutput>(
     });
 
     const removeItem = action(({ item }: { item: CheckItem }) => {
-      items.remove(item);
+      // Plain reads of inline rows carry value references; mapped UI rows
+      // carry the live slot reference.
+      const index = items.get().findIndex((candidate, index) =>
+        Writable.equals(items.key(index), item) ||
+        Writable.equals(candidate, item)
+      );
+      if (index < 0) return;
+      items.set(items.get().filter((_, position) => position !== index));
     });
 
     const clearCompleted = action(() => {

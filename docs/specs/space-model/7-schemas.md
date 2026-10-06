@@ -57,6 +57,12 @@ This causes:
 - Different runtime behavior (send vs set)
 - Different change detection (every send triggers)
 
+It is a statement about what the position is rather than a view onto a value
+held there, so it does not combine with a description of that position's own
+value the way `asCell: ["cell"]` does; the keywords beside it describe the
+event instead. See
+[JSON Schema](../json_schema.md#streams-are-declarations-not-views).
+
 #### `default`
 
 Provides default values:

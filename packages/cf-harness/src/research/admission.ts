@@ -47,6 +47,7 @@ export interface RawResearchResult {
   missing?: unknown;
   leads?: unknown;
   questions?: unknown;
+  refinedTask?: unknown;
 }
 
 /** Host observations against which a proposed kit is admitted. */
@@ -87,6 +88,8 @@ export const RESEARCH_RESULT_SCHEMA = {
     },
     inputs: RESEARCH_INPUTS_SCHEMA,
     selectedPatternIds: {
+      description:
+        "Inspected patterns selected as reusable building blocks for this goal. The author must import each selection or give a one-line reason for omitting it. Do not select a pattern only as a specification to rewrite; explain a capability mismatch in the findings instead.",
       type: "array",
       maxItems: 8,
       items: { type: "string", maxLength: 200 },
@@ -220,11 +223,16 @@ export const researchResultSchema = (
       maxItems: 3,
       items: { type: "string", maxLength: 500 },
     };
+    properties.refinedTask = { type: "string", maxLength: 2_000 };
   }
   return {
     type: "object",
     properties,
-    required: Object.keys(properties).filter((key) => key !== "example"),
+    // An orientation without a refined task is still admitted: losing the kit
+    // over one missing sentence would cost the parent everything else in it.
+    required: Object.keys(properties).filter((key) =>
+      key !== "example" && key !== "refinedTask"
+    ),
     additionalProperties: false,
   };
 };
@@ -602,11 +610,13 @@ export const admitResearchResult = async (
     sources,
     missing: unique(missing),
   };
+  const refinedTask = stringValue(raw.refinedTask, 2_000).trim();
   return purpose === "answer" ? { ...findings, purpose } : {
     ...findings,
     purpose,
     leads,
     availableHandleTokens: [...(state.handleTokens ?? [])],
     questions: stringList(raw.questions, 3, 500),
+    ...(refinedTask.length > 0 ? { refinedTask } : {}),
   };
 };

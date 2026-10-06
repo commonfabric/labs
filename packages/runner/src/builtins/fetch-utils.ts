@@ -1,8 +1,12 @@
 import { internSchema } from "@commonfabric/data-model-schema";
-import { hashStringOf } from "@commonfabric/data-model";
+import {
+  type FabricPlainObject,
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { stripUndefinedProps } from "@commonfabric/utils/strip-undefined-props";
-import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { Schema } from "../builder/types.ts";
 import { type Cell } from "../cell.ts";
@@ -76,23 +80,15 @@ export const internalSchema = internSchema(
  * `hashStringOf()` itself is happy to hash `undefined` values; no
  * normalization for hashability per se is needed.
  */
-export function computeInputHashFromValue<T extends Record<string, any>>(
-  inputs: T | undefined,
+export function computeInputHashFromValue(
+  inputs: FabricPlainObject | undefined,
 ): string {
-  const { result: _result, ...inputsOnly } = (inputs ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const { result: _result, ...rest } = inputs ?? {};
+  const inputsOnly: Record<string, FabricValue> = { ...rest };
   const options = inputsOnly.options;
-  if (isObjectNotArray(options)) {
-    const {
-      mutexTimeoutMs: _mutexTimeoutMs,
-      ...requestOptions
-    } = options as Record<string, unknown>;
-    const normalizedOptions = stripUndefinedProps(requestOptions) as Record<
-      string,
-      unknown
-    >;
+  if (isFabricPlainObject(options)) {
+    const { mutexTimeoutMs: _mutexTimeoutMs, ...requestOptions } = options;
+    const normalizedOptions = stripUndefinedProps(requestOptions);
     if (Object.keys(normalizedOptions).length > 0) {
       inputsOnly.options = normalizedOptions;
     } else {
@@ -100,14 +96,6 @@ export function computeInputHashFromValue<T extends Record<string, any>>(
     }
   }
   return hashStringOf(stripUndefinedProps(inputsOnly));
-}
-
-export function computeInputHash<T extends Record<string, any>>(
-  tx: IExtendedStorageTransaction,
-  inputsCell: Cell<T>,
-): string {
-  const inputs = inputsCell.getAsQueryResult([], tx) ?? {};
-  return computeInputHashFromValue(inputs);
 }
 
 /**
@@ -118,7 +106,7 @@ export function computeInputHash<T extends Record<string, any>>(
  * result/error to maintain the invariant that result/error are undefined while
  * pending.
  */
-export async function tryClaimMutex<T extends Record<string, any>>(
+export async function tryClaimMutex<T extends FabricPlainObject>(
   runtime: Runtime,
   inputsCell: Cell<T>,
   pending: Cell<boolean>,
@@ -238,7 +226,7 @@ export async function tryClaimMutex<T extends Record<string, any>>(
  * must not treat the effect as fulfilled (fetch.ts converts it into an
  * error-shaped result, or propagates when even that cannot commit).
  */
-export async function tryWriteResult<T extends Record<string, any>>(
+export async function tryWriteResult<T extends FabricPlainObject>(
   runtime: Runtime,
   internal: Cell<Schema<typeof internalSchema>>,
   inputsCell: Cell<T>,

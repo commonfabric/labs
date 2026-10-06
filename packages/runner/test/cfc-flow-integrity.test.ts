@@ -16,6 +16,7 @@ import { atomPropagationClass } from "../src/cfc/atom-classes.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-flow-integrity");
 const space = signer.did();
@@ -69,7 +70,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -140,7 +141,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { sum: rawA.n + rawB.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       // p1 on every input: survives the meet. p2 only on B: dropped.
@@ -183,7 +184,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const a = runtime.getCell(space, "flow-wl-a", undefined, tx);
@@ -193,7 +194,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const out = runtime.getCell(space, "flow-wl-out", undefined, tx);
       out.set({ sum: rawA.n + rawB.n });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(
         storageManager,
@@ -217,7 +218,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       await seedDoc(runtime, "flow-tb-src", [certified("p1")]);
 
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "flow-test-builtin",
       });
@@ -230,7 +231,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
@@ -258,7 +259,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       await seedDoc(runtime, "flow-tb-multi-src", [certified("p1")]);
 
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.x",
       });
@@ -270,7 +271,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { space, scope: "space", id: out1Id, path: ["value"] },
         { copied: raw.n },
       );
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.y",
       });
@@ -281,7 +282,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       for (const id of [out1Id, out2Id]) {
         const integrity = derivedIntegrity(storageManager, id);
@@ -312,7 +313,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { space, scope: "space", id: out1Id, path: ["value"] },
         { copied: raw.n },
       );
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "late-identity",
       });
@@ -323,7 +324,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The unattributed write must not borrow the later trusted identity.
       for (const id of [out1Id, out2Id]) {
@@ -343,7 +344,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       await seedDoc(runtime, "flow-tb-author-src", [certified("p1")]);
 
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "the-author",
       });
@@ -357,12 +358,12 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       );
       // A later run in the same tx changes the identity but writes nothing:
       // the write-authoring identity is still uniform.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "the-bystander",
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
@@ -405,7 +406,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const cell = runtime.getCell(space, "flow-forge", forged.schema, tx);
       cell.set({ field: "hello" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const declared = entriesOf(
         storageManager,

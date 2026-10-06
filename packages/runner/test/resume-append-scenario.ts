@@ -11,7 +11,7 @@ import {
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -126,19 +126,13 @@ class GatedStorageManager extends StorageManager {
   private constructor(o: Options, server: MemoryV2Server.Server, gate?: Gate) {
     super(o, new GatedSessionFactory(() => server, gate));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
 export function makeServer(): MemoryV2Server.Server {
-  return new MemoryV2Server.Server({
-    authorizeSessionOpen(m) {
-      const p = (m.authorization as { principal?: unknown })?.principal;
-      return typeof p === "string" ? p : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  return newSharedServer();
 }
 
 export interface AppendScenario {
@@ -187,7 +181,7 @@ async function build(scenario: AppendScenario): Promise<void> {
     tx0,
   );
   rt.run(tx0, compiled, { items }, rc);
-  await tx0.commit();
+  await tx0.commit().settled;
   // Drive the aggregate to convergence: pull() reads to quiescence and settled()
   // waits for the scheduler, storage sync, and any async builtin work — both
   // converge internally, so no pump loop here.
@@ -237,7 +231,7 @@ export async function runResumeAppendScenario(
       compiled.resultSchema,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     // Not awaited yet: the resume pre-sync names the per-element result
     // documents and the gate holds them, so the start stays pending for the
@@ -272,7 +266,7 @@ export async function runResumeAppendScenario(
       const nextItems = scenario.updateItems?.(cur) ??
         [...cur, scenario.appended];
       rc2.withTx(tx1).key("items").set(nextItems);
-      await tx1.commit();
+      await tx1.commit().settled;
       // idle() drives whatever the scheduler holds to quiescence without
       // blocking on the held documents the way pull() would.
       await rt2.idle();

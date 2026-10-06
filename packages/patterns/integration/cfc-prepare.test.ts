@@ -14,6 +14,7 @@ import { Identity } from "@commonfabric/identity";
 import {
   attachWorkerProfiler,
   awaitViewSettled,
+  createTestSpace,
   env,
   type Page,
   type ProbeApi,
@@ -106,7 +107,7 @@ describe({ name: "cfc-prepare", ignore: !enabled }, () => {
     await Deno.mkdir(output, { recursive: true });
     identity = await Identity.generate({ implementation: "noble" });
     controller = await initializePiecesController({
-      space: env.SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(env.API_URL),
       identity,
       cfcEnforcementMode: "enforce-explicit",
@@ -144,7 +145,7 @@ describe({ name: "cfc-prepare", ignore: !enabled }, () => {
         await shell.disposeRuntime();
         await shell.goto({
           frontendUrl: env.FRONTEND_URL,
-          view: { spaceName: env.SPACE_NAME, pieceId: piece.id },
+          view: { spaceDid: controller.getSpace(), pieceId: piece.id },
           identity,
         });
         await waitForText(page, "#cfc-open", "Open thread");
@@ -297,7 +298,7 @@ describe({ name: "cfc-prepare", ignore: !enabled }, () => {
         );
         target.set({ copied: row });
         tx.prepareCfc();
-        const refusal = await tx.commit();
+        const refusal = await tx.commit().settled;
         expect(isCfcEnforcementRejection(refusal.error)).toBe(true);
         const strictReason = refusal.error!.message.replaceAll(
           target.getAsNormalizedFullLink().id,

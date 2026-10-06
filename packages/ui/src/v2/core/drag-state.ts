@@ -1,6 +1,7 @@
 import { type CellHandle, UI, type VNode } from "@commonfabric/runtime-client";
 import { render } from "@commonfabric/html/client";
-import "../components/cf-cell-link/index.ts";
+
+import { createNameChip } from "./name-chip.ts";
 
 /**
  * State information for an active drag operation.
@@ -177,6 +178,27 @@ export function subscribeToDrag(listener: DragListener): () => void {
   };
 }
 
+/**
+ * Swallows the `click` a browser dispatches when the pointer that ended a drag
+ * of `element` is released over it, so that dragging does not also activate
+ * what the drag started on. The next `pointerdown` on `element` ends the
+ * suppression when no such click comes, as when the pointer was released over
+ * something else.
+ */
+export function suppressClickAfterDrag(element: HTMLElement): void {
+  const swallow = (event: Event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    end();
+  };
+  const end = () => {
+    element.removeEventListener("click", swallow, true);
+    element.removeEventListener("pointerdown", end, true);
+  };
+  element.addEventListener("click", swallow, true);
+  element.addEventListener("pointerdown", end, true);
+}
+
 /** A drag preview element and, when it renders a piece, its teardown. */
 export interface DragPreview {
   /** The preview element (not yet added to the DOM). */
@@ -189,11 +211,12 @@ export interface DragPreview {
 /**
  * Create a drag preview element for a cell.
  * Uses the cell's [UI] property if available, otherwise falls back to
- * a static cf-cell-link pill.
+ * a chip naming the cell.
  *
- * The preview renders the cell's `[UI]` through the same renderer the page
- * uses, so the confidentiality policy that decides what a piece may show
- * decides what its drag preview shows.
+ * The preview renders the cell's `[UI]`, or the name in the chip, through the
+ * same renderer the page uses, so the confidentiality policy that decides
+ * what a piece may show decides what its drag preview shows. When even the
+ * name cannot be rendered, the preview shows the short form of the cell's id.
  *
  * @param cell - The CellHandle to create a preview for
  * @returns The preview element and its teardown
@@ -217,8 +240,7 @@ export function createDragPreview(cell: CellHandle): DragPreview {
 
   const cellValue = cell.get();
   if (!cellValue || typeof cellValue !== "object" || !(UI in cellValue)) {
-    _addFallbackPreview(preview, cell);
-    return { preview };
+    return { preview, cleanup: _addFallbackPreview(preview, cell) };
   }
 
   try {
@@ -234,16 +256,31 @@ export function createDragPreview(cell: CellHandle): DragPreview {
     return { preview, cleanup };
   } catch (error) {
     console.warn("[drag-state] Failed to render [UI] preview:", error);
-    _addFallbackPreview(preview, cell);
-    return { preview };
+    return { preview, cleanup: _addFallbackPreview(preview, cell) };
   }
 }
 
-function _addFallbackPreview(container: HTMLElement, cell: CellHandle) {
-  const link = document.createElement("cf-cell-link");
-  link.cell = cell;
-  link.isStatic = true;
-  container.appendChild(link);
+/**
+ * Adds a chip naming `cell` to `container` and returns the teardown of its
+ * render, or shows the short form of the cell's id when the name cannot be
+ * rendered.
+ */
+function _addFallbackPreview(
+  container: HTMLElement,
+  cell: CellHandle,
+): (() => void) | undefined {
+  const onError = (error: unknown) => {
+    console.warn("[drag-state] Failed to render the name preview:", error);
+  };
+  try {
+    const { chip, cleanup } = createNameChip(cell, { onError });
+    container.appendChild(chip);
+    return cleanup;
+  } catch (error) {
+    onError(error);
+    container.textContent = `#${cell.id().slice(-6)}`;
+    return undefined;
+  }
 }
 
 /**

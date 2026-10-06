@@ -1,4 +1,12 @@
-import { action, assert, pattern, TESTS, wish, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  wish,
+  Writable,
+} from "commonfabric";
 import {
   createEventAndContinue,
   createEventHandler,
@@ -61,6 +69,9 @@ export default pattern(() => {
   const assert_stream_registers_event = assert(() =>
     events.get().length === 1 && pieceRegistry.get().length === 1
   );
+  const assert_registered_event_name = assert(() =>
+    pieceRegistry.get()[0]?.[NAME] === "Planning"
+  );
   const assert_create_another_keeps_prompt_open = assert(() =>
     events.get().length === 2 &&
     pieceRegistry.get().length === 2 &&
@@ -77,6 +88,7 @@ export default pattern(() => {
     [TESTS]: [
       { action: action_create_from_stream },
       { assertion: assert_stream_registers_event },
+      { assertion: assert_registered_event_name },
       { action: action_create_another_from_prompt },
       { assertion: assert_create_another_keeps_prompt_open },
       { action: action_create_from_prompt },

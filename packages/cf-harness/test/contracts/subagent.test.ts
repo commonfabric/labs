@@ -44,6 +44,38 @@ const REPORTED_FAILURE = {
 
 describe("subagent", () => {
   describe("return contract", () => {
+    it("preserves an unavailable inspection marker beside an applied piece without releasing prose", () => {
+      const sanitized = validateAndSanitizeSubagentReturn({
+        schema: PATTERN_AUTHOR_RETURN_SCHEMA,
+        childRunId: "uninspected-piece",
+        value: {
+          ok: true,
+          resultRef: "cfh:a:piece",
+          verification: "not-checked",
+          describes: "Changed the filter; the result could not be inspected.",
+        },
+      });
+
+      expect(sanitized.value).toEqual({
+        ok: true,
+        resultRef: { "@link": "opaque:uninspected-piece#/resultRef" },
+        verification: "not-checked",
+        describes: { "@link": "opaque:uninspected-piece#/describes" },
+      });
+      expect(() =>
+        validateAndSanitizeSubagentReturn({
+          schema: PATTERN_AUTHOR_RETURN_SCHEMA,
+          childRunId: "uninspected-piece",
+          value: {
+            ok: true,
+            resultRef: "cfh:a:piece",
+            verification: "27 calendar rows and 277 documents",
+            describes: "Changed the join.",
+          },
+        })
+      ).toThrow();
+    });
+
     for (const outcome of ["success", "blocked"] as const) {
       it(`keeps revision verification on the ${outcome} branch behind the ordinary reference boundary`, () => {
         const value = outcome === "success"

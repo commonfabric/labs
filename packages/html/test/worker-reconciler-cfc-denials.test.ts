@@ -9,6 +9,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import type { WorkerVNode } from "../src/worker/types.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -73,13 +74,15 @@ Deno.test("worker reconciler CFC denials", async (t) => {
         },
       },
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
   };
 
   const collectOps = () => {
     const all: VDomOp[] = [];
     return {
-      onOps: (ops: VDomOp[]) => all.push(...ops),
+      onOps: (ops: VDomOp[]) => {
+        for (const op of ops) all.push(op);
+      },
       all,
       propValue: (key: string): string | undefined => {
         for (const op of all) {
@@ -153,7 +156,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       undefined,
       unsignedTx,
     ).set("Unsigned note");
-    expect((await unsignedTx.commit()).ok).toBeDefined();
+    expect((await unsignedTx.commit().settled).ok).toBeDefined();
 
     const confidential = runtime.getCell<string>(
       signer.did(),
@@ -184,6 +187,30 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       expect(said).not.toContain("OncologyReferralLetter");
     });
 
+    // A property is decided on what its read consumed, so the explanation of
+    // one it withholds names those labels, and only at debug.
+    await t.step("explains a property it withholds", async () => {
+      const property: WorkerVNode = {
+        type: "vnode",
+        name: "span",
+        props: { title: confidential as never },
+        children: [],
+      };
+      const quiet = await mounted(property, {
+        collector: collectOps(),
+        ceiling: true,
+      });
+      expect(quiet).toContain(CEILING_BLOCK);
+      expect(quiet).not.toContain("OncologyReferralLetter");
+      const said = await mounted(property, {
+        collector: collectOps(),
+        ceiling: true,
+        debug: true,
+      });
+      expect(said).toContain("OncologyReferralLetter");
+      expect(said).toContain("consumed");
+    });
+
     await t.step(
       "names the label beside the ceiling once raised to debug",
       async () => {
@@ -193,7 +220,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           debug: true,
         });
         expect(said).toContain("OncologyReferralLetter");
-        expect(said).toContain("stored");
+        expect(said).toContain("consumed");
       },
     );
 
@@ -246,10 +273,10 @@ Deno.test("worker reconciler CFC denials", async (t) => {
     // The gate blocks a cell whose label it cannot read, and reports the
     // decision it made without one.
     await t.step("names an unreadable label as the source", async () => {
-      const unreadable = runtime.getCell<string>(
+      const unreadable = patchableCell(runtime.getCell<string>(
         signer.did(),
         "cfc-denials-unsigned",
-      );
+      ));
       unreadable.resolveAsCell = () => {
         throw new Error("label resolution failed");
       };
@@ -278,7 +305,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           undefined,
           tx,
         ).set({ maxConfidentiality: [], $value: confidential as never });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         const props = runtime.getCell<Record<string, unknown>>(
           signer.did(),
           "cfc-denials-boundary-props",

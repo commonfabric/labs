@@ -65,6 +65,10 @@ export const BROWSER_SUBAGENT_ALLOWED_TOOL_IDS = [
   "read_skill_resource",
   "run_skill_script",
 ] as const satisfies readonly BuiltinToolId[];
+/** A browser child's surface when a browser host carries its actions. */
+export const BROWSER_HOST_SUBAGENT_ALLOWED_TOOL_IDS = [
+  "browser",
+] as const satisfies readonly BuiltinToolId[];
 export const WEB_FETCH_SUBAGENT_ALLOWED_TOOL_IDS = [
   "web_fetch",
 ] as const satisfies readonly BuiltinToolId[];
@@ -255,8 +259,10 @@ const VERIFICATION_REF_SCHEMA: JSONSchema = {
  * names what stopped it from the fixed inert vocabulary — no data read out of
  * the space, no partial result dressed as a whole one.
  *
- * The success branch names the running pattern's result cell, with a line of
- * prose about what it computes and its publication hashtags. Either branch
+ * The success branch names the created or revised piece's result cell, with a
+ * line of prose about the build or change and its publication hashtags. An
+ * unavailable result inspection carries `verification: "not-checked"`; a
+ * successful source update does not establish its effect on data. Either branch
  * can name a separate verification result; reading its comparison goes
  * through run_pattern's ordinary release rules. There is no field for source,
  * in any encoding, because a parent has no use for source it should not be
@@ -266,8 +272,8 @@ const VERIFICATION_REF_SCHEMA: JSONSchema = {
  *
  * The free-form strings arrive at the parent as opaque links, the ordinary
  * treatment of unconstrained strings in a sanitized child return; `ok`, the
- * failure `code`, and the minted reference tokens are what the parent acts
- * on.
+ * failure `code`, fixed verification marker, and minted reference tokens are
+ * what the parent acts on.
  */
 export const PATTERN_AUTHOR_RETURN_SCHEMA: JSONSchema = {
   oneOf: [
@@ -281,10 +287,16 @@ export const PATTERN_AUTHOR_RETURN_SCHEMA: JSONSchema = {
             "The working piece's result reference from run_pattern or revise_piece, never the verification probe's reference.",
         },
         verificationRef: VERIFICATION_REF_SCHEMA,
+        verification: {
+          type: "string",
+          enum: ["not-checked"],
+          description:
+            "The piece was created or revised, but its result could not be inspected. State that limitation, describe only the build or change, and point the user to the piece. Omission does not establish verification.",
+        },
         describes: {
           type: "string",
           description:
-            "One or two inert sentences saying what the pattern computes. No data read out of the space.",
+            "One or two inert sentences describing what was built or changed, with any inspection limitation. No data read out of the space or claims about unseen results.",
         },
         hashtags: {
           type: "array",
@@ -415,6 +427,22 @@ export const BROWSER_SUBAGENT_PROFILE_CONFIG: HarnessSubagentProfileConfig = {
   returnPolicy: DEFAULT_SUBAGENT_RETURN_POLICY,
 };
 
+/**
+ * The `browser` profile in a run with a browser host attached. The host
+ * executes every browser action itself, so the child holds the `browser` tool
+ * and nothing that runs on this machine: no skill scripts, which drive the
+ * Browser Access CLI, and no host tools.
+ */
+export const BROWSER_HOST_SUBAGENT_PROFILE_CONFIG:
+  HarnessSubagentProfileConfig = {
+    type: "cf-harness.subagent-profile-config",
+    profile: BROWSER_SUBAGENT_PROFILE,
+    allowedToolIds: BROWSER_HOST_SUBAGENT_ALLOWED_TOOL_IDS,
+    hostToolIds: NO_HOST_TOOL_IDS,
+    maxModelTurns: DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
+    returnPolicy: DEFAULT_SUBAGENT_RETURN_POLICY,
+  };
+
 export const WEB_FETCH_SUBAGENT_PROFILE_CONFIG: HarnessSubagentProfileConfig = {
   type: "cf-harness.subagent-profile-config",
   profile: WEB_FETCH_SUBAGENT_PROFILE,
@@ -504,6 +532,16 @@ export interface HarnessSubagentInputSummary {
   returnSchemaDigest?: string;
 }
 
+/**
+ * The child reads through the parent's fabric session and therefore inherits
+ * its ceiling. The clauses remain in each run's fabric-session record; this
+ * model-visible reference records inheritance without disclosing their atoms.
+ */
+export interface HarnessSubagentConfidentialityCeiling {
+  source: "parent";
+  mode: "bounded" | "owner-view";
+}
+
 export interface HarnessSubagentRunManifest {
   type: "cf-harness.subagent-run-manifest";
   version: 1;
@@ -529,6 +567,7 @@ export interface HarnessSubagentRunManifest {
   returnPolicy: HarnessSubagentReturnPolicy;
   createdAt: string;
   inputSummary: HarnessSubagentInputSummary;
+  confidentialityCeiling?: HarnessSubagentConfidentialityCeiling;
 }
 
 /**

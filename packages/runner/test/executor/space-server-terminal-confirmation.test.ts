@@ -9,11 +9,13 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 
+import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("terminal confirmation owner");
 const service = await Identity.fromPassphrase("terminal confirmation service");
@@ -113,9 +115,11 @@ describe("SpaceServer", () => {
     };
     const facade = new Proxy(server, {
       get(target, key, receiver) {
-        if (key === "demandedInstancesForSpace") {
+        if (key === "demandForSpace") {
           return () =>
-            demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [];
+            sessionDemandOf(
+              demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [],
+            );
         }
         const value = Reflect.get(target, key, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -208,7 +212,7 @@ describe("SpaceServer", () => {
       });
       const tx = creator.edit();
       creator.run(tx, compiled, {}, root);
-      const committed = tx.commit();
+      const committed = tx.commit().settled;
       await settle(admitted.promise);
       return async () => {
         expect((await settle(committed)).error).toBeUndefined();
@@ -224,6 +228,15 @@ describe("SpaceServer", () => {
 
   describe("instance members", () => {
     describe("activate()", () => {
+      // A sync count here counts CALLS, and the demand pass calls `syncCell`
+      // for each address it is about to load before it loads any of them —
+      // the instance a demand names, and the space instance a scoped demand
+      // falls back to. The call a traversal then makes for one of those
+      // documents is answered from the watch the pull registered, so a count
+      // below carries one call more per address than the documents read. What
+      // the documents-read claim rests on is the session's tracked and watch
+      // sizes, asserted beside the first of them.
+
       it("leaves a successor tenure independent of a parked load", async () => {
         const releases = [
           Promise.withResolvers<void>(),
@@ -304,7 +317,7 @@ describe("SpaceServer", () => {
             await settle(root.sync());
             const tx = creator.edit();
             creator.run(tx, compiled, {}, root);
-            expect((await settle(tx.commit())).error).toBeUndefined();
+            expect((await settle(tx.commit().settled)).error).toBeUndefined();
             await settle(creator.storageManager.synced());
             await Promise.all(publications);
             server.setServerExecutionObserver({
@@ -363,7 +376,6 @@ describe("SpaceServer", () => {
           expect(await settle(fixture.serving.activate())).toBe(true);
           expect(fixture.stats.structureLoadTerminal).toBe(1);
           expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(1);
-          expect(fixture.syncCount()).toBe(scope === "space" ? 3 : 4);
           expect(server.demandSetSizesForSpace(space).perSession).toMatchObject(
             [
               {
@@ -372,6 +384,7 @@ describe("SpaceServer", () => {
               },
             ],
           );
+          expect(fixture.syncCount()).toBe(scope === "space" ? 4 : 6);
 
           const syncs = fixture.syncCount();
           await settle(
@@ -397,7 +410,7 @@ describe("SpaceServer", () => {
         expect(await settle(fixture.serving.activate())).toBe(true);
         expect(fixture.stats.structureLoadTerminal).toBe(1);
         expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
-        expect(fixture.syncCount()).toBe(8);
+        expect(fixture.syncCount()).toBe(9);
       });
 
       it("re-asks the chain once the engine's database has closed", async () => {
@@ -413,7 +426,7 @@ describe("SpaceServer", () => {
           const result = await sync(cell, options);
           if (
             cell.getAsNormalizedFullLink().id === ids[2] &&
-            cell.tx?.tx.immediate && !closed
+            cellTx(cell)?.tx.immediate && !closed
           ) {
             closed = true;
             await server.close();
@@ -430,7 +443,7 @@ describe("SpaceServer", () => {
           expect(await settle(fixture.serving.activate())).toBe(true);
           expect(fixture.stats.structureLoadTerminal).toBe(1);
           expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
-          expect(fixture.syncCount()).toBe(6);
+          expect(fixture.syncCount()).toBe(7);
         } finally {
           const parked = fixture.serving.park("confirmation-test");
           release.resolve();
@@ -449,7 +462,7 @@ describe("SpaceServer", () => {
           fixture.manager.syncCell = async (cell, options) => {
             if (
               cell.getAsNormalizedFullLink().id === ids[0] &&
-              cell.tx?.tx.immediate && ++rootSyncs === 2
+              cellTx(cell)?.tx.immediate && ++rootSyncs === 2
             ) {
               reAsked.resolve();
               await release.promise;
@@ -507,7 +520,7 @@ describe("SpaceServer", () => {
         await clock.settle();
         expect(fixture.stats.structureLoadTerminal).toBe(2);
         expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(2);
-        expect(fixture.syncCount()).toBe(6);
+        expect(fixture.syncCount()).toBe(8);
       });
 
       it("retires a decision when demand leaves during a structure load", async () => {
@@ -520,7 +533,7 @@ describe("SpaceServer", () => {
           const result = await sync(cell, options);
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && ++reads === 1
+            cellTx(cell)?.tx.immediate && ++reads === 1
           ) {
             held++;
             await release.promise;
@@ -539,7 +552,7 @@ describe("SpaceServer", () => {
           await clock.tick(300);
           await clock.settle();
           expect(fixture.stats.structureLoadTerminal).toBe(decisions + 1);
-          expect(fixture.syncCount()).toBe(6);
+          expect(fixture.syncCount()).toBe(8);
         } finally {
           release.resolve();
         }
@@ -552,7 +565,7 @@ describe("SpaceServer", () => {
         fixture.manager.syncCell = async (cell, options) => {
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && failing
+            cellTx(cell)?.tx.immediate && failing
           ) {
             throw new Error("injected chain sync failure");
           }
@@ -579,7 +592,7 @@ describe("SpaceServer", () => {
         fixture.manager.syncCell = async (cell, options) => {
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && ++matching >= 2 && failing
+            cellTx(cell)?.tx.immediate && ++matching >= 2 && failing
           ) {
             throw new Error("injected chain sync failure");
           }
@@ -629,7 +642,7 @@ describe("SpaceServer", () => {
               const result = await sync(cell, options);
               if (
                 cell.getAsNormalizedFullLink().id === ids[1] &&
-                cell.tx?.tx.immediate &&
+                cellTx(cell)?.tx.immediate &&
                 ++matching === pass
               ) {
                 held++;

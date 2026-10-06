@@ -3,7 +3,11 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   deepFrozenCloneAndInternSchema,
 } from "@commonfabric/data-model-schema";
-import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
+import {
+  isSubschema,
+  SINGLE_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import {
   cloneIfNecessary,
   fabricAwareEqual,
@@ -28,6 +32,7 @@ import {
   isCellKind,
   isSchemaScope,
 } from "../scope.ts";
+import { fabricAwareEqualThroughViews } from "../view-equality.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives, isOrClause } from "./clause.ts";
 import {
@@ -728,6 +733,7 @@ const schemaTypeDefinitionIssue = (type: unknown): string | undefined => {
 
 const strictConstraintDefinitionIssue = (
   schema: Exclude<JSONSchema, boolean>,
+  formatAnnotations = false,
 ): string | undefined => {
   const record = schema as Record<string, unknown>;
   for (
@@ -785,7 +791,7 @@ const strictConstraintDefinitionIssue = (
   if (Object.hasOwn(record, "format")) {
     if (
       typeof record.format !== "string" ||
-      !SUPPORTED_SCHEMA_FORMATS.has(record.format)
+      (!formatAnnotations && !SUPPORTED_SCHEMA_FORMATS.has(record.format))
     ) {
       return `schema has unsupported format ${String(record.format)}`;
     }
@@ -801,6 +807,9 @@ const strictConstraintDefinitionIssue = (
 };
 
 interface SchemaDefinitionContext {
+  /** Whether formats are annotations and all structural positions are checked. */
+  structuredResult: boolean;
+
   activeByRoot: WeakMap<object, WeakSet<object>>;
   activeRefsByRoot: WeakMap<object, Set<string>>;
 
@@ -837,10 +846,17 @@ interface SchemaDefinitionContext {
   provenLog: Array<{ rootKey: object; schema: object }>;
 }
 
-/** Validate the schema language understood by strict Fabric migration checks. */
+/**
+ * Validates a Fabric schema definition. Migration mode restricts formats to
+ * those the migration value checker enforces. Structured-result mode admits
+ * string format annotations and checks unevaluated schema positions too.
+ * Diagnostics may contain schema content; callers crossing a disclosure
+ * boundary replace them with a fixed message.
+ */
 export const validateSchemaDefinition = (
   schema: JSONSchema,
   fullSchema: JSONSchema = schema,
+  mode: "migration" | "structured-result" = "migration",
 ): string | undefined => {
   // Compatibility later interns schemas for root-aware identity tracking.
   // Prove that normalization is safe up front so malformed literal payloads,
@@ -853,6 +869,7 @@ export const validateSchemaDefinition = (
     return `$: schema cannot be normalized: ${message}`;
   }
   return validateSchemaDefinitionInternal(schema, fullSchema, "$", {
+    structuredResult: mode === "structured-result",
     activeByRoot: new WeakMap(),
     activeRefsByRoot: new WeakMap(),
     walkedDefinitionsByRoot: new WeakMap(),
@@ -1054,7 +1071,10 @@ const validateSchemaDefinitionInternal = (
       }
     }
 
-    const constraintIssue = strictConstraintDefinitionIssue(schema);
+    const constraintIssue = strictConstraintDefinitionIssue(
+      schema,
+      context.structuredResult,
+    );
     if (constraintIssue !== undefined) return `${path}: ${constraintIssue}`;
 
     if (schema.required !== undefined) {
@@ -1150,17 +1170,19 @@ const validateSchemaDefinitionInternal = (
     }
 
     for (
-      const key of [
-        "additionalProperties",
-        "contains",
-        "contentSchema",
-        "else",
-        "if",
-        "items",
-        "not",
-        "propertyNames",
-        "then",
-      ] as const
+      const key of context.structuredResult
+        ? [...SINGLE_SUBSCHEMA_KEYS, ...UNUSED_SINGLE_SUBSCHEMA_KEYS]
+        : [
+          "additionalProperties",
+          "contains",
+          "contentSchema",
+          "else",
+          "if",
+          "items",
+          "not",
+          "propertyNames",
+          "then",
+        ] as const
     ) {
       const child = schema[key];
       if (child === undefined) continue;
@@ -1629,6 +1651,16 @@ export function relaxDefaultedRequired(
   return relaxed as JSONSchema;
 }
 
+/**
+ * Validates `value` against `schema`, returning the failure's message, or
+ * `undefined` when it validates.
+ *
+ * `value` may hold query-result views: the default merge hands over the parts
+ * it added nothing to as the views they were read through. An `enum`, a
+ * `const` or `uniqueItems` compares the part of `value` it applies to with
+ * `fabricAwareEqualThroughViews()`, which decides each view as the stored
+ * value it reads.
+ */
 export const validateSchemaValue = (
   schema: JSONSchema,
   value: unknown,
@@ -1852,13 +1884,13 @@ const validateAgainstSchemaUncached = (
 
     if (
       Array.isArray(schema.enum) &&
-      !schema.enum.some((entry) => fabricAwareEqual(entry, value))
+      !schema.enum.some((entry) => fabricAwareEqualThroughViews(entry, value))
     ) {
       return mismatch("value is not in enum");
     }
     if (
       Object.hasOwn(schema, "const") &&
-      !fabricAwareEqual(schema.const, value)
+      !fabricAwareEqualThroughViews(schema.const, value)
     ) {
       return mismatch("value does not match const");
     }
@@ -2138,7 +2170,7 @@ function validateStrictSchemaConstraints(
         if (!Object.hasOwn(value, index)) continue;
         if (
           value.slice(0, index).some((entry) =>
-            fabricAwareEqual(entry, value[index])
+            fabricAwareEqualThroughViews(entry, value[index])
           )
         ) {
           return mismatch("array items are not unique");

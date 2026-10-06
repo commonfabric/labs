@@ -314,6 +314,7 @@ describe("StorageManager per-space host wiring", () => {
 
     const realWebSocket = globalThis.WebSocket;
     (globalThis as { WebSocket: unknown }).WebSocket = RecordingWebSocket;
+    RecordingWebSocket.dialed.length = 0;
     try {
       const signer = await Identity.fromPassphrase("per-space-host-wiring");
       const spaceA = signer.did();
@@ -444,6 +445,51 @@ describe("StorageManager.registerSpaceHost", () => {
     const manager = await makeManager();
     expect(() => manager.registerSpaceHost(spaceLearned, "not a url"))
       .toThrow(`Invalid host for space ${spaceLearned}`);
+  });
+
+  describe("registerSpaceHostDetailed()", () => {
+    it("returns an acceptance for a first hint and for its confirmation", async () => {
+      const manager = await makeManager();
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test"),
+      ).toEqual({ accepted: true });
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test/"),
+      ).toEqual({ accepted: true });
+      expect(
+        manager.registerSpaceHostDetailed(spaceSeeded, "http://host-seed.test"),
+      ).toEqual({ accepted: true });
+    });
+
+    it("returns `known-different-host` with the seeded host for a seeded space", async () => {
+      const manager = await makeManager();
+      expect(
+        manager.registerSpaceHostDetailed(spaceSeeded, "http://host-evil.test"),
+      ).toEqual({
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: "http://host-seed.test/",
+      });
+    });
+
+    it("returns `known-different-host` with the accepted host for a later hint", async () => {
+      const manager = await makeManager();
+      expect(manager.registerSpaceHost(spaceLearned, "http://host-b.test"))
+        .toBe(true);
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-c.test"),
+      ).toEqual({
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: "http://host-b.test/",
+      });
+    });
+
+    it("throws on a malformed host, naming the space", async () => {
+      const manager = await makeManager();
+      expect(() => manager.registerSpaceHostDetailed(spaceLearned, "not a url"))
+        .toThrow(`Invalid host for space ${spaceLearned}`);
+    });
   });
 
   it("rejects an unusable first hint without fixing the route", async () => {
@@ -692,6 +738,59 @@ describe("WebSocketTransport failure signaling", () => {
       },
     }));
   };
+
+  it("resets an open connection and ignores its queued frames and late close events", async () => {
+    await withTransport(async (transport, socket) => {
+      const received: string[] = [];
+      const delivered = Promise.withResolvers<void>();
+      let disconnects = 0;
+      transport.setReceiver((payload) => {
+        received.push(payload);
+        delivered.resolve();
+      });
+      transport.setCloseReceiver(() => disconnects++);
+      const initialSend = transport.send("initial");
+      const initial = socket();
+      initial.openConnection();
+      await initialSend;
+
+      initial.receive("stale");
+      transport.reset();
+      expect(initial.readyState).toBe(DrivableWebSocket.CLOSED);
+      const nextSend = transport.send("next");
+      const next = socket();
+      expect(next).not.toBe(initial);
+      next.openConnection();
+      await nextSend;
+      initial.dispatchEvent(new Event("close"));
+      next.receive("fresh");
+      await delivered.promise;
+      expect(received).toEqual(["fresh"]);
+      expect(disconnects).toBe(0);
+      expect(next.sent).toEqual(["next"]);
+      await transport.close();
+      await expect(transport.send("closed")).rejects.toThrow(
+        "Memory transport closed",
+      );
+    });
+  });
+
+  it("rejects an opening connection on reset and permits a new one", async () => {
+    await withTransport(async (transport, socket) => {
+      const pending = transport.send("initial");
+      const rejected = expect(pending).rejects.toThrow(
+        "memory websocket transport closed before opening",
+      );
+      transport.reset();
+      await rejected;
+
+      const next = transport.send("next");
+      socket().openConnection();
+      await next;
+      expect(socket().sent).toEqual(["next"]);
+      await transport.close();
+    });
+  });
 
   it("refuses to open a session declaring a read ceiling on a server that does not advertise `sessionReadCeiling`", async () => {
     // Such a server would accept the descriptor and serve every query

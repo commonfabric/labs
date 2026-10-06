@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { handler } from "../src/builder/module.ts";
 import { pattern } from "../src/builder/pattern.ts";
+import { sendEvent } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { EventAppendDeliveryOutcome } from "../src/storage/interface.ts";
 
@@ -39,7 +40,7 @@ describe("a stream send's appended hook off server execution", () => {
         tx,
       );
       runtime.run(tx, counter, { value: 0 }, result);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const settled: string[] = [];
@@ -47,7 +48,7 @@ describe("a stream send's appended hook off server execution", () => {
       let appendedTx: unknown;
       let committedTx: unknown;
       await new Promise<void>((resolve) => {
-        (result.key("bump") as any).send({}, (committed: unknown) => {
+        sendEvent(result.key("bump"), {}, (committed: unknown) => {
           settled.push("commit");
           committedTx = committed;
           resolve();
@@ -86,12 +87,12 @@ describe("a stream send's appended hook off server execution", () => {
         tx2,
       );
       runtime.run(tx2, declining, { value: 0 }, declined);
-      await tx2.commit();
+      await tx2.commit().settled;
       await runtime.idle();
       let refused: EventAppendDeliveryOutcome | undefined;
       let failedStatus: string | undefined;
       await new Promise<void>((resolve) => {
-        (declined.key("bump") as any).send({}, (committed: any) => {
+        sendEvent(declined.key("bump"), {}, (committed: any) => {
           failedStatus = committed.status().status;
           resolve();
         }, {

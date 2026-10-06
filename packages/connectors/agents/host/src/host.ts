@@ -831,6 +831,10 @@ export class AgentsHost {
       return prior !== undefined && prior.syncStatus === "complete" &&
         readSinceStart.has(key) &&
         prior.driver === driver.source.driver &&
+        // A pairing can arrive after the transcript was published. A driver
+        // that forgot one after restart leaves the durable pairing intact.
+        (summary.startedAs === undefined ||
+          prior.startedAs === summary.startedAs) &&
         summary.updatedAt !== null && prior.updatedAt === summary.updatedAt &&
         prior.archived === summary.archived && prior.active === summary.active;
     };

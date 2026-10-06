@@ -19,7 +19,7 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -365,8 +365,8 @@ class RewritingStorageManager extends StorageManager {
       ),
     );
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
@@ -453,14 +453,7 @@ describe("list builtin resume container defer", () => {
     sm2Hold = undefined;
     heldDeliveries = [];
     withheldDocIds.clear();
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
     sm1 = RewritingStorageManager.make(signer, server, {
       redirectSends: true,
       onWithheldCommitOp: (n) => redirected += n,
@@ -508,7 +501,7 @@ describe("list builtin resume container defer", () => {
       const tx0 = runtime.edit();
       const rc = runtime.getCell(space, resultKey, compiled.resultSchema, tx0);
       const handle = runtime.run(tx0, compiled, { items }, rc);
-      await tx0.commit();
+      await tx0.commit().settled;
       for (let k = 0; k < 10; k++) {
         await handle.pull();
         await runtime.idle();
@@ -628,7 +621,7 @@ describe("list builtin resume container defer", () => {
         created.compiled.resultSchema,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const started = await rt2.start(rc2);
       expect(started).toBe(true);
@@ -972,7 +965,7 @@ describe("list builtin resume container defer", () => {
           created.compiled.resultSchema,
           tx,
         );
-        await tx.commit();
+        await tx.commit().settled;
         const started = await rt2.start(rc2);
         expect(started).toBe(true);
         // Drive the resume with a sink (an effect, so the coordinator runs)
@@ -1143,7 +1136,7 @@ describe("list builtin resume container defer", () => {
               created.compiled.resultSchema,
               tx3,
             );
-            await tx3.commit();
+            await tx3.commit().settled;
             for (let k = 0; k < 10; k++) {
               await rc3.pull();
               await rt3.idle();

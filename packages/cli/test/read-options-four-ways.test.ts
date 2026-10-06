@@ -58,6 +58,7 @@ import {
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
 import { safeStringify } from "../lib/render.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 const userIdentity = await Identity.fromPassphrase("cf-four-ways-user");
 
@@ -105,7 +106,7 @@ describe("read options, four ways", () => {
     );
     profileCell.set({ ...PROFILE });
     profileSpaceCell.key("defaultPattern").set(profileCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     tx = runtime.edit();
@@ -121,7 +122,7 @@ describe("read options, four ways", () => {
     ]);
     // deno-lint-ignore no-explicit-any
     (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     return runtime.getCell(profileSpace, "profile-default") as Cell<unknown>;
@@ -209,6 +210,7 @@ describe("read options, four ways", () => {
       // deno-lint-ignore no-explicit-any
     } as any;
     const executed = await executeResolvedCallable(resolution, {}, {
+      sendEvent: sendThroughStandIn,
       invocation: { id: "inv-four-ways", session: "ses:four-ways" },
       selection,
     });
@@ -269,6 +271,7 @@ describe("read options, four ways", () => {
       filePath,
       ["invoke"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir: join(tmpDir, "state"),
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(pieces as any),

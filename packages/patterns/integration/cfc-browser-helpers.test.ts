@@ -2977,8 +2977,8 @@ describe("CFC browser helpers", () => {
       assertStringIncludes(error.message, "outside the page");
       // The size of the page, so a message that names some other 800 cannot
       // satisfy this.
-      assertStringIncludes(error.message, "width: 800");
-      assertStringIncludes(error.message, "height: 600");
+      assertStringIncludes(error.message, "width:800");
+      assertStringIncludes(error.message, "height:600");
 
       const clicks = await narrow.evaluate(() =>
         (globalThis as typeof globalThis & {

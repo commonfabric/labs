@@ -111,14 +111,21 @@ profile roster — every participant's cross-space profile badge), `self.tsx`,
 `text-swapper.tsx`.
 
 App and integration directories: `activity-log/`, `agent/`, `base/`,
-`battleship/`, `budget-tracker/`, `calendar/`, `card-piles/`,
-`collection-naming/` (the member-naming library and the board that exercises it;
-the library is the reference, the board is a demo), `contacts/`, `cozy-poll/`,
-`examples/`, `experimental/` (explicitly unhardened explorations), `file-share/`
-(a minimal file-sharing example: bytes go to the blob store, cells hold
-descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
-`project-list/`, `router/`, `scoped-group-chat/`, `scoped-user-directory/`,
-`scrabble/`, `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
+`battleship/`, `book-recommendations/`, `budget-tracker/`, `calendar/`,
+`card-piles/`, `collection-naming/` (the member-naming library and the board
+that exercises it; the library is the reference, the board is a demo),
+`contacts/`, `cozy-poll/`, `examples/`, `experimental/` (explicitly unhardened
+explorations), `fabrichat/` (chat among real profiles: a room per conversation,
+whose messages and reactions are written only through reviewed surfaces, each
+user's manager of their rooms, and placements that show a room in other spaces),
+`file-share/` (a minimal file-sharing example: bytes go to the blob store, cells
+hold descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`,
+`profile-group-chat/`, `project-list/`,
+[`recommend-a-book/`](recommend-a-book/README.md) (personal reading shelf and
+private visitor recommendations), `router/`, `scoped-group-chat/`,
+`scoped-user-directory/`, `scrabble/`, `shared-note/` (a shared Markdown
+document whose live cursors carry each viewer's profile name),
+`shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
 `weekly-calendar/`.
 
 Connector-owned patterns live with their connector families: the
@@ -152,6 +159,9 @@ itself. Two groups sit outside the marker's reach and are fixture anyway:
 
 The remaining legacy patterns each carry the legacy marker:
 
+- `collaborative-note/` — a minimal co-presence note, superseded by
+  `shared-note/`, which adds an editable title, an embeddable view, and notices
+  for editing and live-cursor failures.
 - `factory-outputs/` and its support file `vehicles.ts` — machine-generated
   pattern-factory outputs, kept with their eval scores and never intended as
   style references. `parking-coordinator/main.tsx` is also a live integration
@@ -247,17 +257,16 @@ passes it into the topic it creates, in the same transaction as the append; each
 topic stores that number and publishes it as `shortName`, reading nothing of its
 board to report it; and `backfillNames` numbers what the board held before it
 numbered anything, asking each such topic to store its number through the
-topic's own `recordName`. No topic's number is SHOWN for now:
-`SHOW_TOPIC_NUMBERS` in `topic.tsx` is off while only some topics have one, so a
-topic publishes no `shortName` and every surface that would show one reads
-nothing; the numbers are stored and recorded either way. Topics reference each
-other by CELL: the board derives the whole graph once by scanning what each
-topic points at with `equals`, and each topic reads its own inbound edges out of
-that pivot. Demonstrates: reading-list-style piece-in-list composition,
-profile-native browser authorship on a shared piece, mergeable comment appends,
-session-scoped drafts, bounding a whole-list derivation with a narrow declared
-`lift` parameter, passing topics through a sort so an activity-ordered list
-keeps the identity its elements already have, `multiUserTest` coverage.
+topic's own `recordName`. Every surface that shows a number reads the one a
+topic publishes — the header badge, the card, the survey row, and the mention
+universe row a `#42` query matches. Topics reference each other by CELL: the
+board derives the whole graph once by scanning what each topic points at with
+`equals`, and each topic reads its own inbound edges out of that pivot.
+Demonstrates: reading-list-style piece-in-list composition, profile-native
+browser authorship on a shared piece, mergeable comment appends, session-scoped
+drafts, bounding a whole-list derivation with a narrow declared `lift`
+parameter, passing topics through a sort so an activity-ordered list keeps the
+identity its elements already have, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
 profile, mergeable, index, discovery, bounded read, row identity, references,
@@ -311,12 +320,11 @@ interface TopicsOutput {
 A single #topic piece: the durable object the tracker's list holds. Body edits
 go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
 the concurrent-edit window small); comments and links are mergeable appends.
-Stores the number its board calls it by as its own input, and publishes it as
-`shortName` while `SHOW_TOPIC_NUMBERS` is on, rendering it as a badge beside the
-title; the constant is off for now, so a topic stores its number and shows none.
-A topic nobody has numbered stores none either way. `recordName` is how a number
-reaches a topic the board did not pass one to at create. Use from
-`topics/main.tsx` via `navigateTo()`, or standalone.
+Stores the number its board calls it by as its own input and publishes it as
+`shortName`, rendering it as a badge beside the title. A topic nobody has
+numbered stores none and publishes none. `recordName` is how a number reaches a
+topic the board did not pass one to at create. Use from `topics/main.tsx` via
+`navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge
@@ -951,37 +959,37 @@ interface Output {
 }
 ```
 
-## `collaborative-note/main.tsx`
+## `shared-note/main.tsx`
 
-A minimal multiplayer note built on `cf-code-editor`. The note body is durable
-per-space state synchronized through Memory's operation protocol. Names, carets,
-and selections travel separately as ephemeral co-presence data. Each viewer
-selects or creates a Fabric profile with `wish({ query: "#profile" })`; the
-editor uses that profile's `#profileName` field as its participant label. The
-host provides the WebSocket endpoint, while `cf-code-editor` derives an opaque
-room identifier from the shared note field.
+A shared Markdown document built on `cf-code-editor` in collaborative prose
+mode. The title and body are durable per-space state; body edits synchronize
+through Memory's operation protocol. Names, carets, and selections travel
+separately as ephemeral co-presence data over each viewer's memory connection.
+Each viewer selects or creates a Fabric profile with
+`wish({ query: "#profile" })`, and the editor uses that profile's `#profileName`
+field as its cursor label. The same compact view serves as `UI` and `TILE_UI`,
+so the note embeds in other surfaces, and editing or live-cursor failures show
+as notices above the editor.
 
-**Keywords:** multiplayer, collaborative editor, note, profile, wish,
+**Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
 co-presence, CodeMirror
 
 ### Input Schema
 
 ```ts
-interface CollaborativeNoteInput {
-  note?: PerSpace<
-    string | Default<"# Collaborative note\n\nStart writing together.">
-  >;
+interface SharedNoteInput {
+  title?: PerSpace<string | Default<"Untitled note">>;
+  content?: PerSpace<string | Default<"">>;
 }
 ```
 
 ### Output Schema
 
 ```ts
-interface CollaborativeNoteOutput {
-  note: PerSpace<
-    string | Default<"# Collaborative note\n\nStart writing together.">
-  >;
-  participantName: string;
+interface SharedNoteOutput {
+  title: PerSpace<string>;
+  content: PerSpace<string>;
+  participantName: PerUser<string>;
 }
 ```
 

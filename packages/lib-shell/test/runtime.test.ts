@@ -9,11 +9,16 @@ import {
   cfcEnforcementStrictness,
   RUNTIME_CFC_DIAL_DEFAULTS,
 } from "@commonfabric/runner/cfc";
-import { createSession, Identity } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity";
 import {
   createRuntimeClientOptions,
   defaultRenderConfidentialityCeiling,
+  resolveSpaceDid,
   RuntimeInternals,
   type RuntimeTrustSnapshot,
 } from "@commonfabric/lib-shell";
@@ -82,11 +87,22 @@ class MockRuntimeClient {
     return Promise.resolve();
   }
 
-  resolvedSpaceNames: string[] = [];
+  createdSpaceLabels: Array<string | undefined> = [];
 
-  resolveSpaceName(name: string): Promise<DID> {
-    this.resolvedSpaceNames.push(name);
-    return Promise.resolve(`did:key:z6Mk-${name}` as DID);
+  createSpace(label?: string): Promise<DID> {
+    this.createdSpaceLabels.push(label);
+    return Promise.resolve(
+      `did:key:z6Mk-created-${this.createdSpaceLabels.length}` as DID,
+    );
+  }
+
+  registeredSpaceHosts: Array<{ space: DID; host: string }> = [];
+
+  registerSpaceHostDetailed(space: DID, host: string) {
+    this.registeredSpaceHosts.push({ space, host });
+    return Promise.resolve(
+      { accepted: false, reason: "default-route-in-use" } as const,
+    );
   }
 
   /** Records the scope each slug read named, alongside the piece. */
@@ -247,6 +263,39 @@ describe("RuntimeInternals", () => {
     }
   }
 
+  describe("createPiece", () => {
+    it("forwards deterministic creation options and the explicit home space", async () => {
+      const calls: unknown[] = [];
+      const piece = { id: () => "participant-header" };
+      const client = Object.assign(new MockRuntimeClient(), {
+        createPiece: (...args: unknown[]) => {
+          calls.push(args);
+          return Promise.resolve(piece);
+        },
+      });
+      const runtime = new RuntimeInternals(client as never);
+      const space = "did:key:z6Mk-host-create-home" as DID;
+      const source = new URL("https://fabric.example/header.tsx");
+      const options = {
+        cause: "host:participant-header:v1",
+        argument: {},
+        run: true,
+      };
+      try {
+        expect(
+          await runtime.createPiece(space, source, {
+            cause: options.cause,
+            argument: {},
+            run: true,
+          }),
+        ).toBe(piece);
+        expect(calls).toEqual([[source, space, options]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  });
+
   describe("getSpaceRootPattern", () => {
     it("caches a successful root-pattern lookup", async () => {
       const client = new MockRuntimeClient();
@@ -404,14 +453,33 @@ describe("RuntimeInternals", () => {
     }
   });
 
-  it("resolves named spaces through the worker client", async () => {
+  it("creates spaces through the worker client and returns each DID", async () => {
     const client = new MockRuntimeClient();
     const runtime = new RuntimeInternals(client as any);
     try {
-      await expect(runtime.resolveSpaceName("notebook")).resolves.toBe(
-        "did:key:z6Mk-notebook",
+      await expect(runtime.createSpace("notebook")).resolves.toBe(
+        "did:key:z6Mk-created-1",
       );
-      expect(client.resolvedSpaceNames).toEqual(["notebook"]);
+      await expect(runtime.createSpace()).resolves.toBe(
+        "did:key:z6Mk-created-2",
+      );
+      expect(client.createdSpaceLabels).toEqual(["notebook", undefined]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("returns the worker's registration for a refused space host", async () => {
+    const space = "did:key:z6Mk-lib-shell-routed-space" as DID;
+    const client = new MockRuntimeClient();
+    const runtime = new RuntimeInternals(client as any);
+    try {
+      await expect(
+        runtime.registerSpaceHostDetailed(space, "http://host-b.test/"),
+      ).resolves.toEqual({ accepted: false, reason: "default-route-in-use" });
+      expect(client.registeredSpaceHosts).toEqual([
+        { space, host: "http://host-b.test/" },
+      ]);
     } finally {
       await runtime.dispose();
     }
@@ -790,9 +858,9 @@ describe("RuntimeInternals", () => {
 
   it("defaults worker runtime options to shell-compatible CFC policy and principal trust", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-runtime-options",
+      spaceDid: identity.did(),
     });
 
     const experimental = {
@@ -819,8 +887,17 @@ describe("RuntimeInternals", () => {
       actingPrincipal: session.as.did(),
     });
     expect(options.spaceDid).toBe(session.space);
-    expect(options.spaceName).toBe(session.spaceName);
     expect(options.experimental).toBe(experimental);
+    // A page that names no outer frame has none, and one that names one has
+    // that one.
+    expect(options.iframeOuterFrameUrl).toBeUndefined();
+    expect(
+      createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://shell.test/"),
+        iframeOuterFrameUrl: "/outer-frame",
+      }).iframeOuterFrameUrl,
+    ).toBe("/outer-frame");
     // With the render ceiling off, neither ceiling field reaches the worker:
     // rendering is unbounded and author declassification is honored. The case
     // below reads the same two fields with the ceiling on.
@@ -833,9 +910,9 @@ describe("RuntimeInternals", () => {
     // below the rung a Runtime resolves for a construction naming none would
     // hand that embedder less enforcement through the shell than without it.
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-enforcement-floor",
+      spaceDid: identity.did(),
     });
 
     const options = createRuntimeClientOptions({
@@ -853,9 +930,9 @@ describe("RuntimeInternals", () => {
 
   it("populates the §8.10.6 render ceiling when cfcRenderCeiling is on", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-render-ceiling",
+      spaceDid: identity.did(),
     });
 
     const options = createRuntimeClientOptions({
@@ -886,14 +963,30 @@ describe("RuntimeInternals", () => {
     expect(options.renderConfidentialityCeiling?.atoms).toContain(
       session.as.did(),
     );
-    // Influence-class caveat kinds are display-dischargeable (rendered
-    // disclosure); material-risk kinds (e.g. injection-risk-unscreened) are
-    // deliberately NOT allow-listed.
-    expect(options.renderConfidentialityCeiling?.caveatKinds).toContain(
-      "https://commonfabric.org/cfc/concepts/prompt-influence",
-    );
-    expect(options.renderConfidentialityCeiling?.caveatKinds).not.toContain(
-      "https://commonfabric.org/cfc/concepts/prompt-injection-risk-unscreened",
+    // The whole §10.1 prompt-caveat family, and nothing else: the three
+    // screening-gradient tiers and prompt influence, each in its canonical
+    // and its short spelling (the unsuffixed form is retired, #5661). A prompt
+    // caveat says not to trust the content as instructions to a model; a
+    // display shows it to the acting user, so the default display ceiling
+    // admits it (SC-54, proposed §8.10.6). Admission is not discharge: the
+    // caveat stays on
+    // the value. Spelled out here rather than read from the constant the
+    // ceiling is built from, so a family member missing there fails here.
+    const family = [
+      "prompt-injection-risk-unscreened",
+      "prompt-injection-risk-ingress-screened",
+      "prompt-injection-risk-value-screened",
+      "prompt-influence",
+    ];
+    expect(
+      [...(options.renderConfidentialityCeiling?.caveatKinds ?? [])].sort(),
+    ).toEqual(
+      [
+        ...family.map((kind) =>
+          `https://commonfabric.org/cfc/concepts/${kind}`
+        ),
+        ...family,
+      ].sort(),
     );
 
     const off = createRuntimeClientOptions({
@@ -907,9 +1000,9 @@ describe("RuntimeInternals", () => {
 
   it("builds the render ceiling for a host-supplied acting principal", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-render-ceiling-delegated",
+      spaceDid: identity.did(),
     });
     const delegate = "did:key:z6MkDelegatedHost";
 
@@ -936,9 +1029,9 @@ describe("RuntimeInternals", () => {
 
   it("falls back to the session identity when nobody is named", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-render-ceiling-fallback",
+      spaceDid: identity.did(),
     });
     const sessionCeiling = defaultRenderConfidentialityCeiling(
       session.as.did(),
@@ -971,9 +1064,9 @@ describe("RuntimeInternals", () => {
 
   it("allows hosts to override CFC policy and trust snapshot", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-runtime-options",
+      spaceDid: identity.did(),
     });
     const trustSnapshot: RuntimeTrustSnapshot = {
       id: "principal:loom-host",
@@ -1005,9 +1098,9 @@ describe("RuntimeInternals", () => {
 
   it("carries the worker-console flag onto the client options", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-forward-worker-console",
+      spaceDid: identity.did(),
     });
 
     expect(
@@ -1034,6 +1127,8 @@ describe("RuntimeInternals", () => {
     type CapturedInitData = {
       forwardWorkerConsole?: boolean;
       concurrentWatchRefresh?: boolean;
+      awaitHealth?: boolean;
+      trustSnapshot?: { actingPrincipal?: string };
       renderDeclassificationPolicy?: string;
       renderConfidentialityCeiling?: {
         atoms?: unknown[];
@@ -1041,10 +1136,17 @@ describe("RuntimeInternals", () => {
       };
     };
 
-    it("includes forwardWorkerConsole, concurrentWatchRefresh, and the render ceiling in the Initialize request", async () => {
-      const identity = await Identity.generate({ implementation: "noble" });
-
+    /**
+     * A worker that reports ready and then refuses every request, recording
+     * the Initialize requests it saw and how often it was terminated.
+     */
+    function refusingWorker(): {
+      StubWorker: unknown;
+      initRequests: Array<{ data: CapturedInitData }>;
+      terminations: number[];
+    } {
       const initRequests: Array<{ data: CapturedInitData }> = [];
+      const terminations: number[] = [];
       class StubWorker extends EventTarget {
         constructor(_url: URL | string) {
           super();
@@ -1081,11 +1183,21 @@ describe("RuntimeInternals", () => {
             )
           );
         }
-        terminate(): void {}
+        terminate(): void {
+          terminations.push(terminations.length + 1);
+        }
       }
+      return { StubWorker, initRequests, terminations };
+    }
 
+    /** Runs `create` against a refusing worker, restoring the real one after. */
+    async function createAgainst(
+      worker: unknown,
+      options: Partial<Parameters<typeof RuntimeInternals.create>[0]> = {},
+    ): Promise<void> {
+      const identity = await Identity.generate({ implementation: "noble" });
       const OriginalWorker = (globalThis as { Worker: unknown }).Worker;
-      (globalThis as { Worker: unknown }).Worker = StubWorker;
+      (globalThis as { Worker: unknown }).Worker = worker;
       try {
         await expect(
           RuntimeInternals.create({
@@ -1093,26 +1205,43 @@ describe("RuntimeInternals", () => {
             apiUrl: new URL("http://shell.test/"),
             workerUrl: new URL("http://shell.test/scripts/worker-runtime.js"),
             getBuildHash: () => Promise.resolve(undefined),
-            forwardWorkerConsole: true,
-            concurrentWatchRefresh: true,
-            cfcRenderCeiling: true,
+            ...options,
           }),
         ).rejects.toThrow("stub init failure");
       } finally {
         (globalThis as { Worker: unknown }).Worker = OriginalWorker;
       }
+    }
+
+    it("includes forwardWorkerConsole, concurrentWatchRefresh, awaitHealth, and the render ceiling in the Initialize request", async () => {
+      const { StubWorker, initRequests } = refusingWorker();
+      await createAgainst(StubWorker, {
+        forwardWorkerConsole: true,
+        concurrentWatchRefresh: true,
+        awaitHealth: true,
+        cfcRenderCeiling: true,
+      });
 
       expect(initRequests).toHaveLength(1);
       expect(initRequests[0].data.forwardWorkerConsole).toBe(true);
       // The dogfood storage toggle rides the same InitializationData path; the
       // worker maps it into StorageManager.open's experimentalConcurrentWatchRefresh.
       expect(initRequests[0].data.concurrentWatchRefresh).toBe(true);
+      expect(initRequests[0].data.awaitHealth).toBe(true);
       // Epic H3a: the ceiling crosses the worker IPC as InitializationData —
       // exactly the fields the worker-side reconciler consumes.
       expect(initRequests[0].data.renderDeclassificationPolicy).toBe("deny");
       expect(initRequests[0].data.renderConfidentialityCeiling).toEqual(
-        defaultRenderConfidentialityCeiling(identity.did()),
+        defaultRenderConfidentialityCeiling(
+          initRequests[0].data.trustSnapshot!.actingPrincipal as DID,
+        ),
       );
+    });
+
+    it("terminates the worker it spawned when the worker refuses Initialize", async () => {
+      const { StubWorker, terminations } = refusingWorker();
+      await createAgainst(StubWorker);
+      expect(terminations).toEqual([1]);
     });
   });
 
@@ -1396,13 +1525,19 @@ describe("RuntimeInternals", () => {
       readonly sent: SentRequest[] = [];
       disposals = 0;
 
+      /** What every request is refused with, once set; acked until then. */
+      refusal: string | undefined;
+
       send(message: unknown): void {
         // A transport is handed the envelope itself; encoding it is the
         // business of the transports that cross a realm boundary.
         const envelope = message as { msgId?: number; data?: SentRequest };
         if (envelope.data) this.sent.push(envelope.data);
         if (typeof envelope.msgId !== "number") return;
-        queueMicrotask(() => this.emit("message", { msgId: envelope.msgId }));
+        const reply = this.refusal === undefined
+          ? { msgId: envelope.msgId }
+          : { msgId: envelope.msgId, error: this.refusal };
+        queueMicrotask(() => this.emit("message", reply));
       }
 
       dispose(): Promise<void> {
@@ -1447,6 +1582,28 @@ describe("RuntimeInternals", () => {
       }
     });
 
+    it("keeps the page's outer-frame setting on the client it attaches, and sends none of it", async () => {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const transport = new StubTransport();
+      const runtime = await withNoWorkerConstructible(() =>
+        RuntimeInternals.create({
+          identity,
+          apiUrl: new URL("http://shell.test/"),
+          transport: transport as unknown as RuntimeTransport,
+          attach: true,
+          iframeOuterFrameUrl: "/outer-frame",
+        })
+      );
+      try {
+        expect(runtime.runtime().iframeOuterFrameUrl()).toBe("/outer-frame");
+        expect(transport.sent).toHaveLength(1);
+        expect(transport.sent[0].type).toBe("attach");
+        expect(JSON.stringify(transport.sent[0])).not.toContain("outer-frame");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
     it("refuses to attach with no transport to attach over", async () => {
       const identity = await Identity.generate({ implementation: "noble" });
       await expect(
@@ -1458,6 +1615,25 @@ describe("RuntimeInternals", () => {
           })
         ),
       ).rejects.toThrow("`attach` needs a `transport`");
+    });
+
+    it("leaves a supplied transport undisposed when the runtime refuses Initialize", async () => {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const transport = new StubTransport();
+      transport.refusal = "stub init failure";
+      await expect(
+        withNoWorkerConstructible(() =>
+          RuntimeInternals.create({
+            identity,
+            apiUrl: new URL("http://shell.test/"),
+            transport: transport as unknown as RuntimeTransport,
+          })
+        ),
+      ).rejects.toThrow("stub init failure");
+      expect(transport.sent.map((request) => request.type)).toEqual([
+        "initialize",
+      ]);
+      expect(transport.disposals).toBe(0);
     });
 
     it("initializes over the supplied transport when not attaching", async () => {
@@ -1476,6 +1652,27 @@ describe("RuntimeInternals", () => {
       } finally {
         await runtime.dispose();
       }
+    });
+  });
+
+  describe("resolveSpaceDid()", () => {
+    it("returns the DID the legacy name resolves to, whoever asks", async () => {
+      const [alice, bob] = await Promise.all([
+        Identity.generate({ implementation: "noble" }),
+        Identity.generate({ implementation: "noble" }),
+      ]);
+      const legacy = await legacySpaceDid("team-lunch");
+
+      expect(await resolveSpaceDid(alice, "team-lunch")).toBe(legacy);
+      expect(await resolveSpaceDid(bob, "team-lunch")).toBe(legacy);
+    });
+
+    it("returns different DIDs for different names", async () => {
+      const identity = await Identity.generate({ implementation: "noble" });
+
+      expect(await resolveSpaceDid(identity, "team-lunch")).not.toBe(
+        await resolveSpaceDid(identity, "team-dinner"),
+      );
     });
   });
 });

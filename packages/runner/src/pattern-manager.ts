@@ -547,6 +547,14 @@ export class PatternManager {
   readonly #modulesByIdentity = new Map<string, { exports: Exports }>();
 
   /**
+   * Program entry module identity → the identities of every module that
+   * program evaluated with, from the latest evaluation that ran it as its
+   * main module. A release of a pattern reads it to say which modules' writer
+   * stamps the release's schema can carry (see `programModuleIdentities`).
+   */
+  readonly #programModules = new Map<string, ReadonlySet<string>>();
+
+  /**
    * In-flight compiled-cache write-backs; awaited by
    * `flushCompileCacheWrites()` for graceful shutdown and deterministic tests.
    * Cold compile write-backs are awaited by `compilePattern()`; recovery and
@@ -1774,24 +1782,45 @@ export class PatternManager {
    * `#patternFromEvaluation` load path does. Reach for the bare
    * `Engine.compileAndEvaluateModules` only to inspect serialized/verified output
    * *without running* (engine unit tests), where stamping entry refs is unwanted.
+   *
+   * With `persistence`, the program's module closure is also written into
+   * `persistence.space`, as an ordinary compile into that space writes it,
+   * unless CFC enforcement is `disabled`. A pattern the program instantiates
+   * in a space of its own, with `inSpace()`, is replicated there from that
+   * closure, so a caller that runs the program in `persistence.space` passes
+   * it. The write comes after evaluation, and `persistence.when`, given the
+   * evaluated result, can decline it. A failed write fails the call, and
+   * leaves the program's modules unregistered.
    */
   async compileAndRegisterModules(
     program: RuntimeProgram,
     options?: TypeScriptHarnessProcessOptions,
+    persistence?: {
+      space: MemorySpace;
+      when?: (result: EvaluateResult) => boolean;
+    },
   ): Promise<EvaluateResult> {
     const patternCoverage = this.#patternCoverageFor(options);
     const effectiveOptions: TypeScriptHarnessProcessOptions = {
       ...options,
       patternCoverage,
     };
-    const byteCache = this.#runtime.moduleByteCache;
-    const runtimeVersion = byteCache === undefined
+    // The same condition `compileOrGetPattern()` persists under.
+    const persistenceSpace = this.#runtime.cfcEnforcementMode === "disabled"
       ? undefined
-      : moduleByteCacheRuntimeVersion(
-        await getCompileCacheRuntimeVersion(),
-        { patternCoverage: patternCoverage !== undefined },
-      );
-    if (byteCache === undefined || runtimeVersion === undefined) {
+      : persistence?.space;
+    const byteCache = this.#runtime.moduleByteCache;
+    const runtimeVersion =
+      byteCache === undefined && persistenceSpace === undefined
+        ? undefined
+        : moduleByteCacheRuntimeVersion(
+          await getCompileCacheRuntimeVersion(),
+          { patternCoverage: patternCoverage !== undefined },
+        );
+    if (
+      persistenceSpace === undefined &&
+      (byteCache === undefined || runtimeVersion === undefined)
+    ) {
       const result = await this.#runtime.harness.compileAndEvaluateModules(
         program,
         effectiveOptions,
@@ -1800,13 +1829,19 @@ export class PatternManager {
       return result;
     }
 
-    const { id, graph, mainSpecifier, modules } = await this.#runtime.harness
-      .compileToRecordGraph(program, {
+    const { id, graph, mainSpecifier, entryIdentity, modules } = await this
+      .#runtime.harness.compileToRecordGraph(program, {
         ...effectiveOptions,
-        precompiledModulesFor: ({ identities }) =>
-          Promise.resolve(byteCache.getCompleteSet(runtimeVersion, identities)),
+        ...(byteCache === undefined || runtimeVersion === undefined ? {} : {
+          precompiledModulesFor: ({ identities }) =>
+            Promise.resolve(
+              byteCache.getCompleteSet(runtimeVersion, identities),
+            ),
+        }),
       });
-    byteCache.putAll(runtimeVersion, modules);
+    if (byteCache !== undefined && runtimeVersion !== undefined) {
+      byteCache.putAll(runtimeVersion, modules);
+    }
     // Yield ahead of the synchronous SES evaluation (see compilePattern).
     await interleaveCompileYield();
     const result = this.#runtime.harness.evaluateRecordGraph(
@@ -1815,6 +1850,27 @@ export class PatternManager {
       mainSpecifier,
       program,
     );
+    // Registered only once any write has succeeded: a registered module is
+    // served by identity without reading the space, which would hide a
+    // closure that never landed there.
+    if (
+      persistenceSpace !== undefined && persistence?.when?.(result) !== false
+    ) {
+      if (runtimeVersion === undefined) {
+        await this.#persistSourceCacheTracked(
+          persistenceSpace,
+          modules,
+          entryIdentity,
+        );
+      } else {
+        await this.#persistCompileCacheTracked(
+          persistenceSpace,
+          modules,
+          entryIdentity,
+          { runtimeVersion },
+        );
+      }
+    }
     this.registerEvaluatedModules(result);
     return result;
   }
@@ -2509,15 +2565,15 @@ export class PatternManager {
     const entry = sourceDocs.get(entryIdentity);
     if (entry === undefined) return undefined;
     const moduleDelegations = moduleDelegationsFromDocs(sourceDocs);
-    const sourceRoots = sourcePackagePaths(
-      entry,
-      sourceDocs,
-      SOURCE_ROOT_SPECIFIER,
+    const sourcePackages = [...sourceDocs.values()].map((doc) => ({
+      entryPath: doc.filename,
+      rootPaths: sourcePackagePaths(doc, sourceDocs, SOURCE_ROOT_SPECIFIER),
+      dataPaths: sourcePackagePaths(doc, sourceDocs, DATA_FILE_SPECIFIER),
+    })).filter((sourcePackage) =>
+      sourcePackage.rootPaths.length > 0 || sourcePackage.dataPaths.length > 0
     );
-    const dataFiles = sourcePackagePaths(
-      entry,
-      sourceDocs,
-      DATA_FILE_SPECIFIER,
+    const dataFiles = sourcePackages.flatMap((sourcePackage) =>
+      sourcePackage.dataPaths
     );
 
     const sourceFiles: Source[] = [...sourceDocs.values()].map((doc) => ({
@@ -2533,8 +2589,7 @@ export class PatternManager {
         {
           fabricImports: { space },
           ...(patternCoverage ? { patternCoverage } : {}),
-          ...(sourceRoots.length === 0 ? {} : { sourceRoots }),
-          ...(dataFiles.length === 0 ? {} : { dataFiles }),
+          sourcePackages,
         },
       );
       if (compiled.entryIdentity !== entryIdentity) {
@@ -2694,6 +2749,10 @@ export class PatternManager {
     const byId = result.exportsByIdentity;
     if (byId) {
       assertNoReservedHoistExports(byId);
+      const main = [...byId].find(([, exports]) => exports === result.main);
+      if (main !== undefined) {
+        this.#programModules.set(main[0], new Set(byId.keys()));
+      }
       for (const [identity, exports] of byId) {
         // `#modulesByIdentity` keeps the whole namespace for MODULE reuse on a
         // by-identity reload (a separate concern from artifact addressing).
@@ -2739,6 +2798,15 @@ export class PatternManager {
     // No eviction for `#addressableByIdentity` — the artifact index is
     // session-lifetime (see its declaration): sync by-identity resolution
     // must keep working for every module evaluated this session.
+  }
+
+  /**
+   * The identities of the modules evaluated in the program `identity` is the
+   * main module of, or `undefined` when no evaluation this session ran it as
+   * one.
+   */
+  programModuleIdentities(identity: string): ReadonlySet<string> | undefined {
+    return this.#programModules.get(identity);
   }
 
   /**
@@ -2854,22 +2922,6 @@ export class PatternManager {
     this.#modulesByIdentity.set(entryIdentity, cached);
     setArtifactEntryRef(pattern, { identity: entryIdentity, symbol });
     return pattern;
-  }
-
-  /**
-   * Attaches the trigger's delegated carriage (`protocol.md` §2b) ONLY for a
-   * write target FOREIGN to the serving manager's home space. Home-space
-   * writebacks and every client writeback are plain bookkeeping and carry
-   * none.
-   */
-  #writebackDelegationFor(
-    space: MemorySpace,
-    delegated: WritebackDelegation | undefined,
-  ): { delegated?: WritebackDelegation } {
-    const home = this.#runtime.storageManager.servingHomeSpace;
-    return delegated !== undefined && home !== undefined && space !== home
-      ? { delegated }
-      : {};
   }
 
   /**
@@ -3111,7 +3163,7 @@ export class PatternManager {
       this.#runtime.stampServerRun(tx, {
         actionId: `compile-cache/source-writeback/${entryIdentity}`,
         kind: "bookkeeping",
-        ...this.#writebackDelegationFor(space, delegated),
+        ...this.#runtime.delegationForWriteTo(space, delegated),
       });
       committedModuleDelegations = writeSourceDocs(
         this.#runtime,
@@ -3202,7 +3254,7 @@ export class PatternManager {
         this.#runtime.stampServerRun(tx, {
           actionId: `compile-cache/writeback/${entryIdentity}`,
           kind: "bookkeeping",
-          ...this.#writebackDelegationFor(space, delegated),
+          ...this.#runtime.delegationForWriteTo(space, delegated),
         });
         chunkDelegations = writeSourceAndCompiledDocs(
           this.#runtime,

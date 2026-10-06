@@ -47,13 +47,13 @@ async function renderAndCollect(
     tx,
   );
   rootCell.set(vnode);
-  await tx.commit();
+  await tx.commit().settled;
   syncCalls.length = 0;
 
   const updateOps: VDomOp[] = [];
   const reconciler = new WorkerReconciler({
     onOps: (ops) => {
-      updateOps.push(...ops);
+      for (const op of ops) updateOps.push(op);
     },
   });
   const cancel = reconciler.mount(
@@ -118,7 +118,7 @@ Deno.test(
       async (rootCell, runtime) => {
         const tx = runtime.edit();
         rootCell.withTx(tx).key("props", "style", "color").set("blue");
-        await tx.commit();
+        await tx.commit().settled;
       },
     );
 

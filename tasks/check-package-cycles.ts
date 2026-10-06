@@ -34,10 +34,10 @@
  * would leave a hole. Which package a file or a specifier belongs to is decided
  * by the workspace member list rather than by the shape of the path, because
  * neither follows from the other. A member's directory name is not its package
- * name — `packages/background-piece-service` publishes
- * `@commonfabric/background-piece` — and a member can sit several directories
- * below `packages`, as `packages/connectors/agents/connector` does, so the
- * longest matching member owns a file rather than the first path segment.
+ * name — `packages/connectors/agents/connector` publishes
+ * `@commonfabric/agents-connector` — and a member can sit several directories
+ * below `packages`, as that one does, so the longest matching member owns a
+ * file rather than the first path segment.
  *
  * A type-only import counts. It disappears before the code runs, so it cannot
  * deadlock a module graph, but it still means one package's source cannot be

@@ -7,6 +7,8 @@
  * which include both ancestors and descendants.
  */
 
+import type { NonDocumentPath } from "@commonfabric/memory/v2";
+
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import { isPrefix } from "./path-prefix-index.ts";
 import type { LabelMapEntry } from "./types.ts";
@@ -16,7 +18,7 @@ type IndexedEntry = {
   /** The validated entry supplied by the label map. */
   entry: LabelMapEntry;
 
-  /** The logical path after removing the storage root segment. */
+  /** The entry's logical path, frozen so the index can retain it. */
   path: readonly string[];
 
   /** Position in the label map, used to restore encounter order. */
@@ -51,24 +53,14 @@ export class ConsumedLabelIndex {
   #root = createNode();
   #onQuery: ((wildcard: boolean) => void) | undefined;
 
-  /**
-   * Constructs a snapshot over validated entries. `canonicalPaths` preserves
-   * paths already in payload coordinates, including a field named `value`.
-   */
+  /** Constructs a snapshot over validated entries. */
   constructor(
     entries: readonly LabelMapEntry[],
-    options: {
-      canonicalPaths?: boolean;
-      onQuery?: (wildcard: boolean) => void;
-    } = {},
+    options: { onQuery?: (wildcard: boolean) => void } = {},
   ) {
     this.#onQuery = options.onQuery;
     for (const [ordinal, entry] of entries.entries()) {
-      const path = options.canonicalPaths
-        ? Object.isFrozen(entry.path)
-          ? entry.path
-          : Object.freeze([...entry.path])
-        : canonicalizeLogicalPath(entry.path);
+      const path = canonicalizeLogicalPath(entry.path);
       const indexed = { entry, path, ordinal };
       let current = this.#root;
       current.descendants.push(indexed);
@@ -90,11 +82,10 @@ export class ConsumedLabelIndex {
   /**
    * Ancestor, equal, and descendant entries in their original map order.
    * With `includeDescendants` false, returns ancestors and equals only.
-   * `path` must already be canonical: a payload field named `value` must not
-   * lose another segment when querying the index.
+   * `path` is a logical path, as the entries' paths are.
    */
   overlapping(
-    path: readonly string[],
+    path: NonDocumentPath,
     includeDescendants = true,
   ): readonly IndexedEntry[] {
     this.#onQuery?.(path.includes("*"));

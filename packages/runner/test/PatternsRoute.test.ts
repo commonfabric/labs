@@ -3,8 +3,15 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { Identity } from "@commonfabric/identity";
+import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import type { Engine } from "../src/harness/engine.ts";
+import { resolveEntryIdentity } from "../src/harness/entry-identity.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 
+const signer = await Identity.fromPassphrase("patterns route");
 const ENTRY = "export default 1;\n";
 const IMPORTER = 'import "./leaf.ts";\nexport default 2;\n';
 
@@ -38,6 +45,124 @@ function get(path: string, headers: Record<string, string> = {}): Request {
 }
 
 describe("PatternsRoute", () => {
+  it("includes requested source roots in the identity and cache key", async () => {
+    const files = {
+      "main.tsx": ENTRY,
+      "attached.ts": IMPORTER,
+      "leaf.ts": ENTRY,
+    };
+    await withRoute(files, async (route) => {
+      const entry = await route.identity("main.tsx");
+      const complete = await route.serve(
+        get(
+          "/api/patterns/main.tsx?identity&sourceRoot=/api/patterns/attached.ts",
+        ),
+      );
+      const expected = await resolveEntryIdentity(
+        "/api/patterns/main.tsx",
+        (name) => route.getText(name.slice("/api/patterns/".length)),
+        { sourceRoots: ["/api/patterns/attached.ts"] },
+      );
+      expect(complete?.status).toBe(200);
+      expect(await complete?.text()).toBe(expected);
+      expect(expected).not.toBe(entry);
+      expect(await route.identity("main.tsx")).toBe(entry);
+    });
+  });
+
+  it("preserves encoded source-root names in the complete identity", async () => {
+    await withRoute({
+      "main.tsx": ENTRY,
+      "foo bar.ts": IMPORTER,
+      "leaf.ts": ENTRY,
+    }, async (route) => {
+      const root = "/api/patterns/foo%20bar.ts";
+      const url = new URL(
+        "https://host.invalid/api/patterns/main.tsx?identity",
+      );
+      url.searchParams.append("sourceRoot", root);
+      const response = await route.serve(new Request(url));
+      const expected = await resolveEntryIdentity(
+        "/api/patterns/main.tsx",
+        async (name) => {
+          const source = await route.serve(get(name));
+          expect(source?.status).toBe(200);
+          return await source!.text();
+        },
+        { sourceRoots: [root] },
+      );
+      expect(response?.status).toBe(200);
+      expect(await response?.text()).toBe(expected);
+    });
+  });
+
+  it("rejects attached roots outside the patterns route", async () => {
+    await withRoute({ "main.tsx": ENTRY }, async (route) => {
+      for (
+        const path of [
+          "/etc/passwd",
+          "/api/patterns/../secret.ts",
+          "file:///secret.ts",
+          "/api/patterns/%2e%2e/secret.ts",
+          "/api/patterns/..%2fsecret.ts",
+          "/api/patterns/%252e%252e/secret.ts",
+          "/api/patterns/%5csecret.ts",
+          "/api/patterns/%00secret.ts",
+          "/api/patterns/%",
+        ]
+      ) {
+        const url = new URL(
+          "https://host.invalid/api/patterns/main.tsx?identity",
+        );
+        url.searchParams.append("sourceRoot", path);
+        expect((await route.serve(new Request(url)))?.status).toBe(400);
+      }
+    });
+  });
+
+  it("accepts 32 distinct attached roots", async () => {
+    const sourceRoots = Array.from(
+      { length: 32 },
+      (_, i) => `/api/patterns/root-${i}.ts`,
+    );
+    const files = {
+      "main.tsx": ENTRY,
+      "leaf.ts": ENTRY,
+      ...Object.fromEntries(sourceRoots.map((name) => [
+        name.slice("/api/patterns/".length),
+        IMPORTER,
+      ])),
+    };
+    await withRoute(files, async (route) => {
+      const url = new URL(
+        "https://host.invalid/api/patterns/main.tsx?identity",
+      );
+      for (const root of sourceRoots) {
+        url.searchParams.append("sourceRoot", root);
+      }
+      const response = await route.serve(new Request(url));
+      const expected = await resolveEntryIdentity(
+        "/api/patterns/main.tsx",
+        (name) => route.getText(name.slice("/api/patterns/".length)),
+        { sourceRoots },
+      );
+      expect(response?.status).toBe(200);
+      expect(await response?.text()).toBe(expected);
+    });
+  });
+
+  it("bounds the number of attached roots an identity request can name", async () => {
+    await withRoute({ "main.tsx": ENTRY }, async (route) => {
+      const url = new URL(
+        "https://host.invalid/api/patterns/main.tsx?identity",
+      );
+      for (let index = 0; index < 33; index++) {
+        url.searchParams.append("sourceRoot", `/api/patterns/root-${index}.ts`);
+      }
+      expect((await route.serve(new Request(url)))?.status).toBe(400);
+    });
+  });
+
   it("serves a file's source under the patterns route", async () => {
     await withRoute({ "system/main.tsx": ENTRY }, async (route) => {
       const response = await route.serve(get("/api/patterns/system/main.tsx"));
@@ -60,6 +185,117 @@ describe("PatternsRoute", () => {
         expect(response?.headers.get("Content-Type")).toContain("text/plain");
         const identity = (await response?.text())?.trim();
         expect(identity).toBe(await route.identity("main.tsx"));
+      },
+    );
+  });
+
+  it("serves the identity a worker compiles for a pattern that reads a data file", async () => {
+    // The worker stores a data file byte for byte, so the byte order mark that
+    // reading the file as source would drop is part of what it hashes.
+
+    const files = {
+      "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+        'export default () => dataFile("./words.txt");\n',
+      "words.txt": "﻿able\nbaker\n",
+    };
+    await withRoute(files, async (route) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://host.invalid"),
+        storageManager,
+      });
+      try {
+        const program = await runtime.harness.resolve(
+          new HttpProgramResolver(
+            "https://host.invalid/api/patterns/speller.tsx",
+            async (input, init) =>
+              await route.serve(new Request(input, init)) ??
+                new Response(null, { status: 404 }),
+          ),
+        );
+        expect(program.dataFiles).toEqual(["/api/patterns/words.txt"]);
+        const { entryIdentity } = await (runtime.harness as Engine)
+          .compileToRecordGraph(program);
+
+        const response = await route.serve(
+          get("/api/patterns/speller.tsx?identity"),
+        );
+        expect(response?.status).toBe(200);
+        expect((await response?.text())?.trim()).toBe(entryIdentity);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
+  it("answers 400 for an identity whose closure reads a data file outside the route", async () => {
+    // A rooted `dataFile()` path names a file at the host's root, which this
+    // route does not serve. The file named `son` is what a read that dropped
+    // the route prefix without checking for it would land on.
+
+    await withRoute(
+      {
+        "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile("/data/cities.json");\n',
+        "data/cities.json": "[]\n",
+        "son": "an unrelated file\n",
+      },
+      async (route) => {
+        const response = await route.serve(
+          get("/api/patterns/speller.tsx?identity"),
+        );
+        expect(response?.status).toBe(400);
+        expect((await response?.json()).error).toContain("/data/cities.json");
+      },
+    );
+  });
+
+  it("answers 400 for an identity whose closure reads a file the route refuses to serve", async () => {
+    // A worker assembles the program by fetching each file from this route, so
+    // a file the route will not serve is one no worker can fetch.
+
+    await withRoute(
+      {
+        "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile("./data/cities..json");\n',
+        "data/cities..json": "[]\n",
+        "importer.tsx": 'import "./lib..x.ts";\nexport default 1;\n',
+        "lib..x.ts": ENTRY,
+      },
+      async (route) => {
+        for (const file of ["data/cities..json", "lib..x.ts"]) {
+          const response = await route.serve(get(`/api/patterns/${file}`));
+          expect(response?.status).toBe(400);
+        }
+        for (const entry of ["speller.tsx", "importer.tsx"]) {
+          const response = await route.serve(
+            get(`/api/patterns/${entry}?identity`),
+          );
+          expect(response?.status).toBe(400);
+        }
+      },
+    );
+  });
+
+  it("answers 400 naming the data file for one that is not valid UTF-8", async () => {
+    await withRoute(
+      {
+        "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile("./words.txt");\n',
+      },
+      async (route, root) => {
+        await Deno.writeFile(
+          join(root, "words.txt"),
+          new Uint8Array([0x61, 0xff, 0x62]),
+        );
+        const response = await route.serve(
+          get("/api/patterns/speller.tsx?identity"),
+        );
+        expect(response?.status).toBe(400);
+        expect((await response?.json()).error).toContain(
+          "/api/patterns/words.txt",
+        );
       },
     );
   });

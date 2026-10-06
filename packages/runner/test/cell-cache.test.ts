@@ -46,6 +46,7 @@ import {
   dataFileSpecifier,
   sourceRootSpecifier,
 } from "../src/sandbox/module-record-compiler.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // These tests drive the sync parse internals directly (below the async flow
 // boundaries that normally load the deferred compiler stack), so load it here.
@@ -753,12 +754,12 @@ describe("cell-cache", () => {
         delegations,
       );
       runtime.prepareTxForCommit(attackerTx);
-      expect((await attackerTx.commit()).error).toBeUndefined();
+      expect((await attackerTx.commit().settled).error).toBeUndefined();
 
       const victimTx = runtime.edit();
       writeSourceDocs(runtime, spaceA, modules, entryIdentity, victimTx);
       runtime.prepareTxForCommit(victimTx);
-      expect((await victimTx.commit()).error).toBeUndefined();
+      expect((await victimTx.commit().settled).error).toBeUndefined();
 
       const entryModule = modules.find((module) =>
         module.identity === entryIdentity
@@ -785,7 +786,7 @@ describe("cell-cache", () => {
         })),
       });
       runtime.prepareTxForCommit(rewireTx);
-      expect((await rewireTx.commit()).error).toBeUndefined();
+      expect((await rewireTx.commit().settled).error).toBeUndefined();
 
       const loadTx = runtime.edit();
       const loaded = await loadVerifiedSourceClosure(
@@ -840,7 +841,7 @@ describe("cell-cache", () => {
       let tx = runtime.edit();
       writeSourceDocs(runtime, spaceA, modules, entryIdentity, tx);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       // Attach a product annotation to the entry source doc.
       await runtime.patternManager.annotatePattern(
@@ -871,7 +872,7 @@ describe("cell-cache", () => {
       const rewriteTx = runtime.edit();
       writeSourceDocs(runtime, spaceA, modules, entryIdentity, rewriteTx);
       runtime.prepareTxForCommit(rewriteTx);
-      await rewriteTx.commit();
+      await rewriteTx.commit().settled;
       const afterRewriteTx = runtime.edit();
       const afterRewrite = await loadVerifiedSourceClosure(
         runtime,
@@ -882,6 +883,43 @@ describe("cell-cache", () => {
       expect(afterRewrite?.get(entryIdentity)?.annotations).toEqual({
         name: { "/": "name-doc-link" },
       });
+    });
+
+    it("keeps an annotation that links to another document a link across a rewrite", async () => {
+      const { modules, entryIdentity } = toModules(PROGRAM);
+      let tx = runtime.edit();
+      writeSourceDocs(runtime, spaceA, modules, entryIdentity, tx);
+      const nameDoc = runtime.getCell<{ title: string }>(
+        spaceA,
+        "annotated-name-doc",
+        undefined,
+        tx,
+      );
+      nameDoc.set({ title: "Annotated" });
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
+      const nameLink = nameDoc.getAsLink();
+      await runtime.patternManager.annotatePattern(
+        entryIdentity,
+        spaceA,
+        "name",
+        nameLink,
+      );
+
+      tx = runtime.edit();
+      writeSourceDocs(runtime, spaceA, modules, entryIdentity, tx);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
+
+      // The stored document, not a read through it: a loaded closure hands
+      // back the document the annotation links to.
+      const stored = runtime.getCell<{ annotations?: unknown }>(
+        spaceA,
+        sourceDocKey(entryIdentity),
+        undefined,
+        runtime.edit(),
+      ).getRaw();
+      expect(stored?.annotations).toEqual({ name: nameLink });
     });
 
     it("is empty for an entry that was never written", async () => {
@@ -978,7 +1016,7 @@ describe("cell-cache", () => {
       const wtx = runtime.edit();
       writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1011,7 +1049,7 @@ describe("cell-cache", () => {
         wtx,
       );
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const codeIdOf = (version: string) => {
@@ -1034,7 +1072,7 @@ describe("cell-cache", () => {
       const utilIdentity = identityOf(PROGRAM, "/util.ts");
       const wtx = runtime.edit();
       const prior = wtx.getCfcState().implementationIdentity;
-      wtx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(wtx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1050,9 +1088,9 @@ describe("cell-cache", () => {
         filename: "/util.ts",
         imports: [],
       });
-      wtx.setCfcImplementationIdentity(prior);
+      setCfcImplementationIdentity(wtx, prior);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1081,7 +1119,7 @@ describe("cell-cache", () => {
       const wtx = runtime.edit();
       writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const inspectTx = runtime.edit();
       const storedDoc = runtime.getCell(
@@ -1121,7 +1159,7 @@ describe("cell-cache", () => {
       ) => {
         const tx = runtime.edit();
         const previousIdentity = tx.getCfcState().implementationIdentity;
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "compile-cache",
         });
@@ -1137,10 +1175,10 @@ describe("cell-cache", () => {
           delete next.patternCoverageSpans;
           cell.set({ ...next, ...value });
         } finally {
-          tx.setCfcImplementationIdentity(previousIdentity);
+          setCfcImplementationIdentity(tx, previousIdentity);
         }
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
       };
 
       // A span whose id is the wrong type is dropped rather than reported
@@ -1186,7 +1224,7 @@ describe("cell-cache", () => {
       const wtx = runtime.edit();
       writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const load = async () => {
         const rtx = runtime.edit();
@@ -1216,7 +1254,7 @@ describe("cell-cache", () => {
       const replace = async (value: Record<string, unknown>) => {
         const tx = runtime.edit();
         const previousIdentity = tx.getCfcState().implementationIdentity;
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "compile-cache",
         });
@@ -1232,10 +1270,10 @@ describe("cell-cache", () => {
           delete next.builderSourceSites;
           cell.set({ ...next, ...value });
         } finally {
-          tx.setCfcImplementationIdentity(previousIdentity);
+          setCfcImplementationIdentity(tx, previousIdentity);
         }
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
       };
 
       await replace({
@@ -1281,7 +1319,7 @@ describe("cell-cache", () => {
         const wtx = runtime.edit();
         writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
         wtx.prepareCfc();
-        await wtx.commit();
+        await wtx.commit().settled;
       }
       expect(runtime.hasCfcPolicyManifest(spaceA, reference)).toBe(false);
 
@@ -1358,12 +1396,12 @@ describe("cell-cache", () => {
       const wtx = runtime.edit();
       writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const replaceEntryFields = async (fields: Record<string, unknown>) => {
         const tx = runtime.edit();
         const previousIdentity = tx.getCfcState().implementationIdentity;
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "compile-cache",
         });
@@ -1379,10 +1417,10 @@ describe("cell-cache", () => {
             ...fields,
           });
         } finally {
-          tx.setCfcImplementationIdentity(previousIdentity);
+          setCfcImplementationIdentity(tx, previousIdentity);
         }
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
       };
       const coldLoad = async () => {
         const rtx = runtime.edit();
@@ -1436,7 +1474,7 @@ describe("cell-cache", () => {
       const wtx = runtime.edit();
       writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1474,7 +1512,7 @@ describe("cell-cache", () => {
         attackerTx,
       );
       attackerTx.prepareCfc();
-      expect((await attackerTx.commit()).error).toBeUndefined();
+      expect((await attackerTx.commit().settled).error).toBeUndefined();
 
       const victimTx = runtime.edit();
       writeCompiledDocs(
@@ -1486,14 +1524,14 @@ describe("cell-cache", () => {
         victimTx,
       );
       victimTx.prepareCfc();
-      expect((await victimTx.commit()).error).toBeUndefined();
+      expect((await victimTx.commit().settled).error).toBeUndefined();
 
       const entryModule = modules.find((module) =>
         module.identity === entryIdentity
       )!;
       const rewireTx = runtime.edit();
       const previousIdentity = rewireTx.getCfcState().implementationIdentity;
-      rewireTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(rewireTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1517,10 +1555,10 @@ describe("cell-cache", () => {
           })),
         });
       } finally {
-        rewireTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(rewireTx, previousIdentity);
       }
       rewireTx.prepareCfc();
-      expect((await rewireTx.commit()).error).toBeUndefined();
+      expect((await rewireTx.commit().settled).error).toBeUndefined();
 
       const loadTx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1556,7 +1594,7 @@ describe("cell-cache", () => {
       const wtx = runtime.edit();
       writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1576,7 +1614,7 @@ describe("cell-cache", () => {
       const entryIdentity = "compiled-entry-with-missing-link";
       const wtx = runtime.edit();
       const previousIdentity = wtx.getCfcState().implementationIdentity;
-      wtx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(wtx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1596,10 +1634,10 @@ describe("cell-cache", () => {
           ],
         });
       } finally {
-        wtx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(wtx, previousIdentity);
       }
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1634,7 +1672,7 @@ describe("cell-cache", () => {
         wtx,
       );
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1668,7 +1706,7 @@ describe("cell-cache", () => {
           imports: [],
         });
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       // Loading util directly as the entry: present but unstamped → dropped.
       const rtx = runtime.edit();
@@ -1709,7 +1747,7 @@ describe("cell-cache", () => {
           imports: [],
         });
       wtx.prepareCfc();
-      const { error } = await wtx.commit();
+      const { error } = await wtx.commit().settled;
       expect(error).toBe(undefined);
 
       const rtx = runtime.edit();
@@ -1737,7 +1775,7 @@ describe("cell-cache", () => {
         wtx,
       );
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const rtx = runtime.edit();
       const loaded = await loadCompiledClosure(
@@ -1871,7 +1909,7 @@ describe("cell-cache", () => {
         wtx,
       );
       wtx.prepareCfc();
-      await wtx.commit();
+      await wtx.commit().settled;
 
       const manager = runtime.patternManager.accessForTestingOnly;
       await manager.replicateClosures(importerIdentity, spaceA, spaceB);
@@ -1947,7 +1985,7 @@ describe("cell-cache", () => {
         protectedSchema,
       );
       const seed = await runtime.editWithRetry((tx) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: predecessorIdentity,
           sourceFile: "/main.tsx",
@@ -1958,7 +1996,7 @@ describe("cell-cache", () => {
       expect(seed.error).toBeUndefined();
 
       const denied = await runtime.editWithRetry((tx) => {
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: importerIdentity,
           sourceFile: "/main.tsx",
@@ -1971,7 +2009,7 @@ describe("cell-cache", () => {
 
       const damageTx = runtime.edit();
       const previousIdentity = damageTx.getCfcState().implementationIdentity;
-      damageTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(damageTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -1989,10 +2027,10 @@ describe("cell-cache", () => {
           damageTx,
         ).set({ damaged: true });
       } finally {
-        damageTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(damageTx, previousIdentity);
       }
       damageTx.prepareCfc();
-      expect((await damageTx.commit()).error).toBeUndefined();
+      expect((await damageTx.commit().settled).error).toBeUndefined();
 
       await manager.replicateClosures(importerIdentity, spaceA, spaceB);
       const repairedTx = runtime.edit();
@@ -2042,7 +2080,7 @@ describe("cell-cache", () => {
         sourceOnlyWrite,
       );
       sourceOnlyWrite.prepareCfc();
-      expect((await sourceOnlyWrite.commit()).error).toBeUndefined();
+      expect((await sourceOnlyWrite.commit().settled).error).toBeUndefined();
 
       await expect(
         manager.replicateClosures(entryIdentity, spaceA, targetSpace),
@@ -2082,7 +2120,7 @@ describe("cell-cache", () => {
           writeTx,
         );
         writeTx.prepareCfc();
-        expect((await writeTx.commit()).error).toBeUndefined();
+        expect((await writeTx.commit().settled).error).toBeUndefined();
 
         const manager = coverageRuntime.patternManager.accessForTestingOnly;
         await expect(
@@ -2119,7 +2157,7 @@ describe("cell-cache", () => {
         initialWrite,
       );
       initialWrite.prepareCfc();
-      expect((await initialWrite.commit()).error).toBeUndefined();
+      expect((await initialWrite.commit().settled).error).toBeUndefined();
 
       const missingModule: CacheableModule = {
         identity: "missing-source-module",
@@ -2149,7 +2187,7 @@ describe("cell-cache", () => {
         uninstrumentedCoverageWrite,
       );
       uninstrumentedCoverageWrite.prepareCfc();
-      expect((await uninstrumentedCoverageWrite.commit()).error)
+      expect((await uninstrumentedCoverageWrite.commit().settled).error)
         .toBeUndefined();
       expect(
         await manager.hasStoredCompileCacheClosure(
@@ -2182,7 +2220,7 @@ describe("cell-cache", () => {
         requiredDelegations,
       );
       sourceOnlyRepair.prepareCfc();
-      expect((await sourceOnlyRepair.commit()).error).toBeUndefined();
+      expect((await sourceOnlyRepair.commit().settled).error).toBeUndefined();
 
       // A source-only repair is insufficient: a later warm load could trust the
       // still-stale compiled set without ever consulting source metadata.
@@ -2206,7 +2244,7 @@ describe("cell-cache", () => {
         compiledRepair,
       );
       compiledRepair.prepareCfc();
-      expect((await compiledRepair.commit()).error).toBeUndefined();
+      expect((await compiledRepair.commit().settled).error).toBeUndefined();
 
       expect(
         await manager.hasStoredCompileCacheClosure(
@@ -2415,7 +2453,7 @@ describe("cell-cache", () => {
         wtxA,
       );
       wtxA.prepareCfc();
-      const a = await wtxA.commit();
+      const a = await wtxA.commit().settled;
       expect(a.error).toBe(undefined);
 
       // Second writer (another user's runtime cold-compiling the same content)
@@ -2432,7 +2470,7 @@ describe("cell-cache", () => {
         wtxB,
       );
       wtxB.prepareCfc();
-      const b = await wtxB.commit();
+      const b = await wtxB.commit().settled;
       expect(b.error?.message).toBe(undefined);
 
       // Any member can then warm-hit the cache.
@@ -2517,7 +2555,7 @@ describe("cell-cache", () => {
       const txA = rtA.edit();
       await pmA.compilePattern(E2E_PROGRAM, { space: sharedSpace, tx: txA });
       await pmA.flushCompileCacheWrites();
-      await txA.commit();
+      await txA.commit().settled;
       // Ensure the docs have propagated through the in-process server.
       await smA.synced();
 
@@ -2536,7 +2574,7 @@ describe("cell-cache", () => {
         space: sharedSpace,
         tx: txB,
       });
-      await txB.commit();
+      await txB.commit().settled;
 
       // (a) Warm hit: B found A's compiled docs without recompiling.
       expect(pmB.getCompileCacheStats()).toEqual({
@@ -2564,7 +2602,7 @@ describe("cell-cache", () => {
         wtxB2,
       );
       wtxB2.prepareCfc();
-      const result = await wtxB2.commit();
+      const result = await wtxB2.commit().settled;
       expect(result.error).toBe(undefined);
     });
 
@@ -2588,7 +2626,7 @@ describe("cell-cache", () => {
         partialTx,
       );
       rtA.prepareTxForCommit(partialTx);
-      const partialResult = await partialTx.commit();
+      const partialResult = await partialTx.commit().settled;
       expect(partialResult.error).toBe(undefined);
       await smA.synced();
 
@@ -2597,7 +2635,7 @@ describe("cell-cache", () => {
         space: sharedSpace,
         tx: txB,
       });
-      await txB.commit();
+      await txB.commit().settled;
       expect(typeof compiled).toBe("function");
       expect(rtB.patternManager.getCompileCacheStats()).toEqual({
         hits: 0,
@@ -2706,7 +2744,7 @@ describe("cell-cache", () => {
       const { modules, entryIdentity } = toModules(PROGRAM);
       const wtx = rtA.edit();
       writeSourceDocs(rtA, space, modules, entryIdentity, wtx);
-      expect((await wtx.commit()).error).toBeUndefined();
+      expect((await wtx.commit().settled).error).toBeUndefined();
       await smA.synced();
       const entry = modules.find((m) => m.identity === entryIdentity)!;
       const rtx = await forgeCodeDocument(
@@ -2732,7 +2770,7 @@ describe("cell-cache", () => {
         wtx,
       );
       wtx.prepareCfc();
-      expect((await wtx.commit()).error).toBeUndefined();
+      expect((await wtx.commit().settled).error).toBeUndefined();
       await smA.synced();
       const entry = modules.find((m) => m.identity === entryIdentity)!;
       const rtx = await forgeCodeDocument(

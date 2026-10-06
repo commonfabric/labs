@@ -10,8 +10,9 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { maxOf } from "@commonfabric/utils/math";
 
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -244,10 +245,10 @@ describe("executor-compile-and-run", () => {
     if (initialCount !== undefined) {
       argument.withTx(seed).key("count").set(initialCount);
     }
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = client.edit();
     client.run(tx, parent, argument, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return { parent, argument, result, cancelDemand: result.sink(() => {}) };
   }
 
@@ -255,7 +256,7 @@ describe("executor-compile-and-run", () => {
   async function setCode(argument: Cell<{ code: string }>, code: string) {
     const tx = client.edit();
     argument.withTx(tx).set({ code });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
 
   /** Opens another client's instance of an existing parent. */
@@ -290,7 +291,7 @@ describe("executor-compile-and-run", () => {
       if (initialCount !== undefined) {
         argument.withTx(tx).key("count").set(initialCount);
       }
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const cancelDemand = result.sink(() => {});
       return {
         runtime,
@@ -323,7 +324,7 @@ describe("executor-compile-and-run", () => {
     );
     const tx = runtime.edit();
     argument.withTx(tx).key(key).set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
 
   /** Waits for a scoped piece to share exactly the expected program groups. */
@@ -355,9 +356,11 @@ describe("executor-compile-and-run", () => {
     const engine = await server.engineForSpace(space);
     const seq = Math.max(
       0,
-      ...Engine.selectCommitsSince(engine, { fromSeq: 0 })
-        .filter((commit) => commit.class === "authored")
-        .map((commit) => commit.seq),
+      maxOf(
+        Engine.selectCommitsSince(engine, { fromSeq: 0 })
+          .filter((commit) => commit.class === "authored")
+          .map((commit) => commit.seq),
+      ),
     );
     expect(seq).toBeGreaterThan(0);
     await waitUntil(
@@ -418,7 +421,7 @@ describe("executor-compile-and-run", () => {
       );
       const tx = client.edit();
       argument.withTx(tx).set({ code: childProgram(7) });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await waitForCellValue<CompiledView>(
         client,
         compiled,
@@ -454,7 +457,7 @@ describe("executor-compile-and-run", () => {
       const poke = client.getCell<number>(space, "unrelated-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await covered();
       expect(servingCompiles.filter((code) => code === broken)).toHaveLength(1);
       expect(created).toEqual([]);
@@ -533,7 +536,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       const poke = client.getCell<number>(space, "reactivation-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await waitUntil(
         () => servingRuntimes.length === 2,
         "fresh serving runtime",
@@ -566,7 +569,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       const poke = client.getCell<number>(space, "reactivation-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await childValue(piece.result, 17);
       expect(servingRuntimes).toHaveLength(2);
       expect(servingCompiles.filter((source) => source === code)).toHaveLength(
@@ -643,7 +646,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await bobResult.sync();
       const tx = bob.edit();
       bobArgument.withTx(tx).key("code").set(a);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cancelBob = bobResult.sink(() => {});
       await waitUntil(
         () => host.stats().outbox.queued === 2,
@@ -680,7 +683,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       );
       const updateInput = client.edit();
       count.withTx(updateInput).key("count").set(3);
-      expect((await updateInput.commit()).error).toBeUndefined();
+      expect((await updateInput.commit().settled).error).toBeUndefined();
       await waitUntil(
         () => piece.result.key("compiled").get()?.result?.answer === 24,
         () =>
@@ -696,7 +699,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
 
       const change = bob.edit();
       bobArgument.withTx(change).key("code").set(reactiveChildProgram(22));
-      expect((await change.commit()).error).toBeUndefined();
+      expect((await change.commit().settled).error).toBeUndefined();
       await waitUntil(
         () => bobResult.key("compiled").get()?.result?.answer === 22,
         () =>
@@ -898,7 +901,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           ).toBe(scope);
 
           const firstDelivered = Promise.withResolvers<string>();
-          piece.result.key("compiled").key("result").key("bump").send(
+          sendEvent(
+            piece.result.key("compiled").key("result").key("bump"),
             {},
             (tx) => {
               firstDelivered.resolve(tx.status().status);
@@ -911,7 +915,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           expect(other.result.key("compiled").get()?.result?.answer).toBe(0);
 
           const secondDelivered = Promise.withResolvers<string>();
-          other.result.key("compiled").key("result").key("bump").send(
+          sendEvent(
+            other.result.key("compiled").key("result").key("bump"),
             {},
             (tx) => {
               secondDelivered.resolve(tx.status().status);
@@ -949,16 +954,20 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await variantsFor(childId, 2);
 
       const aliceDelivered = Promise.withResolvers<string>();
-      piece.result.key("compiled").key("result").key("bump").send({}, (tx) => {
-        aliceDelivered.resolve(tx.status().status);
-      });
+      sendEvent(
+        piece.result.key("compiled").key("result").key("bump"),
+        {},
+        (tx) => {
+          aliceDelivered.resolve(tx.status().status);
+        },
+      );
       expect(await aliceDelivered.promise).not.toBe("error");
       await childValue(piece.result, 1);
       expect(bob.result.key("compiled").get()?.result?.answer).toBe(0);
       const bobBump = bob.result.key("compiled").key("result").key("bump")
         .resolveAsCell();
       const bobDelivered = Promise.withResolvers<string>();
-      bobBump.send({}, (tx) => {
+      sendEvent(bobBump, {}, (tx) => {
         bobDelivered.resolve(tx.status().status);
       });
       expect(await bobDelivered.promise).not.toBe("error");
@@ -969,7 +978,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(bob.result, 10, bob.runtime);
       await variantsFor(childId, 1);
       const bobReplacedDelivered = Promise.withResolvers<string>();
-      bobBump.send({}, (tx) => {
+      sendEvent(bobBump, {}, (tx) => {
         bobReplacedDelivered.resolve(tx.status().status);
       });
       expect(await bobReplacedDelivered.promise).not.toBe("error");
@@ -1081,7 +1090,7 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
     answer: number,
   ) {
     const delivered = Promise.withResolvers<string>();
-    result.key("compiled").key("result").key("bump").send({}, (tx) => {
+    sendEvent(result.key("compiled").key("result").key("bump"), {}, (tx) => {
       delivered.resolve(tx.status().status);
     });
     expect(await delivered.promise).not.toBe("error");
@@ -1158,7 +1167,7 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
         piece.argument.asSchema(undefined).withTx(rebind).key("count").set(
           explicit,
         );
-        expect((await rebind.commit()).error).toBeUndefined();
+        expect((await rebind.commit().settled).error).toBeUndefined();
         await covered();
         const runtimeCount = servingRuntimes.length;
         await host.spaceServer(space)!.park(

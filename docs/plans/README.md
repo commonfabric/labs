@@ -10,6 +10,31 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [CFC spec correspondence process](cfc-spec-correspondence-process.md)
+  gives agents the procedure for changing Contextual Flow Control here: read
+  the specification first, classify the change as host arrangement, conforming
+  implementation or semantic gap, and route a semantic gap through a specs
+  pull request before code; and stages what enforces it, from the instruction
+  surfaces that name the specs repository, through a hash-pinned spec snapshot
+  and correspondence manifest checked in CI and a §18.6.4 conformance
+  statement, to a kernel of same-named pure functions the pseudocode is the
+  source of.
+- [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
+  callbacks, a cohesive handles module, one session UI for both command aliases,
+  and hands-on demo validation across labs, Weaver, and Loom.
+- [Memory router security requirements](memory-router-security-requirements.md)
+  defines the authentication, authorization, isolation, and public-ingress
+  gates for multiplexed Memory WebSockets routed to toolsheds.
+- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
+  subtrees, graph-aware policy queries, and a reader-first stored-format migration
+  to bound the cost of staged reference diamonds.
+
+- [Shuffled test order: what is left to build](test-order-shuffle.md) carries
+  the piece the shuffle does not yet have: a shuffle inside this repository's
+  own `describe()` and `it()`, which every test file already resolves to,
+  reordering the cases inside a file that `deno test --shuffle` leaves in
+  place. Its first stage, a scheduled run under the next day's seed a day
+  ahead, is built.
 - [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview
   of current trust boundaries and the path from runtime security to operator
   exclusion, with remaining work and technical references in an appendix.
@@ -43,6 +68,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Topics computation cost and live upgrade](topics-computation-cost.md)
   sequences shared backlink lookup, incremental mention maintenance, topic
   summaries, measurement gates, and rehearsed upgrades of populated boards.
+- [One way to render Markdown](markdown-rendering.md) brings the three modules
+  that render `marked` tokens — the `<cf-markdown>` component, the harness
+  console, and the `cf` pager — onto one character reference decoder and one URL
+  policy, and asks whether the two Lit renderers should share their token walk.
 - [Cast-free patterns](cast-free-patterns.md) sequences shared type and API
   repairs, migration of authored patterns and their tests, and enforcement
   through lint and new-source admission.
@@ -71,9 +100,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   on which authority and which caveat tiers admit content to a model.
 - [CFC TypeScript authoring](cfc_typescript_authoring.md) sequences the
   TypeScript and JSX authoring surface for CFC metadata.
-- [`cf-code-editor` co-presence](cf-code-editor-copresence.md) adds an
-  ephemeral Cloudflare WebSocket plane for live participant names, carets, and
-  selections while Memory remains the sole authority for document contents.
 - [First-class serializable factories](first-class-serializable-factories.md)
   sequences the implementation of durable pattern, module, and handler
   factories.
@@ -141,19 +167,16 @@ a record: archive it to `docs/history/plans/` following the procedure in
   intent listener, the ruled double-dispatch implementation, the
   acceptance and the owner ruling set); it archives beside the stage-C
   closeout when that build lands.
-- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes the
-  simpler form D12 said bgUpdater would come back as: a pattern declares the
-  cadence it wants to wake on, and the space's own serving runtime honors it,
-  so background work stops needing a separate process anyone has to run and
-  keep online. Waking a piece on a timer with nobody watching is the one thing
-  the background piece service does that the executor does not, and the ruling
-  accepts that capability lapsing in the meantime — nothing depends on it, so
-  nothing is broken while it is gone. Three separable parts: the replacement,
-  the already-ruled deletion, which waits for nothing here and has a worked v1
-  inventory to read, and compute accounting, which neither of the others
-  depends on. The replacement rests on a further ruling, because a
-  scheduled wake would be the second issuer of warm demand where the spec pins
-  the count at one.
+- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes a
+  simpler form for bgUpdater, which the owner ruled will come back later: a
+  pattern declares the cadence it wants to wake on, and the space's own
+  serving runtime honors it, so background work needs no separate process
+  anyone has to run and keep online. Nothing wakes a piece on a timer with nobody watching, and the ruling
+  accepts that capability being absent in the meantime — nothing depends on
+  it. Two separable parts: the capability, and compute accounting, which the
+  capability does not depend on to function. The capability rests on a further
+  ruling, because a scheduled wake would be the second issuer of warm demand
+  where the spec pins the count at one.
 - [Revision-keyed schema memo](revision-keyed-schema-memo.md) designs a
   cross-evaluation, per-document memo of schema-walk computation on the
   memory server, keyed by each document's revision so validity needs no
@@ -171,6 +194,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   it. It implements the
   [random space identity specification](../specs/random-space-identities.md),
   uses existing DID routes, and is complete without a public name registry.
+  The code is implemented; its deployment sequence, a specification change and
+  an infrastructure change in other repositories, and the tripwire's deletion
+  remain.
 - [CFC runner implementation](runner_cfc_implementation.md) defines the
   commit-boundary enforcement workstreams and rollout.
 - [Finishing the piece source lifecycle](piece-source-lifecycle-completion.md)

@@ -213,7 +213,7 @@ describe("wish-home-readiness", () => {
               rawMetaWriteAuthorization,
             );
             seed.prepareTxForCommit(tx);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             tx = seed.edit();
             homeDefault.withTx(tx).asSchema(homeSchema).set({ profiles: [] });
             homeDefault.withTx(tx).setMetaRaw(
@@ -225,7 +225,7 @@ describe("wish-home-readiness", () => {
               defaultPattern: homeDefault.getAsLink(),
             });
             seed.prepareTxForCommit(tx);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             tx = seed.edit();
             parent.withTx(tx).set({});
             inputs.withTx(tx).set({
@@ -240,7 +240,7 @@ describe("wish-home-readiness", () => {
               },
             });
             seed.prepareTxForCommit(tx);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             for (const rt of [seed, runtime]) {
               await rt.patternManager.compilePattern(program, {
                 space: board.did(),
@@ -260,7 +260,7 @@ describe("wish-home-readiness", () => {
               seedWish,
             );
             seed.prepareTxForCommit(seedWish);
-            expect((await seedWish.commit()).error).toBeUndefined();
+            expect((await seedWish.commit().settled).error).toBeUndefined();
             await seed.idle();
             await helper.pull();
 
@@ -270,13 +270,13 @@ describe("wish-home-readiness", () => {
               profilePresent ? [profile.getAsLink()] : [],
             );
             seed.prepareTxForCommit(addProfile);
-            expect((await addProfile.commit()).error).toBeUndefined();
+            expect((await addProfile.commit().settled).error).toBeUndefined();
             const warmWish = seed.edit();
             seedAction.action(
               warmWish,
             );
             seed.prepareTxForCommit(warmWish);
-            expect((await warmWish.commit()).error).toBeUndefined();
+            expect((await warmWish.commit().settled).error).toBeUndefined();
             await seedManager.synced();
             const input = runtime.getCellFromLink(
               inputs.getAsNormalizedFullLink(),

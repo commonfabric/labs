@@ -100,6 +100,9 @@ deno task cf piece link ... editor-id/items viewer-id/items
   not bypass compilation, normal value validation, atomic stale-update
   checks, or source-history availability (a piece with recorded revisions
   whose current source cannot be restored is still refused).
+  `piece follow` reports a current pattern that cannot be loaded as an
+  incompatibility and takes the same flag to accept it, which puts such a
+  piece on an origin in one step.
   `piece new` accepts the same flag for deploy-script symmetry, but a fresh
   piece has no predecessor schema to compare.
 - Test one feature at a time. Manual CLI and browser checks complement automated
