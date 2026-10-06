@@ -870,18 +870,40 @@ not known, and declares nothing. So these are declared:
 - another pattern's result, which passed this check in its own compile; a
   cell; a class instance; a literal, a function, or JSX
 
-The trace follows a local's initializer, both arms of a conditional and of
-`??`, `||` and `&&`, the elements of an array literal, the properties and
-spreads of an object literal, and the callback of `computed()`, a lift, and an
-array's `map()`, `filter()`, `slice()`, `toSorted()` and `toReversed()`, each
-callback's parameter bound to the value it is called with. A position is
-declared where every return of the callback declares it. Nothing else is: an
-untyped `wish()`, `generateObject()` or `generateText()`, whose type argument
-is inferred; another generic call with no type argument written; a helper
-whose written return type is `unknown`; `x as unknown` and a tuple of
-`unknown`. A pattern that returns another pattern's instance passes the
-references its declared result holds without a report, and an untyped `wish()`
-returned whole is reported.
+The trace follows a local's initializer, the elements of an array literal, the
+properties and spreads of an object literal, and the callback of `computed()`,
+a lift, and an array's `map()`, `filter()`, `slice()`, `toSorted()`,
+`toReversed()`, `find()`, `findLast()` and `at()`, each callback's parameter
+bound to the value it is called with. A callback is written in place or named,
+as a function declaration or a binding initialized with one, and a lift may be
+held in a binding and applied by its name. Nothing else is declared: an untyped
+`wish()`, `generateObject()` or `generateText()`, whose type argument is
+inferred; another generic call with no type argument written; a helper whose
+written return type is `unknown`; `x as unknown` and a tuple of `unknown`. A
+pattern that returns another pattern's instance passes the references its
+declared result holds without a report, and an untyped `wish()` returned whole
+is reported.
+
+A value that is one of several alternatives — the arms of a conditional, of
+`??`, `||` and `&&`, and of `ifElse()`, `when()` and `unless()`, or the returns
+of a callback — has a position undeclared when any alternative leaves it
+undeclared. A part only one alternative has takes that alternative's verdict:
+the others have no value there, so they contribute nothing undeclared, and
+`flag ? { note: note() } : {}` declares `note` when `note()` does. A
+destructuring or a parameter default is an alternative to the value it
+destructures, and an optional member of an object spread is an alternative to
+what the literal held under that key before it, which a required member
+replaces.
+
+A binding's traced positions are those of its initializer, so they hold only
+while nothing writes to it. A binding with no type written that is reassigned,
+or written through — a property or index assignment, `push()`, `unshift()`,
+`splice()`, `fill()`, `set()` or `add()`, `Object.assign()`,
+`Object.defineProperty()` or `Object.defineProperties()`, `delete`, `++` or
+`--` — declares nothing, and a write through a binding initialized with
+another, or with a path through one, counts against that other binding too. A
+binding whose type is written keeps its declared positions, since every write
+must satisfy that type.
 
 ### 6.7 Lowerable Expression-Site Categories
 

@@ -65,11 +65,15 @@ export interface NodeTypeLinks {
 }
 
 /**
- * The positions of a value that an author declared: `true` for the whole
- * value, or, for a value assembled from parts, the declared positions of each
- * part by its key. The elements of an array are keyed `[]`.
+ * The positions of a value that an author declared: `true` for every position
+ * of the value, `false` for none, or, for a value assembled from parts, the
+ * declared positions of each part by its key. The elements of an array are
+ * keyed `[]`. A key the map does not hold names a part the value does not
+ * have, which contributes nothing that could be undeclared.
  */
-export type DeclaredPositions = true | ReadonlyMap<string, DeclaredPositions>;
+export type DeclaredPositions =
+  | boolean
+  | ReadonlyMap<string, DeclaredPositions>;
 
 /**
  * What SchemaInjection records about a `toSchema` call it created to describe a
@@ -87,9 +91,9 @@ export interface PatternResultSchemaCall {
    * The positions of the result an author declared. A result type written as
    * the second type argument of `pattern<Input, Output>()` declares all of
    * them. One inferred from the pattern's callback declares the positions its
-   * return expression traces to a declaration, or none.
+   * return expression traces to a declaration.
    */
-  readonly declared: DeclaredPositions | undefined;
+  readonly declared: DeclaredPositions;
 }
 
 /**

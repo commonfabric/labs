@@ -18,7 +18,7 @@ const UNKNOWN = { type: "unknown" } as const;
 /** The diagnostics one schema draws, reported straight rather than compiled. */
 function diagnosticsFor(
   schema: unknown,
-  declared?: DeclaredPositions,
+  declared: DeclaredPositions = false,
   options: { storedSource?: boolean } = {},
 ): DiagnosticInput[] {
   const reported: DiagnosticInput[] = [];
@@ -33,11 +33,11 @@ function diagnosticsFor(
 
 /**
  * The paths each `pattern-result:unknown-type` names for a compiled module
- * importing `computed`, `pattern`, `str`, and `wish`.
+ * importing `computed`, `lift`, `pattern`, `str`, and `wish`.
  */
 async function reportedPaths(body: string): Promise<string[][]> {
   const { diagnostics } = await validateSource(
-    `import { computed, pattern, str, wish } from "commonfabric";\n${body}`,
+    `import { computed, lift, pattern, str, wish } from "commonfabric";\n${body}`,
     { types: COMMONFABRIC_TYPES },
   );
   return diagnostics
@@ -201,9 +201,22 @@ describe("unknown-result-fields", () => {
           ["ref", true],
           ["refs", elements],
           ["pair", elements],
-          ["byName", new Map()],
+          ["byName", false],
+          ["loose", false],
         ]),
       )).toEqual(["byName.*", "loose"]);
+    });
+
+    it("returns no path for a part the declared positions show the value lacks", () => {
+      expect(collectUnknownResultFieldPaths(
+        {
+          type: "object",
+          properties: {
+            note: { type: "object", properties: { ref: UNKNOWN } },
+          },
+        },
+        new Map(),
+      )).toEqual([]);
     });
   });
 
@@ -239,7 +252,7 @@ describe("unknown-result-fields", () => {
     it("demotes the report to a warning over stored source", () => {
       const reported = diagnosticsFor(
         { type: "object", properties: { a: UNKNOWN } },
-        undefined,
+        false,
         { storedSource: true },
       );
 
@@ -364,6 +377,69 @@ export default pattern<{ seed: string }>(({ seed }) => ({
   profile: wish<{ name: string }>({ query: "#p" }),
 }));`),
       ).toEqual([]);
+    });
+
+    it("reports nothing for a named callback or lift whose return type is written", async () => {
+      expect(
+        await reportedPaths(`interface Note { ref: unknown }
+function toNote(): Note { return { ref: 1 }; }
+function noteOf(n: number): Note { return { ref: n }; }
+const getNote = lift((n: number): Note => ({ ref: n }));
+export default pattern<{ xs: number[] }>(({ xs }) => ({
+  note: computed(toNote),
+  notes: xs.map(noteOf),
+  lifted: getNote(1),
+}));`),
+      ).toEqual([]);
+    });
+
+    it("reports nothing for a declared field only one arm of a conditional has", async () => {
+      expect(
+        await reportedPaths(`interface Note { ref: unknown }
+function note(): Note { return { ref: 1 }; }
+export default pattern<{ flag: boolean }>(({ flag }) => ({
+  value: flag ? { note: note() } : {},
+}));`),
+      ).toEqual([]);
+    });
+
+    it("reports a value written into a local after its declaration", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref: unknown } { return { ref: 1 }; }
+export default pattern(() => ({
+  result: computed(() => {
+    let x = note().ref;
+    x = op();
+    const p = { x: note().ref };
+    p.x = op();
+    const xs = [note().ref];
+    xs.push(op());
+    return { x, p, xs };
+  }),
+}));`),
+      ).toEqual([["result.x", "result.p.x", "result.xs[]"]]);
+    });
+
+    it("reports a destructuring default that is undeclared", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+export default pattern(() => ({
+  result: computed(() => {
+    const { x = op() } = { x: undefined };
+    const [y = op()] = [undefined];
+    return { x, y };
+  }),
+}));`),
+      ).toEqual([["result.x", "result.y"]]);
+    });
+
+    it("reports an undeclared field an optional spread member may not replace", async () => {
+      expect(
+        await reportedPaths(`function op(): unknown { return 1; }
+function note(): { ref?: unknown } { return {}; }
+export default pattern(() => ({ ref: op(), ...note() }));`),
+      ).toEqual([["ref"]]);
     });
 
     it("reports nothing for a result type written out", async () => {
