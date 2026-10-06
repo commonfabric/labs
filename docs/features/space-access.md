@@ -5,7 +5,9 @@ in a space: `"OWNER"`, `"WRITE"`, `"READ"`, or `"none"`, and `undefined` while
 that is not known. It is what a pattern consults to decide what to offer a
 person, such as whether to show the controls only an owner can use, or whether
 a room it lists is one they belong to. The implementation is
-`packages/runner/src/builder/space-access.ts`.
+`packages/runner/src/builder/space-access.ts`, which also holds
+`spaceOf(target)`, the DID of that same space, described
+[below](#the-spaces-own-did).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -136,6 +138,41 @@ replica has not asked for.
 The answer names no principal. It tells a member only what a member can
 already read, since the memory server serves the whole access list to anyone
 holding `READ`, and it tells a non-member only that they are one.
+
+## The space's own DID
+
+`spaceOf(target)` returns the DID of the space `target`'s value lives in, the
+space `spaceAccess(target)` asks about. It is what a pattern writes into data
+that has to name a space, such as an invitation to a room it has just created
+with `PatternFactory.inSpace()`, which its recipient checks with
+`isWellFormedDID()` before acting on it. It shares the internal resolution of
+`target` with `spaceAccess(target)`, in
+`packages/runner/src/builder/space-access.ts`, so the two always name the same
+space.
+
+It can be called where `spaceAccess(target)` can: in a handler or a reactive
+computation, and a call in a pattern body throws. The answer does not depend on
+who asks, so a call in a computation leaves its read scope as it is.
+
+| Answer | When |
+| --- | --- |
+| a DID | the space `target`'s value lives in, after following any links it holds |
+| `undefined` | `target` was passed as `undefined`, or the run has named an `inSpace()` target whose space is not resolved yet |
+
+The second `undefined` comes from how `inSpace()` creates a space. A run that
+names a space not yet resolved records the name, and when the run ends the
+runner creates the space, discards everything the run wrote, and runs it again;
+in that run the name resolves at once. Until then the child the call created
+has no space, and neither has a cell linking to it, so `spaceOf(target)`
+returns `undefined` for every `target` in such a run rather than a DID for the
+cells it could resolve. Nothing the run wrote commits, so no DID it returned
+could reach a document either way. The run after it returns the new space's
+DID, for the child and for anything linking to it, and a later handler reading
+the child from the data that run wrote gets the same DID.
+
+The DID carries no label. A space's DID is an address rather than a principal,
+and a stored reference to a cell in another space already records that space's
+DID, so it is in data anyone holding the reference can read.
 
 ## In a pattern test
 
