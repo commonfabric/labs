@@ -26,6 +26,7 @@ import {
 } from "./subagent.ts";
 import type { HarnessTaskOutcome } from "./task-outcome.ts";
 import type { HarnessModelUsage } from "../model/client.ts";
+import type { SandboxRuntimeKind } from "../sandbox/types.ts";
 
 export const HARNESS_CHAT_PROTOCOL_VERSION = 1 as const;
 export const HARNESS_CHAT_REQUEST_TYPE = "cf-harness.chat.request" as const;
@@ -431,7 +432,7 @@ export interface HarnessChatSessionStatus {
    * ran its first turn since. A session goes on only on that runtime, which
    * keeps what its turns labelled. Absent until then for such a session.
    */
-  sandboxRuntime?: "docker" | "runsc";
+  sandboxRuntime?: SandboxRuntimeKind;
 
   capabilities: HarnessChatCapabilities;
   policy: HarnessChatPolicy;
@@ -650,7 +651,7 @@ export interface CreateHarnessChatSessionStatusOptions {
   model?: string;
   loomLocalHostBinding?: LoomLocalHostBinding;
   artifactRoot?: string;
-  sandboxRuntime?: "docker" | "runsc";
+  sandboxRuntime?: SandboxRuntimeKind;
   capabilities?: Partial<HarnessChatCapabilities>;
   policy?: HarnessChatPolicy;
   browserAccess?: HarnessChatBrowserAccessLease;

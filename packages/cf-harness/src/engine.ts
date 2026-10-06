@@ -243,6 +243,7 @@ import type {
   DockerRunscSandboxConfig,
   SandboxRuntime,
   SandboxRuntimeChoice,
+  SandboxRuntimeKind,
   SandboxRuntimeMountDescription,
 } from "./sandbox/types.ts";
 import {
@@ -440,7 +441,7 @@ export interface CreateHarnessEngineOptions
    * default) drives Docker with the runsc-cfc runtime; `runsc` runs runsc
    * directly, with no Docker, and honours tool-call sessions.
    */
-  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRuntimeKind?: SandboxRuntimeKind;
   /** runsc runtime: the rootfs a bundle names. */
   sandboxRootfs?: string;
   /** runsc runtime: CFC policy file; `--cfc` is passed exactly when set. */

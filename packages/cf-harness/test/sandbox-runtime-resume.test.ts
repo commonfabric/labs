@@ -26,6 +26,7 @@ import type { HarnessRunState } from "../src/run-state.ts";
 import type { ProcessRunner } from "../src/sandbox/process-runner.ts";
 import {
   recordedSandboxRuntime,
+  sandboxRuntimeNamed,
   sandboxRuntimeOfKind,
   sandboxRuntimeOfOptions,
 } from "../src/sandbox/runtime-selection.ts";
@@ -174,6 +175,24 @@ describe("sandbox-runtime-resume", () => {
     }
     return undefined;
   };
+
+  describe("sandboxRuntimeNamed()", () => {
+    it("returns each runtime for its own name, and nothing for any other", () => {
+      expect(
+        ["docker", "runsc", "Docker", "RUNSC", " docker", "", "podman"].map(
+          sandboxRuntimeNamed,
+        ),
+      ).toEqual([
+        "docker",
+        "runsc",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    });
+  });
 
   describe("sandboxRuntimeOfKind()", () => {
     it("returns the runtime an entrypoint names for each kind a runtime describes itself as", () => {

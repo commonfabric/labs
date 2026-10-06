@@ -148,6 +148,18 @@ export const processSandboxSelectionEnv = (): Record<
     SANDBOX_SELECTION_ENV.map((name) => [name, Deno.env.get(name)]),
   );
 
+/**
+ * Returns `name` as a sandbox runtime where it is one of the two, `docker` or
+ * `runsc`, and `undefined` where it is anything else. It is the one check of
+ * a runtime's name: the selection reads a named runtime through it, and so
+ * do `recordedSandboxRuntime()`, for the runtime a run's state records, and
+ * the interactive chat service, for the runtime a session's status records.
+ */
+export const sandboxRuntimeNamed = (
+  name: string,
+): SandboxRuntimeKind | undefined =>
+  name === "docker" ? "docker" : name === "runsc" ? "runsc" : undefined;
+
 /** The platform whose default is the native runtime. */
 export const NATIVE_RUNTIME_PLATFORM: SandboxPlatform = "darwin";
 
@@ -418,8 +430,9 @@ export const resolveSandboxRuntimeSelection = async (
   const rawRuntime = explicit.sandboxRuntime !== undefined
     ? explicit.sandboxRuntime.trim()
     : nonEmpty(env[SANDBOX_RUNTIME_ENV]);
-  const named: SandboxRuntimeKind | undefined =
-    rawRuntime === "docker" || rawRuntime === "runsc" ? rawRuntime : undefined;
+  const named = rawRuntime === undefined
+    ? undefined
+    : sandboxRuntimeNamed(rawRuntime);
   if (rawRuntime !== undefined && named === undefined) {
     throw new Error("sandbox runtime must be one of docker, runsc");
   }
@@ -781,8 +794,9 @@ export const recordedSandboxRuntime = (
     );
   const named = runState.sandboxRuntime;
   if (named !== undefined) {
-    if (named === "docker" || named === "runsc") return named;
-    throw unknown(named);
+    const runtime = sandboxRuntimeNamed(named);
+    if (runtime === undefined) throw unknown(named);
+    return runtime;
   }
   const kind = runState.capabilitySnapshot?.cfc?.sandbox?.kind;
   if (kind === undefined) return undefined;

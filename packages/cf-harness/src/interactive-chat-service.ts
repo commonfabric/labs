@@ -21,6 +21,7 @@ import {
 import { establishHarnessSessionContext } from "./session-assembly.ts";
 import {
   SANDBOX_RUNTIME_ENV,
+  sandboxRuntimeNamed,
   sandboxRuntimeOfOptions,
 } from "./sandbox/runtime-selection.ts";
 import type { SandboxRuntimeKind } from "./sandbox/types.ts";
@@ -1532,14 +1533,15 @@ export class HarnessInteractiveChatService {
     // is bound below to the runtime this turn runs on. The status is read
     // from a store another build may have written, so a runtime it names is
     // checked rather than trusted to be one of the two.
-    const startedOn: string | undefined = record.status.sandboxRuntime;
-    if (
-      startedOn !== undefined && startedOn !== "docker" && startedOn !== "runsc"
-    ) {
+    const recorded: string | undefined = record.status.sandboxRuntime;
+    const startedOn = recorded === undefined
+      ? undefined
+      : sandboxRuntimeNamed(recorded);
+    if (recorded !== undefined && startedOn === undefined) {
       return providerMismatchError(
         requestId,
         `chat session \`${params.sessionId}\` records that it started on the ` +
-          `sandbox runtime \`${startedOn}\`, which this cf-harness does not ` +
+          `sandbox runtime \`${recorded}\`, which this cf-harness does not ` +
           "know, so it cannot tell whether this host runs the same one. " +
           "Start a new session, or go on with this one on the cf-harness " +
           "that started it.",
