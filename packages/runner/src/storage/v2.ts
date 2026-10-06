@@ -1375,6 +1375,18 @@ export class StorageManager implements IStorageManager {
     // caller mutating their map object must not desynchronize them.
     this.#seedHosts = Object.freeze({ ...(options.spaceHostMap ?? {}) });
     this.#memoryHost = String(options.memoryHost);
+    // The memory server says when a space that refused this principal would
+    // admit it. The notice is a hint, so it starts an ordinary retry, whose
+    // admission the server decides again.
+    sessionFactory.subscribeAdmissible?.((space, principal) => {
+      if (principal !== this.as.did()) return;
+      this.retrySpaceAccess(space).catch((error) =>
+        logger.warn("admission-notice-retry", () => [
+          `space ${space}: the retry a \`session/admissible\` started failed:`,
+          error,
+        ])
+      );
+    });
   }
 
   /**
