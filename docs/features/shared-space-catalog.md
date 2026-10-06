@@ -79,6 +79,12 @@ and archived choices; an action on an entry in another state returns
 `conflict: unsupported-state`, including an attempted confirmation. A future
 writer must define the additional state's transitions.
 
+Stored revisions are nonempty strings of at most 320 characters. When applying
+a new membership action, a writer that cannot advance the stored revision
+returns `conflict: unsupported-revision`. This includes an unfamiliar revision
+format and a generation whose next token would exceed the length bound. The
+catalog remains unchanged. Other entries remain readable and writable.
+
 The catalog uses additive evolution without a root version gate. Readers
 preserve extra root and entry fields and opaque `lastAction` evidence. A writer
 that cannot interpret an entry's action evidence, or finds that its action state

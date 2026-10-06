@@ -1,13 +1,67 @@
 import { action, assert, pattern, TESTS, Writable } from "commonfabric";
 
 import Home from "./home.tsx";
+import {
+  changeSharedSpaceMembership,
+  type SharedSpaceCatalogStorage,
+} from "./shared-space-catalog.ts";
 
 const SPACE = "did:key:catalog-test-room";
 const FROM = "did:key:catalog-test-sender";
 const OFFER = JSON.stringify([FROM, "first-offer"]);
+const EXHAUSTED_SPACE = "did:key:catalog-exhausted";
+// A 272-digit generation plus the 48-character event suffix fills the bound.
+const EXHAUSTED_REVISION =
+  "99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999:evk:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 export default pattern(() => {
   const home = Home({});
+  const futureCatalog = new Writable<SharedSpaceCatalogStorage>({
+    entries: {
+      [SPACE]: {
+        space: SPACE,
+        host: "https://room.example",
+        kind: "loom",
+        state: "saved",
+        revision: "legacy",
+      },
+      [EXHAUSTED_SPACE]: {
+        space: EXHAUSTED_SPACE,
+        host: "https://room.example",
+        kind: "loom",
+        state: "saved",
+        revision: EXHAUSTED_REVISION,
+      },
+    },
+    offers: {},
+  });
+  const unsupported = changeSharedSpaceMembership({ catalog: futureCatalog });
+  const action_unsupported = action(() => {
+    unsupported.send({
+      space: SPACE,
+      id: "unsupported",
+      expectedRevision: "legacy",
+      state: "archived",
+    });
+  });
+  const action_exhausted = action(() => {
+    unsupported.send({
+      space: EXHAUSTED_SPACE,
+      id: "exhausted",
+      expectedRevision: EXHAUSTED_REVISION,
+      state: "archived",
+    });
+  });
+  const assert_unsupported_unchanged = assert(() =>
+    futureCatalog.get().entries[SPACE].revision === "legacy" &&
+    futureCatalog.get().entries[SPACE].state === "saved" &&
+    futureCatalog.get().entries[SPACE].lastAction === undefined &&
+    futureCatalog.get().entries[EXHAUSTED_SPACE].revision ===
+      EXHAUSTED_REVISION &&
+    futureCatalog.get().entries[EXHAUSTED_SPACE].state === "saved" &&
+    futureCatalog.get().entries[EXHAUSTED_SPACE].lastAction === undefined &&
+    Object.keys(futureCatalog.get().offers).length === 0
+  );
   const revision = new Writable("");
   const assert_empty_catalog = assert(() =>
     Object.keys(home.sharedSpaceCatalog.entries).length === 0 &&
@@ -92,6 +146,9 @@ export default pattern(() => {
   );
   return {
     [TESTS]: [
+      { action: action_unsupported },
+      { action: action_exhausted },
+      { assertion: assert_unsupported_unchanged },
       { assertion: assert_empty_catalog },
       { action: action_register },
       { assertion: assert_registered },
