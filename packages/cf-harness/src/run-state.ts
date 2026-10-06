@@ -49,6 +49,7 @@ import type {
   HarnessFailureRecord,
 } from "./diagnostics.ts";
 import { selectPrimaryHarnessFailure } from "./diagnostics.ts";
+import type { SandboxRuntimeKind } from "./sandbox/types.ts";
 import type {
   HarnessFabricCfcFlowLabelsSource,
   HarnessModelAuthSource,
@@ -181,6 +182,16 @@ export interface HarnessRunState {
   cancelReason?: string;
 
   cfcEnforcementMode: CfcEnforcementMode;
+
+  /**
+   * The sandbox runtime the run executes on, written as its engine is built,
+   * before anything runs in a sandbox, so that a resume can be held to it
+   * whatever became of the run afterwards. Absent from a record written
+   * before runs recorded it; such a run's runtime is the kind its capability
+   * snapshot describes, where it has one.
+   */
+  sandboxRuntime?: SandboxRuntimeKind;
+
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
   currentDir: string;
@@ -297,6 +308,7 @@ export interface CreateHarnessRunStateOptions {
   cancelReason?: string;
 
   cfcEnforcementMode: CfcEnforcementMode;
+  sandboxRuntime?: SandboxRuntimeKind;
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
   currentDir: string;
@@ -379,6 +391,9 @@ export const createHarnessRunState = (
       ? { cancelReason: options.cancelReason }
       : {}),
     cfcEnforcementMode: options.cfcEnforcementMode,
+    ...(options.sandboxRuntime !== undefined
+      ? { sandboxRuntime: options.sandboxRuntime }
+      : {}),
     ...(options.fabricSessionCfc !== undefined
       ? { fabricSessionCfc: options.fabricSessionCfc }
       : {}),

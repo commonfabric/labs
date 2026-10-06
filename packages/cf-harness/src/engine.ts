@@ -229,7 +229,7 @@ import {
   RunscSandboxRuntime,
 } from "./sandbox/runsc.ts";
 import {
-  sandboxRuntimeOfKind,
+  recordedSandboxRuntime,
   sandboxRuntimeOfOptions,
   sandboxRuntimeResumeRefusal,
   unnamedRuntimeMountNote,
@@ -926,22 +926,21 @@ export class CfHarnessEngine {
       );
     }
     // A run's files carry the CFC labels of the runtime that wrote them,
-    // kept where the other runtime need not read them. A run that recorded
-    // no runtime description has nothing to compare.
-    const recordedSandbox = options.runState?.capabilitySnapshot?.cfc?.sandbox
-      ?.kind;
-    if (recordedSandbox !== undefined) {
-      const recorded = sandboxRuntimeOfKind(recordedSandbox);
-      const resumed = sandboxRuntimeOfOptions(options);
-      if (recorded !== resumed) {
-        throw sandboxRuntimeResumeRefusal(
-          recorded,
-          options.sandboxRuntimeChoice?.runtime === resumed
-            ? options.sandboxRuntimeChoice
-            : resumed,
-          false,
-        );
-      }
+    // kept where the other runtime need not read them, so a run stays on the
+    // runtime its state records. A state that records none has nothing to
+    // compare, and is bound to this runtime where the state is taken below.
+    const sandboxRuntime = sandboxRuntimeOfOptions(options);
+    const recordedRuntime = options.runState === undefined
+      ? undefined
+      : recordedSandboxRuntime(options.runState);
+    if (recordedRuntime !== undefined && recordedRuntime !== sandboxRuntime) {
+      throw sandboxRuntimeResumeRefusal(
+        recordedRuntime,
+        options.sandboxRuntimeChoice?.runtime === sandboxRuntime
+          ? options.sandboxRuntimeChoice
+          : sandboxRuntime,
+        false,
+      );
     }
     const runId = options.runState?.runId ?? options.runId ??
       crypto.randomUUID();
@@ -1277,10 +1276,14 @@ export class CfHarnessEngine {
         }
       }
     }
-    this.#runState = options.runState ??
-      createHarnessRunState({
+    // Written here, before anything runs in the sandbox and whatever a first
+    // probe of it comes to, so that no later state of the run lacks it.
+    this.#runState = options.runState !== undefined
+      ? { ...options.runState, sandboxRuntime }
+      : createHarnessRunState({
         runId,
         cfcEnforcementMode: this.config.cfcEnforcementMode,
+        sandboxRuntime,
         ...(fabricSessionCfc !== undefined ? { fabricSessionCfc } : {}),
         currentDir,
         model: this.config.model,

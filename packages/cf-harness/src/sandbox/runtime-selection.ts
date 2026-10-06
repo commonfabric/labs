@@ -38,9 +38,7 @@ import {
 } from "./runsc.ts";
 import type {
   SandboxPlatform,
-  SandboxRuntime,
   SandboxRuntimeChoice,
-  SandboxRuntimeDescription,
   SandboxRuntimeKind,
 } from "./types.ts";
 
@@ -658,26 +656,84 @@ export const unnamedRuntimeMountNote = (
 
 /**
  * Returns the runtime, as an entrypoint names it, that describes itself as
- * `kind`. A run records the kind, and an operator names the runtime.
+ * `kind`, or `undefined` for a kind this build does not know. A run records
+ * the kind, and an operator names the runtime.
  */
 export const sandboxRuntimeOfKind = (
-  kind: SandboxRuntimeDescription["kind"],
-): SandboxRuntimeKind => kind === "runsc-cfc" ? "runsc" : "docker";
+  kind: string,
+): SandboxRuntimeKind | undefined =>
+  kind === "runsc-cfc"
+    ? "runsc"
+    : kind === "docker-runsc-cfc"
+    ? "docker"
+    : undefined;
 
 /**
  * Returns the runtime an engine built with `options` executes on: the one it
  * is handed where it is handed one, and otherwise the one it builds, which is
  * Docker unless `runsc` is named.
+ *
+ * @throws Error where the runtime handed in describes itself as a kind this
+ * build does not know.
  */
 export const sandboxRuntimeOfOptions = (
   options: {
-    sandboxRuntime?: Pick<SandboxRuntime, "describe">;
+    sandboxRuntime?: { describe(): { kind: string } };
     sandboxRuntimeKind?: SandboxRuntimeKind;
   },
-): SandboxRuntimeKind =>
-  options.sandboxRuntime !== undefined
-    ? sandboxRuntimeOfKind(options.sandboxRuntime.describe().kind)
-    : options.sandboxRuntimeKind ?? "docker";
+): SandboxRuntimeKind => {
+  if (options.sandboxRuntime === undefined) {
+    return options.sandboxRuntimeKind ?? "docker";
+  }
+  const { kind } = options.sandboxRuntime.describe();
+  const runtime = sandboxRuntimeOfKind(kind);
+  if (runtime === undefined) {
+    throw new Error(
+      `the sandbox runtime handed in describes itself as \`${kind}\`, ` +
+        "which is no kind of runtime this cf-harness knows",
+    );
+  }
+  return runtime;
+};
+
+/**
+ * Returns the runtime a run's state records the run started on, or
+ * `undefined` where it records none. That is the runtime the state names,
+ * which every engine writes as it is built. A state written before engines
+ * did so names none, and its runtime is the kind its capability snapshot
+ * describes, where a first probe of the sandbox left one.
+ *
+ * The state is read from a file another build may have written, so what it
+ * names is checked rather than trusted to be one of the two.
+ *
+ * @throws HarnessControlError, a resume refusal, where the state names a
+ * runtime, or describes a kind of one, that this build does not know: a
+ * resume cannot be held to a runtime it cannot tell from its own.
+ */
+export const recordedSandboxRuntime = (
+  runState: {
+    sandboxRuntime?: string;
+    capabilitySnapshot?: { cfc?: { sandbox?: { kind: string } } };
+  },
+): SandboxRuntimeKind | undefined => {
+  const unknown = (recorded: string): HarnessControlError =>
+    harnessResumeRefusal(
+      "resume sandbox runtime unknown: the run records that it started on " +
+        `the sandbox runtime \`${recorded}\`, which this cf-harness does not ` +
+        "know, so it cannot tell whether this resume is on the same one. " +
+        "Resume it with the cf-harness that wrote the record.",
+    );
+  const named = runState.sandboxRuntime;
+  if (named !== undefined) {
+    if (named === "docker" || named === "runsc") return named;
+    throw unknown(named);
+  }
+  const kind = runState.capabilitySnapshot?.cfc?.sandbox?.kind;
+  if (kind === undefined) return undefined;
+  const runtime = sandboxRuntimeOfKind(kind);
+  if (runtime === undefined) throw unknown(kind);
+  return runtime;
+};
 
 /**
  * Builds the refusal of a resume on another runtime than its run started on.

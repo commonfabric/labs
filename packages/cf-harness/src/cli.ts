@@ -96,8 +96,8 @@ import {
   DOCKER_DRIVER_SETTINGS,
   type ExplicitSandboxRuntimeSelection,
   processSandboxSelectionEnv,
+  recordedSandboxRuntime,
   resolveSandboxRuntimeSelection,
-  sandboxRuntimeOfKind,
   sandboxRuntimeOfOptions,
   sandboxRuntimeResumeRefusal,
   type SandboxRuntimeSelection,
@@ -3606,15 +3606,13 @@ export const runCfHarnessCli = async (
       }
       // The engine refuses this too. It is refused here first, where the
       // flag that names the recorded runtime can be said.
-      const recordedSandbox = artifacts.runState.capabilitySnapshot?.cfc
-        ?.sandbox?.kind;
+      const recordedRuntime = recordedSandboxRuntime(artifacts.runState);
       if (
-        recordedSandbox !== undefined &&
-        sandboxRuntimeOfKind(recordedSandbox) !==
-          sandboxRuntimeOfOptions(parsed)
+        recordedRuntime !== undefined &&
+        recordedRuntime !== sandboxRuntimeOfOptions(parsed)
       ) {
         throw sandboxRuntimeResumeRefusal(
-          sandboxRuntimeOfKind(recordedSandbox),
+          recordedRuntime,
           parsed.sandboxRuntimeChoice ?? sandboxRuntimeOfOptions(parsed),
           deps.sandboxSelectionFlags ?? true,
         );

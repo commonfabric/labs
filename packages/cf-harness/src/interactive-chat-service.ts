@@ -1528,8 +1528,23 @@ export class HarnessInteractiveChatService {
     }
     // What the session's earlier turns labelled is labelled where the runtime
     // they ran on keeps labels, which the other runtime need not read. A
-    // session stored before hosts recorded a runtime has none to compare.
-    const startedOn = record.status.sandboxRuntime;
+    // session stored before hosts recorded a runtime has none to compare, and
+    // is bound below to the runtime this turn runs on. The status is read
+    // from a store another build may have written, so a runtime it names is
+    // checked rather than trusted to be one of the two.
+    const startedOn: string | undefined = record.status.sandboxRuntime;
+    if (
+      startedOn !== undefined && startedOn !== "docker" && startedOn !== "runsc"
+    ) {
+      return providerMismatchError(
+        requestId,
+        `chat session \`${params.sessionId}\` records that it started on the ` +
+          `sandbox runtime \`${startedOn}\`, which this cf-harness does not ` +
+          "know, so it cannot tell whether this host runs the same one. " +
+          "Start a new session, or go on with this one on the cf-harness " +
+          "that started it.",
+      );
+    }
     if (startedOn !== undefined && startedOn !== this.#sandboxRuntime) {
       return providerMismatchError(
         requestId,
@@ -1635,6 +1650,15 @@ export class HarnessInteractiveChatService {
           undefined
       ) {
         return turnExistsError(requestId, params.sessionId, turnId);
+      }
+      // A session with no recorded runtime is bound to the one its first turn
+      // here runs on. The status is saved with the event below, so the
+      // binding is durable exactly where the turn is.
+      if (startedOn === undefined) {
+        record.status = {
+          ...record.status,
+          sandboxRuntime: this.#sandboxRuntime,
+        };
       }
       await this.#emit(params.sessionId, turn.turnId, {
         kind: "turn_started",

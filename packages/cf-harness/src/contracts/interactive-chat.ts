@@ -426,9 +426,10 @@ export interface HarnessChatSessionStatus {
   artifactRoot?: string;
 
   /**
-   * The sandbox runtime of the host the session started on. A session goes on
-   * only on that runtime, whose label store holds what its turns labelled.
-   * Absent for a session stored before hosts recorded it.
+   * The sandbox runtime the session is bound to: that of the host it started
+   * on, or, for a session stored before hosts recorded one, of the host that
+   * ran its first turn since. A session goes on only on that runtime, which
+   * keeps what its turns labelled. Absent until then for such a session.
    */
   sandboxRuntime?: "docker" | "runsc";
 
