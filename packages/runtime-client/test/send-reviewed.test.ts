@@ -178,11 +178,36 @@ async function chatRoom(serverExecution: boolean) {
     createCellRef(result.key("save")),
   );
 
-  /** The bodies of the messages the pattern stored. */
+  /**
+   * The bodies of the messages the pattern stored. Under server execution
+   * the runtime shows its own speculative run of a handler until the served
+   * one lands, so the bodies are read by a runtime of their own, which runs
+   * nothing and reads what the memory server holds.
+   */
   const stored = async () => {
     await runtime.idle();
-    await result.pull();
-    return (result.key("items").get() ?? []).map(({ body }) => body);
+    if (serving === undefined) {
+      await result.pull();
+      return (result.key("items").get() ?? []).map(({ body }) => body);
+    }
+    const readerStorage = EmulatedStorageManager.connectTo(serving.server, {
+      as: signer,
+    });
+    const reader = new Runtime({
+      apiUrl: new URL(apiUrl),
+      storageManager: readerStorage,
+      experimental: { serverExecution: true },
+    });
+    try {
+      const items = reader.getCellFromLink<{ body: string }[]>(
+        result.key("items").getAsNormalizedFullLink(),
+      );
+      await items.pull();
+      return (items.get() ?? []).map(({ body }) => body);
+    } finally {
+      await reader.dispose();
+      await readerStorage.close();
+    }
   };
 
   return {
