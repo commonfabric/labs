@@ -2628,6 +2628,42 @@ Deno.test("installCfHarnessSignalHandlers terminalizes the active run before exi
   );
 });
 
+Deno.test("installCfHarnessSignalHandlers handles one signal, and disposes once", async () => {
+  let handler: CfHarnessCliSignalHandler | undefined;
+  let disposals = 0;
+  const exits: number[] = [];
+  let release = () => {};
+  const held = new Promise<void>((resolve) => release = resolve);
+  const cleanup = installCfHarnessSignalHandlers(
+    () =>
+      ({ terminalizeInterruptedRun: () => held }) as unknown as CfHarnessEngine,
+    {
+      registerSignalHandler: (_signals, registeredHandler) => {
+        handler = registeredHandler;
+        return () => {
+          disposals += 1;
+        };
+      },
+      exit: (code) => {
+        exits.push(code);
+      },
+    },
+  );
+
+  // A second signal while the first is being handled is not handled again.
+  const first = Promise.resolve(handler?.("SIGINT"));
+  await handler?.("SIGTERM");
+  release();
+  await first;
+  cleanup();
+  cleanup();
+
+  assertEquals(exits, [130]);
+  // Once as the signal is handled, once as the caller disposes; the second
+  // dispose does nothing.
+  assertEquals(disposals, 2);
+});
+
 Deno.test("runCfHarnessCli registers and disposes signal handlers around a run", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let registeredSignals: readonly string[] = [];
