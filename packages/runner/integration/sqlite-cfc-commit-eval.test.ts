@@ -177,7 +177,7 @@ async function runTest(base: URL) {
           dtx,
           dtx.getCfcState().dereferenceTraces,
         );
-        await dtx.commit();
+        await dtx.commit().settled;
         const conf: unknown[] = [];
         for (const entry of view?.entries ?? []) {
           for (const atom of entry.label.confidentiality ?? []) {

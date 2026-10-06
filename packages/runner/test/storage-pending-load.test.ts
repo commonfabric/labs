@@ -44,7 +44,7 @@ describe("storage pending-load generations", () => {
   it("keeps the document pending until its CFC schema load settles", async () => {
     const { runtime, tx } = env;
     const cell = runtime.getCell(space, "pending-through-cfc", undefined);
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     const storage = runtime.storageManager as StorageManager;

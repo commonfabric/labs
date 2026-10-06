@@ -86,14 +86,48 @@ export default pattern((__cf_pattern_input) => {
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "array",
-            items: {}
+            items: {
+                anyOf: [{
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }, {
+                        $ref: "#/$defs/UIRenderable"
+                    }]
+            },
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, {
             anyOf: [{
                     type: "boolean"
                 }, {
                     type: "array",
-                    items: {}
-                }]
+                    items: {
+                        anyOf: [{
+                                $ref: "https://commonfabric.org/schemas/vnode.json"
+                            }, {
+                                $ref: "#/$defs/UIRenderable"
+                            }]
+                    }
+                }],
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, showItems, items.mapWithPattern(__cfPattern_1, {}))}
       </div>),
     };

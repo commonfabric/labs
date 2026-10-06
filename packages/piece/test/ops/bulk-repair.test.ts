@@ -61,7 +61,10 @@ function holderProgram(): RuntimeProgram {
       name: "/main.tsx",
       contents: [
         "import { NAME, pattern } from 'commonfabric';",
-        "export default pattern<{ title?: string; members?: unknown[] }>(",
+        "export default pattern<",
+        "  { title?: string; members?: unknown[] },",
+        "  { [NAME]: string; title?: string; members?: unknown[] }",
+        ">(",
         "  ({ title, members }) => ({",
         "    [NAME]: 'Holder',",
         "    title,",

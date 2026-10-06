@@ -108,7 +108,7 @@ describe("whole-object read over a session-scoped link", () => {
       count: 3,
       myDraft: draft,
     });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -312,7 +312,7 @@ describe("whole-object read over a session-scoped link", () => {
       question: "inline scope question",
       inner: { value: { draft } },
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -390,7 +390,7 @@ describe("whole-object read over a session-scoped link", () => {
       question: "group question",
       nested: { draft },
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -439,7 +439,7 @@ describe("whole-object read over a session-scoped link", () => {
       tx,
     );
     container.set({ type: "vnode", name, props: {} } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -493,7 +493,7 @@ describe("whole-object read over a session-scoped link", () => {
       count: 1,
       myDraft: mid,
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -539,7 +539,7 @@ describe("whole-object read over a session-scoped link", () => {
       count: 2,
       myDraft: userDraft,
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -597,7 +597,7 @@ describe("whole-object read over a session-scoped link", () => {
       title: "nested",
       inner: { plain: "visible", scoped },
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -658,7 +658,7 @@ describe("whole-object read over a session-scoped link", () => {
       count: 3,
       myDraft: cellA,
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -729,7 +729,7 @@ describe("whole-object read over a session-scoped link", () => {
         },
       },
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -781,7 +781,7 @@ describe("whole-object read over a session-scoped link", () => {
         },
       },
     } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -840,7 +840,7 @@ describe("whole-object read over a session-scoped link", () => {
     ) as { required?: string[] };
     expect(relaxed.required).toEqual(["question", "count"]);
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   });
 
@@ -893,7 +893,7 @@ describe("whole-object read over a session-scoped link", () => {
       tx,
     );
     holder.set({ title: "t", sub } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -928,7 +928,7 @@ describe("whole-object read over a session-scoped link", () => {
       tx,
     );
     incomplete.set({ question: "only a question" } as never);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 

@@ -202,7 +202,7 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(tx, target, ["elements"]);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
 
       const verify = runtime.edit();
@@ -264,7 +264,7 @@ describe("profile owner CFC policy", () => {
       });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -289,7 +289,7 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(seed, target, ["avatar"]);
       recordTrustedEdit(seed, target, ["elements"]);
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       setTrustedProfileWriter(tx, bob.did());
@@ -303,7 +303,7 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(tx, target, ["name"]);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("ownerPrincipal");
     } finally {
       await runtime.dispose();
@@ -354,7 +354,7 @@ describe("profile owner CFC policy", () => {
       const target = seedCell.getAsNormalizedFullLink();
       recordTrustedEdit(seed, target, ["tags"]);
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // The authorized writer adds through the mergeable op.
       const add = runtime.edit();
@@ -363,7 +363,7 @@ describe("profile owner CFC policy", () => {
         .key("tags").addUnique("x");
       recordTrustedEdit(add, target, ["tags"]);
       add.prepareCfc();
-      expect((await add.commit()).error).toBeUndefined();
+      expect((await add.commit().settled).error).toBeUndefined();
 
       // ...and removes through the mergeable op.
       const rm = runtime.edit();
@@ -372,7 +372,7 @@ describe("profile owner CFC policy", () => {
         .key("tags").removeByValue("x");
       recordTrustedEdit(rm, target, ["tags"]);
       rm.prepareCfc();
-      expect((await rm.commit()).error).toBeUndefined();
+      expect((await rm.commit().settled).error).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -395,7 +395,7 @@ describe("profile owner CFC policy", () => {
       const target = seedCell.getAsNormalizedFullLink();
       recordTrustedEdit(seed, target, ["tags"]);
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Bob add-uniques to Alice's owner-protected list: the mergeable op is
       // gated by the same ownerPrincipal check as a whole-value set.
@@ -405,7 +405,7 @@ describe("profile owner CFC policy", () => {
         .key("tags").addUnique("x");
       recordTrustedEdit(tx, target, ["tags"]);
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("ownerPrincipal");
     } finally {
       await runtime.dispose();
@@ -435,7 +435,7 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(tx, target, ["elements"]);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("ownerPrincipal");
     } finally {
       await runtime.dispose();
@@ -465,7 +465,7 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(tx, target, ["elements"]);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted builtin identity",
       );
@@ -509,7 +509,7 @@ describe("profile owner CFC policy", () => {
       cell.set({ name: "Ada" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("ownerPrincipal");
     } finally {
       await runtime.dispose();
@@ -655,7 +655,7 @@ describe("profile owner CFC policy", () => {
         resultCell,
       );
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -685,7 +685,7 @@ describe("profile owner CFC policy", () => {
         avatar: "",
         elements: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const writeTx = runtime.edit();
       const protectedHomeDefault = runtime.getCell(
@@ -696,7 +696,7 @@ describe("profile owner CFC policy", () => {
       );
       protectedHomeDefault.key("profiles").set([profileDefault]);
       writeTx.prepareCfc();
-      const result = await writeTx.commit();
+      const result = await writeTx.commit().settled;
       expect(result.error?.message).toContain("trusted");
     } finally {
       await runtime.dispose();
@@ -735,7 +735,7 @@ describe("profile owner CFC policy", () => {
         home.key("profiles").getAsNormalizedFullLink(),
       );
       seed.writeOrThrow(storedProfiles, [profileA.getAsLink()]);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       // Untrusted truncation under enforcement → rejected by the container
       // writeAuthorizedBy (the array value changed [A] -> []).
@@ -750,7 +750,7 @@ describe("profile owner CFC policy", () => {
       expect(writeTx.readOrThrow(storedProfiles)).toHaveLength(1);
       protectedHome.key("profiles").set([]);
       writeTx.prepareCfc();
-      const result = await writeTx.commit();
+      const result = await writeTx.commit().settled;
       expect(result.error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity " +
           "at /profiles",
@@ -835,7 +835,7 @@ describe("profile owner CFC policy", () => {
         }, runtimeWritePolicyAuthorization);
       }
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -871,7 +871,7 @@ describe("profile owner CFC policy", () => {
       recordTrustedEdit(tx, target, ["elements"]);
       // No setup-projection marker recorded.
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("writeAuthorizedBy");
     } finally {
       await runtime.dispose();
@@ -931,7 +931,7 @@ describe("profile owner CFC policy", () => {
         }, authorization);
       }
       tx.prepareCfc();
-      return (await tx.commit()).error?.message;
+      return (await tx.commit().settled).error?.message;
     };
     try {
       expect(await attempt("owner-init-unauthorized-marker")).toContain(
@@ -983,7 +983,7 @@ describe("profile owner CFC policy", () => {
       });
       cell.key("y").set("vy");
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -1023,7 +1023,7 @@ describe("profile owner CFC policy", () => {
       cell.key("x").set("vx");
       cell.key("y").set("vy");
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("writeAuthorizedBy");
     } finally {
       await runtime.dispose();

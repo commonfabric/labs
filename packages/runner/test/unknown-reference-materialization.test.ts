@@ -61,7 +61,7 @@ describe("unknown-reference materialization", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -151,14 +151,14 @@ describe("unknown-reference materialization", () => {
           setup,
         );
         cell.set({ v: value } as never);
-        await setup.commit();
+        await setup.commit().settled;
         const read = async (lazy: boolean) => {
           const readTx = rt.edit();
           if (lazy) readTx.markLazyMaterialize(true);
           // Projected while the transaction is open: a lazy view resolves what
           // a reader touches when it touches it, and a closed one refuses.
           const out = project((cell.withTx(readTx).get() as { v: unknown }).v);
-          await readTx.commit();
+          await readTx.commit().settled;
           return out;
         };
         return { eager: await read(false), lazy: await read(true) };

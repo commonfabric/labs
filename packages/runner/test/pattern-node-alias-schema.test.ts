@@ -127,7 +127,7 @@ describe("compiled pattern node alias schemas", () => {
       runtime.getCell(space, "scoped computed child", undefined, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     expect(result.key("count").get()).toBe(7);
     expect(result.key("count").resolveAsCell().getAsNormalizedFullLink().scope)
@@ -160,7 +160,7 @@ describe("compiled pattern node alias schemas", () => {
       }, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     expect(result.key("count").get()).toBe(9);
     expect(result.key("count").resolveAsCell().getAsNormalizedFullLink().scope)
@@ -220,7 +220,7 @@ describe("compiled pattern node alias schemas", () => {
       tx,
     );
     const result = runtime.run(tx, live as any, root, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const childArgument = result.key("node").getArgumentCell(

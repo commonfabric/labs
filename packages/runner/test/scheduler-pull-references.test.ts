@@ -88,7 +88,7 @@ describe("pull mode with references", () => {
     );
     effectResult.set("");
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let innerRuns = 0;
@@ -164,7 +164,7 @@ describe("pull mode with references", () => {
 
     // Now change source to ["apple"]
     source.withTx(tx).send(["apple"]);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await effectResult.pull();
 
@@ -189,7 +189,7 @@ describe("pull mode with references", () => {
       profile: target,
     });
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const profileName = source.key("profile").key("name").asSchema(
@@ -208,7 +208,7 @@ describe("pull mode with references", () => {
 
     target.withTx(tx).set({ name: "Ada" });
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -230,7 +230,7 @@ describe("pull mode with references", () => {
     });
     target.set({ name: "Ada" });
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const profileName = source.key("profile").key("name").asSchema(
@@ -249,7 +249,7 @@ describe("pull mode with references", () => {
 
     target.withTx(tx).set({ name: "Grace" });
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 

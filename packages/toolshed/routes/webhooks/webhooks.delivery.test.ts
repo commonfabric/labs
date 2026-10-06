@@ -45,7 +45,7 @@ describe("webhook cell-link wire delivery (fcl1: -> resolve -> stream)", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   });
@@ -63,7 +63,7 @@ describe("webhook cell-link wire delivery (fcl1: -> resolve -> stream)", () => {
       tx,
     );
     received.set(null);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     runtime.scheduler.addEventHandler((eventTx, event) => {
@@ -87,7 +87,7 @@ describe("webhook cell-link wire delivery (fcl1: -> resolve -> stream)", () => {
     const streamCell = runtime.getCellFromLink(linkRefFrom(payload))
       .asSchema({ asCell: ["stream"] });
     streamCell.withTx(tx).send({ data: "hello-webhook" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
 

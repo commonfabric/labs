@@ -227,123 +227,333 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
               {__cfHelpers.ifElse({
         type: ["string", "undefined"]
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, defaultSpot, <span>{defaultSpot}</span>, null)}
               {__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, isFirst, <span>first</span>, null)}
               {__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, isLast, <span>last</span>, null)}
               {__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, isEditing, <span>editing</span>, null)}
               {__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, isRemoveConfirm, <span>removing</span>, null)}
               {__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, __cfLift_4({ activeSpotOpts: {
             length: activeSpotOpts.key("length")
         } }), <span>spots</span>, null)}
               {__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, __cfLift_5({ spotPreferences: spotPreferences }), <span>
                     Prefers: {__cfLift_6({ spotPreferences: spotPreferences })}
                   </span>, null)}

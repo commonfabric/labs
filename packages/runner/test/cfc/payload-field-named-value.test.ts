@@ -58,7 +58,7 @@ describe("payload-field-named-value", () => {
     const tx = runtime.edit();
     runtime.getCell(space, name, schema, tx).set(value as never);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cell = runtime.getCell(space, name, schema);
     await cell.sync();
     return cell;
@@ -115,7 +115,7 @@ describe("payload-field-named-value", () => {
           .key(field as never) as Cell<string>).set("changed");
         runtime.prepareTxForCommit(tx);
 
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const after = runtime.getCell(space, `field-write-${field}`, schema);
         await after.sync();
         expect(after.get()).toEqual({ [field]: "changed", other: "b" });
@@ -141,7 +141,7 @@ describe("payload-field-named-value", () => {
         }, "new");
         tx.prepareCfc();
 
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "missing schema write-policy input",
         );
       });
@@ -172,7 +172,7 @@ describe("payload-field-named-value", () => {
           cell.set({ [field]: { x: "S" }, x: "T", copy: "S" } as never);
           tx.prepareCfc();
 
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const inspect = runtime.edit();
           const stored = readStoredCfcMetadata(
             inspect,
@@ -194,7 +194,7 @@ describe("payload-field-named-value", () => {
           );
           tx.prepareCfc();
 
-          expect((await tx.commit()).error?.message).toContain(
+          expect((await tx.commit().settled).error?.message).toContain(
             "exactCopyOf failed at /copy",
           );
         });

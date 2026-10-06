@@ -84,7 +84,7 @@ describe("receipt schema", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await root.pull();
     return root.key("verb") as Cell<unknown>;
@@ -317,7 +317,7 @@ describe("receipt schema", () => {
       tx,
     );
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await root.pull();
     const stream = root.key("verb") as Cell<unknown>;

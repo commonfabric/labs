@@ -136,7 +136,7 @@ async function buildFixture(
       resultOf(writer, index),
     );
   }
-  const setupResult = await setup.commit();
+  const setupResult = await setup.commit().settled;
   if (setupResult.error !== undefined) throw setupResult.error;
   await closeClient(writer);
 
@@ -157,7 +157,7 @@ async function buildFixture(
       await argument.sync();
       argument.withTx(move).set({ value: round * 1_000 + index });
     }
-    const moved = await move.commit();
+    const moved = await move.commit().settled;
     if (moved.error !== undefined) throw moved.error;
     await closeClient(mover);
     for (let index = 0; index < pieces; index++) {

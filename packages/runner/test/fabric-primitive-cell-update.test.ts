@@ -46,12 +46,12 @@ describe("FabricPrimitive cell updates", () => {
       tx,
     );
     c.set({ bytes: new Uint8Array([1, 2, 3, 4]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     c.withTx(tx).key("bytes").set(new Uint8Array([9, 8, 7, 6]));
     const writes = [...getTransactionWriteDetails(tx, space)];
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(writes.map((w) => w.address.path.join("/"))).toContain(
       "value/bytes",
@@ -67,11 +67,11 @@ describe("FabricPrimitive cell updates", () => {
       tx,
     );
     c.set({ bytes: new Uint8Array([1, 2, 3, 4]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     c.withTx(tx).set({ bytes: new Uint8Array([5, 5, 5, 5]) });
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(bytesOf(c)).toEqual([5, 5, 5, 5]);
   });
@@ -84,7 +84,7 @@ describe("FabricPrimitive cell updates", () => {
       tx,
     );
     c.set({ bytes: new Uint8Array([1, 2, 3, 4]) });
-    await tx.commit();
+    await tx.commit().settled;
 
     const seen: string[] = [];
     const cancel = c.key("bytes").sink((value: unknown) => {
@@ -95,7 +95,7 @@ describe("FabricPrimitive cell updates", () => {
 
     tx = runtime.edit();
     c.withTx(tx).key("bytes").set(new Uint8Array([9, 8, 7, 6]));
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     cancel();
 

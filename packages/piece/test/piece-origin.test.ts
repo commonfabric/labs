@@ -36,6 +36,7 @@ import {
   PiecesController,
 } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 // The route that ref resolves to.
 const DEFAULT_APP_PATTERN_PATH = resolveSystemPatternSource(
@@ -931,7 +932,7 @@ describe("reading a piece's source state", () => {
     const tx = runtime.edit();
     cell.withTx(tx).setMetaRaw(key, value as never, rawMetaWriteAuthorization);
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
   }
 
@@ -995,7 +996,7 @@ describe("reading a piece's source state", () => {
       expected,
     });
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const state = await readPieceSourceState(runtime, cell);
     expect(state.origin).toEqual({
@@ -1018,7 +1019,7 @@ describe("reading a piece's source state", () => {
       ...revision,
       origin: "not an origin",
     }] as never, rawMetaWriteAuthorization);
-    await tx.commit();
+    await tx.commit().settled;
 
     const state = await readPieceSourceState(runtime, cell);
     expect(state.history).toHaveLength(1);
@@ -1095,18 +1096,21 @@ describe("reading a piece's source state", () => {
     runtime.edit = () => {
       const tx = edit();
       const commit = tx.commit.bind(tx);
-      tx.commit = async (options) => {
-        const validatesSnapshot = tx.getCommitPreconditions?.(
-          controller.getSpace(),
-        )?.some((precondition) => precondition.kind === "entity-value-hash") ??
-          false;
-        if (validatesSnapshot && !injectedChange) {
-          injectedChange = true;
-          runtime.edit = edit;
-          await source.input.set({ label: "changed during clone" });
-        }
-        return await commit(options);
-      };
+      tx.commit = (options) =>
+        createTransactionCommitReceipt((async () => {
+          const validatesSnapshot = tx.getCommitPreconditions?.(
+            controller.getSpace(),
+          )?.some((precondition) =>
+            precondition.kind === "entity-value-hash"
+          ) ??
+            false;
+          if (validatesSnapshot && !injectedChange) {
+            injectedChange = true;
+            runtime.edit = edit;
+            await source.input.set({ label: "changed during clone" });
+          }
+          return await commit(options).settled;
+        })());
       return tx;
     };
 
@@ -1492,13 +1496,13 @@ describe("reading a piece's source state", () => {
           ) ?? false;
           if (!rejectNextCommit || !validatesSnapshot) return commit(options);
           rejectNextCommit = false;
-          return Promise.resolve({
+          return createTransactionCommitReceipt(Promise.resolve({
             error: {
               name: "StorageTransactionAborted" as const,
               message: "snapshot rejected",
               reason: new Error("snapshot commit rejected"),
             },
-          });
+          }));
         };
         return tx;
       };
@@ -1564,7 +1568,9 @@ describe("reading a piece's source state", () => {
         if (rejectRestore) {
           rejectRestore = false;
           tx.commit = (() =>
-            Promise.resolve({ error: failure.error })) as typeof tx.commit;
+            createTransactionCommitReceipt(
+              Promise.resolve({ error: failure.error }),
+            )) as typeof tx.commit;
         }
         return tx;
       };
@@ -1753,7 +1759,7 @@ describe("reading a piece's source state", () => {
         rawMetaWriteAuthorization,
       );
       runtime.prepareTxForCommit(tx);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
       release.resolve();
       await expect(cloning).rejects.toThrow(

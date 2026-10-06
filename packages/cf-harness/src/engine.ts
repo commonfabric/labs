@@ -15,6 +15,12 @@ import type {
 import type { JSONSchema } from "@commonfabric/api";
 import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
 import type {
+  ListCommandsInput,
+  ListCommandsOutput,
+  RunCommandInput,
+  RunCommandOutput,
+} from "./tools/loom-commands.ts";
+import type {
   SubmitResultInput,
   SubmitResultOutput,
 } from "./tools/submit-result.ts";
@@ -254,6 +260,11 @@ import {
   type EditFileToolOutput,
 } from "./tools/edit-file.ts";
 import type { FinishTaskInput, FinishTaskOutput } from "./tools/finish-task.ts";
+import type {
+  WeaverActionInput,
+  WeaverActionOutput,
+} from "./tools/weaver-action.ts";
+import type { HarnessClientActionRequester } from "./client-actions/coordinator.ts";
 import {
   type ReadFileToolInput,
   type ReadFileToolOutput,
@@ -328,6 +339,7 @@ export interface BuiltinToolInputMap {
   resolve_piece: ResolvePieceToolInput;
   describe_handle: DescribeHandleToolInput;
   finish_task: FinishTaskInput;
+  weaver_action: WeaverActionInput;
   search_patterns: SearchPatternsToolInput;
   record_feedback: RecordFeedbackToolInput;
   search_skills: SearchSkillsToolInput;
@@ -344,6 +356,8 @@ export interface BuiltinToolInputMap {
   loom_calendar_list: LoomCalendarListInput;
   loom_context: LoomContextInput;
   loom_profile: LoomProfileInput;
+  list_commands: ListCommandsInput;
+  run_command: RunCommandInput;
   submit_result: SubmitResultInput;
 }
 
@@ -365,6 +379,7 @@ export interface BuiltinToolOutputMap {
   resolve_piece: ResolvePieceToolOutput;
   describe_handle: DescribeHandleToolOutput;
   finish_task: FinishTaskOutput;
+  weaver_action: WeaverActionOutput;
   search_patterns: SearchPatternsToolOutput;
   record_feedback: RecordFeedbackToolOutput;
   search_skills: SearchSkillsToolOutput;
@@ -381,6 +396,8 @@ export interface BuiltinToolOutputMap {
   loom_calendar_list: LoomRetrievalToolOutput;
   loom_context: LoomRetrievalToolOutput;
   loom_profile: LoomRetrievalToolOutput;
+  list_commands: ListCommandsOutput;
+  run_command: RunCommandOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -476,6 +493,16 @@ export interface CreateHarnessEngineOptions
   inheritedCfcModelContext?: HarnessCfcModelContext;
 
   /**
+   * The handle table a new run starts from: an interactive session's table as
+   * its last checkpoint left it, so a token the model saw in an earlier turn
+   * still resolves in this one. The run keeps the table's salt and its own
+   * run id; startup inputs and well-known grants mint into it, and an address
+   * it already holds keeps its token. Refused beside `runState`, whose
+   * recorded table is the one a resumed run continues.
+   */
+  inheritedHandleTable?: HarnessHandleTable;
+
+  /**
    * Injection seam for the render gate's probe runtime, mirroring
    * `fabricSessionFactory`: a test supplies one to see what the gate opens
    * the probe under. When absent, the gate opens a real isolated runtime.
@@ -506,6 +533,13 @@ export interface CreateHarnessEngineOptions
    * own fetch seam below because it is a separate effect.
    */
   skillsShSearchClientFactory?: HarnessSkillsShSearchClientFactory;
+
+  /**
+   * The host's door for asking the person's client to act mid-turn. Supplying
+   * it is the host's opt-in: without it `weaver_action` stays out of the tool
+   * surface. Never inherited by a subagent's engine.
+   */
+  requestClientActions?: HarnessClientActionRequester;
 
   /**
    * Injection seam for pinned external-skill acquisition. Production builds
@@ -696,6 +730,7 @@ export class CfHarnessEngine {
   readonly #patternIndexClientFactory?: HarnessPatternIndexClientFactory;
   readonly #browserHost?: HarnessBrowserHost;
   readonly #skillsShSearchClientFactory?: HarnessSkillsShSearchClientFactory;
+  readonly #requestClientActions?: HarnessClientActionRequester;
   readonly #skillsShAcquisitionClientFactory?:
     HarnessSkillsShAcquisitionClientFactory;
   #docsCorpus?: Promise<HarnessDocsCorpus>;
@@ -825,6 +860,14 @@ export class CfHarnessEngine {
     if (options.runState?.handleTable !== undefined) {
       assertValidHarnessHandleTable(options.runState.handleTable);
     }
+    if (options.inheritedHandleTable !== undefined) {
+      if (options.runState !== undefined) {
+        throw new Error(
+          "an inherited handle table cannot accompany a resumed run state",
+        );
+      }
+      assertValidHarnessHandleTable(options.inheritedHandleTable);
+    }
     this.config = resolveHarnessConfig({
       ...options,
       modelProvider: options.runState === undefined
@@ -899,6 +942,7 @@ export class CfHarnessEngine {
     this.#patternIndexClientFactory = patternIndexClientFactory === undefined
       ? undefined
       : cacheHarnessPatternIndexClientFactory(patternIndexClientFactory);
+    this.#requestClientActions = options.requestClientActions;
     const skillsShSearchClientFactory = options.skillsShSearchClientFactory ??
       (this.config.skillsSh !== undefined
         ? createHarnessSkillsShSearchClientFactory(
@@ -1227,6 +1271,9 @@ export class CfHarnessEngine {
         ...(options.inheritedCfcModelContext !== undefined
           ? { cfcModelContext: options.inheritedCfcModelContext }
           : {}),
+        ...(options.inheritedHandleTable !== undefined
+          ? { handleTable: options.inheritedHandleTable }
+          : {}),
         skillsRoot: this.config.skillsRootRecord,
         ...(options.acquiredSkills !== undefined
           ? { acquiredSkills: options.acquiredSkills }
@@ -1380,6 +1427,11 @@ export class CfHarnessEngine {
     | HarnessPatternIndexClientFactory
     | undefined {
     return this.#patternIndexClientFactory;
+  }
+
+  /** Whether the host opted this run in to asking the client to act. */
+  get clientActionsAvailable(): boolean {
+    return this.#requestClientActions !== undefined;
   }
 
   /** Whether this run can search the configured skills.sh registry. */
@@ -2929,6 +2981,9 @@ export class CfHarnessEngine {
       currentDir: this.#runState.currentDir,
       workspaceHostPath: this.workspaceHostPath,
       ...(signal !== undefined ? { signal } : {}),
+      ...(this.#requestClientActions !== undefined
+        ? { requestClientActions: this.#requestClientActions }
+        : {}),
       skillRegistry: this.#runState.skillRegistry,
       skillActivations: this.#runState.skillActivations,
       allowSkillScripts: this.config.allowSkillScripts,
@@ -3014,6 +3069,7 @@ export class CfHarnessEngine {
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
+      loomCommands: this.config.loomCommands,
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
         this.mintReferentHandle(referent),
       mintResearchHandle: (

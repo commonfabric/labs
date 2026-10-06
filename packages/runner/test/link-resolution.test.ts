@@ -47,7 +47,7 @@ describe("link-resolution", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -68,7 +68,7 @@ describe("link-resolution", () => {
         tx,
       );
       targetCell.set(sourceCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const readTx = runtime.edit();
@@ -951,7 +951,7 @@ describe("link-resolution", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });
@@ -1447,7 +1447,7 @@ describe("link-resolution", () => {
         tx,
       );
       home.set({ items: [note] });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       return { home, note, base: home.getAsNormalizedFullLink() };
     };
@@ -1552,7 +1552,7 @@ describe("link-resolution", () => {
         targetTx,
       );
       target.set({ value: "ada@example.com" });
-      await targetTx.commit();
+      await targetTx.commit().settled;
       const homeTx = runtime.edit();
       const home = runtime.getCell<unknown[]>(
         space,
@@ -1561,7 +1561,7 @@ describe("link-resolution", () => {
         homeTx,
       );
       home.setRawUntyped([target.getAsLink()]);
-      await homeTx.commit();
+      await homeTx.commit().settled;
       return {
         targetId: target.getAsNormalizedFullLink().id,
         valueLink: home.key(0).key("value").getAsNormalizedFullLink(),

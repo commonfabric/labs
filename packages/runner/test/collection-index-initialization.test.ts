@@ -92,7 +92,7 @@ describe("collection index initialization", () => {
           ),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         cleanup.defer(result.sink(() => {}));
         await runtime.idle();
         const eligible = Array.from(

@@ -90,7 +90,7 @@ describe("CFC resume membership taint", () => {
       },
     });
     rt.prepareTxForCommit(seed);
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -148,7 +148,7 @@ describe("CFC resume membership taint", () => {
     );
     rt1.run(tx0, compiled, { items: listCell }, rc1);
     rt1.prepareTxForCommit(tx0);
-    expect((await tx0.commit()).ok).toBeDefined();
+    expect((await tx0.commit().settled).ok).toBeDefined();
     await rc1.pull();
     await rt1.settled();
     await rt1.patternManager.flushCompileCacheWrites();
@@ -191,7 +191,7 @@ describe("CFC resume membership taint", () => {
       rtMid.getCell(space, "memb-el-2", undefined, txMid),
     ]);
     rtMid.prepareTxForCommit(txMid);
-    expect((await txMid.commit()).ok).toBeDefined();
+    expect((await txMid.commit().settled).ok).toBeDefined();
     await storageManager.synced();
     await rtMid.dispose({ closeStorage: false });
 
@@ -208,7 +208,7 @@ describe("CFC resume membership taint", () => {
         tx2,
       );
       rt2.prepareTxForCommit(tx2);
-      expect((await tx2.commit()).ok).toBeDefined();
+      expect((await tx2.commit().settled).ok).toBeDefined();
       await rc2.sync();
       expect(await rt2.start(rc2)).toBe(true);
       await rc2.pull();

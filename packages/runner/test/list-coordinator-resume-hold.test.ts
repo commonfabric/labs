@@ -86,7 +86,7 @@ describe("list-coordinator-resume-hold", () => {
         tx,
       );
       builder.run(tx, compiled, { items: [{ n: 1 }] }, built);
-      await tx.commit();
+      await tx.commit().settled;
       await built.pull();
       await builder.settled();
       await builder.patternManager.flushCompileCacheWrites();
@@ -100,7 +100,7 @@ describe("list-coordinator-resume-hold", () => {
       const emptying = builder.edit();
       builder.getCellFromLink(argumentLink!).withTx(emptying).key("items")
         .set([]);
-      expect((await emptying.commit()).error).toBeUndefined();
+      expect((await emptying.commit().settled).error).toBeUndefined();
       await builder.storageManager.synced();
       await builder.dispose({ closeStorage: false });
       runtimes.splice(runtimes.indexOf(builder), 1);

@@ -41,7 +41,7 @@ describe("cfc-private-array-append", () => {
         ifc: { confidentiality: [OWNER] },
       }, create);
       inbox.set(["owner's existing recommendation"]);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
       const link = inbox.getAsNormalizedFullLink();
       const visitorInbox = visitor.getCellFromLink<string[]>(link);
@@ -56,7 +56,7 @@ describe("cfc-private-array-append", () => {
       const submit = visitor.edit();
       expect(visitorInbox.withTx(submit).push("visitor's recommendation"))
         .toBeUndefined();
-      expect((await submit.commit()).error).toBeUndefined();
+      expect((await submit.commit().settled).error).toBeUndefined();
       await owner.storageManager.synced();
       expect(owner.getCellFromLink<string[]>(link).get()).toEqual([
         "owner's existing recommendation",
@@ -113,7 +113,7 @@ describe("cfc-private-array-append", () => {
       inbox.set([]);
       history.set([]);
       draft.set({ title: "Solaris", author: "Stanisław Lem" });
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
       await history.sync();
       await draft.sync();
@@ -122,7 +122,7 @@ describe("cfc-private-array-append", () => {
       const selected = draft.withTx(submit).get();
       history.withTx(submit).push(selected);
       inbox.withTx(submit).push(selected);
-      const result = await submit.commit();
+      const result = await submit.commit().settled;
       expect(result.error).toBeDefined();
       expect(JSON.stringify(result.error)).toMatch(
         /writer-fit confidentiality misfit for .* \(canWrite, §8\.12\.4\)/,
@@ -155,7 +155,7 @@ describe("cfc-private-array-append", () => {
         create,
       );
       inbox.set(["private recommendation"]);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
       await runtime.storageManager.synced();
       const submit = runtime.edit();
@@ -204,7 +204,7 @@ describe("cfc-private-array-append", () => {
         create,
       );
       inbox.set([]);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
       const inboxLink = inbox.getAsNormalizedFullLink();
       const submit = visitor.edit();
@@ -225,7 +225,7 @@ describe("cfc-private-array-append", () => {
       book.set({ title: "Solaris", author: "Stanisław Lem" });
       visitor.getCellFromLink<{ title: string; author: string }[]>(inboxLink)
         .withTx(submit).push(book);
-      expect((await submit.commit()).error).toBeUndefined();
+      expect((await submit.commit().settled).error).toBeUndefined();
       await book.sync();
       const bookLink = book.getAsNormalizedFullLink();
       expect(owner.getCellFromLink(inboxLink).get()).toEqual([

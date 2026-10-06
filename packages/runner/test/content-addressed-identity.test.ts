@@ -201,7 +201,7 @@ describe("content-addressed action identity", () => {
     );
     // deno-lint-ignore no-explicit-any
     const r = runtime!.run(tx, rehydrated, {}, resultCell) as any;
-    await tx.commit();
+    await tx.commit().settled;
     await r.pull();
     r.key("setName").send({ name: "resolved-after-eviction" });
     await runtime!.idle();
@@ -259,7 +259,7 @@ describe("content-addressed action identity", () => {
     );
     // deno-lint-ignore no-explicit-any
     const r = runtime!.run(tx, rehydrated, {}, resultCell) as any;
-    await tx.commit();
+    await tx.commit().settled;
     await r.pull();
     r.key("setName").send({ name: "resolved-through-fallback" });
     await runtime!.idle();
@@ -300,7 +300,7 @@ describe("content-addressed action identity", () => {
     );
     // deno-lint-ignore no-explicit-any
     const r = runtime!.run(tx, rehydrated, {}, resultCell) as any;
-    await tx.commit();
+    await tx.commit().settled;
     await r.pull();
     r.key("setName").send({ name: "resolved-through-fallback" });
     await runtime!.idle();
@@ -362,7 +362,7 @@ export default pattern<{ out: string }>(({ out }) => ({
     );
     // deno-lint-ignore no-explicit-any
     const r = runtime.run(tx, pattern, {}, resultCell) as any;
-    await tx.commit();
+    await tx.commit().settled;
     await r.pull();
     r.key("dump").send({});
     await runtime.idle();
@@ -507,7 +507,7 @@ export default pattern<{ value: number }>(({ value }) => ({
       tx,
     );
     const result = runtime.run(tx, stripped, 21, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     const out = await result.pull();
     // 21 → 42: the registered artifact's implementation ran via $implRef.
     expect(out).toBe(42);

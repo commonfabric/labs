@@ -56,7 +56,7 @@ describe("describeSinkReleaseRefusal", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return { id, path: [] as string[], space, scope: "space" as const };
   };
 
@@ -67,7 +67,7 @@ describe("describeSinkReleaseRefusal", () => {
       const seed = runtime.edit();
       const plain = runtime.getCell(space, "release-plain", undefined, seed);
       plain.set({ note: "public" });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const tx = runtime.edit();
       const cell = runtime.getCellFromLink(

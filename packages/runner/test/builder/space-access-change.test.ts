@@ -331,12 +331,12 @@ describe("space-access-change", () => {
     {
       const tx = runtime.edit();
       argument.withTx(tx).set({ notes: [] });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancel = result.sink(() => {});
     cleanups.push(() => Promise.resolve(cancel()));
@@ -643,7 +643,7 @@ describe("space-access-change", () => {
       const tx = member.runtime.edit();
       member.runtime.getCell<string>(space, "written by bob", undefined, tx)
         .set("hello");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
 
     it("throws in a `computed()`", async () => {

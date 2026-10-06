@@ -63,7 +63,7 @@ const declaredWrite = async (
   const cidWrites = [...tx.getWriteDetails?.(space) ?? []]
     .map((detail) => detail.address.id)
     .filter((id) => id.startsWith("cid:"));
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
   const targetId = cell.getAsNormalizedFullLink().id;
   const stored = (runtime.storageManager.open(space).replica as unknown as {
     getDocument(id: string): { cfc?: CfcMetadata } | undefined;
@@ -123,7 +123,7 @@ describe("CFC decomposed envelopes", () => {
       const cidWrites = [...tx.getWriteDetails?.(space) ?? []]
         .map((detail) => detail.address.id)
         .filter((id) => id.startsWith("cid:"));
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       expect(cidWrites).toEqual([]);
     } finally {
       await runtime.dispose();
@@ -221,7 +221,7 @@ describe("CFC decomposed envelopes", () => {
       const cell = runtime.getCell(space, "inline-target", DECLARED_SCHEMA, tx);
       cell.set({ secret: "classified", note: "detail" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const targetId = cell.getAsNormalizedFullLink().id;
       const stored = (runtime.storageManager.open(space).replica as unknown as {
         getDocument(id: string): { cfc?: CfcMetadata } | undefined;

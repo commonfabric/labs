@@ -87,7 +87,7 @@ describe("a profile's saved name across a release", () => {
         sourceOrigin: origin,
       });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await profile.pull();
       const shown = profile.key("initialNameApplied").asSchema<string>({
         type: "string",
@@ -98,7 +98,7 @@ describe("a profile's saved name across a release", () => {
       const edit = runtime.edit();
       profile.withTx(edit).key("setName").send(setNameEvent("Saved name"));
       runtime.prepareTxForCommit(edit);
-      expect((await edit.commit()).error).toBeUndefined();
+      expect((await edit.commit().settled).error).toBeUndefined();
       await profile.pull();
       await runtime.idle();
       await profile.pull();

@@ -60,7 +60,7 @@ const CAUSE = "lazy-view-epoch-doc";
     title: "bench",
     xs: Array.from({ length: N }, (_, index) => index),
   });
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 /**

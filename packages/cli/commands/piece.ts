@@ -2101,7 +2101,7 @@ export function buildRecreateRootCommand(
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
-      "Recreate the root pattern for the explicitly targeted space.",
+      "Recreate the root pattern for the explicitly targeted space. Existing identity Home roots require an in-place source update.",
     )
     .usage(spaceUsage)
     .example(
@@ -2118,8 +2118,8 @@ export function buildRecreateRootCommand(
 }
 
 /**
- * `set-home`, which deploys a custom home-space pattern or resets the
- * identity's home space to the system default.
+ * `set-home`, which initializes an absent identity Home with custom or
+ * system source. Existing Home roots require an in-place source update.
  *
  * `spelling` and `replacedBy` carry the meanings they have in
  * {@link buildRecreateRootCommand}.
@@ -2169,7 +2169,7 @@ export function buildSetHomeCommand(
 
     if (options.reset) {
       await resetHomePattern(baseConfig);
-      render("Reset home pattern to system default.");
+      render("Initialized home with the system default pattern.");
     } else {
       await setHomePattern(baseConfig, localPatternEntry(main!, options));
       render("Deployed custom home pattern.");
@@ -2181,26 +2181,29 @@ export function buildSetHomeCommand(
     // writing is the notice arguing with itself.
     hint(cliText(`NEXT STEPS:
   → Open home in browser: ${baseConfig.apiUrl}
-  → Reset to default:     cf ${replacedBy ?? spelling} --reset ...`));
+  → Update this root:     cf piece setsrc --cell <home-root> ...`));
   };
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
-      "Deploy a custom home-space pattern or reset the identity's home space to system default.",
+      "Initialize an absent identity Home with custom or system source. Update an existing Home in place with piece setsrc.",
     )
     .example(
       cliText(
         `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} ./my-home.tsx`,
       ),
-      `Deploy a custom pattern to the identity's home space.`,
+      `Initialize the identity's Home with a custom pattern.`,
     )
     .example(
       cliText(
         `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} --reset`,
       ),
-      `Reset the identity's home space to the system default pattern.`,
+      `Initialize an absent Home with the system default pattern.`,
     )
-    .option("--reset", "Reset to the system default home pattern")
+    .option(
+      "--reset",
+      "Initialize an absent Home with the system default pattern",
+    )
     .option(
       "--main-export <export:string>",
       'Named export from entry for pattern definition. Defaults to "default".',

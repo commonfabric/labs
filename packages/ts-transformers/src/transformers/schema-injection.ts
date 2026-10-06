@@ -2828,11 +2828,12 @@ function reportAnyResultSchema(
 
 /**
  * Reports on a pattern's inferred result schema. A top-level `any`/`unknown`
- * result is an error (the whole output is permissive). A concrete result that
- * nests `unknown` fields is also an error: those fields lower to
- * `{ type: "unknown" }`, which a consumer does not materialize — it reads
- * them back as opaque references carrying no properties, the producer-side
- * form of the unknown-capture bug.
+ * result is an error (the whole output is permissive). Detected nested
+ * `unknown` fields report an error when authoring and a warning under
+ * `TransformationOptions.storedSource`, so a stored-source reload reconstructs
+ * the admitted pattern. Those fields lower to `{ type: "unknown" }`, which a
+ * consumer does not materialize: it reads them back as opaque references
+ * carrying no properties.
  */
 function reportUnknownPatternResult(
   context: TransformationContext,
@@ -2862,7 +2863,10 @@ function reportUnknownPatternResult(
   if (paths.length === 0) return;
   const fields = paths.map((p) => `\`${p}\``).join(", ");
   context.reportDiagnosticOnce({
-    severity: "error",
+    // A reload of stored source reconstructs what was admitted when it was
+    // deployed, so a shape this check has covered only since then reports
+    // there without refusing the reload.
+    severity: context.options.storedSource ? "warning" : "error",
     type: "pattern-result:unknown-type",
     message:
       `pattern() output ${paths.length > 1 ? "fields" : "field"} ${fields} ` +
@@ -2879,8 +2883,17 @@ function reportUnknownPatternResult(
 
 /**
  * Collects dotted paths to `unknown`-typed leaves within a result type node,
- * descending object literals and array element types. A top-level `unknown` is
+ * descending object literals, array element types, tuple elements, a
+ * `readonly` type's operand, and each member of a union, whose schema the
+ * output carries as one of its alternatives. A tuple element's path is its
+ * index, written `[i...]` for a rest element, whose own element is the one
+ * walked; a union member's path is the union's. A top-level `unknown` is
  * handled by the error path above, so this only sees nested occurrences.
+ *
+ * It stops at a type reference. A named type is a declaration, and `unknown`
+ * in a declaration is the form for a reference to another piece
+ * (`docs/common/concepts/types-and-schemas/unknown.md`), so what a name
+ * declares is not reported.
  */
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
   const paths: string[] = [];
@@ -2890,7 +2903,14 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
       paths.push(path || "(result)");
       return;
     }
-    if (ts.isTypeLiteralNode(unwrapped)) {
+    if (
+      ts.isTypeOperatorNode(unwrapped) &&
+      unwrapped.operator === ts.SyntaxKind.ReadonlyKeyword
+    ) {
+      walk(unwrapped.type, path);
+    } else if (ts.isUnionTypeNode(unwrapped)) {
+      for (const member of unwrapped.types) walk(member, path);
+    } else if (ts.isTypeLiteralNode(unwrapped)) {
       for (const member of unwrapped.members) {
         if (
           ts.isPropertySignature(member) && member.type && member.name &&
@@ -2902,6 +2922,22 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
       }
     } else if (ts.isArrayTypeNode(unwrapped)) {
       walk(unwrapped.elementType, `${path}[]`);
+    } else if (ts.isTupleTypeNode(unwrapped)) {
+      unwrapped.elements.forEach((element, index) => {
+        const named = ts.isNamedTupleMember(element) ? element : undefined;
+        let elementType = named?.type ?? element;
+        const rest = !!named?.dotDotDotToken || ts.isRestTypeNode(elementType);
+        if (
+          ts.isRestTypeNode(elementType) || ts.isOptionalTypeNode(elementType)
+        ) {
+          elementType = elementType.type;
+        }
+        const spread = rest ? unwrapTypeParentheses(elementType) : undefined;
+        if (spread && ts.isArrayTypeNode(spread)) {
+          elementType = spread.elementType;
+        }
+        walk(elementType, `${path}[${index}${rest ? "..." : ""}]`);
+      });
     }
   };
   walk(resultNode, "");
@@ -2913,7 +2949,10 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
  * result that stands as a placeholder printed from a type the checker prints
  * no node for. It descends an object type with no name, which a print writes
  * out as structure; an instance of a class expression with no name, which is
- * what leaves a type with no print; and an array's element.
+ * what leaves a type with no print; an array's element; a tuple's elements;
+ * and each member of a union, along the paths the node walk gives them. It
+ * stops at a named type, as the node walk stops at a reference, since what a
+ * name declares is not reported.
  */
 function collectUnknownResultTypePaths(
   type: ts.Type,
@@ -2929,9 +2968,22 @@ function collectUnknownResultTypePaths(
       paths.push(path || "(result)");
       return;
     }
+    // An alias names its type whatever shape it has, an array or a union as
+    // much as an object, so the walk stops at one before reading its shape.
+    if (current.aliasSymbol) return;
     if (enclosing.has(current)) return;
     enclosing.add(current);
-    if (checker.isArrayType(current)) {
+    if (current.isUnion()) {
+      for (const member of current.types) walk(member, path);
+    } else if (checker.isTupleType(current)) {
+      const tuple = current as ts.TypeReference;
+      const { elementFlags } = tuple.target as ts.TupleType;
+      checker.getTypeArguments(tuple).forEach((element, index) => {
+        const flags = elementFlags[index] ?? ts.ElementFlags.Required;
+        const rest = (flags & ts.ElementFlags.Variable) !== 0;
+        walk(element, `${path}[${index}${rest ? "..." : ""}]`);
+      });
+    } else if (checker.isArrayType(current)) {
       const [element] = checker.getTypeArguments(current as ts.TypeReference);
       if (element) walk(element, `${path}[]`);
     } else if (hasNoNameToPrint(current)) {

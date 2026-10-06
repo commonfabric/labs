@@ -84,10 +84,13 @@ The value is as trustworthy as the runtime that runs the handler.
 
 ## Its relation to the `CurrentPrincipal` label subject
 
-The `CurrentPrincipal` placeholder in a label — what `AuthoredByCurrentUser`
-and `RepresentsCurrentUser` lower to, and what `ownerPrincipal` may name —
-resolves when the write is prepared, to the `actingPrincipal` of the
-transaction's trust snapshot. Where the handler has an actor and that snapshot
+The `CurrentPrincipal` placeholder in a principal claim — what
+`AuthoredByCurrentUser` and `RepresentsCurrentUser` lower to, and what
+`ownerPrincipal` may name — resolves when the write is prepared, to the
+`actingPrincipal` of the transaction's trust snapshot. A `User` reader named
+`CurrentPrincipal` resolves by its own rule, which
+[the next section](#a-reader-named-currentprincipal) gives, and is not one of
+the places below. Where the handler has an actor and that snapshot
 names the identity the runtime authenticates as, which is the default when no
 host supplies a snapshot of its own, the two agree: a label the same handler
 writes names the principal `currentPrincipal()` returned.
@@ -104,6 +107,49 @@ They part in two places.
   different acting principal. The placeholder then resolves to that principal,
   and `currentPrincipal()` still returns the identity the runtime authenticates
   as.
+
+## A reader named `CurrentPrincipal`
+
+A `User` confidentiality clause whose subject is `CurrentPrincipal` declares a
+store readable by one principal, and commit preparation replaces the
+placeholder with a concrete DID. Which DID depends on whether the store already
+exists, and on where a new one is created.
+
+- **A store already holding labels** keeps the readers it stores. A writer
+  presenting the same symbolic declaration does not become a reader of it.
+- **A document created beneath a stored parent** takes the parent's readers.
+  When a transaction creates a document, writing it where nothing stood before
+  in its scope, and links it into a document that existed before the
+  transaction, the placeholder binds to the concrete `User`
+  readers the parent's declared policy names at the position the link lands
+  on. An item a second principal appends to an owner-private list is that
+  case: the item becomes a document of its own, and it is bound to the list's
+  owner, not to the principal who appended it. A document created beneath such
+  a document in the same transaction takes the same readers, so nesting does
+  not change the answer.
+- **Any other new document** binds to the acting principal of the
+  transaction's trust snapshot, as the integrity placeholder does. That
+  includes a document beneath a parent whose policy names no `User` reader at
+  that position, such as one labeled only for its space.
+
+A principal who creates a document beneath a private store of their own gets
+the same reader either way, since the store's reader is that principal.
+
+Binding to the parent cannot widen who reads anything. The new document's
+readers are the readers the parent already promised the data at that position
+to, and a reader of the new document has to satisfy every clause it holds. A
+writer gains no standing as a reader: what a sender appends to someone else's
+private list is labeled for the list's readers, so a read ceiling admitting
+only the sender withholds it.
+
+What the binding changes is which writes fit the new document's write ceiling,
+which the CFC spec's `canWrite` (§8.12.4) measures a transaction's taint
+against. A transaction that read the parent carries the parent's readers in its
+taint, and those now fit. Data labeled for any other reader still misfits, the
+writer's own private data included, so moving it into the owner's list still
+needs a declassification. SC-57 in
+[the CFC spec change list](../specs/cfc-spec-changes.md) records the rule for
+the spec.
 
 ## Why only in a handler
 
@@ -133,3 +179,15 @@ through the live serving loop, with a payload naming someone else.
 position that declares a writer and no gesture: on a client, on a served run
 with an actor and with none, reached through another handler's `send()`, and
 against claims naming someone other than the acting principal.
+
+`packages/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
+reader binding, under "a document created under a labeled parent": an item
+another principal appends to an owner-private list, a document nested in it,
+the owner's own append, a list whose policy names no `User` reader, an
+existing document linked into the list, both one stored as present but
+`undefined` and one whose id the transaction also creates in another scope,
+and an existing store another principal writes.
+`packages/patterns/integration/owner-private-inbox-multi-runtime.test.ts`
+drives the same append through compiled patterns in separate runtimes, under
+either server-execution posture. With server execution on, it also refuses a
+stranger's served copy of the appended items.

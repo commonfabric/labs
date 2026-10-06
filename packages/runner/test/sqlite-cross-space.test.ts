@@ -41,7 +41,7 @@ describe("sqlite-cross-space", () => {
     const seed = runtime.edit();
     const handle = runtime.getCell(source, "identity handle", undefined, seed);
     handle.set({ id: "of:identity-query" });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const setup = runtime.edit();
     const parent = runtime.getCell(
       consumer,
@@ -57,7 +57,7 @@ describe("sqlite-cross-space", () => {
       setup,
     );
     inputs.set({ db: handle, sql: "SELECT 1" });
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
     for (
       const context of [
         { acting: { user: consumer } },
@@ -110,7 +110,7 @@ describe("sqlite-cross-space", () => {
         sql: "INSERT INTO notes (body) VALUES (?)",
         params: [body],
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     const handleTx = runtime.edit();
     const handle = runtime.getCell<SqliteDbRef>(
@@ -120,7 +120,7 @@ describe("sqlite-cross-space", () => {
       handleTx,
     );
     handle.set(db);
-    expect((await handleTx.commit()).error).toBeUndefined();
+    expect((await handleTx.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     const queryPattern = cf.pattern<{ db: unknown }>(({ db }) =>
       cf.sqliteQuery({ db: db as never, sql: "SELECT body FROM notes" })
@@ -136,7 +136,7 @@ describe("sqlite-cross-space", () => {
         tx,
       ),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const state = await waitForCellValue<QueryState>(
       runtime,
       result,
@@ -153,7 +153,7 @@ describe("sqlite-cross-space", () => {
     );
     localHandle.set(db);
     result.getArgumentCell()!.withTx(switchTx).key("db").set(localHandle);
-    expect((await switchTx.commit()).error).toBeUndefined();
+    expect((await switchTx.commit().settled).error).toBeUndefined();
     const switched = await waitForCellValue<QueryState>(
       runtime,
       result,

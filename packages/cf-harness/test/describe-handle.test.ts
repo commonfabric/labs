@@ -1034,7 +1034,7 @@ describe("describe_handle", () => {
           },
         },
       } as unknown as FabricValue);
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
       return `/${id}`;
     };
 
@@ -1326,7 +1326,7 @@ describe("describe_handle", () => {
         seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
           value,
         } as FabricValue);
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
         return `/${id}`;
       };
 

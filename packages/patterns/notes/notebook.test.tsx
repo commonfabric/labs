@@ -21,11 +21,24 @@
  *
  * Run: deno task cf test packages/patterns/notes/notebook.test.tsx --verbose
  */
-import { action, assert, NAME, pattern, TESTS } from "commonfabric";
+import {
+  action,
+  assert,
+  equals,
+  NAME,
+  pattern,
+  TESTS,
+  wish,
+  Writable,
+} from "commonfabric";
 import Notebook from "./notebook.tsx";
 import Note from "./note.tsx";
 
 export default pattern(() => {
+  const pieceRegistry = wish<Writable<object[]>>({
+    query: "#pieceRegistry",
+  }).result!;
+
   // Create some initial notes for testing
   const note1 = Note({
     title: "First Note",
@@ -54,23 +67,21 @@ export default pattern(() => {
     isHidden: false,
   });
 
+  const selectionNoteA = Note({
+    title: "Note A",
+    content: "Content A",
+    isHidden: true,
+  });
+  const selectionNoteB = Note({
+    title: "Note B",
+    content: "Content B",
+    isHidden: true,
+  });
+
   // Create a notebook for selection/deletion/duplication tests
   const selectionNotebook = Notebook({
     title: "Selection Test",
-    notes: [
-      Note({
-        title: "Note A",
-        content: "Content A",
-
-        isHidden: true,
-      }),
-      Note({
-        title: "Note B",
-        content: "Content B",
-
-        isHidden: true,
-      }),
-    ],
+    notes: [selectionNoteA, selectionNoteB],
     isHidden: false,
   });
 
@@ -167,6 +178,10 @@ export default pattern(() => {
   // ==========================================================================
   // Actions - Delete Selected
   // ==========================================================================
+
+  const action_register_notes = action(() => {
+    pieceRegistry.pushAll([note1, selectionNoteA, selectionNoteB]);
+  });
 
   const action_delete_selected = action(() => {
     selectionNotebook.deleteSelected.send();
@@ -329,10 +344,26 @@ export default pattern(() => {
   // Assertions - Delete Selected
   // ==========================================================================
 
+  const assert_notes_registered = assert(() =>
+    pieceRegistry.get().some((piece) => equals(piece, selectionNoteA)) &&
+    pieceRegistry.get().some((piece) => equals(piece, selectionNoteB)) &&
+    pieceRegistry.get().some((piece) => equals(piece, note1))
+  );
+
   const assert_notes_deleted = assert(() =>
     selectionNotebook.noteCount === 0 &&
     selectionNotebook.notes.length === 0 &&
     selectionNotebook.selectedNoteIndices.length === 0
+  );
+
+  const assert_selected_notes_removed_from_registry = assert(() =>
+    !pieceRegistry.get().some((piece) => equals(piece, selectionNoteA)) &&
+    !pieceRegistry.get().some((piece) => equals(piece, selectionNoteB))
+  );
+
+  const assert_unselected_note_kept = assert(() =>
+    pieceRegistry.get().some((piece) => equals(piece, note1)) &&
+    note1.title === "First Note" && note1.content === "Content of first note"
   );
 
   // ==========================================================================
@@ -500,9 +531,13 @@ export default pattern(() => {
       { assertion: assert_dup_notes_have_parent },
 
       // === Delete selected (destructive, run last on selectionNotebook) ===
+      { action: action_register_notes },
+      { assertion: assert_notes_registered },
       { action: action_select_all },
       { action: action_delete_selected },
       { assertion: assert_notes_deleted },
+      { assertion: assert_selected_notes_removed_from_registry },
+      { assertion: assert_unselected_note_kept },
 
       // === Create nested notebook (writes to pieceRegistry, not notes) ===
       { action: action_create_notebook_via_stream },

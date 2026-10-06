@@ -41,13 +41,21 @@ Related contracts:
 The canonical compiler-facing carrier is:
 
 ```ts
+type CfcStamp<T, Meta> = {
+  readonly meta?: Meta;
+  readonly of?: T;
+};
+
 type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: Meta;
+  readonly __ct_cfc__?: CfcStamp<T, Meta>;
 };
 ```
 
 `Cfc<T, Meta>` must preserve the runtime/schema shape of `T` and only add to
-the emitted `ifc` metadata.
+the emitted `ifc` metadata. The stamp records the payload `T` beside the
+metadata. TypeScript merges the carrier into whatever the value is merged
+into, and the recorded payload is what tells the schema generator which part
+of the merged value the policy names (mapping spec §11).
 
 ### Path-Bearing Helpers
 
@@ -221,10 +229,14 @@ Normative behavior:
    `cfc-write-authorized-by:unread` rather than yield a schema with no write
    restriction. A reload of stored source fails the same way: the error guards
    a write restriction, not an authoring shape, and a pattern does not run
-   without the restriction its author wrote. Plain generic interfaces and
-   object aliases preserve whole policy arguments and writer parameters through
-   their member declarations, forwarded aliases, inherited members, defaults,
-   and recursive definitions. A generic member operator that leaves a writer
+   without the restriction its author wrote. Plain generic interfaces, classes
+   and structural aliases preserve whole policy arguments and writer parameters
+   through member declarations, inherited members, forwarded aliases, parameter
+   defaults, arrays, tuples, literal index signatures, nullable alias bodies and
+   recursive definitions. Library views follow named policy aliases to their
+   authored writer queries; ordinary value queries keep checker semantics.
+   Generic binding terms are defined in the schema-generator mapping spec §4.1.
+   A generic member operator that leaves a writer
    carrier without readable binding syntax must report that unsupported form
    rather than silently discard its restriction. A schema
    generated from a type alone, such as a computed's capture, has no reference

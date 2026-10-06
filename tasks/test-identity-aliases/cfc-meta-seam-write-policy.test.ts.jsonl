@@ -1,0 +1,1 @@
+{"date":"2026-10-01","from":{"k":"unit","s":"runner","n":"cfc-meta-seam-write-policy > stamps the writing transaction's confidentiality onto a document a raw meta write lands on"},"to":{"k":"unit","s":"runner","n":"cfc-meta-seam-write-policy > labels no payload path for a secret parked in a meta field"}}

@@ -427,6 +427,9 @@ const inviteBaker = handler<
   `ownerPrincipal` and it is the user the pattern runs for.
 - A claim binds honest runtimes. The memory server does not check one, so it
   does not hold against a modified client.
+- `principalsOf(target, kind)` returns every principal the label attests: `[]`
+  for none, several for a contested one. Read it where a value nobody attests
+  is fine but one someone else attests is not.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 

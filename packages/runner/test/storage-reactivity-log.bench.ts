@@ -80,7 +80,7 @@ Deno.bench(
       }
 
       txToReactivityLog(tx);
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await cleanup(runtime, storageManager);
     }
@@ -122,7 +122,7 @@ Deno.bench(
         tx.getReactivityLog?.();
       }
 
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await cleanup(runtime, storageManager);
     }

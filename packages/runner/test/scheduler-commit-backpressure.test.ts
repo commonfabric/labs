@@ -306,7 +306,7 @@ describe("committed-write backpressure", () => {
     "lands a write after a burst of transient conflicts longer than the old fixed budget",
     async () => {
       const piece = buildCounterPiece(runtime, tx, "backpressure-burst-root");
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -347,7 +347,7 @@ describe("committed-write backpressure", () => {
     "does not warn when a transient conflict converges on retry",
     async () => {
       const piece = buildCounterPiece(runtime, tx, "backpressure-warning-root");
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -403,7 +403,7 @@ describe("committed-write backpressure", () => {
         tx,
         "backpressure-nonstalebasis-root",
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -471,7 +471,7 @@ describe("committed-write backpressure", () => {
         tx,
         "backpressure-permanent-root",
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -531,7 +531,7 @@ describe("committed-write backpressure", () => {
         tx,
         "backpressure-terminal-root",
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -588,7 +588,7 @@ describe("committed-write backpressure", () => {
         tx,
         "backpressure-cfc-refusal-root",
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -651,7 +651,7 @@ describe("committed-write backpressure", () => {
         tx,
         "backpressure-stuck-root",
       );
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -706,7 +706,7 @@ describe("committed-write backpressure", () => {
       ));
 
       const piece = buildCounterPiece(runtime, tx, "backpressure-zerowin-root");
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 
@@ -759,7 +759,7 @@ describe("committed-write backpressure", () => {
       // array appends issued while the entity is churned by a burst of conflicts.
       // Each append rewrites the list, so a stale basis sequence rejects it.
       const piece = buildListPiece(runtime, tx, "backpressure-list-root");
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.idle();
 

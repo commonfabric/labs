@@ -387,12 +387,12 @@ describe("Phase 4 client-effect channel", () => {
     {
       const seed = runtime.edit();
       argument.withTx(seed).set({ value: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     return { compiled, argument, result };
   };
@@ -716,7 +716,7 @@ describe("Phase 4 client-effect channel", () => {
       await kick.sync();
       const tx = clientRuntime.edit();
       kick.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const serving = await servingManagerUp.promise;
     const gate = Promise.withResolvers<void>();
@@ -766,7 +766,7 @@ describe("Phase 4 client-effect channel", () => {
         await bobArgument.sync();
         const tx = bob.runtime.edit();
         bobArgument.withTx(tx).set({ value: 100 });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
     } finally {
       // ALWAYS release (a throw above with the gate still armed would
@@ -938,7 +938,7 @@ describe("Phase 4 client-effect channel", () => {
       await kick.sync();
       const tx = clientRuntime.edit();
       kick.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // Hold the serving loop's settle: the wave that computes the intent
     // stays OPEN while the first runtime life optimistically enacts and
@@ -1142,7 +1142,7 @@ describe("Phase 4 client-effect channel", () => {
         scope: "session",
         path: ["retryPoke"],
       }).withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await navigations.reached(1);
     await clientRuntime.idle();
@@ -1367,12 +1367,12 @@ describe("Phase 4 client-effect channel", () => {
       const seed = clientRuntime.edit();
       destination.withTx(seed).set({ label: "somewhere" });
       argument.withTx(seed).set({ target: destination as never });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -1394,7 +1394,7 @@ describe("Phase 4 client-effect channel", () => {
       await kick.sync();
       const tx = clientRuntime.edit();
       kick.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // The §4 runtime error is raised and charged to the served run.
     await servedErrors.matched;
@@ -1479,12 +1479,12 @@ describe("Phase 4 client-effect channel", () => {
       const seed = clientRuntime.edit();
       destination.withTx(seed).set({ label: "somewhere" });
       argument.withTx(seed).set({ target: destination as never });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -1504,7 +1504,7 @@ describe("Phase 4 client-effect channel", () => {
     {
       const tx = clientRuntime.edit();
       kick.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // The §4 error is raised and charged to the served run…
     await servedErrors.matched;
@@ -1526,7 +1526,7 @@ describe("Phase 4 client-effect channel", () => {
       const tx = clientRuntime.edit();
       destination2.withTx(tx).set({ label: "elsewhere" });
       argument.withTx(tx).set({ target: destination2 as never });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // …and the RACING authored input lands in the tight window after
     // that failure (back-to-back commits land it well inside the
@@ -1534,7 +1534,7 @@ describe("Phase 4 client-effect channel", () => {
     {
       const tx = clientRuntime.edit();
       kick.withTx(tx).set({ n: 2 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // The settled contract, with the CORRECT arithmetic: W must cover
     // the racing input's own AUTHORED seq (never `Engine.serverSeq`,

@@ -39,7 +39,7 @@ const cleanup = async (
   tx?: IExtendedStorageTransaction,
 ) => {
   if (tx) {
-    await tx.commit();
+    await tx.commit().settled;
   }
   await runtime.dispose();
 };
@@ -91,7 +91,7 @@ Deno.bench("Immutable cell - empty tx commit only (100x)", async () => {
   try {
     for (let index = 0; index < 100; index += 1) {
       const tx = runtime.edit();
-      await tx.commit();
+      await tx.commit().settled;
     }
   } finally {
     await cleanup(runtime, storageManager);
@@ -122,7 +122,7 @@ Deno.bench(
       for (let index = 0; index < 100; index += 1) {
         const tx = runtime.edit();
         runtime.getImmutableCell(space, makeData(index), schema, tx);
-        await tx.commit();
+        await tx.commit().settled;
       }
     } finally {
       await cleanup(runtime, storageManager);

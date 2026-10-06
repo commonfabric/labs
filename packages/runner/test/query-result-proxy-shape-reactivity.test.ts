@@ -39,7 +39,7 @@ describe("query-result-proxy nonRecursive shape reads stay reactive", () => {
     tx = runtime.edit();
   });
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

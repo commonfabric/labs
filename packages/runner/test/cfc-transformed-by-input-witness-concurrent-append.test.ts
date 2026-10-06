@@ -73,7 +73,8 @@ const seed = async (runtime: Runtime): Promise<void> => {
     },
   });
   runtime.getCell(space, "briefs", undefined, tx).set([]);
-  expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+  expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
+    .toBeUndefined();
   await runtime.storageManager.synced();
 };
 
@@ -106,7 +107,8 @@ const push = async (
     popFrame(frame);
   }
   tx.prepareCfc();
-  expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+  expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
+    .toBeUndefined();
   await runtime.storageManager.synced();
 };
 
@@ -125,7 +127,8 @@ const asAttacker = async (
     popFrame(frame);
   }
   tx.prepareCfc();
-  expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+  expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
+    .toBeUndefined();
   await runtime.storageManager.synced();
 };
 
@@ -155,7 +158,7 @@ const commitWitnessesSubmit = async (
     expect(votes).toEqual(expectedVotes);
     runtime.getCell(space, "committed", undefined, tx).set({ votes });
     tx.prepareCfc();
-    expect((await tx.commit({ resolveAt: "verdict" })).error)
+    expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
       .toBeUndefined();
     const readTx = runtime.edit();
     const metadata = readStoredCfcMetadata(
@@ -261,7 +264,8 @@ const seedListOfBriefs = async (
       },
     },
   } as never);
-  expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+  expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
+    .toBeUndefined();
   await runtime.storageManager.synced();
 };
 

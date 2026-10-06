@@ -22,6 +22,7 @@ import {
   returnReferentValues,
   swapTokensForRefs,
 } from "../src/handle-table.ts";
+import type { HarnessHandleReferent } from "../src/contracts/handle-table.ts";
 import { agentObservedHandlesOfTable } from "../src/result-writer.ts";
 import { describeHandleTool } from "../src/tools/describe-handle.ts";
 import type {
@@ -238,6 +239,153 @@ describe("referent handles", () => {
           ],
         })
       ).toThrow("duplicate referent identity");
+    });
+
+    it("accepts a command result with its provenance and throws without it", async () => {
+      const provenance = {
+        command: "loom.inspect",
+        actor: "agent" as const,
+        loomId: "loom-0123456789abcdef",
+        version: 12,
+      };
+      const { table } = await mintReferentHandle(
+        createHarnessHandleTable("run-referents"),
+        {
+          ...ROW,
+          source: "weaver_action",
+          labelSource: "command",
+          provenance,
+        },
+      );
+      expect(() => assertValidHarnessHandleTable(table)).not.toThrow();
+      expect(referentDraft(table.referents![0])).toEqual({
+        ...ROW,
+        source: "weaver_action",
+        labelSource: "command",
+        provenance,
+      });
+      const { provenance: _provenance, ...bare } = table.referents![0] as
+        & HarnessHandleReferent
+        & { provenance?: unknown };
+      for (
+        const broken of [
+          bare,
+          { ...table.referents![0], provenance: { command: "loom.inspect" } },
+          { ...table.referents![0], labelSource: "query" },
+          { ...table.referents![0], kind: "research" },
+        ]
+      ) {
+        expect(() =>
+          assertValidHarnessHandleTable({
+            ...table,
+            // deno-lint-ignore no-explicit-any
+            referents: [broken as any],
+          })
+        ).toThrow(/invalid handle table/);
+      }
+    });
+
+    it("includes a present `loomActor` in identity and omits an absent one", async () => {
+      const provenance = { command: "loom.inspect", actor: "agent" as const };
+      const row = {
+        ...ROW,
+        source: "weaver_action",
+        labelSource: "command" as const,
+        provenance,
+      };
+      const legacy = await mintReferentHandle(
+        createHarnessHandleTable("run-provenance-actors"),
+        row,
+      );
+      const absent = await mintReferentHandle(legacy.table, {
+        ...row,
+        provenance: { ...provenance, loomActor: undefined },
+      });
+      expect(absent.token).toBe(legacy.token);
+      const named = await mintReferentHandle(absent.table, {
+        ...row,
+        provenance: { ...provenance, loomActor: "agent:people-discovery" },
+      });
+      const other = await mintReferentHandle(named.table, {
+        ...row,
+        provenance: { ...provenance, loomActor: "agent:other" },
+      });
+      expect(named.token).not.toBe(legacy.token);
+      expect(other.token).not.toBe(named.token);
+      const persisted = JSON.parse(JSON.stringify(other.table));
+      expect(() => assertValidHarnessHandleTable(persisted)).not.toThrow();
+      const again = await mintReferentHandle(persisted, {
+        ...row,
+        provenance: { ...provenance, loomActor: "agent:people-discovery" },
+      });
+      expect(again.token).toBe(named.token);
+      expect(again.table.referents).toHaveLength(3);
+      const mismatch = {
+        ...named.table.referents![1],
+        provenance: { ...provenance, loomActor: "user" },
+      };
+      expect(() =>
+        assertValidHarnessHandleTable({ ...named.table, referents: [mismatch] })
+      ).toThrow(/invalid handle table/);
+    });
+
+    it("refuses to mint a command result without its provenance", async () => {
+      await expect(
+        mintReferentHandle(createHarnessHandleTable("run-referents"), {
+          ...ROW,
+          labelSource: "command",
+        }),
+      ).rejects.toThrow(/provenance/);
+      await expect(
+        mintReferentHandle(createHarnessHandleTable("run-referents"), {
+          ...ROW,
+          provenance: { command: "loom.inspect", actor: "agent" },
+        }),
+      ).rejects.toThrow(/provenance/);
+    });
+
+    it("gives a command result one identity whether or not it was persisted", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("run-referents"),
+        {
+          ...ROW,
+          labelSource: "command",
+          provenance: {
+            command: "loom.inspect",
+            actor: "agent",
+            loomId: undefined,
+          },
+        },
+      );
+      const persisted = JSON.parse(JSON.stringify(minted.table));
+      expect(() => assertValidHarnessHandleTable(persisted)).not.toThrow();
+      const again = await mintReferentHandle(persisted, {
+        ...ROW,
+        labelSource: "command",
+        provenance: {
+          command: "loom.inspect",
+          actor: "agent",
+          loomId: undefined,
+        },
+      });
+      expect(again.token).toBe(minted.token);
+      expect(again.table.referents).toHaveLength(1);
+    });
+
+    it("keeps the identity of a referent minted without provenance", async () => {
+      const first = await mintReferentHandle(
+        createHarnessHandleTable("run-referents"),
+        ROW,
+      );
+      const command = await mintReferentHandle(first.table, {
+        ...ROW,
+        labelSource: "command",
+        provenance: { command: "loom.inspect", actor: "agent" },
+      });
+      expect(command.token).not.toBe(first.token);
+      expect((await mintReferentHandle(command.table, ROW)).token).toBe(
+        first.token,
+      );
     });
   });
 

@@ -64,5 +64,9 @@ export function bigintToUnpaddedBase64url(value: bigint): string {
  * base64url, and input that decodes to zero bytes, both throw.
  */
 export function bigintFromUnpaddedBase64url(encoded: string): bigint {
+  // TODO(danfuzz): Refuse bytes that are not minimal, with a redundant
+  // leading `0x00` or `0xff`, which the `fvj1:` format refuses in a bigint
+  // state. The case `bigint state not minimal` in
+  // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
   return bigintFromMinimalTwosComplement(fromBase64url(encoded));
 }

@@ -73,7 +73,7 @@ describe("StorageManager.pullOpenSpacesToHead", () => {
       const tx = rt1.edit();
       rt1.getCell<string[]>(space, "shared-list", stringListSchema, tx)
         .set(["A"]);
-      await tx.commit({ resolveAt: "verdict" });
+      await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       await storage1.synced();
       await rt2.idle();
       expect(cell2.get()).toBeUndefined();

@@ -49,7 +49,7 @@ describe("CFC tx state contracts", () => {
       // Re-asserting persist is fine.
       tx.setCfcFlowLabelsMode("persist");
       expect(tx.getCfcState().flowLabelsMode).toBe("persist");
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -68,7 +68,7 @@ describe("CFC tx state contracts", () => {
       expect(tx.getCfcState().sinkMaxConfidentiality).toEqual({
         fetchJson: [],
       });
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -103,7 +103,7 @@ describe("CFC tx state contracts", () => {
           reasons: readonly string[];
         }).reasons,
       ).toEqual(["trigger-reads-after-prepare", "test-second-reason"]);
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -128,7 +128,7 @@ describe("CFC tx state contracts", () => {
       expect(
         (flow as { status: string; reasons: readonly string[] }).reasons,
       ).toContainEqual("flow-labels-mode-changed");
-      await tx.commit();
+      await tx.commit().settled;
     });
 
     await withTx(async (runtime, tx) => {
@@ -145,7 +145,7 @@ describe("CFC tx state contracts", () => {
       expect(
         (floor as { status: string; reasons: readonly string[] }).reasons,
       ).toContainEqual("write-floor-mode-changed");
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -174,7 +174,7 @@ describe("CFC tx state contracts", () => {
       expect(
         (prepare as { status: string; reasons: readonly string[] }).reasons,
       ).toContainEqual("write-after-prepare");
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -246,7 +246,7 @@ describe("CFC tx state contracts", () => {
           d.includes("fetchJson:tx-contracts") && d.includes("test-detail")
         ),
       ).toBe(true);
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 });

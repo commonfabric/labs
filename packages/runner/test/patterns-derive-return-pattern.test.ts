@@ -44,7 +44,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -70,7 +70,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
     );
 
     const result = runtime.run(tx, outerPattern, { value: 5 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     const value = await result.pull();
@@ -137,7 +137,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
       { remaining: 3, accumulated: [], pageSize: 2 },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     const value = await result.pull();
@@ -189,7 +189,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
       "derive-pattern-cache-dedup-input",
     );
     inputCell.withTx(tx).set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const resultCell = runtime.getCell<{ result: number }>(
@@ -205,7 +205,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
       { trigger: inputCell },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     const value1 = await result.pull();
@@ -221,7 +221,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
     // should prevent a second this.run() call.
     tx = runtime.edit();
     inputCell.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     const value2 = await result.pull();
@@ -280,7 +280,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
     );
     modeCell.withTx(tx).set("double");
     valueCell.withTx(tx).set(5);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
     tx = runtime.edit();
 
@@ -296,7 +296,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
       { mode: modeCell, value: valueCell },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     expect(await result.pull()).toEqual({ result: 10 });
@@ -306,7 +306,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
 
     tx = runtime.edit();
     modeCell.withTx(tx).send("triple");
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     expect(await result.pull()).toEqual({ result: 15 });
@@ -316,7 +316,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
 
     tx = runtime.edit();
     modeCell.withTx(tx).send("double");
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     expect(await result.pull()).toEqual({ result: 10 });
@@ -363,7 +363,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
       { value: 5, usePattern: false },
       resultCell1,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
     tx = runtime.edit();
 
@@ -383,7 +383,7 @@ describe("Pattern Runner - Derive returning pattern", () => {
       { value: 5, usePattern: true },
       resultCell2,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.storageManager.synced();
 
     const value2 = await result2.pull();

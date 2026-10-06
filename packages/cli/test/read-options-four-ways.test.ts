@@ -106,7 +106,7 @@ describe("read options, four ways", () => {
     );
     profileCell.set({ ...PROFILE });
     profileSpaceCell.key("defaultPattern").set(profileCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     tx = runtime.edit();
@@ -122,7 +122,7 @@ describe("read options, four ways", () => {
     ]);
     // deno-lint-ignore no-explicit-any
     (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     return runtime.getCell(profileSpace, "profile-default") as Cell<unknown>;

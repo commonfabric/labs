@@ -73,6 +73,7 @@ import {
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
 import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
 import {
+  DEFAULT_HARNESS_MODEL,
   type HarnessFabricCfcEnforcementMode,
   type HarnessFabricCfcFlowLabelsMode,
   type HarnessFabricSessionConfig,
@@ -89,6 +90,13 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
+import {
+  checkHarnessClientProtocol,
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  type HarnessClientFeature,
+  harnessClientProtocolEcho,
+  readHarnessClientProtocolDeclaration,
+} from "../src/contracts/client-command.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -283,9 +291,6 @@ const DEFAULT_FABRIC_API_URL = "http://localhost:8000";
  * per-session move, so it has its own flag and no default here.
  */
 const DEFAULT_FABRIC_CFC_POSTURE: CfcPosture = "max-enforcement";
-
-/** The CLI's own default model, so both entrypoints bill the same route. */
-const DEFAULT_MODEL = "gpt-6.1-sol";
 
 /** How often the stream publishes a liveness tick, in milliseconds. */
 const PING_INTERVAL_MS = 15_000;
@@ -910,7 +915,8 @@ export const resolveConsoleConfig = async (
       nonEmpty(env.CF_HARNESS_HOME) ??
         join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
     ),
-    model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL,
+    model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ??
+      DEFAULT_HARNESS_MODEL,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(researchReasoningEffort !== undefined
       ? { researchReasoningEffort }
@@ -1045,7 +1051,7 @@ export const resolveConsoleConfig = async (
       source: source("pattern-index-url", "CF_HARNESS_PATTERN_INDEX_URL"),
     }, {
       name: "model",
-      value: config.model ?? DEFAULT_MODEL,
+      value: config.model ?? DEFAULT_HARNESS_MODEL,
       source: source("model", "CF_HARNESS_MODEL"),
     }, {
       name: "reasoning effort",
@@ -1490,6 +1496,8 @@ export class ConsoleServer {
   /** Each running turn's browser host channel, by turn id. */
   readonly #browserHosts = new Map<string, ConsoleBrowserHost>();
   readonly #config: ConsoleConfig;
+  /** The client features this console serves, as launched. */
+  readonly #clientFeatures: readonly HarnessClientFeature[];
   readonly #service: HarnessInteractiveChatService;
   readonly #health: ConsoleHealth;
   readonly #patternIndexClientFactory:
@@ -1525,6 +1533,9 @@ export class ConsoleServer {
     health?: ConsoleHealth,
   ) {
     this.#config = config;
+    this.#clientFeatures = config.allowBrowserHost
+      ? [...HARNESS_SUPPORTED_CLIENT_FEATURES, "browser_host"]
+      : HARNESS_SUPPORTED_CLIENT_FEATURES;
     this.#service = createService((envelope) => this.broadcast(envelope));
     const factory = patternIndexClientFactory ??
       (config.patternIndex !== undefined
@@ -1749,12 +1760,16 @@ export class ConsoleServer {
     if (request.method === "POST" && url.pathname === "/api/cancel") {
       return await this.#cancel(request);
     }
+    if (request.method === "POST" && url.pathname === "/api/client-actions") {
+      return await this.#resolveClientAction(request);
+    }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return Response.json(await this.#sessions());
     }
     if (request.method === "GET" && url.pathname === "/api/status") {
       return Response.json({
         artifactRoot: this.#config.artifactRoot,
+        protocol: harnessClientProtocolEcho(this.#clientFeatures),
         ...this.#service.status(url.searchParams.get("sessionId") ?? undefined),
       });
     }
@@ -2031,7 +2046,39 @@ export class ConsoleServer {
       patternRefs?: unknown;
       loomId?: unknown;
       browserHost?: unknown;
+      clientActions?: unknown;
+      protocol?: unknown;
     } = isObjectOrArray(parsed) ? parsed : {};
+    // The host's protocol is checked before anything else is read, so a host
+    // this console cannot serve learns that, and nothing starts.
+    if (body.protocol !== undefined) {
+      const protocolDeclaration = readHarnessClientProtocolDeclaration(
+        body.protocol,
+      );
+      if (protocolDeclaration === undefined) {
+        return Response.json({
+          error:
+            "protocol must be { protocolVersion: integer, requires: feature names }",
+        }, { status: 400 });
+      }
+      const check = checkHarnessClientProtocol(
+        protocolDeclaration,
+        this.#clientFeatures,
+      );
+      if (!check.ok) {
+        const { message, ...mismatch } = check.mismatch;
+        return Response.json({ error: message, ...mismatch }, { status: 409 });
+      }
+    }
+    if (
+      body.clientActions !== undefined &&
+      typeof body.clientActions !== "boolean"
+    ) {
+      return Response.json({ error: "clientActions must be a boolean" }, {
+        status: 400,
+      });
+    }
+    const clientActions = body.clientActions === true;
     if (
       body.loomId !== undefined &&
       (typeof body.loomId !== "string" ||
@@ -2090,6 +2137,7 @@ export class ConsoleServer {
         model: this.#config.model,
         artifactRoot: this.#config.artifactRoot,
         policy: this.#sessionPolicy(),
+        ...(clientActions ? { clientActions } : {}),
       });
       if (!session.ok) {
         return chatErrorResponse(session);
@@ -2107,6 +2155,7 @@ export class ConsoleServer {
       {
         turnId,
         sessionId,
+        ...(clientActions ? { clientActions } : {}),
         input: {
           text,
           ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
@@ -2129,6 +2178,7 @@ export class ConsoleServer {
       sessionId,
       turnId: turn.result.turnId,
       ...(browserHostToken !== undefined ? { browserHostToken } : {}),
+      protocol: harnessClientProtocolEcho(this.#clientFeatures),
     });
   }
 
@@ -2276,6 +2326,34 @@ export class ConsoleServer {
     return response.ok
       ? Response.json(response.result)
       : chatErrorResponse(response);
+  }
+
+  /**
+   * Takes the person's answer to one action the model asked their client to
+   * perform: a final action's outcome, or a typed command's settlement. The
+   * route is the stdio `resolve_client_action` request under HTTP: the body
+   * goes to the same service method, which reads it with the same reader, so
+   * the two cannot disagree. Its errors carry the code in an `error` object,
+   * as the Weaver reads them.
+   */
+  async #resolveClientAction(request: Request): Promise<Response> {
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ error: "request body is not JSON" }, {
+        status: 400,
+      });
+    }
+    const response = await this.#service.resolveClientAction(
+      crypto.randomUUID(),
+      parsed,
+    );
+    if (response.ok) return Response.json({ ok: true });
+    const { code, message } = response.error;
+    return Response.json({ error: { code, message } }, {
+      status: CHAT_ERROR_STATUS[code],
+    });
   }
 
   /**
@@ -2547,6 +2625,9 @@ export class ConsoleServer {
 
 const CHAT_ERROR_STATUS: Readonly<Record<HarnessChatError["code"], number>> = {
   invalid_request: 400,
+  unknown_action: 404,
+  action_resolved: 409,
+  protocol_mismatch: 409,
   session_exists: 409,
   session_not_found: 404,
   turn_exists: 409,

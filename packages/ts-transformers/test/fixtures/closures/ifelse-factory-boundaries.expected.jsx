@@ -62,16 +62,46 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     return ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "null"
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "null"
-            }, {}]
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, moduleHasSettings({ piece: entry.key("piece") }), <span>settings</span>, null).for("__patternResult", true);
 }, {
     type: "object",
@@ -144,16 +174,63 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     return ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
-    } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ msg: {
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
+    } as const satisfies __cfHelpers.JSONSchema, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ msg: {
             type: msg.key("type")
         } }), <span>{msg.key("id")}</span>, <button type="button" onClick={selectMessage({ selectedId, msgId: msg.key("id") })}>
                 open

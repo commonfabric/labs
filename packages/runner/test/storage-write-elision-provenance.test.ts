@@ -76,7 +76,7 @@ describe("pending write elision provenance", () => {
         sibling: "kept",
       }).error,
     ).toBeUndefined();
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
   });
 
   afterEach(async () => {
@@ -208,7 +208,7 @@ describe("pending write elision provenance", () => {
       const retry = storage.edit();
       write(retry);
       expect([...getDirectTransactionReadActivities(retry)!]).toEqual([]);
-      expect((await retry.commit()).error).toBeUndefined();
+      expect((await retry.commit().settled).error).toBeUndefined();
       expect(
         Engine.readState(await server.engineForSpace(space), { id: input.id })
           ?.document,
@@ -239,7 +239,7 @@ describe("pending write elision provenance", () => {
       seed.write({ ...scoped, path: ["value"] }, { selected: "alice" }).error,
     )
       .toBeUndefined();
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const verdict = Promise.withResolvers<SealedCommitVerdict>();
     const replica = storage.open(space).replica;
     const pending = replica.sealNative!(

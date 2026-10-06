@@ -512,9 +512,9 @@ describe("late space host hints", () => {
       ).toBe(true);
       await reader.crossSpaceSettled();
 
-      const rejected = await stale.commit();
+      const rejected = await stale.commit().settled;
       expect(rejected.error?.name).toBe("StorageTransactionInconsistent");
-      const emptyRejected = await emptyReactive.commit();
+      const emptyRejected = await emptyReactive.commit().settled;
       expect(emptyRejected.error).toMatchObject({
         name: "StorageTransactionInconsistent",
         emptyReactiveCommit: true,
@@ -753,7 +753,7 @@ describe("late space host hints", () => {
       expect(
         stale.write(address, { name: "derived from missing data" }).error,
       ).toBeUndefined();
-      const committing = stale.commit();
+      const committing = stale.commit().settled;
       await openingStarted.promise;
 
       expect(
@@ -855,7 +855,7 @@ describe("late space host hints", () => {
         }, { seen: target.ok?.value ?? "missing" }).error,
       ).toBeUndefined();
 
-      const committing = stale.commit();
+      const committing = stale.commit().settled;
       await writeSessionStarted.promise;
       expect(
         reader.registerSpaceHost(
@@ -1763,7 +1763,7 @@ describe("late space host hints", () => {
         tx,
       );
       const result = runtime.run(tx, Root, { target }, resultCell);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeUndefined();
       await result.pull();
       expect(result.key("seen").get()).toBeUndefined();

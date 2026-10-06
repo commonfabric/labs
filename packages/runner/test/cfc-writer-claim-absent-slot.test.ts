@@ -182,7 +182,7 @@ describe("a writer claim on an input with no default", () => {
     const cell = runtime.getCell<Room>(space, name, undefined, tx);
     const running = runtime.run(tx, pattern, {}, cell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
     await runtime.storageManager.synced();
@@ -375,7 +375,7 @@ describe("a writer claim on an input with no default", () => {
         },
       } as JSONSchema, tx);
       seat.set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.storageManager.synced();
       return seat.withTx(undefined);
     };

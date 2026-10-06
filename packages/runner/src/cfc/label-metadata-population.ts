@@ -78,15 +78,28 @@ export const isLabelMetadataTemplateEntry = (
 ): boolean => entry.origin === LABEL_METADATA_TEMPLATE_ORIGIN;
 
 /**
+ * Whether an entry of the template origin is keyed and classed as the mint
+ * produces one: under the `["cfc", "labels"]` metadata subtree, and observed
+ * by the `labelMetadata` class alone. The origin is what marks an entry as
+ * document-rooted, so one keyed anywhere else, or one a payload read class
+ * consumes, is a payload label spelled as a template.
+ */
+export const isWellFormedLabelMetadataTemplateEntry = (
+  entry: Pick<LabelMapEntry, "path" | "observes">,
+): boolean =>
+  entry.path[0] === "cfc" && entry.path[1] === "labels" &&
+  entry.observes === "labelMetadata";
+
+/**
  * Whether the entry's own effective confidentiality is a sound population
  * label for its source-bearing fields: true exactly for the components
  * produced by the §8.9.2 conservative join — `derived` (the per-tx flow
  * stamp) and `structure` (the same join stamped on container shape,
  * §8.5.6.1) — whose label contains each influencing source's confidentiality
  * by construction. Declared/authored entries, link-carried pointer labels,
- * the external-ingest mark, label-metadata templates themselves and legacy
- * (component-less) entries carry no such containment guarantee and stay
- * fail-closed (spec §4.6.4.2, merged via specs#14). Shared by the mint
+ * minted value stamps, the external-ingest mark, label-metadata templates
+ * themselves and legacy (component-less) entries carry no such containment
+ * guarantee and stay fail-closed (spec §4.6.4.2, merged via specs#14). Shared by the mint
  * (which entries GET templates) and the introspection surface (which entries'
  * fields are observable at all) so the two cannot drift.
  */

@@ -31,8 +31,9 @@ export default pattern(() => {
   const loom = Loom({});
   // A second Loom, into which an occurrence of the first may be linked.
   const elsewhere = Loom({});
+  // A third, which admits an occurrence that names its adder by claim.
+  const claimedLoom = Loom({});
   const piece = new Writable({ title: "Target" });
-  const refusedPiece = new Writable({ title: "Refused target" });
   const url = new Writable<Panel>({
     kind: "url",
     url: "https://example.com/acting-profile",
@@ -41,21 +42,15 @@ export default pattern(() => {
   const addPieceAsMember = action(() =>
     loom.addPiece.send({ piece, as: member })
   );
-  const addPieceNamingBoth = action(() =>
-    loom.addPiece.send({ piece: refusedPiece, as: member, addedBy: alice })
-  );
-  // `addPanel` takes `addedBy` from the occurrence, never from its event.
-  const addUrlNamingAdder = action(() =>
-    loom.addPanel.send({ panel: url, addedBy: alice })
-  );
-  // An occurrence that names its adder by DID takes no profile besides.
+  // An occurrence that names its adder by claim is copied under `as` like any
+  // other; the copy records the profile and no claim.
   const claimed = new Writable<Panel>({
     kind: "url",
     url: "https://example.com/claimed-adder",
     addedBy: alice,
   });
   const addClaimedAsMember = action(() =>
-    loom.addPanel.send({ panel: claimed, as: member })
+    claimedLoom.addPanel.send({ panel: claimed, as: member })
   );
   // `as` admits a new occurrence copied from the one passed, and records the
   // profile only there: the document the caller passed stays as it was.
@@ -85,12 +80,13 @@ export default pattern(() => {
   const duplicateAsOther = action(() =>
     loom.duplicatePanel.send({ panel: linked, as: other })
   );
-  const duplicateUnattributed = action(() =>
+  const duplicateWithoutProfile = action(() =>
     loom.duplicatePanel.send({ panel: linked })
   );
   // Writes that do not go through the root's handlers: one gives an
-  // unattributed occurrence a profile, one replaces a recorded profile.
-  const forgeOnUnattributed = action(() =>
+  // occurrence that records no profile a profile, one replaces a recorded
+  // profile.
+  const forgeOnUnprofiled = action(() =>
     loom.panels[4].key("addedByProfile").set(member)
   );
   const forgeOverRecorded = action(() =>
@@ -138,7 +134,7 @@ export default pattern(() => {
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 5,
+    expectRuntimeErrors: 2,
     [TESTS]: [
       { action: addPieceAsMember },
       {
@@ -148,13 +144,15 @@ export default pattern(() => {
           loom.panels[0].get().addedBy === undefined
         ),
       },
-      { action: addPieceNamingBoth },
-      { action: addUrlNamingAdder },
       { action: addClaimedAsMember },
       {
         assertion: assert(() =>
-          loom.panels.length === 1 &&
-          claimed.get().addedByProfile === undefined
+          claimedLoom.panels.length === 1 &&
+          !claimedLoom.panels[0].equals(claimed) &&
+          claimedLoom.panels[0].key("addedByProfile").equals(member) &&
+          claimedLoom.panels[0].get().addedBy === undefined &&
+          claimed.get().addedByProfile === undefined &&
+          claimed.get().addedBy === alice
         ),
       },
       { action: addUrlAsMember },
@@ -195,7 +193,7 @@ export default pattern(() => {
       },
       // A copy is added by whoever duplicates it.
       { action: duplicateAsOther },
-      { action: duplicateUnattributed },
+      { action: duplicateWithoutProfile },
       {
         assertion: assert(() =>
           loom.panels.length === 5 &&
@@ -204,7 +202,7 @@ export default pattern(() => {
           linked.get().addedByProfile === undefined
         ),
       },
-      { action: forgeOnUnattributed },
+      { action: forgeOnUnprofiled },
       { action: forgeOverRecorded },
       {
         assertion: assert(() =>

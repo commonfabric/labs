@@ -185,6 +185,23 @@ describe("CFProfileBadge", () => {
       expect(JSON.stringify(el.render())).not.toContain('"verified"');
     });
 
+    it("shows a profile the worker refuses as withheld, with no seal and no fallback", () => {
+      const el = new CFProfileBadge() as any;
+      markConnected(el);
+      el._applyValue({ name: "Ada" });
+      el._state = "verified";
+      el._seal = identitySeal(OWNER_DID);
+      el.fallbackName = "Alex";
+
+      el._applyRefusal(el._resolveGeneration);
+
+      const html = JSON.stringify(el.render());
+      expect(html).toContain("Content hidden by policy");
+      expect(html).not.toContain("Ada");
+      expect(html).not.toContain("Alex");
+      expect(el._verified).toBe(false);
+    });
+
     it("reports verified once a value and a label have both arrived", () => {
       // The boundary must not swallow the real case it is protecting.
       const el = new CFProfileBadge() as any;

@@ -96,7 +96,7 @@ describe("a list projection survives its input emptying", () => {
       runtime.getCell(space, "eviction-filter", undefined, tx),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.key("positives").get()).toEqual([1, 2, 3]);
@@ -106,7 +106,7 @@ describe("a list projection survives its input emptying", () => {
     // deno-lint-ignore no-explicit-any
     result.withTx(tx).key("values").set(undefined as any);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.key("positives").get()).toEqual([]);
@@ -119,7 +119,7 @@ describe("a list projection survives its input emptying", () => {
     const runsBeforeRestore = predicateRuns;
     result.withTx(tx).key("values").set([4, 5]);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.key("positives").get()).toEqual([4, 5]);
@@ -172,7 +172,8 @@ describe("a cross-replica conflict settles", () => {
       // accept and force the shared fan-out through, destroying the
       // controlled staleness this test is built on. The awaited verdict is
       // durably accepted, which is all B's explicit sync/pull needs.
-      expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+      expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
+        .toBeUndefined();
     }
 
     // B catches up, then stages a write over a read taken at v0.
@@ -192,7 +193,8 @@ describe("a cross-replica conflict settles", () => {
       const tx = rtA.edit();
       docA.withTx(tx).set({ v: "v1" });
       rtA.prepareTxForCommit(tx);
-      expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+      expect((await tx.commit({ holdSyncedUntilCovered: false }).verdict).error)
+        .toBeUndefined();
     }
     expect(docB.get()).toEqual({ v: "v0" });
 
@@ -202,7 +204,8 @@ describe("a cross-replica conflict settles", () => {
     // that frame's release, and synced() settling is the proof the gate
     // opened — if the watch were gone the wait would never end, so synced()
     // hanging is the symptom, not a failure message.
-    const rejected = await txB.commit({ resolveAt: "verdict" });
+    const rejected = await txB.commit({ holdSyncedUntilCovered: false })
+      .verdict;
     expect(rejected.error?.name).toBe("ConflictError");
     await server.flushSessions([space]);
     await clock.settle();

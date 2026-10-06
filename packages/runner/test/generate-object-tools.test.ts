@@ -96,7 +96,7 @@ describe("generateObject with tools", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -1629,7 +1629,7 @@ describe("generateObject with tools", () => {
 
     runtime.run(tx, testPattern, {}, resultCell).sink(() => {});
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     await systemCaptured.promise;
     await runtime.idle();
@@ -1700,7 +1700,7 @@ describe("generateObject with tools", () => {
 
     runtime.run(tx, testPattern, {}, resultCell).sink(() => {});
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     await systemCaptured.promise;
     await runtime.idle();
@@ -1784,7 +1784,7 @@ describe("generateObject with tools", () => {
       );
       runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const generatedResult = patternOutputCell(resultCell, testPattern);
       await waitForLlmSettled(runtime, generatedResult);
@@ -2268,7 +2268,7 @@ describe("generateObject with tools", () => {
     );
     runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const generatedResult = patternOutputCell(resultCell, testPattern);
     await waitForLlmSettled(runtime, generatedResult);

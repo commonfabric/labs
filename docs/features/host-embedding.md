@@ -37,6 +37,7 @@ weeks later.
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
 | 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
 | 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
+| 10 | Native reviewed controls | trusted host API | `runner` | available | `runner/test/native-ui.test.ts` |
 
 ---
 
@@ -493,6 +494,45 @@ a receipt with no entry, which is how the actor's home space records a seal
 that did not commit. As with snapshot
 sharing, an embedder exposing this transport to untrusted content delegates the
 actor's consent. `cf-custody-seal` is the component that drives it.
+
+---
+
+## 10. Native reviewed controls
+
+A host running the runtime in its own process, and drawing a control natively
+rather than rendering a pattern's surface, sends that control's action through
+`bindNativeUiControl()` from `@commonfabric/runner/native-ui`. It binds one
+stream to one reviewed surface and action, read once at the call, so a later
+change to the descriptor object changes nothing the control sends. The function
+it returns sends the payload's fields with `native` provenance for that surface
+and action, carrying the renderer-trust mark; a `provenance` field in the
+payload is replaced. A write gated on that surface and action, such as a
+`TrustedActionWrite`, then commits as it would for a click on the rendered
+surface. This is the sanctioned issuance path §6 calls for, for a host's own
+surface, in place of a host building the provenance and marking the event
+itself.
+
+The runtime's ordinary checks still apply: the writer the contract names, the
+surface and action, the actor, and the space's access list. The mark reaches a
+served handler the way a DOM event's does, through the attestation the firing
+runtime writes on the stream entry
+([events, §2](../specs/server-side-execution/events.md#2-lifecycle-end-to-end)). A native event is not a trusted gesture: `isTrustedGesture()` admits only
+events of `dom` origin, so a native control cannot confirm a snapshot share, a
+custody seal, a reviewed intent, or a change to a space's access list.
+
+This is a trusted host capability that mints trusted events. The host calls the
+returned function only from the control's real user-input path, with exactly
+the values the control showed, and keeps it away from pattern code, loaded web
+content, automation and agent interfaces, generic IPC, URL handlers, and
+restored state. A host that cannot hold that boundary renders the pattern's
+reviewed surface for the write instead. The generic `cell:send` request marks
+nothing, and pattern source cannot import the module.
+
+**Test.** `packages/runner/test/native-ui.test.ts` covers a gated write
+committing through a real handler and one bound to another action being
+refused, the provenance and payload sent, capture of the descriptor, a
+replaced payload `provenance`, an unmarked copy matching nothing, and the
+event not counting as a trusted gesture.
 
 ---
 

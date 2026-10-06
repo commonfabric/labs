@@ -68,22 +68,22 @@ describe("preload-profiles", () => {
       let tx = seed.edit();
       elements.withTx(tx).set({ body: "Content outside the profile display" });
       seed.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = seed.edit();
       displayName.withTx(tx).set("Active profile");
       seed.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = seed.edit();
       profile.withTx(tx).set({ name: displayName, avatar: "", elements });
       seed.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = seed.edit();
       home.withTx(tx).set({ profiles: [profile] });
       seed.getHomeSpaceCell(tx).asSchema(undefined).set({
         defaultPattern: home,
       });
       seed.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await seed.storageManager.synced();
 
       cancel = preloadProfiles(runtime);
@@ -106,11 +106,11 @@ describe("preload-profiles", () => {
         tx = seed.edit();
         added.withTx(tx).set({ name: "Added profile" });
         seed.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         tx = seed.edit();
         home.withTx(tx).set({ profiles: [profile, added] });
         seed.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await seed.storageManager.synced();
         await addedArrived.promise;
       } finally {
@@ -122,11 +122,11 @@ describe("preload-profiles", () => {
       tx = seed.edit();
       afterCancel.withTx(tx).set({ name: "After cancel" });
       seed.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       tx = seed.edit();
       home.withTx(tx).set({ profiles: [afterCancel] });
       seed.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await seed.storageManager.synced();
       await server.idle();
       await manager.synced();

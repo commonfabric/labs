@@ -2,7 +2,7 @@
  * Trusted-UI event synthesis for host code standing in for a person's gesture.
  *
  * Writes guarded by a `TrustedActionWrite`/`TrustedActionUiContract` policy
- * require a renderer-trusted event whose DOM provenance matches the surface's
+ * require a renderer-trusted event whose UI provenance matches the surface's
  * UI contract. In the shell the html worker reconciler attaches that
  * provenance and marks the event when a real DOM event fires on a trusted
  * surface. Two other hosts stand in for the gesture exactly as the renderer

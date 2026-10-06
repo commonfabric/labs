@@ -156,7 +156,7 @@ describe("CFC requiredIntegrity coherence (B5)", () => {
             seed,
           ).set(`value-${index}`);
           seed.prepareCfc();
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
         }
 
         const tx = runtime.edit();
@@ -188,7 +188,7 @@ describe("CFC requiredIntegrity coherence (B5)", () => {
         ).set({ out: "derived" });
         // "" = prepare rejected; the commit result carries the reason.
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           ok: result.ok !== undefined,
           message: (result.error as Error | undefined)?.message,
@@ -284,7 +284,7 @@ describe("CFC requiredIntegrity coherence (B5)", () => {
             seed,
           ).set(`value-${index}`);
           seed.prepareCfc();
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
         }
 
         const tx = runtime.edit();
@@ -307,7 +307,7 @@ describe("CFC requiredIntegrity coherence (B5)", () => {
           .set({ out: "derived" });
         if (readBAfterWrite) readB();
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           ok: result.ok !== undefined,
           message: (result.error as Error | undefined)?.message,

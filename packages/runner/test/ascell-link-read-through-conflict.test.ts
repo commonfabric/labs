@@ -46,7 +46,7 @@ describe("asCell link: value read-through stays a commit-conflict dependency", (
     tx = runtime.edit();
   });
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storage?.close();
   });
@@ -62,7 +62,7 @@ describe("asCell link: value read-through stays a commit-conflict dependency", (
     cellB.set({ isAdmin: true });
     const cellA = runtime.getCell(space, "cellA", true, tx);
     cellA.setRaw({ isAdmin: cellB.key("isAdmin").getAsLink() });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     return { cellA, cellB };
   };
@@ -103,10 +103,10 @@ describe("asCell link: value read-through stays a commit-conflict dependency", (
     // Concurrent writer flips the linked value.
     const writerTx = runtime.edit();
     cellB.withTx(writerTx).key("isAdmin").set(false);
-    expect((await writerTx.commit()).ok).toBeDefined();
+    expect((await writerTx.commit().settled).ok).toBeDefined();
 
     // The holder's late commit must be rejected — it read a value that changed.
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     assert(
       committed.error !== undefined,
       "holder's commit must conflict (it read cellB.isAdmin, which changed); " +

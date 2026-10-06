@@ -105,7 +105,7 @@ describe("executor-home-sqlite", () => {
             favorites: [{ cell: provider, tags: ["loom_resources_v1"] }],
           },
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const pattern = await runtime.patternManager.compilePattern({
           main: "/main.tsx",
           files: [{
@@ -134,11 +134,11 @@ export default pattern<{ sql: PerSession<Writable<string>> }, { query: any }>(({
         await argument.sync();
         const args = runtime.edit();
         argument.withTx(args).key("sql").set("SELECT body FROM notes");
-        expect((await args.commit()).error).toBeUndefined();
+        expect((await args.commit().settled).error).toBeUndefined();
         if (user === alice) {
           const start = runtime.edit();
           runtime.run(start, pattern, argument, result);
-          expect((await start.commit()).error).toBeUndefined();
+          expect((await start.commit().settled).error).toBeUndefined();
         }
         client.cancel = result.sink(() => {});
         const value = await waitForCellValue<View>(

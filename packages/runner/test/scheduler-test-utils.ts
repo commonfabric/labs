@@ -73,7 +73,7 @@ function createSchedulerTestRuntime(
 async function disposeSchedulerTestRuntime(
   testRuntime: SchedulerTestRuntime,
 ): Promise<void> {
-  await testRuntime.tx.commit();
+  await testRuntime.tx.commit().settled;
   // The manager is the caller's — either handed in via `options.storageManager`
   // (shared with a sibling runtime that may outlive this one) or created here
   // and closed on the line below. Either way the runtime must not close it.

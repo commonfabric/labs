@@ -77,7 +77,7 @@ describe("commit read basis", () => {
   const createSharedFromA = async () => {
     const txA = rtA.edit();
     sharedCellOf(rtA).withTx(txA).set({ value: 42 });
-    const created = await txA.commit({ resolveAt: "verdict" });
+    const created = await txA.commit({ holdSyncedUntilCovered: false }).verdict;
     expect(created.error).toBeUndefined();
     await server.flushSessions([space]);
     await clock.settle();
@@ -117,7 +117,8 @@ describe("commit read basis", () => {
     it("rejects the commit locally as `StorageTransactionInconsistent`, which commit paths retry", async () => {
       const tx = await readAbsentThenLand();
       rtB.prepareTxForCommit(tx);
-      const committed = await tx.commit({ resolveAt: "verdict" });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(committed.error?.name).toBe("StorageTransactionInconsistent");
       expect(isRetryableCommitRejection(committed.error)).toBe(true);
 
@@ -147,7 +148,8 @@ describe("commit read basis", () => {
       await createSharedFromA();
 
       rtB.prepareTxForCommit(tx);
-      const committed = await tx.commit({ resolveAt: "verdict" });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(committed.error?.name).toBe("PreconditionFailedError");
       expect(isRetryableCommitRejection(committed.error)).toBe(false);
     });
@@ -160,7 +162,8 @@ describe("commit read basis", () => {
       const shared = sharedCellOf(rtB);
       const first = rtB.edit();
       shared.withTx(first).set({ value: 7 });
-      const firstCommit = first.commit({ resolveAt: "verdict" });
+      const firstCommit =
+        first.commit({ holdSyncedUntilCovered: false }).verdict;
 
       // The second transaction reads through that pending layer.
       const tx = rtB.edit();
@@ -173,7 +176,8 @@ describe("commit read basis", () => {
       await storageB.synced();
 
       rtB.prepareTxForCommit(tx);
-      const committed = await tx.commit({ resolveAt: "verdict" });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(committed.error).toBeUndefined();
     });
   });
@@ -200,7 +204,8 @@ describe("commit read basis", () => {
       });
       const txA = rtA.edit();
       sharedYOf(rtA).withTx(txA).set({ value: 42 });
-      const created = await txA.commit({ resolveAt: "verdict" });
+      const created = await txA.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(created.error).toBeUndefined();
       await server.flushSessions([spaceY]);
       await clock.settle();
@@ -228,7 +233,8 @@ describe("commit read basis", () => {
       };
 
       rtB.prepareTxForCommit(tx);
-      const committed = await tx.commit({ resolveAt: "verdict" });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(committed.error?.name).toBe("StorageTransactionInconsistent");
 
       // The first space closed before the change was found; the second
@@ -259,7 +265,8 @@ describe("commit read basis", () => {
       };
 
       rtB.prepareTxForCommit(tx);
-      const committed = await tx.commit({ resolveAt: "verdict" });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(committed.error?.name).toBe("PreconditionFailedError");
     });
 
@@ -279,7 +286,8 @@ describe("commit read basis", () => {
       };
 
       rtB.prepareTxForCommit(tx);
-      const committed = await tx.commit({ resolveAt: "verdict" });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       expect(committed.error?.name).toBe("StorageTransactionInconsistent");
     });
 

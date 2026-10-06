@@ -161,7 +161,7 @@ describe("effect commit-conflict recovery (no retry budget)", () => {
       // accept and force the shared fan-out through — to B too, destroying
       // the controlled staleness. The awaited verdict is durably accepted,
       // which is all B's explicit sync/pull needs.
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -179,7 +179,7 @@ describe("effect commit-conflict recovery (no retry budget)", () => {
       const tx = rtA.edit();
       srcA.withTx(tx).set(2);
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `bump: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
     expect(srcB.get(), "B is provably stale (still 1) before the effect runs")
@@ -256,7 +256,7 @@ describe("effect commit-conflict recovery (no retry budget)", () => {
       // accept and force the shared fan-out through — to B too, destroying
       // the controlled staleness. The awaited verdict is durably accepted,
       // which is all B's explicit sync/pull needs.
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -313,7 +313,7 @@ describe("effect commit-conflict recovery (no retry budget)", () => {
       const tx = rtA.edit();
       srcA.withTx(tx).set(2);
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `bump: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 

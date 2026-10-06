@@ -93,7 +93,7 @@ describe("pattern swap with a link-valued argument slot", () => {
       tx,
     );
     const running = rt.run(tx, v1, { registry: registryCell }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     expect((cell.getAsQueryResult() as { marker: string }).marker).toBe("v1");
 
@@ -102,7 +102,7 @@ describe("pattern swap with a link-valued argument slot", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     await cell.pull();
     return { cell, v2Identity: v2Ref.identity };
@@ -117,7 +117,7 @@ describe("pattern swap with a link-valued argument slot", () => {
       tx,
     );
     registry.set([{ name: "one" }]);
-    await tx.commit();
+    await tx.commit().settled;
 
     const { cell } = await startThenSwap(registry);
     expect((cell.getAsQueryResult() as { marker: string }).marker).toBe("v2");
@@ -174,7 +174,7 @@ describe("pattern swap with a link-valued argument slot", () => {
       tx,
     );
     const running = rt.run(tx, v1, { registry: [{ name: "one" }] }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     expect((cell.getAsQueryResult() as { marker: string }).marker).toBe("v1");
 
@@ -194,7 +194,7 @@ describe("pattern swap with a link-valued argument slot", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rt.idle();
     // The watcher names the cold argument document before the swap reads
     // it; the swap lands once that name-sync has settled.

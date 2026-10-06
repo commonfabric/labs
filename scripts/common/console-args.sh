@@ -18,9 +18,12 @@
 #   DB_PATH            optional; the toolshed's single-file store
 #   CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG
 #                      `true` to let that console run skill scripts
+#   CF_HARNESS_ALLOW_BROWSER_HOST_FLAG
+#                      `true` to let a task declare a browser host
 #
-# `--space-db` goes after `--` because it is the console server's flag rather
-# than the launcher's, and everything before `--` is the launcher's own.
+# `--allow-browser-host` and `--space-db` go after `--` because they are the
+# console server's flags rather than the launcher's, and everything before
+# `--` is the launcher's own.
 console_launch_args() {
     printf '%s\n' --port "$CONSOLE_PORT"
     printf '%s\n' --fabric-api-url "$TOOLSHED_API_URL"
@@ -31,7 +34,14 @@ console_launch_args() {
     if [[ "${CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG:-false}" == "true" ]]; then
         printf '%s\n' --allow-skill-scripts
     fi
+    local server_args=()
+    if [[ "${CF_HARNESS_ALLOW_BROWSER_HOST_FLAG:-false}" == "true" ]]; then
+        server_args+=(--allow-browser-host)
+    fi
     if [[ -n "${DB_PATH:-}" ]]; then
-        printf '%s\n' -- --space-db "$DB_PATH"
+        server_args+=(--space-db "$DB_PATH")
+    fi
+    if [[ ${#server_args[@]} -gt 0 ]]; then
+        printf '%s\n' -- "${server_args[@]}"
     fi
 }

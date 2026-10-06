@@ -31,10 +31,10 @@ import {
 const { API_URL, FRONTEND_URL } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
-// send and reaction (`fabrichat/chat.tsx`).
+// message write and reaction (`fabrichat/schemas.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
-const SEND_ACTION = "FabriChatSend";
-const REACT_ACTION = "FabriChatReact";
+const SEND_ACTION = "ChatSend";
+const REACT_ACTION = "ChatReact";
 
 // The control on each message that opens its reaction picker. The first one
 // enabled is on the oldest message.
@@ -88,7 +88,7 @@ describe("fabrichat integration test", () => {
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),
       {
-        main: join(import.meta.dirname!, "..", "fabrichat", "main.tsx"),
+        main: join(import.meta.dirname!, "..", "fabrichat", "room.tsx"),
         root: join(import.meta.dirname!, ".."),
       },
     );
@@ -97,8 +97,11 @@ describe("fabrichat integration test", () => {
     const result = cc.getResult(piece.getCell());
     pieceSinkCancel = result.sink(() => {});
     storedBodies = () =>
-      ((result.get() as { messages?: { body?: string }[] } | undefined)
-        ?.messages ?? []).map((message) => message?.body ?? "");
+      ((result.get() as
+        | { messages?: { latest?: { messages?: { body?: unknown }[] } } }
+        | undefined)?.messages?.latest?.messages ?? []).map((message) =>
+          typeof message?.body === "string" ? message.body : ""
+        );
   });
 
   afterAll(async () => {
@@ -132,29 +135,29 @@ describe("fabrichat integration test", () => {
     await waitForVerified(page, "Hello from Ada");
 
     // With the picker open on Ada's message, and no reactions yet, the first
-    // reaction control on the page is the picker's first cat.
+    // reaction control on the page is the picker's first quick reaction.
     await clickCfButton(page, ADD_REACTION);
     await clickTrustedAction(page, REACT_ACTION);
-    await waitForText(page, "#fabrichat-messages", "😺 1");
+    await waitForText(page, "#fabrichat-messages", "👍 1");
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { spaceDid, pieceId },
       identity: thirdIdentity,
     });
-    await waitForText(page, "#fabrichat-messages", "😺 1");
+    await waitForText(page, "#fabrichat-messages", "👍 1");
     await createProfile(page, "Julie Sussman");
     // The count under Ada's message is now the first reaction control, and
     // clicking it adds the viewer's own.
     await clickTrustedAction(page, REACT_ACTION);
-    await waitForText(page, "#fabrichat-messages", "😺 2");
+    await waitForText(page, "#fabrichat-messages", "👍 2");
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { spaceDid, pieceId },
       identity: firstIdentity,
     });
-    await waitForText(page, "#fabrichat-messages", "😺 2");
+    await waitForText(page, "#fabrichat-messages", "👍 2");
     await waitForReactorCard(page, ["Grace Hopper", "Julie Sussman"]);
   });
 });

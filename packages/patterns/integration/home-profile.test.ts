@@ -1,4 +1,8 @@
-import { env } from "@commonfabric/integration";
+import {
+  env,
+  type ProbeApi,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { beforeAll, describe, it } from "@std/testing/bdd";
@@ -13,6 +17,53 @@ import {
 
 const { FRONTEND_URL } = env;
 const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
+
+/**
+ * Whether the picker shows its default-profile marker as `shown` says, once
+ * the view has settled. The marker is a span reading exactly "default", which
+ * takes the place of a row's "Set default" button while home's
+ * `defaultProfile` holds that row's profile, so it shows that a "Set default"
+ * write landed. The renderer also wraps reactive regions in spans of no size,
+ * whose text holds every row's buttons, so only a rendered span counts.
+ */
+const defaultMarkerShownIs = async (
+  probe: ProbeApi,
+  shown: boolean,
+): Promise<boolean> => {
+  const settle = (globalThis as typeof globalThis & {
+    commonfabric?: { viewSettled?: () => Promise<void> };
+  }).commonfabric?.viewSettled;
+  if (!settle) return false;
+  await settle();
+  return probe.collect("#profile-picker span").some((element) =>
+    probe.isRendered(element) && probe.deepText(element).trim() === "default"
+  ) === shown;
+};
+
+/**
+ * Whether, once the view has settled, the picker shows exactly one
+ * default-profile marker (see `defaultMarkerShownIs`), in the row of the
+ * profile named `name`.
+ */
+const defaultRowNames = async (
+  probe: ProbeApi,
+  name: string,
+): Promise<boolean> => {
+  const settle = (globalThis as typeof globalThis & {
+    commonfabric?: { viewSettled?: () => Promise<void> };
+  }).commonfabric?.viewSettled;
+  if (!settle) return false;
+  await settle();
+  const markers = probe.collect("#profile-picker span").filter((element) =>
+    probe.isRendered(element) && probe.deepText(element).trim() === "default"
+  );
+  if (markers.length !== 1) return false;
+  let row: Element | null = markers[0]!;
+  while (row && row.tagName.toLowerCase() !== "cf-hstack") {
+    row = row.parentElement;
+  }
+  return row !== null && probe.deepText(row).includes(name);
+};
 
 // Workaround for a flaky activeTab regression (tracked in Linear CT-1666):
 // navigating to the home view with profile data already persisted sometimes
@@ -168,8 +219,13 @@ describe("home-space profile creation", () => {
     await createProfile(page, "Ada Lovelace");
     await createProfile(page, "Alan Turing");
     await waitForText(page, "#home-profile-summary", "Alan Turing");
+    await waitForCondition(page, defaultMarkerShownIs, { args: [false] });
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
+    // The marker shows the "Set default" write landed. The picker writes
+    // home's default slot, whose cell is typed `TrustedDefaultProfile`, so the
+    // write is checked against the writer that type declares.
+    await waitForCondition(page, defaultMarkerShownIs, { args: [true] });
 
     await clickProfileLink(page, "Alan Turing");
     await waitForRuntimeIdle(page);
@@ -185,6 +241,39 @@ describe("home-space profile creation", () => {
     await waitForRuntimeIdle(page);
     await page.waitForSelector('[data-ui-region="profile-edit"]', {
       strategy: "pierce",
+    });
+  });
+
+  it("moves the default from one profile to another", async () => {
+    // A home of its own, so the first "Set default" in the picker is the
+    // first profile this test creates.
+    const page = shell.page();
+    const ownIdentity = await Identity.generate({ implementation: "noble" });
+
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { builtin: "home" },
+      identity: ownIdentity,
+    });
+
+    await clickCfButton(page, 'cf-tab[value="profile"]');
+    await createProfile(page, "Katherine Johnson");
+    await createProfile(page, "Dorothy Vaughan");
+    await waitForText(page, "#home-profile-summary", "Dorothy Vaughan");
+
+    await clickTrustedAction(page, "SetDefaultProfile");
+    await waitForRuntimeIdle(page);
+    await waitForCondition(page, defaultRowNames, {
+      args: ["Katherine Johnson"],
+    });
+
+    // Katherine's row shows the marker, so the "Set default" left is
+    // Dorothy's. Choosing it re-points the default rather than writing into
+    // the profile chosen first.
+    await clickTrustedAction(page, "SetDefaultProfile");
+    await waitForRuntimeIdle(page);
+    await waitForCondition(page, defaultRowNames, {
+      args: ["Dorothy Vaughan"],
     });
   });
 

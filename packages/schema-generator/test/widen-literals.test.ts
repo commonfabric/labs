@@ -85,6 +85,95 @@ describe("widenLiterals option", () => {
     });
   });
 
+  it("keeps a cell apart from a plain value of its type", async () => {
+    // The merge pass merges only members identical but for literal values,
+    // so a member's `asCell` keeps it apart.
+    const schema = await generate(
+      `interface O { v: Cell<string> | string | number }`,
+      "O",
+      WIDEN,
+    );
+    expect(schema).toEqual({
+      type: "object",
+      properties: {
+        v: {
+          anyOf: [
+            { type: ["number", "string"] },
+            { type: "string", asCell: ["cell"] },
+          ],
+        },
+      },
+      required: ["v"],
+    });
+  });
+
+  it("keeps the metadata members share when it merges them", async () => {
+    const schema = await generate(
+      `type U = { x: Cell<1 | 2> } | { x: Cell<3 | 4> };`,
+      "U",
+      WIDEN,
+    );
+    expect(schema).toEqual({
+      type: "object",
+      properties: { x: { type: "number", asCell: ["cell"] } },
+      required: ["x"],
+    });
+  });
+
+  it("keeps members that differ only in a `$ref` apart", async () => {
+    // Named types read as `$ref`s, which the merge compares like any other
+    // keyword, so the two named members stay and keep their definitions.
+    const schema = await generate(
+      `interface NA { a: number } interface NB { b: string }
+       type U = NA | NB | string;`,
+      "U",
+      WIDEN,
+    );
+    expect(schema).toEqual({
+      anyOf: [
+        { type: "string" },
+        { $ref: "#/$defs/NA" },
+        { $ref: "#/$defs/NB" },
+      ],
+      $defs: {
+        NA: {
+          type: "object",
+          properties: { a: { type: "number" } },
+          required: ["a"],
+        },
+        NB: {
+          type: "object",
+          properties: { b: { type: "string" } },
+          required: ["b"],
+        },
+      },
+    });
+  });
+
+  it("leaves literal members of more than one type as written", async () => {
+    // `1 | "a"` has no one base type to widen to, so the members stay apart
+    // with their literals rather than widening to the type of the first.
+    const schema = await generate(
+      `type U = { x: 1 | "a" } | { x: 2 | "b" };`,
+      "U",
+      WIDEN,
+    );
+    expect(schema).toEqual({
+      anyOf: [
+        {
+          type: "object",
+          properties: { x: { enum: [1, "a"] } },
+          required: ["x"],
+        },
+        {
+          type: "object",
+          properties: { x: { enum: [2, "b"] } },
+          required: ["x"],
+        },
+      ],
+    });
+  });
+
   it("without the flag, literal unions and single literals keep enums", async () => {
     expect(await generate(`type T = "a" | "b";`, "T")).toEqual({
       enum: ["a", "b"],

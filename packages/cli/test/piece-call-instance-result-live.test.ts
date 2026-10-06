@@ -50,7 +50,7 @@ describe("piece-call-instance-result-live", () => {
     const receipt = runtime.getCell<unknown>(space, cause, undefined, tx);
     receipt.withTx(tx).set(stored);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const link = receipt.getAsNormalizedFullLink();
 
     const resolution = {

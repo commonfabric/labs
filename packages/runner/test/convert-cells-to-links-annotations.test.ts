@@ -33,7 +33,7 @@ describe("convertCellsToLinks() with runtime-annotated arrays", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

@@ -59,7 +59,7 @@ describe("stream handler whose argument does not resolve", () => {
       tx,
     );
     runtime.run(tx, compiled, argument, result);
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
     await runtime.idle();
 
@@ -96,7 +96,7 @@ describe("stream handler whose argument does not resolve", () => {
     {
       const write = runtime.edit();
       argument.key("gate").withTx(write).set(1);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
     }
     await runtime.idle();
     await runtime.scheduler.idleWithPendingCommits();

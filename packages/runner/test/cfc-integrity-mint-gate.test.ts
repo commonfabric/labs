@@ -45,7 +45,7 @@ describe("CFC integrity mint gate", () => {
       );
       src.set("attacker-controlled");
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // A sink requires InjectionSafe integrity on its inputs. The forged atom
       // on the source must not satisfy it.
@@ -76,7 +76,7 @@ describe("CFC integrity mint gate", () => {
 
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("requiredIntegrity failed");
     } finally {
       await runtime.dispose();
@@ -169,7 +169,7 @@ describe("CFC integrity mint gate", () => {
         );
         src.set("attacker-controlled");
         seed.prepareCfc();
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         runtime.getCell(
@@ -195,7 +195,7 @@ describe("CFC integrity mint gate", () => {
         ).set({ out: "derived" });
 
         expect(tx.prepareCfc()).toBe("");
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain("requiredIntegrity failed");
       }
     } finally {

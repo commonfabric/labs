@@ -802,7 +802,7 @@ describe("RuntimeClient operation collaboration", () => {
         tx,
       );
       alias.set(target);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const targetId = target.resolveAsCell().getAsNormalizedFullLink().id;
 
       const processor = buildProcessor({ runtime });

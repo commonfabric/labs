@@ -79,7 +79,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       },
       // deno-lint-ignore no-explicit-any
     } as any);
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
   };
 
   /** Start a piece holding a list of its own, and hand back that list. */
@@ -98,7 +98,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     return { result, resultCell };
   };
@@ -119,7 +119,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     // deno-lint-ignore no-explicit-any
     (result.withTx(tx) as any).key("notes").set([`${raw.secret}/${suffix}`]);
     tx.prepareCfc();
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   it("enrolls a running piece's stores, so a later write declares", async () => {
@@ -154,7 +154,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     // A later transaction naming no store, writing a labeled value into the
@@ -179,7 +179,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     );
     document.key("scratch").set(`${raw.secret}!`);
     write.prepareCfc();
-    expect((await write.commit()).error).toBeUndefined();
+    expect((await write.commit().settled).error).toBeUndefined();
   });
 
   it("enrolls no store a builtin minted outside the owner's space", () => {
@@ -264,7 +264,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     const resultCell = runtime.getCell(space, "wiring-elements", undefined, tx);
     const result = runtime.run(tx, doubled, { values }, resultCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.settled();
     await result.pull();
 
@@ -304,7 +304,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     tx = runtime.edit();
     result.withTx(tx).key("values").set(values.slice(0, 2));
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.settled();
     await result.pull();
 
@@ -341,7 +341,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       );
       const result = runtime.run(tx, listPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       return result;
     };
@@ -360,7 +360,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       // deno-lint-ignore no-explicit-any
       shape((result.withTx(tx) as any).key("items"), raw.secret!);
       tx.prepareCfc();
-      return await tx.commit();
+      return await tx.commit().settled;
     };
 
     it("puts each element in a document of its own with no handler or lift running", async () => {
@@ -395,7 +395,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       // this a separate document rather than a separate address.
       const container = items.getAsNormalizedFullLink().id;
       expect(ids).not.toContain(container);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
 
     it("declares on the child the anchoring write mints", async () => {
@@ -507,7 +507,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       const raw = source.getRaw() as { secret?: string };
       target.withTx(tx).set({ items: [{ note: `${raw.secret}/anchored` }] });
       tx.prepareCfc();
-      return await tx.commit();
+      return await tx.commit().settled;
     };
 
     it("refuses one whose parent declares nothing", async () => {

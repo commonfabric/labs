@@ -89,11 +89,10 @@ export interface MergeableBuildContext {
  * reads out of the commit's conflict set on behalf of an op that is no longer
  * being sent, and the whole-value diff replacing it is entitled to those reads.
  *
- * In today's reachable cases the reshaping write also leaves an unmarked read at
- * the path, which keeps it in the conflict set anyway — so this is belt and
- * braces rather than a demonstrated behavior change. It is kept because the
- * guarantee should not rest on that coincidence: nothing makes a reshape
- * obliged to read what it overwrites.
+ * The op's own read of the value is among those reads, and it can be the only
+ * one, since nothing makes a reshape obliged to read what it overwrites. With
+ * the intent dropped that read is back in the conflict set, which is what
+ * refuses the replacing write from a session whose view of the value is stale.
  */
 export interface MergeableBuildResult {
   ops: PatchOp[];
@@ -210,7 +209,7 @@ const buildTailOp = (
   // situations, and each one must abandon the op rather than let that
   // replacement be suppressed:
   //
-  //   1. the prefix changed length (a `set` here or at a parent that shrank or
+  //   1. the prefix changed length (a write here or at a parent that shrank or
   //      grew it) — the base elements it removed have no surviving removal
   //      candidate, so the store keeps them and appends on top: a doubled list;
   //   2. the prefix's HOLE LAYOUT changed — punching or filling a hole without
@@ -287,13 +286,13 @@ const withRemovalsApplied = (
 // to be exactly the base with the removed values taken out.
 //
 // Anything else the transaction changed on the same array — an element edit, a
-// whole-value `set` at this path or at a parent — otherwise loses the candidate
+// whole-value write at this path or at a parent — otherwise loses the candidate
 // that would have carried it and is silently discarded, while the writing
-// session's own value shows the change. Neither shape is caught earlier: an
-// element edit writes BENEATH the array and so deliberately does not poison the
-// intent, and a `set` landing before the op has no intent to poison yet. When
-// the check fails, abandon the intent and let the whole-array diff commit the
-// local value.
+// session's own value shows the change. Neither shape is always caught
+// earlier: an element edit writes BENEATH the array and so deliberately does
+// not poison the intent, and a whole-value write made straight to the
+// transaction poisons nothing. When the check fails, abandon the intent and
+// let the whole-array diff commit the local value.
 const buildRemoveByValue = (
   intent: RemoveIntent,
   ctx: MergeableBuildContext,

@@ -56,7 +56,10 @@ function scan(
   const beneathProbe = (entry: LabelMapEntry) =>
     shape === "followRef" && template(entry) &&
     entry.path.length > path.length && isPrefix(path, entry.path);
+  // A label-metadata entry is keyed relative to the stored document, so a
+  // payload lookup never sees it (spec §4.6.4), whatever class it carries.
   const selected = entries.filter((entry) =>
+    entry.origin !== "label-metadata" &&
     readConsumesEntry(shape, entry) && !(machinery && template(entry)) &&
     !beneathProbe(entry)
   );
@@ -128,6 +131,7 @@ describe("deriveFlowJoin()", () => {
         derived: true,
         structure: true,
         link: true,
+        minted: true,
         "external-ingest": true,
         "label-metadata": true,
       };
@@ -143,11 +147,16 @@ describe("deriveFlowJoin()", () => {
         "followRef",
         "labelMetadata",
       ] as const;
+      // A stored entry of the label-metadata origin is a template: keyed
+      // under the label subtree and observed by the `labelMetadata` class.
+      // Any other spelling of that origin makes the envelope unreadable.
       const entries: LabelMapEntry[] = paths.flatMap((path, index) =>
         origins.map((origin, offset): LabelMapEntry => ({
-          path,
+          path: origin === "label-metadata" ? ["cfc", "labels", ...path] : path,
           origin,
-          observes: classes[(index + offset) % classes.length],
+          observes: origin === "label-metadata"
+            ? "labelMetadata"
+            : classes[(index + offset) % classes.length],
           label: {
             confidentiality: ["shared", `entry-${index}-${offset}`],
             integrity: [
@@ -172,7 +181,7 @@ describe("deriveFlowJoin()", () => {
           labelMap: { version: 1, entries },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const valueFields = runtime.edit();
       try {
         const literalPaths = [[], ["value"], ["value", "value"]];

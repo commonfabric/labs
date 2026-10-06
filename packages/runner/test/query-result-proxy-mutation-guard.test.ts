@@ -33,7 +33,7 @@ describe("query-result proxy mutation guard", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

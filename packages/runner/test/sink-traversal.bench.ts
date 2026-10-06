@@ -97,14 +97,14 @@ async function runSinkTraversalBench(
   let tx = runtime.edit();
   const cell = runtime.getCell<NestedPayload>(space, name, schema, tx);
   cell.set(createPayload(0));
-  await tx.commit();
+  await tx.commit().settled;
 
   const cancel = cell.sink(() => {});
 
   for (let version = 1; version <= 10; version++) {
     tx = runtime.edit();
     cell.withTx(tx).set(createPayload(version));
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
   }
 

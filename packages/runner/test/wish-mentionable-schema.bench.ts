@@ -136,7 +136,7 @@ async function setupMentionableWishBench(
     return runtime.run(tx, wishPattern, {}, resultCell) as Cell<unknown>;
   });
 
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   return {

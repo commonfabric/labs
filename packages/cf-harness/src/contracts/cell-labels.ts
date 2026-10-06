@@ -43,7 +43,8 @@ export interface HarnessCfcAtom {
  * How a label came to sit at a path, as the space recorded it. `declared` is
  * an author's own label on a schema; `derived` is one the runtime computed
  * from what a lifted function read; `link` is one that rode in on a
- * reference. The distinction is the whole reading: a value's label may be the
+ * reference; `minted` is one a write's own schema stamped onto the value it
+ * left. The distinction is the whole reading: a value's label may be the
  * join of the fields it was built from, so an input that carries a
  * confidentiality atom is not by itself a value that was derived from
  * anything. `derived` and the provenance atom beside it are what say that.
@@ -53,6 +54,7 @@ export type HarnessCellLabelOrigin =
   | "derived"
   | "link"
   | "structure"
+  | "minted"
   | "external-ingest"
   | "label-metadata";
 

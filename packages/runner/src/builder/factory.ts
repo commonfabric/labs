@@ -87,7 +87,7 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
-import { principalOf } from "./principal-of.ts";
+import { principalOf, principalsOf } from "./principal-of.ts";
 import { spaceAccess } from "./space-access.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
@@ -277,6 +277,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     inspectConfLabel,
     currentPrincipal,
     principalOf,
+    principalsOf,
     eventKey,
     // The DID Core syntax guard the runtime itself decides by.
     isWellFormedDID,

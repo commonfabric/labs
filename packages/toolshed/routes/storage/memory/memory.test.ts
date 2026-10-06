@@ -168,7 +168,7 @@ serialTest(
       );
       cell.set({ hello: "created" });
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       assert("ok" in result);
 
       await runtime.storageManager.synced();
@@ -249,7 +249,7 @@ serialTest(
       );
 
       cell.set({ hello: "world" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await storageManager.synced();
 
@@ -289,7 +289,7 @@ serialTest(
       const tx = runtime1.edit();
       const writer = runtime1.getCell(identity.did(), cause, undefined, tx);
       writer.set({ persisted: true, count: 1 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.idle();
       await runtime1.storageManager.synced();
       await runtime1.dispose();
@@ -749,7 +749,7 @@ serialTest(
         tx,
       );
       addressCell.set({ city: "San Francisco" });
-      await tx.commit();
+      await tx.commit().settled;
 
       tx = runtime1.edit();
       const personCell = runtime1.getCell(
@@ -759,7 +759,7 @@ serialTest(
         tx,
       );
       personCell.set({ name: "Alice" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
       await runtime1.dispose();
@@ -793,7 +793,7 @@ serialTest(
         name: "Alice",
         address: addressLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime3.storageManager.synced();
 
       await gotAddress.promise;
@@ -847,7 +847,7 @@ serialTest(
         tx,
       );
       addressCell.set({ city: "New York" });
-      await tx.commit();
+      await tx.commit().settled;
       await addressCell.sync();
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
@@ -863,7 +863,7 @@ serialTest(
         name: "Bob",
         address: addressLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -896,7 +896,7 @@ serialTest(
       await addressCell3.sync();
       tx = runtime3.edit();
       addressCell3.withTx(tx).set({ city: "Los Angeles" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime3.storageManager.synced();
 
       await gotNewCity.promise;
@@ -960,7 +960,7 @@ serialTest(
         tx,
       );
       cityCell.set({ name: "Seattle", population: 750000 });
-      await tx.commit();
+      await tx.commit().settled;
       await cityCell.sync();
       await runtime1.storageManager.synced();
       const cityLink = structuredClone(cityCell.getAsLink());
@@ -976,7 +976,7 @@ serialTest(
         street: "123 Main St",
         city: cityLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await addressCell.sync();
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
@@ -992,7 +992,7 @@ serialTest(
         name: "Charlie",
         address: addressLink,
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1024,7 +1024,7 @@ serialTest(
       await cityCell3.sync();
       tx = runtime3.edit();
       cityCell3.withTx(tx).set({ name: "Seattle", population: 800000 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime3.storageManager.synced();
 
       await gotPopulation.promise;
@@ -1073,7 +1073,7 @@ serialTest(
         tx,
       );
       writer.set({ count: 1 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1106,7 +1106,7 @@ serialTest(
       await counterWriter.sync();
       tx = runtime2.edit();
       counterWriter.withTx(tx).set({ count: 2 });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime2.storageManager.synced();
 
       await gotReconnectUpdate.promise;
@@ -1160,7 +1160,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1222,7 +1222,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1256,7 +1256,7 @@ serialTest(
       await targetCell2.sync();
       tx = runtime2.edit();
       targetCell2.withTx(tx).set({ count: 2, label: "after-restart" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime2.storageManager.synced();
 
       await gotUpdate.promise;
@@ -1318,7 +1318,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
 
       const subscriberRuntime = createRuntime(identity, base);
@@ -1345,7 +1345,7 @@ serialTest(
           includeSchema: true,
         }),
       );
-      await tx.commit();
+      await tx.commit().settled;
       await runtime1.storageManager.synced();
 
       await gotRetarget.promise;

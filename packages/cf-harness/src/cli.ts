@@ -1,4 +1,5 @@
 import { readLoomAuthoringConfig } from "./loom-authoring.ts";
+import { readLoomCommandsConfig } from "./loom-commands.ts";
 import { readLoomRetrievalConfig } from "./loom-retrieval.ts";
 import { parseArgs } from "@std/cli/parse-args";
 import {
@@ -13,6 +14,7 @@ import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   DEFAULT_GATEWAY_BASE_URL,
+  DEFAULT_HARNESS_MODEL,
   type HarnessGatewayAuthMode,
   type HarnessModelProviderId,
   type HarnessPatternIndexConfig,
@@ -62,6 +64,7 @@ import {
 } from "./contracts/subagent.ts";
 import {
   type BuiltinToolId,
+  LOOM_COMMAND_TOOL_IDS,
   LOOM_RETRIEVAL_TOOL_IDS,
 } from "./contracts/tool-descriptor.ts";
 import { renderCfcPostureReport } from "./cfc-posture.ts";
@@ -172,7 +175,6 @@ import {
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
-const DEFAULT_MODEL = "gpt-6.1-sol";
 const DEFAULT_MAX_MODEL_TURNS = 8;
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
 const CLI_OUTPUT_MODES = ["operator", "batch"] as const;
@@ -223,6 +225,7 @@ const CLI_STRING_FLAGS = [
   "fabric-mount",
   "loom-authoring-config",
   "loom-retrieval-config",
+  "loom-commands-config",
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
@@ -401,6 +404,12 @@ export interface RunCfHarnessCliDependencies {
    */
   sandboxHomeDir?: string;
   writeTextFile?: (path: string, text: string) => Promise<void>;
+
+  /** The structured-result validation verdict after a completed prompt loop. */
+  onStructuredResultValidation?: (
+    validation: CfHarnessStructuredResultValidation,
+  ) => void;
+
   readRunArtifacts?: typeof readHarnessRunArtifacts;
   createPromptLoop?: (
     options: CreateHarnessPromptLoopOptions,
@@ -521,13 +530,14 @@ Options:
   --workspace <path>            Workspace host path (defaults to current directory)
   --cwd <path>                  Initial working directory inside the workspace
   --focus-root <path>           Narrow exploration to a workspace subpath when possible
-  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile);
+  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command);
                                 run_pattern, assign_slug, resolve_piece, and acquire_skill additionally require the three --fabric-* session flags,
                                 search_patterns and record_feedback require --pattern-index-url,
                                 search_skills and acquire_skill require --skills-registry-url,
                                 research requires a documentation corpus or pattern index (query_docs is a deprecated input alias),
                                 loom_compose, loom_inspect, and loom_authoring_context require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG),
-                                and the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG)
+                                the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG),
+                                and list_commands and run_command require --loom-commands-config (or CF_HARNESS_LOOM_COMMANDS_CONFIG)
   --allow-skill-scripts         Run skill scripts in the sandbox, for every skill this run holds,
                                 registry and acquired alike. Off unless named.
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
@@ -550,7 +560,7 @@ Options:
                                 Execute skill scripts in sandbox or host (default: sandbox)
   --no-skill-catalog            Disable automatic skill catalog disclosure
   --no-docs-corpus              Resolve no documentation corpus for research
-  --model <name>                Model name (default: ${DEFAULT_MODEL})
+  --model <name>                Model name (default: ${DEFAULT_HARNESS_MODEL})
   --model-provider <provider>   openai-compatible-gateway | openai-codex
                                 (no default; select one here, through
                                 CF_HARNESS_MODEL_PROVIDER, or with config set)
@@ -559,7 +569,7 @@ Options:
                                 Reasoning effort for the research tool's own model
   --compact-threshold <n>       Token threshold for server-side compaction
                                 (default: 75% of the model input budget; 0 disables)
-  --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6 API gateway only)
+  --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6/GPT-6.1 Sol API gateway)
   --gateway-base-url <url>      OpenAI-compatible gateway URL
   --gateway-auth-mode <mode>    bearer | none (default: bearer)
   --artifact-root <path>        Host-side artifact directory
@@ -593,6 +603,8 @@ Options:
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
+  --loom-commands-config <path> Absolute host-owned JSON file naming the command broker
+                                behind list_commands and run_command
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug, resolve_piece)
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
@@ -647,6 +659,7 @@ Environment:
                                 as sandbox)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
+  CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY    Default value for --fabric-identity
   CF_HARNESS_FABRIC_SPACE       Default value for --fabric-space
@@ -732,6 +745,8 @@ const CLI_PARENT_TOOL_IDS = [
   "loom_calendar_list",
   "loom_context",
   "loom_profile",
+  "list_commands",
+  "run_command",
   "run_pattern",
   "assign_slug",
   "resolve_piece",
@@ -1573,6 +1588,9 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_LOOM_RETRIEVAL_CONFIG: Deno.env.get(
         "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
       ),
+      CF_HARNESS_LOOM_COMMANDS_CONFIG: Deno.env.get(
+        "CF_HARNESS_LOOM_COMMANDS_CONFIG",
+      ),
       CF_HARNESS_SPACE_DB: Deno.env.get("CF_HARNESS_SPACE_DB"),
       CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: Deno.env.get(
         "CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE",
@@ -1716,6 +1734,12 @@ export const parseCfHarnessCliArgs = async (
     typeof args["loom-retrieval-config"] === "string"
       ? args["loom-retrieval-config"]
       : env.CF_HARNESS_LOOM_RETRIEVAL_CONFIG,
+    readTextFile,
+  );
+  const loomCommands = await readLoomCommandsConfig(
+    typeof args["loom-commands-config"] === "string"
+      ? args["loom-commands-config"]
+      : env.CF_HARNESS_LOOM_COMMANDS_CONFIG,
     readTextFile,
   );
   const inputCells = parseInputCells(
@@ -1966,6 +1990,14 @@ export const parseCfHarnessCliArgs = async (
       `--allow-tool ${retrievalTool} requires a Loom retrieval configuration; missing --loom-retrieval-config`,
     );
   }
+  const commandTool = allowedToolIds?.find((toolId) =>
+    LOOM_COMMAND_TOOL_IDS.has(toolId)
+  );
+  if (commandTool !== undefined && loomCommands === undefined) {
+    throw new Error(
+      `--allow-tool ${commandTool} requires a host command broker configuration; missing --loom-commands-config`,
+    );
+  }
   const apiKey = env.CF_HARNESS_API_KEY ?? env.OPENAI_API_KEY;
   const apiKeySource = env.CF_HARNESS_API_KEY !== undefined
     ? "CF_HARNESS_API_KEY"
@@ -1999,7 +2031,9 @@ export const parseCfHarnessCliArgs = async (
     ...(typeof args.model === "string"
       ? { model: args.model }
       : resumeRun === undefined
-      ? { model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL }
+      ? {
+        model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_HARNESS_MODEL,
+      }
       : {}),
     ...(modelProvider !== undefined ? { modelProvider } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
@@ -2057,6 +2091,7 @@ export const parseCfHarnessCliArgs = async (
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
     ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
     ...(loomRetrieval !== undefined ? { loomRetrieval } : {}),
+    ...(loomCommands !== undefined ? { loomCommands } : {}),
     ...(patternIndex !== undefined ? { patternIndex } : {}),
     ...(skillsSh !== undefined ? { skillsSh } : {}),
     hostMounts,
@@ -2331,6 +2366,10 @@ const appendStructuredResultInstructions = (
     `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
+    "",
+    "Result schema (JSON):",
+    JSON.stringify(structuredResult.schema),
   );
 };
 
@@ -3796,6 +3835,9 @@ export const runCfHarnessCli = async (
         config: effectiveStructuredResult,
         readTextFile,
       });
+    if (structuredResultValidation !== undefined) {
+      deps.onStructuredResultValidation?.(structuredResultValidation);
+    }
     if (parsed.resultJsonPath !== undefined) {
       await writeTextFile(
         parsed.resultJsonPath,

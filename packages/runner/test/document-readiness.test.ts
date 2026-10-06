@@ -6,6 +6,7 @@ import { defer } from "@commonfabric/utils/defer";
 
 import {
   createDocumentReadiness,
+  DocumentLoadError,
   DocumentPending,
 } from "../src/document-readiness.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -14,6 +15,59 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 const user = await Identity.fromPassphrase("document readiness recovery");
 
 describe("document-readiness", () => {
+  it("exempts only completed failures of explicitly optional documents", async () => {
+    const manager = EmulatedStorageManager.emulate({ as: user });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.invalid"),
+      storageManager: manager,
+    });
+    const otherSpace =
+      (await Identity.fromPassphrase("required document space"))
+        .did();
+    const optional = runtime.getCell(user.did(), "same document id");
+    const required = runtime.getCell(otherSpace, "same document id");
+    expect(optional.getAsNormalizedFullLink().id)
+      .toBe(required.getAsNormalizedFullLink().id);
+    const cancels: (() => void)[] = [];
+    const readiness = createDocumentReadiness(
+      runtime,
+      (cancel) => cancels.push(cancel),
+    );
+    const originalSync = manager.syncCell.bind(manager);
+    manager.syncCell = async (cell, options) => {
+      await originalSync(cell, options);
+      throw new Error("Document load failed");
+    };
+    let tx = runtime.edit();
+    try {
+      expect(() => readiness.requireDocument(optional, tx))
+        .toThrow(DocumentPending);
+      expect(() => readiness.requireLoadedReads(tx, [optional]))
+        .toThrow(DocumentPending);
+      expect(() => readiness.requireDocument(required, tx))
+        .toThrow(DocumentPending);
+      tx.abort();
+      await manager.crossSpaceSettled();
+
+      tx = runtime.edit();
+      expect(() => readiness.requireDocument(optional, tx))
+        .toThrow(DocumentLoadError);
+      expect(() => readiness.requireLoadedReads(tx)).toThrow(DocumentLoadError);
+      expect(() => readiness.requireLoadedReads(tx, [optional])).not.toThrow();
+
+      // The same id in a different space remains a required failed read.
+      expect(() => readiness.requireDocument(required, tx))
+        .toThrow(DocumentLoadError);
+      expect(() => readiness.requireLoadedReads(tx, [optional]))
+        .toThrow(DocumentLoadError);
+    } finally {
+      tx.abort();
+      cancels.forEach((cancel) => cancel());
+      manager.syncCell = originalSync;
+      await runtime.dispose();
+    }
+  });
+
   for (const outcome of ["failed", "pending"] as const) {
     it(`rechecks absence after presence supersedes a ${outcome} load`, async () => {
       const manager = EmulatedStorageManager.emulate({ as: user });
@@ -60,7 +114,7 @@ describe("document-readiness", () => {
         const arrived = manager.edit();
         expect(arrived.write(address, { value: "Recovered" }).error)
           .toBeUndefined();
-        expect((await arrived.commit()).error).toBeUndefined();
+        expect((await arrived.commit().settled).error).toBeUndefined();
         expect(read()).toBe(true);
         release.resolve();
         await manager.crossSpaceSettled();
@@ -68,7 +122,7 @@ describe("document-readiness", () => {
         const removed = manager.edit();
         expect(removed.write(address, undefined, { delete: true }).error)
           .toBeUndefined();
-        expect((await removed.commit()).error).toBeUndefined();
+        expect((await removed.commit().settled).error).toBeUndefined();
         expect(read).toThrow(DocumentPending);
         await manager.crossSpaceSettled();
         expect(read()).toBe(false);

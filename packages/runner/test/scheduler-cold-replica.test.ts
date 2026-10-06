@@ -102,7 +102,7 @@ describe("scheduler cold-replica startup", () => {
         { value: sourceCell.key("value").getAsWriteRedirectLink() },
         writerResultCell,
       );
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await writer.patternManager.flushCompileCacheWrites();
       await writer.storageManager.synced();
 
@@ -130,7 +130,7 @@ describe("scheduler cold-replica startup", () => {
         sourceSchema,
         writerTx,
       ).set({ value: "arrived" });
-      await writerTx.commit();
+      await writerTx.commit().settled;
       await writer.storageManager.synced();
 
       const projected = await waitForCellValue<{ observed: string }>(

@@ -84,7 +84,7 @@ describe("CFC commit preparation", () => {
         .getCell(space, "commit-prep-source", undefined, seed)
         .getAsNormalizedFullLink().id;
       seedLabeledDoc(seed, sourceId);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const tx = runtime.edit();
       const out = runtime.getCell<{ copied?: string }>(
@@ -108,7 +108,7 @@ describe("CFC commit preparation", () => {
       );
       out.set({ copied: source.get()?.note });
 
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(tx.getCfcState().relevant).toBe(true);
       expect(tx.getCfcState().prepare.status).toBe("prepared");
     } finally {
@@ -161,7 +161,7 @@ describe("CFC commit preparation", () => {
         .getCell(space, "commit-prep-read-only", undefined, seed)
         .getAsNormalizedFullLink().id;
       seedLabeledDoc(seed, sourceId);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const read = (tx: IExtendedStorageTransaction) =>
         runtime
@@ -178,7 +178,7 @@ describe("CFC commit preparation", () => {
       expect(readOnlyTx.getCfcState().relevant).toBe(true);
       runtime.prepareTxForCommit(readOnlyTx);
       expect(readOnlyTx.getCfcState().prepare.status).toBe("unprepared");
-      expect((await readOnlyTx.commit()).error).toBeUndefined();
+      expect((await readOnlyTx.commit().settled).error).toBeUndefined();
 
       const writableTx = runtime.edit();
       read(writableTx);
@@ -210,7 +210,7 @@ describe("CFC commit preparation", () => {
       createChildCellTransaction(tx, childCellTx).prepareForCommit();
 
       expect(tx.getCfcState().prepare.status).toBe("prepared");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       childCellTx.abort("unused by this test");
     } finally {
       await dispose();
@@ -261,7 +261,7 @@ describe("CFC commit preparation", () => {
       const cidId = `cid:${taggedHashStringOf({ note: "labeled" })}` as URI;
       seedLabeledDoc(seed, plainId);
       seedLabeledDoc(seed, cidId);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const write = (id: URI): IExtendedStorageTransaction => {
         const tx = runtime.edit();
@@ -299,7 +299,7 @@ describe("CFC commit preparation", () => {
           .getAsNormalizedFullLink().id;
         const seed = runtime.edit();
         seedLabeledDoc(seed, id);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const tx = runtime.edit();
         const address = {
@@ -324,7 +324,7 @@ describe("CFC commit preparation", () => {
           .getAsNormalizedFullLink().id;
         const seed = runtime.edit();
         seedLabeledDoc(seed, id);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const tx = runtime.edit();
         // The extended transaction marks itself only where it serves a seal
@@ -356,7 +356,7 @@ describe("CFC commit preparation", () => {
           .getAsNormalizedFullLink().id;
         const seed = runtime.edit();
         seedLabeledDoc(seed, id);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const tx = runtime.edit();
         const note = tx.readOrThrow({
@@ -431,7 +431,7 @@ describe("CFC commit preparation", () => {
             { space, scope: "space", id: otherId, path: [] },
             { value: { count: 1 } } as unknown as FabricValue,
           );
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
 
           const tx = runtime.edit();
           const address = {
@@ -448,7 +448,7 @@ describe("CFC commit preparation", () => {
               2 as unknown as FabricValue,
             );
           }
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
 
           const check = runtime.edit();
           const stored = check.readOrThrow({

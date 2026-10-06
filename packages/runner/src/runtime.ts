@@ -90,6 +90,8 @@ import {
 import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
 import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
+  CFC_POLICY_MANIFEST_ID_PREFIX,
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
   validateCfcPolicyArtifactManifest,
@@ -1026,11 +1028,6 @@ export const spaceCellSchema = internSchema(
   },
 );
 
-const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
-  type: "object",
-  additionalProperties: true,
-} as const satisfies JSONSchema;
-
 /** The allocation record a space holds for one `PatternFactory.inSpace`
  *  name: the DID of the space the name reaches. */
 const inSpaceAllocationSchema = {
@@ -1168,6 +1165,14 @@ const externalObservationRefusal = (
 
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
+
+/** A document a commit retry's catch-up could not load, and the reason. */
+export type CommitRetryPullFailure = {
+  space: MemorySpace;
+  id: URI;
+  scope?: CellScope;
+  error: unknown;
+};
 
 /**
  * Main Runtime class that orchestrates all services in the runner package.
@@ -2103,8 +2108,8 @@ export class Runtime {
    *
    * Each entry carries the pattern run it belongs to, as the address key of the
    * run's result cell — the `parentCell` every raw builtin is handed. Entries
-   * with no owner belong to no single run: the scheduler's commit promises,
-   * which are the barrier that a fire-and-forget builtin's outbox flush has
+   * with no owner belong to no single run: the scheduler's post-commit effect
+   * promises, which are the barrier that a fire-and-forget builtin's outbox flush has
    * registered its own work. `settledFor()` waits for those as well as the
    * run's own, because that handoff is how the run's work first becomes
    * visible.
@@ -2186,9 +2191,9 @@ export class Runtime {
   /**
    * Register an in-flight async builtin operation so `settled()` waits for it
    * instead of racing the post-commit flush. The scheduler registers an
-   * effect-bearing commit's promise here (a race-free barrier — the flush runs
-   * inside that commit), and the fire-and-forget builtins register their
-   * network/LLM promise. Normalized to always resolve (failures are settled, not
+   * effect-bearing commit's `postCommitEffectsSettled()` promise here,
+   * covering the flush's handoff to the builtin's own work. Fire-and-forget
+   * builtins register their network/LLM promise. Normalized to always resolve (failures are settled, not
    * thrown) and auto-removed once it settles, so a rejecting promise is safe and
    * never leaks.
    *
@@ -2333,9 +2338,9 @@ export class Runtime {
    * Clean up resources and cancel all operations.
    *
    * NOTE: This does not wait for in-flight transactions to settle.
-   * Any unawaited tx.commit() calls will be canceled when
+   * Commits whose receipt.settled remains pending will be canceled when
    * storageManager.close() tears down storage sessions. Callers
-   * should await all pending commits before calling dispose().
+   * should await pending receipts' .settled before calling dispose().
    *
    * `closeStorage: false` leaves the storage manager OPEN for a caller that
    * OWNS it and is still using it — a second runtime sharing the same store, or
@@ -3196,12 +3201,12 @@ export class Runtime {
         throw error;
       }
       const commit = preparation === undefined
-        ? tx.commit()
+        ? tx.commit().settled
         : preparation.then(() => {
           if (signal.aborted && tx.status().status === "ready") {
             tx.abort(signal.reason);
           }
-          return tx.commit();
+          return tx.commit().settled;
         });
       return commit.then(async ({ error }) => {
         if (error) {
@@ -3354,14 +3359,21 @@ export class Runtime {
    * without scope use the space instance. If no array entry names a usable
    * address, the singular conflict supplies the recovery target.
    *
-   * Recovery is best-effort: failed waits and pulls leave the fresh retry's
-   * commit to decide whether its basis is valid. Aborting `teardownSignal`
-   * ends the wait; callers must check their lifetime before requeueing work.
+   * A policy manifest is pulled with the documents its rules live in, since
+   * a retry verifies the whole artifact.
+   *
+   * Recovery is best-effort: a failed wait or pull leaves the fresh retry's
+   * commit to decide whether its basis is valid. The pulls that failed are
+   * returned, each with its reason, so that a caller whose retry cannot
+   * succeed without a document can tell a document that could not be loaded
+   * from one that is absent. Aborting `teardownSignal` ends the wait and
+   * returns no failures; callers must check their lifetime before requeueing
+   * work.
    */
   async awaitCommitRetryReadiness(
     error: unknown,
     teardownSignal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<CommitRetryPullFailure[]> {
     const waitUnlessTeardown = async (
       operation: PromiseLike<unknown>,
     ): Promise<boolean> => {
@@ -3386,12 +3398,14 @@ export class Runtime {
       ?.readyToRetry;
     if (typeof readyToRetry === "function") {
       try {
-        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) return;
+        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) {
+          return [];
+        }
       } catch {
         // Readiness aborted — the retry's commit decides.
       }
     }
-    if (teardownSignal?.aborted) return;
+    if (teardownSignal?.aborted) return [];
     type ConflictAddress = { space: MemorySpace; of: URI; scope?: CellScope };
     const isPullableConflict = (value: unknown): value is ConflictAddress => {
       const conflict = value as Partial<ConflictAddress> | null | undefined;
@@ -3408,6 +3422,7 @@ export class Runtime {
       : isPullableConflict(rejection?.conflict)
       ? [rejection.conflict]
       : [];
+    const failures: CommitRetryPullFailure[] = [];
     const pulls: Promise<unknown>[] = [];
     const seen = new Set<string>();
     for (const conflict of conflicts) {
@@ -3418,23 +3433,39 @@ export class Runtime {
       });
       if (seen.has(key)) continue;
       seen.add(key);
+      const failed = (reason: unknown) => {
+        failures.push({
+          space: conflict.space,
+          id: conflict.of,
+          scope: conflict.scope,
+          error: reason,
+        });
+      };
       try {
         pulls.push(
           Promise.resolve(
             this.storageManager.open(conflict.space).sync(
               conflict.of,
-              { path: [], schema: false },
+              {
+                path: [],
+                schema: conflict.of.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX)
+                  ? CFC_POLICY_MANIFEST_DOC_SCHEMA
+                  : false,
+              },
               conflict.scope,
             ),
-          ).catch(() => undefined),
+          ).then((result) => {
+            if (result?.error !== undefined) failed(result.error);
+          }, failed),
         );
-      } catch {
-        // A synchronous pull failure leaves the retry's commit to decide.
+      } catch (reason) {
+        failed(reason);
       }
     }
-    if (pulls.length > 0) {
-      await waitUnlessTeardown(Promise.all(pulls));
+    if (pulls.length > 0 && !await waitUnlessTeardown(Promise.all(pulls))) {
+      return [];
     }
+    return failures;
   }
 
   /**

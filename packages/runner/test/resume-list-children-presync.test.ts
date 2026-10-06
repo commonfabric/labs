@@ -86,7 +86,7 @@ describe("resume-list-children-presync", () => {
       tx,
     );
     author.runtime.run(tx, compiled, { items: [{ n: 1 }, { n: 2 }] }, authored);
-    await tx.commit();
+    await tx.commit().settled;
     await authored.pull();
     await author.runtime.settled();
     await author.runtime.patternManager.flushCompileCacheWrites();

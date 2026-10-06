@@ -169,7 +169,7 @@ describe("wish profile-create sidecar duplicate launch", () => {
         homeDefault,
       );
       rt1.prepareTxForCommit(setupTx);
-      const setupCommit = await setupTx.commit();
+      const setupCommit = await setupTx.commit().settled;
       expect(setupCommit.error).toBeUndefined();
       await rt1.storageManager.synced();
 
@@ -211,7 +211,7 @@ describe("wish profile-create sidecar duplicate launch", () => {
       // deno-lint-ignore no-explicit-any
       const run1 = rt1.run(tx1, pattern1 as any, {}, result1);
       rt1.prepareTxForCommit(tx1);
-      const commit1 = await tx1.commit();
+      const commit1 = await tx1.commit().settled;
       expect(commit1.error).toBeUndefined();
 
       // Demand drives the compiled piece's wish action (which fires the

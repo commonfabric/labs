@@ -29,7 +29,7 @@ describe("data URI sync", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -584,7 +584,7 @@ describe("data URI sync", () => {
 
       expect(syncedIds).toContain(linkedId);
     } finally {
-      await otherTx.commit();
+      await otherTx.commit().settled;
       await otherRuntime.dispose();
       await otherStorageManager.close();
     }

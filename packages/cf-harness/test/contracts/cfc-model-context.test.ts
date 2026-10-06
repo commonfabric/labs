@@ -7,6 +7,7 @@ import {
   appendHarnessCfcModelContextObservations,
   createHarnessCfcModelContextInputLabels,
   type HarnessCfcModelContext,
+  type HarnessCfcModelContextObservationInput,
 } from "../../src/contracts/cfc-model-context.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 
@@ -98,6 +99,40 @@ describe("cfc-model-context", () => {
       expect(context?.label).toEqual({
         confidentiality: [observedSecret, otherReader],
       });
+    });
+
+    it("returns the saved context itself when given no observations", () => {
+      const saved = savedContext([observedSecret]);
+
+      expect(appendHarnessCfcModelContextObservations(saved, [], "later"))
+        .toBe(saved);
+      expect(appendHarnessCfcModelContextObservations(undefined, [], "later"))
+        .toBeUndefined();
+    });
+
+    it("returns no model context when prompt-slot influence is all an observation's confidentiality holds", () => {
+      const observation = (
+        confidentiality: HarnessCfcModelContext["label"]["confidentiality"],
+      ): HarnessCfcModelContextObservationInput => ({
+        toolCallId: "call-1",
+        toolId: "delegate_task",
+        outputId: createToolOutputId("run", "delegate_task", 1),
+        channels: ["output"],
+        label: { confidentiality },
+      });
+
+      expect(appendHarnessCfcModelContextObservations(
+        undefined,
+        [observation([influence])],
+        "2026-09-21T10:00:00.000Z",
+      )).toBeUndefined();
+      expect(
+        appendHarnessCfcModelContextObservations(
+          undefined,
+          [observation([influence, observedSecret])],
+          "2026-09-21T10:00:00.000Z",
+        )?.label,
+      ).toEqual({ confidentiality: [observedSecret] });
     });
   });
 });

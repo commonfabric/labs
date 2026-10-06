@@ -74,7 +74,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
         },
       },
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
   };
 
   const collectOps = () => {
@@ -156,7 +156,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       undefined,
       unsignedTx,
     ).set("Unsigned note");
-    expect((await unsignedTx.commit()).ok).toBeDefined();
+    expect((await unsignedTx.commit().settled).ok).toBeDefined();
 
     const confidential = runtime.getCell<string>(
       signer.did(),
@@ -305,7 +305,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           undefined,
           tx,
         ).set({ maxConfidentiality: [], $value: confidential as never });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         const props = runtime.getCell<Record<string, unknown>>(
           signer.did(),
           "cfc-denials-boundary-props",

@@ -49,7 +49,7 @@ describe("Pattern Runner - Default<[]> array field materializes as array", () =>
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -106,7 +106,7 @@ describe("Pattern Runner - Default<[]> array field materializes as array", () =>
       },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
 

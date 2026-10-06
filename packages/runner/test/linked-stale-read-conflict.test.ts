@@ -79,7 +79,7 @@ describe("stale linked read across two clients", () => {
       // accept and force the shared fan-out through, destroying the
       // controlled staleness this test is built on. The awaited verdict is
       // durably accepted, which is all the peer's explicit sync/pull needs.
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -95,7 +95,7 @@ describe("stale linked read across two clients", () => {
       const tx = rtB.edit();
       cellB2.withTx(tx).key("isAdmin").set(false);
       rtB.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `flip: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -114,7 +114,7 @@ describe("stale linked read across two clients", () => {
     // Verdict-marked so the rejection receipt resolves without the
     // read-repair gate, which would otherwise wait on a fan-out this
     // manual server has not been told to run.
-    const res = await tx.commit({ resolveAt: "verdict" });
+    const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
 
     // ... but now that read is part of the tx's read-set, so committing the
     // grant is REJECTED: the server's head for cellB.isAdmin has advanced past

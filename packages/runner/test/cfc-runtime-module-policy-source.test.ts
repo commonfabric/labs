@@ -97,7 +97,7 @@ const writeRawManifest = async (
     type: "application/json",
     path: ["value"],
   }, value as never);
-  expect((await raw.commit()).ok).toBeDefined();
+  expect((await raw.commit().settled).ok).toBeDefined();
 };
 
 /** A source whose document reads, and cells it watches, are counted. */

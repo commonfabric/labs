@@ -204,8 +204,7 @@ The server prints that origin as its configured first-party authority at
 startup, and a refused proof is logged at `warn` with the request path, its
 method, that authority, and the verification failure — enough to tell a
 misconfigured origin from a bad signature without recording the proof, the
-signature, or any code. The signed inbox routes under `/api/inbox/` take the
-same origin and log the same way.
+signature, or any code.
 
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
@@ -260,12 +259,3 @@ private verifiers and must receive the same protection as the live store.
 Deletion of an active row does not erase retained backups, WAL pages, or old
 filesystem bytes. Expiry and revocation stop admission; removing a member is a
 separate ACL operation.
-
-## DID inbox delivery
-
-`GET /api/inbox` advertises the generic private inbox protocol. Signed POSTs
-under `/api/inbox/` enable, inspect readiness, send, list, get, and acknowledge
-inert messages. The verified signer owns recipient operations and identifies the
-sender; delivery grants no space access. See
-[DID inboxes](../../docs/features/did-inboxes.md) for limits, retry receipts,
-storage, and the `@commonfabric/runner/inbox` SDK.

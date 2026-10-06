@@ -30,7 +30,7 @@ describe("Pattern run via the ESM module loader", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -72,7 +72,7 @@ describe("Pattern run via the ESM module loader", () => {
       tx,
     );
     const result = runtime.run(tx, compiled, { value: 3 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.getAsQueryResult()).toEqual({ result: 6 });
@@ -117,7 +117,7 @@ describe("Pattern run via the ESM module loader", () => {
       tx,
     );
     const result = runtime.run(tx, compiled, { value: 5 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.getAsQueryResult()).toEqual({ result: 15 });
@@ -166,7 +166,7 @@ describe("Pattern run via the ESM module loader", () => {
       tx,
     );
     const result = runtime.run(tx, compiled, { value: 4 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     expect(result.getAsQueryResult()).toEqual({ result: 5 });

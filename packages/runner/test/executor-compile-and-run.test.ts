@@ -245,10 +245,10 @@ describe("executor-compile-and-run", () => {
     if (initialCount !== undefined) {
       argument.withTx(seed).key("count").set(initialCount);
     }
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = client.edit();
     client.run(tx, parent, argument, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return { parent, argument, result, cancelDemand: result.sink(() => {}) };
   }
 
@@ -256,7 +256,7 @@ describe("executor-compile-and-run", () => {
   async function setCode(argument: Cell<{ code: string }>, code: string) {
     const tx = client.edit();
     argument.withTx(tx).set({ code });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
 
   /** Opens another client's instance of an existing parent. */
@@ -291,7 +291,7 @@ describe("executor-compile-and-run", () => {
       if (initialCount !== undefined) {
         argument.withTx(tx).key("count").set(initialCount);
       }
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const cancelDemand = result.sink(() => {});
       return {
         runtime,
@@ -324,7 +324,7 @@ describe("executor-compile-and-run", () => {
     );
     const tx = runtime.edit();
     argument.withTx(tx).key(key).set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
 
   /** Waits for a scoped piece to share exactly the expected program groups. */
@@ -421,7 +421,7 @@ describe("executor-compile-and-run", () => {
       );
       const tx = client.edit();
       argument.withTx(tx).set({ code: childProgram(7) });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await waitForCellValue<CompiledView>(
         client,
         compiled,
@@ -457,7 +457,7 @@ describe("executor-compile-and-run", () => {
       const poke = client.getCell<number>(space, "unrelated-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await covered();
       expect(servingCompiles.filter((code) => code === broken)).toHaveLength(1);
       expect(created).toEqual([]);
@@ -536,7 +536,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       const poke = client.getCell<number>(space, "reactivation-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await waitUntil(
         () => servingRuntimes.length === 2,
         "fresh serving runtime",
@@ -569,7 +569,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       const poke = client.getCell<number>(space, "reactivation-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await childValue(piece.result, 17);
       expect(servingRuntimes).toHaveLength(2);
       expect(servingCompiles.filter((source) => source === code)).toHaveLength(
@@ -646,7 +646,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await bobResult.sync();
       const tx = bob.edit();
       bobArgument.withTx(tx).key("code").set(a);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cancelBob = bobResult.sink(() => {});
       await waitUntil(
         () => host.stats().outbox.queued === 2,
@@ -683,7 +683,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       );
       const updateInput = client.edit();
       count.withTx(updateInput).key("count").set(3);
-      expect((await updateInput.commit()).error).toBeUndefined();
+      expect((await updateInput.commit().settled).error).toBeUndefined();
       await waitUntil(
         () => piece.result.key("compiled").get()?.result?.answer === 24,
         () =>
@@ -699,7 +699,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
 
       const change = bob.edit();
       bobArgument.withTx(change).key("code").set(reactiveChildProgram(22));
-      expect((await change.commit()).error).toBeUndefined();
+      expect((await change.commit().settled).error).toBeUndefined();
       await waitUntil(
         () => bobResult.key("compiled").get()?.result?.answer === 22,
         () =>
@@ -1167,7 +1167,7 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
         piece.argument.asSchema(undefined).withTx(rebind).key("count").set(
           explicit,
         );
-        expect((await rebind.commit()).error).toBeUndefined();
+        expect((await rebind.commit().settled).error).toBeUndefined();
         await covered();
         const runtimeCount = servingRuntimes.length;
         await host.spaceServer(space)!.park(

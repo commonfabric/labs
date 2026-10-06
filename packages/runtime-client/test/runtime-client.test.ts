@@ -228,6 +228,43 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("getStorageDiagnostics()", () => {
+    const snapshot = {
+      pendingCommitCount: 1,
+      pendingCommits: [{ kind: "event-intent", id: 1, ageMs: 5 }],
+      pendingCommitsOmitted: 0,
+      pendingCrossSpaceCount: 0,
+      spaces: [],
+      spacesOmitted: 0,
+    };
+
+    for (const diagnostics of [snapshot, null]) {
+      it(
+        diagnostics === null
+          ? "returns `null` when the worker's storage manager has no diagnostics"
+          : "returns the snapshot the worker reports",
+        async () => {
+          const requests: unknown[] = [];
+          const conn = {
+            on: () => {},
+            request: (message: unknown) => {
+              requests.push(message);
+              return Promise.resolve({ diagnostics });
+            },
+          } as unknown as never;
+          const client = new (RuntimeClient as unknown as {
+            new (conn: never, options: unknown): RuntimeClient;
+          })(conn, undefined);
+
+          expect(await client.getStorageDiagnostics()).toEqual(diagnostics);
+          expect(requests).toEqual([
+            { type: RequestType.GetStorageDiagnostics },
+          ]);
+        },
+      );
+    }
+  });
+
   describe("setMemoryMessageCompression", () => {
     it("asks the worker to change live memory WebSocket compression", async () => {
       const requests: unknown[] = [];

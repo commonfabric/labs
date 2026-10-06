@@ -44,7 +44,7 @@ describe("wave withdrawal compensation", () => {
     const source = runtime.getCell<Source>(waves.space, "source", undefined);
     const seed = runtime.edit();
     source.withTx(seed).set({ value });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     await waves.storageManager.synced();
     return source;
   };
@@ -88,7 +88,7 @@ describe("wave withdrawal compensation", () => {
         { value: source.key("value"), tag: source.key("tag") },
         parent,
       );
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       const stopReading = parent.key("child").sink(() => {});
       await runtime.scheduler.idleWithPendingCommits();
       const doubled = async () => {
@@ -175,7 +175,7 @@ describe("wave withdrawal compensation", () => {
         seed,
       );
       request.set({ task: "summarize" });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await waves.storageManager.synced();
 
       // The wave opens before an authored write moves the document on, so the
@@ -183,7 +183,7 @@ describe("wave withdrawal compensation", () => {
       waves.openWave();
       const authored = runtime.edit();
       request.withTx(authored).key("tag").set("authored");
-      expect((await authored.commit()).error).toBeUndefined();
+      expect((await authored.commit().settled).error).toBeUndefined();
       waves.serve(acting);
       const doomed = runtime.edit();
       stampWaveRunContext(doomed, {
@@ -191,7 +191,7 @@ describe("wave withdrawal compensation", () => {
         kind: "derivation",
       });
       request.withTx(doomed).key("other").set(1);
-      expect((await doomed.commit()).error).toBeUndefined();
+      expect((await doomed.commit().settled).error).toBeUndefined();
 
       const { agent, pattern } = createTrustedBuilder(runtime).commonfabric;
       const agentPattern = pattern<{ task: string }>(({ task }) =>
@@ -220,7 +220,7 @@ describe("wave withdrawal compensation", () => {
         { task: request.key("task") },
         resultCell,
       );
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       const stopReading = resultCell.sink(() => {});
       try {
         await runtime.scheduler.idleWithPendingCommits();

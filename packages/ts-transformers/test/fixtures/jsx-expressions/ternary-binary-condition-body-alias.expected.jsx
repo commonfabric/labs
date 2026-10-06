@@ -44,19 +44,49 @@ export default pattern((__cf_pattern_input) => {
         {__cfHelpers.ifElse({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
-            anyOf: [{}, {
+            anyOf: [{
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                }, {
+                    $ref: "#/$defs/UIRenderable"
+                }, {
                     type: "object",
                     properties: {}
-                }]
+                }],
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "null"
         } as const satisfies __cfHelpers.JSONSchema, {
             anyOf: [{
                     type: "null"
-                }, {}, {
+                }, {
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                }, {
+                    $ref: "#/$defs/UIRenderable"
+                }, {
                     type: "object",
                     properties: {}
-                }]
+                }],
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ userCount: userCount }), <div>has users</div>, null)}
       </div>),
     };

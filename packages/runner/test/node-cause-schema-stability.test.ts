@@ -63,7 +63,7 @@ describe("node-cause-schema-stability", () => {
   async function commitTx() {
     if (tx.status().status !== "ready") return;
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
   }
 
   afterEach(async () => {

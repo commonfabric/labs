@@ -32,7 +32,7 @@ describe("in-process-attributes", () => {
         props: { "aria-label": "green vote", style: "color: green" },
         children: ["V"],
       });
-      await tx.commit();
+      await tx.commit().settled;
       render = renderInProcess(container, vdom, {
         document: mock.document,
         setProp: mock.renderOptions.setProp,
@@ -52,7 +52,7 @@ describe("in-process-attributes", () => {
           "aria-label": `${color} vote`,
           style: `color: ${color}`,
         });
-        await update.commit();
+        await update.commit().settled;
         await runtime.idle();
         render.flush();
         expect(container.firstChild).toBe(element);
@@ -99,7 +99,7 @@ describe("in-process-attributes", () => {
         props: { "aria-label": "Edit name", "aria-expanded": false },
         children: ["Edit"],
       });
-      await tx.commit();
+      await tx.commit().settled;
       render = renderInProcess(container, vdom, { document: mock.document });
       await runtime.idle();
       render.flush();
@@ -117,7 +117,7 @@ describe("in-process-attributes", () => {
       for (const props of updates) {
         const update = runtime.edit();
         vdom.withTx(update).key("props").set(props);
-        await update.commit();
+        await update.commit().settled;
         await runtime.idle();
         render.flush();
         expect(container.firstChild).toBe(element);

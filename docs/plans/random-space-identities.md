@@ -58,8 +58,9 @@ Creating a space and opening a space are separate operations.
   commit as the writes that refer to it; a concurrent writer of the same record
   makes that commit conflict. A record is never overwritten, and one naming a
   DID with no history is reported rather than replaced. The in-process map of
-  resolved names only grows. Profile creation grants the wildcard `"*"` READ on
-  the space it creates.
+  resolved names only grows. Profile creation grants the wildcard `"*"` WRITE
+  on the space it creates, because a runtime showing a profile writes into the
+  profile's space.
 - **Narrowed space-identity authority.** The memory server grants a principal
   equal to the space DID OWNER only while the space has no ACL document and is
   at server sequence 0 (`#resolveCapability`), and grants it nothing beyond the

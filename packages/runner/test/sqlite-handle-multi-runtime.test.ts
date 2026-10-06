@@ -99,7 +99,7 @@ async function seedDbFile(
     "sqlite",
   ) as unknown as { exec(sql: string, params?: readonly unknown[]): void };
   db.exec("INSERT INTO notes (body) VALUES (?)", ["seed"]);
-  const res = await tx.commit();
+  const res = await tx.commit().settled;
   expect(res.error).toBeUndefined();
 }
 
@@ -134,7 +134,7 @@ function runPattern(runtime: Runtime) {
   // The handle and the query are computations: a reader has to demand
   // them, and the runtime's disposal ends the subscription.
   resultCell.sink(() => {});
-  const commit = tx.commit();
+  const commit = tx.commit().settled;
   return { resultCell, commit };
 }
 
@@ -252,14 +252,14 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     const resultCell = runtimeA.getCell(space, cause, undefined, tx);
     runtimeA.run(tx, pattern(cfA), { tables }, resultCell);
     resultCell.sink(() => {});
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtimeA.settled();
     const redeclare = runtimeA.edit();
     redeclare.writeValueOrThrow(
       tables.getAsNormalizedFullLink(),
       declared(false) as unknown as FabricValue,
     );
-    expect((await redeclare.commit()).error).toBeUndefined();
+    expect((await redeclare.commit().settled).error).toBeUndefined();
     await runtimeA.storageManager.synced();
 
     // The init that merges a declaration into the stored handle runs once per

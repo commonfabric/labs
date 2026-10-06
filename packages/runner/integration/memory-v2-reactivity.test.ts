@@ -62,7 +62,7 @@ Deno.test("memory v2 runner discovers newly linked documents", async () => {
       tx,
     );
     addressCell.set({ city: "San Francisco" });
-    await tx.commit();
+    await tx.commit().settled;
 
     tx = runtime1.edit();
     const personCell = runtime1.getCell(
@@ -72,7 +72,7 @@ Deno.test("memory v2 runner discovers newly linked documents", async () => {
       tx,
     );
     personCell.set({ name: "Alice" });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime1.storageManager.synced();
     const addressLink = structuredClone(addressCell.getAsLink());
     await runtime1.dispose();
@@ -106,7 +106,7 @@ Deno.test("memory v2 runner discovers newly linked documents", async () => {
       name: "Alice",
       address: addressLink,
     });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime3.storageManager.synced();
 
     await gotAddress.promise;
@@ -157,7 +157,7 @@ Deno.test("memory v2 runner propagates linked document changes", async () => {
       tx,
     );
     addressCell.set({ city: "New York" });
-    await tx.commit();
+    await tx.commit().settled;
     await addressCell.sync();
     await runtime1.storageManager.synced();
     const addressLink = structuredClone(addressCell.getAsLink());
@@ -173,7 +173,7 @@ Deno.test("memory v2 runner propagates linked document changes", async () => {
       name: "Bob",
       address: addressLink,
     });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime1.storageManager.synced();
     await runtime1.dispose();
 
@@ -206,7 +206,7 @@ Deno.test("memory v2 runner propagates linked document changes", async () => {
     await addressCell3.sync();
     tx = runtime3.edit();
     addressCell3.withTx(tx).set({ city: "Los Angeles" });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime3.storageManager.synced();
 
     await gotNewCity.promise;
@@ -267,7 +267,7 @@ Deno.test("memory v2 runner keeps deep linked chains live", async () => {
       tx,
     );
     cityCell.set({ name: "Seattle", population: 750000 });
-    await tx.commit();
+    await tx.commit().settled;
     await cityCell.sync();
     await runtime1.storageManager.synced();
     const cityLink = structuredClone(cityCell.getAsLink());
@@ -283,7 +283,7 @@ Deno.test("memory v2 runner keeps deep linked chains live", async () => {
       street: "123 Main St",
       city: cityLink,
     });
-    await tx.commit();
+    await tx.commit().settled;
     await addressCell.sync();
     await runtime1.storageManager.synced();
     const addressLink = structuredClone(addressCell.getAsLink());
@@ -299,7 +299,7 @@ Deno.test("memory v2 runner keeps deep linked chains live", async () => {
       name: "Charlie",
       address: addressLink,
     });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime1.storageManager.synced();
     await runtime1.dispose();
 
@@ -335,7 +335,7 @@ Deno.test("memory v2 runner keeps deep linked chains live", async () => {
     await cityCell3.sync();
     tx = runtime3.edit();
     cityCell3.withTx(tx).set({ name: "Seattle", population: 800000 });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime3.storageManager.synced();
 
     await gotPopulation.promise;

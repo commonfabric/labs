@@ -530,6 +530,12 @@ export class CFFab extends BaseElement {
             if (this._resolvedPreviewMessage && !this.expanded) {
               this._showPreviewNotification();
             }
+          }, {
+            // A message the worker will not show is not previewed, and the
+            // last one is not left in its place.
+            onRefused: () => {
+              this._resolvedPreviewMessage = undefined;
+            },
           });
       } else if (
         this.previewMessage &&

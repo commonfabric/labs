@@ -202,7 +202,7 @@ function resolvedProfile(
 /**
  * Duplicates `panel` under the profile this session acts as: the one it
  * claimed in `viewerState`, or else the viewer's `#profile`. With neither, the
- * copy is attributed to the Loom's owner.
+ * copy records the principal the duplication acted for.
  */
 const duplicateAsViewer = handler<
   void,

@@ -23,6 +23,7 @@ import {
 import {
   type HandleValueResolutionContext,
   resolveHandleValue,
+  resolveReturnReferent,
 } from "../src/tools/handle-values.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 
@@ -152,7 +153,7 @@ describe("handle-values", () => {
         ref,
         "browser valueHandle",
       );
-      expect(resolution).toEqual({ value: "Ada Lovelace", source: "space" });
+      expect(resolution).toEqual({ value: "Ada Lovelace" });
     });
 
     it("returns the string behind an unswapped handle token", async () => {
@@ -182,17 +183,15 @@ describe("handle-values", () => {
         },
       );
 
-      const resolution = await resolveHandleValue(
+      const resolution = resolveReturnReferent(
         {},
         minted.token,
         "browser urlHandle",
-        { returnReferents: true },
       );
-      const held = await resolveHandleValue(
+      const held = resolveReturnReferent(
         { handleTable: minted.table },
         minted.token,
         "browser urlHandle",
-        { returnReferents: true },
       );
 
       expect(resolution.error).toBe(
@@ -200,7 +199,7 @@ describe("handle-values", () => {
       );
       expect(held).toEqual({
         value: "https://shop.example/item/7",
-        source: "return",
+        label: {},
       });
     });
 
@@ -216,19 +215,18 @@ describe("handle-values", () => {
         },
       );
       const resolve = (ceiling: readonly string[]) =>
-        resolveHandleValue(
+        resolveReturnReferent(
           { handleTable: minted.table, cfcReadMaxConfidentiality: ceiling },
           minted.token,
           "browser valueHandle",
-          { returnReferents: true },
         );
 
-      expect((await resolve(["did:key:zFacet"])).error).toBe(
+      expect(resolve(["did:key:zFacet"]).error).toBe(
         "browser valueHandle names a value labeled above this run's read ceiling",
       );
-      expect(await resolve(["did:key:zOwner"])).toEqual({
+      expect(resolve(["did:key:zOwner"])).toEqual({
         value: "the owner's address",
-        source: "return",
+        label: { confidentiality: ["did:key:zOwner"] },
       });
     });
 
@@ -244,11 +242,10 @@ describe("handle-values", () => {
         },
       );
 
-      const resolution = await resolveHandleValue(
+      const resolution = resolveReturnReferent(
         { handleTable: minted.table },
         minted.token,
         "browser valueHandle",
-        { returnReferents: true },
       );
 
       expect(resolution.error).toBe(

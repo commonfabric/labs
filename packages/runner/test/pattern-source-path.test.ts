@@ -102,7 +102,7 @@ describe("pattern source path", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });
@@ -145,7 +145,7 @@ describe("pattern source path", () => {
         tx,
       );
       const result = runtime.run(tx, compiled, { value: 4 }, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       // The run really composed, so the instantiations below are real.
@@ -212,7 +212,7 @@ describe("pattern source path", () => {
         tx,
       );
       const result = runtime.run(tx, compiled, { value: 4 }, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await result.pull();
       expect(result.getAsQueryResult()).toEqual({ result: 5 });

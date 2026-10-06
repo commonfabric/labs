@@ -1222,7 +1222,7 @@ describe("CFCodeEditor collaboration", () => {
     (element as any)._updateMentionedFromContent = () => {};
     let persisted: string | undefined;
     (element as any).setValue = (value: string) => persisted = value;
-    (element as any)._cellController = { flush: () => {} };
+    (element as any)._cellController = { flush: () => {}, getCell: () => null };
     const piece = {
       key: (key: string) => ({
         get: () => key === "title" ? "New" : "📝 New",

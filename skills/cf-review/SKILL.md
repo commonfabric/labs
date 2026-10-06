@@ -135,6 +135,23 @@ For `cf-harness` runtime-semantics changes, include the system map, which reads
 as authoritative but is never a source of truth, in that coherence sweep and
 follow its update procedure in `packages/cf-harness/docs/system-map/README.md`.
 
+For a change under `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts`,
+the CFC tests under `packages/runner/test/`, the render boundaries in
+`packages/html/src/worker/reconciler.ts` and `display-fit.ts`, the harness's CFC
+enforcement in `packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+`sandbox/runsc-cfc-result.ts`), or a `docs/specs/cfc-*.md` document, classify it
+yourself by `docs/development/cfc-spec-correspondence.md` before reading the
+author's classification: host arrangement, conforming implementation, or
+semantic gap. A semantic gap with no linked specs pull request, a kernel
+function given an input the pseudocode lacks, or a rule stated with MUST force
+in a labs document is Blocking. Count the `SPEC-PENDING` markers the diff adds:
+each names a specs pull request, the tree holds at most three, and marked code
+runs at the strict default only when it is fail-closed. Reviewing a specs ruling
+pull request instead, check that its body says whether the entry was already
+answered at specs `main`, states the runtime's conformance under the current and
+the applied text, carries its proof, and, where it defers one, says why and
+names the `FUTURE-SPEC-WORK.md` entry.
+
 `docs/history/` is exempt from the coherence sweep: those are frozen
 point-in-time records and are supposed to describe old behavior. The reverse
 check applies instead — a diff that edits the content of a `docs/history/`
@@ -333,5 +350,6 @@ file.
 - Comment style, `//` and JSDoc alike, file headers included:
   `docs/development/code-comment-style.md`
 - Transformer semantics: `docs/specs/ts-transformer/README.md`
+- CFC and its specification: `docs/development/cfc-spec-correspondence.md`
 - Reactivity model: `docs/common/concepts/reactivity.md`
 - Debugging & gotchas: `docs/development/debugging/README.md`

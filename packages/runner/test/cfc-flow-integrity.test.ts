@@ -70,7 +70,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -141,7 +141,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { sum: rawA.n + rawB.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       // p1 on every input: survives the meet. p2 only on B: dropped.
@@ -184,7 +184,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const a = runtime.getCell(space, "flow-wl-a", undefined, tx);
@@ -194,7 +194,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const out = runtime.getCell(space, "flow-wl-out", undefined, tx);
       out.set({ sum: rawA.n + rawB.n });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(
         storageManager,
@@ -231,7 +231,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
@@ -282,7 +282,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       for (const id of [out1Id, out2Id]) {
         const integrity = derivedIntegrity(storageManager, id);
@@ -324,7 +324,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { copied: raw.n },
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The unattributed write must not borrow the later trusted identity.
       for (const id of [out1Id, out2Id]) {
@@ -363,7 +363,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         builtinId: "the-bystander",
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const integrity = derivedIntegrity(storageManager, outId);
       expect(integrity).toContainEqual({
@@ -406,7 +406,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const cell = runtime.getCell(space, "flow-forge", forged.schema, tx);
       cell.set({ field: "hello" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const declared = entriesOf(
         storageManager,

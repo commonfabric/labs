@@ -86,7 +86,24 @@ export default pattern((__cf_pattern_input) => {
             asCell: ["cell"]
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "array",
-            items: {}
+            items: {
+                anyOf: [{
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }, {
+                        $ref: "#/$defs/UIRenderable"
+                    }]
+            },
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, {
             asCell: ["cell"]
         } as const satisfies __cfHelpers.JSONSchema, customContent, items.mapWithPattern(__cfPattern_1, {}))}

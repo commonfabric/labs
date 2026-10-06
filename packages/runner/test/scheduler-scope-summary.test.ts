@@ -111,7 +111,7 @@ describe("scheduler scope summary certificate", () => {
       tx,
     );
     runtime.run(tx, testPattern, { x: 21 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const certified = captured.filter(
@@ -162,7 +162,7 @@ describe("scheduler scope summary certificate", () => {
       tx,
     );
     runtime.run(tx, testPattern, { x: 21 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     expect(captured.length).toBeGreaterThan(0);

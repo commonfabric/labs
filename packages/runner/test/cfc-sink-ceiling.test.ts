@@ -84,7 +84,7 @@ const seedConfidentialCell = async (
     id: `cid:${schema.taggedHashString}`,
     path: [],
   }, { value: schema.schema });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 // Read the confidential cell through its schema and enqueue a fetchJson sink
@@ -114,7 +114,7 @@ const readConfidentialThenSink = (
     () => {},
   );
   tx.prepareCfc();
-  return { commit: () => tx.commit() };
+  return { commit: () => tx.commit().settled };
 };
 
 const withRuntime = async (
@@ -186,7 +186,7 @@ describe("CFC sink-request confidentiality ceiling", () => {
           () => {},
         );
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isCfcEnforcementRejection(result.error)).toBe(true);
         expect(String((result.error as Error).message)).toContain(
           "exceeds ceiling for fetchJson",
@@ -217,7 +217,7 @@ describe("CFC sink-request confidentiality ceiling", () => {
           () => {},
         );
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.ok).toBeDefined();
         expect(
           tx.getCfcState().diagnostics.some((d) =>
@@ -292,7 +292,7 @@ describe("CFC sink-request confidentiality ceiling", () => {
         tx.prepareCfc();
         // With no CFC-relevant activity the boundary check is skipped entirely;
         // either way the public request must commit.
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
       },
     );
   });

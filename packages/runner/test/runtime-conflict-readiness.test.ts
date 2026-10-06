@@ -98,4 +98,52 @@ describe("runtime-conflict-readiness", () => {
       "of:other",
     ]);
   });
+
+  it("returns the pulls that failed, each with its reason", async () => {
+    const thrown = new Error("provider unavailable");
+    const refused = new Error("the load was refused");
+    const rejected = new Error("the connection dropped");
+    using _sync = stub(storage.open(space), "sync", (of) => {
+      if (of === "of:thrown") throw thrown;
+      if (of === "of:refused") return Promise.resolve({ error: refused });
+      if (of === "of:rejected") return Promise.reject(rejected);
+      return Promise.resolve({ ok: {} });
+    });
+    const failures = await runtime.awaitCommitRetryReadiness({
+      conflicts: [
+        { space, of: "of:thrown" },
+        { space, of: "of:refused", scope: "user" },
+        { space, of: "of:rejected" },
+        { space, of: "of:loaded" },
+      ],
+    });
+    expect(failures).toEqual(expect.arrayContaining([
+      { space, id: "of:thrown", scope: undefined, error: thrown },
+      { space, id: "of:refused", scope: "user", error: refused },
+      { space, id: "of:rejected", scope: undefined, error: rejected },
+    ]));
+    expect(failures).toHaveLength(3);
+  });
+
+  it("pulls a policy manifest with the documents its rules live in", async () => {
+    using sync = stub(
+      storage.open(space),
+      "sync",
+      () => Promise.resolve({ ok: {} }),
+    );
+    const manifest = "of:cfc-policy-manifest:digest";
+    await runtime.awaitCommitRetryReadiness({
+      conflicts: [{ space, of: manifest }],
+    });
+    expect(sync.calls.map(({ args }) => args)).toEqual([
+      [
+        manifest,
+        {
+          path: [],
+          schema: { type: "object", additionalProperties: true },
+        },
+        undefined,
+      ],
+    ]);
+  });
 });

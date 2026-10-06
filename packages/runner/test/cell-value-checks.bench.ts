@@ -148,7 +148,7 @@ for (const shape of SHAPES) {
     const tx = runtime.edit();
 
     runtime.getCell<unknown[]>(space, cause, undefined, tx).set([held]);
-    await tx.commit();
+    await tx.commit().settled;
   }
 
   Deno.bench(shape.name, { group: "addUnique()" }, (b) => {

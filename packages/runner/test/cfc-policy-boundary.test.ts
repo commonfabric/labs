@@ -119,7 +119,7 @@ const seedSpaceLabeledCell = async (
     id: `cid:${SECRET_SCHEMA.taggedHashString}`,
     path: [],
   }, { value: SECRET_SCHEMA.schema });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 // Read the labeled cell and enqueue a fetchJson sink request; prepare and

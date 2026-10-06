@@ -70,7 +70,7 @@ describe("collection index resume", () => {
         ),
       );
       first.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await firstStorage.synced();
       await first.dispose({ closeStorage: false });
       await firstStorage.close();
@@ -154,7 +154,7 @@ describe("collection index resume", () => {
         ),
       );
       first.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       cancelFirst = result.sink(() => {});
       await first.idle();
       expect(await result.key("values").pull()).toEqual([]);
@@ -183,7 +183,7 @@ describe("collection index resume", () => {
       ).set([7]);
       restoredIndex.key("keys").set(["a"]);
       restoredIndex.key("keyEntries").set([{ kind: "value", value: "a" }]);
-      await edit.commit();
+      await edit.commit().settled;
       await second.idle();
       expect(await restored.key("values").pull()).toEqual([7]);
     } finally {

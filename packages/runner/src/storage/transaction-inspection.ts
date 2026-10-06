@@ -1,3 +1,5 @@
+import { toDocumentPath } from "@commonfabric/memory/v2";
+
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -167,6 +169,7 @@ export function getTransactionWriteDetails(
         address: {
           ...attestation.address,
           space,
+          path: toDocumentPath(attestation.address.path),
         },
         value: attestation.value as TransactionWriteDetail["value"],
         previousValue: previousValues.get(key),

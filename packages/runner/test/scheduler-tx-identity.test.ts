@@ -40,7 +40,7 @@ describe("tx-carried source action identity", () => {
       tx,
     );
     value.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -69,13 +69,13 @@ describe("tx-carried source action identity", () => {
     const cancel = value.withTx(tx).sink(() => {});
     try {
       value.withTx(tx).set(1);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
       expect(runs).toBe(1);
 
       value.withTx(tx).set(2);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.scheduler.idle();
       expect(runs).toBe(2);
@@ -99,7 +99,7 @@ describe("tx-carried source action identity", () => {
     );
     source.set(1);
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const outputLink = output.getAsNormalizedFullLink();
@@ -123,7 +123,7 @@ describe("tx-carried source action identity", () => {
     );
 
     source.withTx(tx).set(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Guards P5's object-identity rule: these two actions share the
@@ -145,7 +145,7 @@ describe("tx-carried source action identity", () => {
       tx,
     );
     value.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const changeGroup = {} as ChangeGroup;
@@ -159,13 +159,13 @@ describe("tx-carried source action identity", () => {
 
       const sameGroupTx = runtime.edit({ changeGroup });
       value.withTx(sameGroupTx).set(1);
-      await sameGroupTx.commit();
+      await sameGroupTx.commit().settled;
       await runtime.scheduler.idle();
       expect(values).toEqual([0]);
 
       const noGroupTx = runtime.edit();
       value.withTx(noGroupTx).set(2);
-      await noGroupTx.commit();
+      await noGroupTx.commit().settled;
       await runtime.scheduler.idle();
       expect(values).toEqual([0, 2]);
     } finally {

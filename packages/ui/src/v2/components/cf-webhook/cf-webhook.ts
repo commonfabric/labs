@@ -1,4 +1,5 @@
-import { CellHandle } from "@commonfabric/runtime-client";
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
+import { CellHandle, CellReadRefusedError } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -44,6 +45,7 @@ export class CFWebhook extends BaseElement {
     config: { type: Object, attribute: false },
     _isLoading: { type: Boolean, state: true },
     _error: { type: String, state: true },
+    _readFailed: { type: Boolean, state: true },
   };
 
   declare name: string;
@@ -52,6 +54,12 @@ export class CFWebhook extends BaseElement {
 
   declare _isLoading: boolean;
   declare _error: string;
+  /**
+   * Whether the last read of a configuration the worker had not answered
+   * failed, for a reason other than a refusal: what it holds is still not
+   * known, so nothing is offered in its place, and it can be read again.
+   */
+  declare _readFailed: boolean;
 
   private _configUnsub?: () => void;
 
@@ -60,6 +68,7 @@ export class CFWebhook extends BaseElement {
     this.name = "";
     this._isLoading = false;
     this._error = "";
+    this._readFailed = false;
   }
 
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
@@ -72,12 +81,30 @@ export class CFWebhook extends BaseElement {
   private _subscribeToConfig() {
     this._configUnsub?.();
     this._configUnsub = undefined;
-    if (this.config?.subscribe) {
-      this._configUnsub = this.config.subscribe(() => {
-        this.requestUpdate();
-      });
+    const config = this.config;
+    if (config?.subscribe) {
+      const update = () => this.requestUpdate();
+      this._configUnsub = config.subscribe(update, { onRefused: update });
+      this._readConfig();
     }
   }
+
+  /**
+   * Reads a configuration the worker has not answered for. A subscription
+   * delivers nothing for one that holds nothing, so it is read, and the
+   * answer reaches the subscription, a refusal as much as a value. A read
+   * that fails otherwise is shown as such, with a way to read again.
+   */
+  private _readConfig = () => {
+    const config = this.config;
+    this._readFailed = false;
+    if (!config || !("unread" in config.lastRead())) return;
+    config.pull({ awaitDurability: false }).catch((error) => {
+      if (error instanceof CellReadRefusedError) return;
+      console.error("[cf-webhook] Reading the configuration failed:", error);
+      if (this.config === config) this._readFailed = true;
+    });
+  };
 
   override disconnectedCallback() {
     super.disconnectedCallback();
@@ -187,6 +214,37 @@ export class CFWebhook extends BaseElement {
   }
 
   override render() {
+    // A configuration the worker will not show is not one that is absent:
+    // offering to create a webhook in its place would replace one that may
+    // exist.
+    if (this.config?.refusal !== undefined) {
+      return html`
+        <div class="webhook-setup">${CFC_POLICY_PLACEHOLDER_TEXT}</div>
+      `;
+    }
+    // Nor is one the worker has not answered for yet, or that could not be
+    // read.
+    if (this.config !== undefined && "unread" in this.config.lastRead()) {
+      if (this._readFailed) {
+        return html`
+          <div class="webhook-setup">
+            <div class="error" role="alert">
+              The webhook configuration could not be read.
+            </div>
+            <cf-button
+              color="neutral"
+              variant="outline"
+              @click="${this._readConfig}"
+            >
+              Retry
+            </cf-button>
+          </div>
+        `;
+      }
+      return html`
+        <div class="webhook-setup">Loading…</div>
+      `;
+    }
     const configData = this._getConfig();
     const hasWebhook = configData?.url && configData?.secret;
 

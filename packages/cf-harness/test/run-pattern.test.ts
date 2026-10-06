@@ -322,7 +322,7 @@ async function seedLabelledSecret(
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return createLLMFriendlyLink(sourceCell.getAsNormalizedFullLink(), space);
 }
 
@@ -431,7 +431,7 @@ async function seedAccountHolder(
         : { account: linkTo(accountId) },
     },
   );
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return {
     account: createLLMFriendlyLink(
       holderCell.key("account").getAsNormalizedFullLink(),
@@ -576,7 +576,7 @@ async function seedLabelledComputedSecret(
       },
     },
   );
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return createLLMFriendlyLink(sourceCell.getAsNormalizedFullLink(), space);
 }
 
@@ -1433,7 +1433,7 @@ describe("run-pattern", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
         const sourceRef = createLLMFriendlyLink(
           sourceCell.getAsNormalizedFullLink(),
           space,
@@ -2192,7 +2192,7 @@ describe("run-pattern", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const engine = createStrictEngine(pieces);
         const result = await engine.invokeBuiltinTool("run_pattern", {
@@ -2285,7 +2285,7 @@ describe("run-pattern", () => {
               },
             },
           });
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
           expenseIds.push(id);
           elementLinks.push({
             "/": { "link@1": { id, path: [], scope: "space", space } },
@@ -2307,7 +2307,7 @@ describe("run-pattern", () => {
           },
           { value: elementLinks },
         );
-        expect((await listSeed.commit()).ok).toBeDefined();
+        expect((await listSeed.commit().settled).ok).toBeDefined();
 
         const engine = createStrictEngine(pieces);
         const result = await engine.invokeBuiltinTool("run_pattern", {
@@ -2428,7 +2428,7 @@ describe("run-pattern", () => {
             labelMap: { version: 1, entries: [{ path: ["secret"], label }] },
           },
         });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         const ref = createLLMFriendlyLink(link, space);
         const engine = new CfHarnessEngine({
           sandboxRuntime: new FakeSandboxRuntime(),

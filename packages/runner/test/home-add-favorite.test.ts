@@ -55,7 +55,7 @@ describe("home favorites handlers", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -93,7 +93,7 @@ describe("home favorites handlers", () => {
 
   it("stores the discovery tags it is given", async () => {
     const { piece, id } = makePiece("favorited-piece");
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     home.key("addFavorite").send({
@@ -112,7 +112,7 @@ describe("home favorites handlers", () => {
 
   it("dedups a re-favorite and removes by piece identity", async () => {
     const { piece, id } = makePiece("favorited-piece");
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     home.key("addFavorite").send({ piece, tags: ["one"], id });
@@ -132,7 +132,7 @@ describe("home favorites handlers", () => {
 
   it("removes a legacy favorite (no keyed entity) via the piece-cell fallback", async () => {
     const { piece, id } = makePiece("legacy-piece");
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Simulate a favorite added before keyed addressing: push a wrapper with no
@@ -147,7 +147,7 @@ describe("home favorites handlers", () => {
     // an enforcing rung refuses a relevant transaction that arrives
     // unprepared.
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await runtime.idle();
     const seeded =

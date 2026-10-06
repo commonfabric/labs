@@ -77,7 +77,7 @@ async function acrossEdit(
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
@@ -91,7 +91,7 @@ async function acrossEdit(
       resultCell,
     );
     runtime.prepareTxForCommit(editTx);
-    await editTx.commit();
+    await editTx.commit().settled;
     await runtime.idle();
     await runtime.storageManager.synced();
     await edited.pull();

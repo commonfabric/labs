@@ -100,7 +100,7 @@ async function seed(
   const tx = runtime.edit();
   runtime.getCell<typeof items>(space, "schema-read-depth-doc", undefined, tx)
     .set(items);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 for (const [label, schema] of VARIANTS) {

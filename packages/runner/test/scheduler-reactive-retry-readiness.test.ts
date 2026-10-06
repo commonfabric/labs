@@ -18,6 +18,7 @@ import {
   disposeSchedulerTestRuntime,
   space,
 } from "./scheduler-test-utils.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 describe("scheduler-reactive-retry-readiness", () => {
   it("does not wake a replacement registration's consumers when an old commit succeeds", async () => {
@@ -32,11 +33,12 @@ describe("scheduler-reactive-retry-readiness", () => {
       if (!held) {
         held = true;
         const commit = tx.commit.bind(tx);
-        tx.commit = async (commitOptions) => {
-          committing.resolve();
-          await verdict.promise;
-          return await commit(commitOptions);
-        };
+        tx.commit = (commitOptions) =>
+          createTransactionCommitReceipt((async () => {
+            committing.resolve();
+            await verdict.promise;
+            return await commit(commitOptions).settled;
+          })());
       }
       return tx;
     });
@@ -75,11 +77,12 @@ describe("scheduler-reactive-retry-readiness", () => {
       using _edits = stub(runtime, "edit", (options) => {
         const tx = edit(options);
         const commit = tx.commit.bind(tx);
-        tx.commit = async (commitOptions) => {
-          committing.resolve(tx);
-          await verdict.promise;
-          return await commit(commitOptions);
-        };
+        tx.commit = (commitOptions) =>
+          createTransactionCommitReceipt((async () => {
+            committing.resolve(tx);
+            await verdict.promise;
+            return await commit(commitOptions).settled;
+          })());
         return tx;
       });
       cancel = runtime.scheduler.subscribe((tx) => {
@@ -172,7 +175,9 @@ describe("scheduler-reactive-retry-readiness", () => {
               },
             };
             refusalReady.resolve();
-            return verdict.promise.then(() => ({ error }));
+            return createTransactionCommitReceipt(
+              verdict.promise.then(() => ({ error })),
+            );
           };
           return tx;
         });

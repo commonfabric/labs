@@ -1,0 +1,28 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-5",
+  "settlement": {
+    "status": "executed",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "outcome": {
+      "executor": "loom",
+      "transportStatus": 200,
+      "ok": true,
+      "id": "page.write",
+      "echo": "page.write --page notes",
+      "outputs": {
+        "loom_id": "loom-0123456789abcdef",
+        "version": 15
+      },
+      "bodyBytes": 400000,
+      "bodyOmitted": true
+    },
+    "receipt": "page.write --page notes"
+  }
+}

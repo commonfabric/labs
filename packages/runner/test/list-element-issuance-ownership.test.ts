@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import { getMetaLink } from "../src/link-utils.ts";
@@ -104,7 +105,7 @@ describe("list element issuance ownership", () => {
     const result = runtime.run(setupTx, mapPattern, {
       values: [cellA, cellB],
     }, resultCell);
-    expect((await setupTx.commit()).error).toBeUndefined();
+    expect((await setupTx.commit().settled).error).toBeUndefined();
 
     const stopReading = result.key("tagged").sink(() => {});
     const originalRun = runtime.runner.run;
@@ -136,11 +137,10 @@ describe("list element issuance ownership", () => {
         rejection = res.error;
       });
       const originalCommit = reconcileTx.commit.bind(reconcileTx);
-      reconcileTx.commit =
-        (() =>
-          heldReconcile.promise.then(() =>
-            originalCommit()
-          )) as typeof reconcileTx.commit;
+      reconcileTx.commit = (() =>
+        createTransactionCommitReceipt(
+          heldReconcile.promise.then(() => originalCommit().settled),
+        )) as typeof reconcileTx.commit;
       captured.resolve();
       return ran;
     }) as typeof runtime.runner.run;
@@ -151,7 +151,7 @@ describe("list element issuance ownership", () => {
       armed = true;
       const addTx = runtime.edit();
       result.withTx(addTx).key("values").set([cellC, cellA, cellB]);
-      expect((await addTx.commit()).error).toBeUndefined();
+      expect((await addTx.commit().settled).error).toBeUndefined();
       await captured.promise;
       expect(sourceAction).toBeDefined();
 
@@ -162,7 +162,7 @@ describe("list element issuance ownership", () => {
         // re-writing C's links, and takes over C's setup record.
         const moveTx = runtime.edit();
         result.withTx(moveTx).key("values").set([cellA, cellC, cellB]);
-        expect((await moveTx.commit()).error).toBeUndefined();
+        expect((await moveTx.commit().settled).error).toBeUndefined();
         // deno-lint-ignore no-explicit-any
         await runtime.scheduler.run(sourceAction as any);
       }

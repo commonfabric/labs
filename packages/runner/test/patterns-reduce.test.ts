@@ -43,7 +43,7 @@ describe("Pattern Runner - Reduce", () => {
       return { ok: undefined, error: undefined };
     }
     runtime.prepareTxForCommit(tx);
-    return await tx.commit();
+    return await tx.commit().settled;
   }
 
   afterEach(async () => {

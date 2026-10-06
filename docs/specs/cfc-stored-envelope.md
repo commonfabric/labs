@@ -79,6 +79,13 @@ one is a place a looser reader would read a labeled document as unlabeled:
   document is held to the same shape for a second reason: its content hash
   is its identity, so the shape check is what stops a record that merely
   hashes correctly from registering as a label.
+- **A template-origin entry that is not keyed and classed as a template is
+  not an entry.** The `label-metadata` origin marks an entry as keyed
+  against the stored document rather than against `value`, and a reader
+  decodes every entry of that origin out of the payload entries (spec
+  §4.6.4). An entry of that origin keyed outside `["cfc", "labels"]`, or one
+  whose observation class a payload read consumes, would be a payload label
+  that decoding drops, so it makes the envelope unreadable.
 
 The levels enclosing the label go the other way. An envelope, its label map,
 and an entry may each carry a member this build does not read, and the
@@ -90,6 +97,12 @@ the ones the profile defines, and gives an entry view-specific refinements
 beside its label (spec §4.6.4). Refusing those would read a labeled document
 as unreadable with its labels sitting right there, which costs availability
 and buys no confidentiality.
+
+A member this build does not read is also one the resolved envelope does not
+carry. The reader builds its answer from the members it validated, so a
+stored label map's own `documentEntries` member, which no stored format
+defines, never stands in for the templates the reader decodes out of
+`entries`.
 
 ## What each consumer owes the rule
 

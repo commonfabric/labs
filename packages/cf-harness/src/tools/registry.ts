@@ -10,6 +10,7 @@ import {
   loomComposeTool,
   loomInspectTool,
 } from "./loom-authoring.ts";
+import { LOOM_COMMAND_TOOLS } from "./loom-commands.ts";
 import { LOOM_RETRIEVAL_TOOLS } from "./loom-retrieval.ts";
 import { bashTool } from "./bash.ts";
 import { browserTool } from "./browser.ts";
@@ -17,6 +18,7 @@ import { delegateTaskTool } from "./delegate-task.ts";
 import { describeHandleTool } from "./describe-handle.ts";
 import { editFileTool } from "./edit-file.ts";
 import { finishTaskTool } from "./finish-task.ts";
+import { weaverActionTool } from "./weaver-action.ts";
 import { readPieceSourceTool, revisePieceTool } from "./piece-source.ts";
 import { researchTool } from "./research.ts";
 import { readFileTool } from "./read-file.ts";
@@ -51,6 +53,7 @@ export const BUILTIN_TOOLS = [
   resolvePieceTool,
   describeHandleTool,
   finishTaskTool,
+  weaverActionTool,
   searchPatternsTool,
   recordFeedbackTool,
   searchSkillsTool,
@@ -60,6 +63,7 @@ export const BUILTIN_TOOLS = [
   loomInspectTool,
   loomAuthoringContextTool,
   ...LOOM_RETRIEVAL_TOOLS,
+  ...LOOM_COMMAND_TOOLS,
   submitResultTool,
 ] as const;
 

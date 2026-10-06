@@ -76,6 +76,7 @@ import {
   type Edge,
   settleServing,
 } from "./support/serving-waits.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 /** The serving-loop harness's settle-gate seam (see
  * executor-serving-loop.test.ts): when set, the loop's settle hangs at
@@ -656,15 +657,17 @@ describe("Phase 3 events-down (serving side)", () => {
             }
             const error = new Error(`forced serving commit ${failure}`);
             if (failure === "result-error") {
-              return Promise.resolve({
+              return createTransactionCommitReceipt(Promise.resolve({
                 error: {
                   name: "StorageTransactionAborted" as const,
                   message: error.message,
                   reason: error,
                 },
-              });
+              }));
             }
-            if (failure === "rejection") return Promise.reject(error);
+            if (failure === "rejection") {
+              return createTransactionCommitReceipt(Promise.reject(error));
+            }
             throw error;
           };
           return tx;
@@ -750,7 +753,7 @@ describe("Phase 3 events-down (serving side)", () => {
     );
     const tx = clientRuntime.edit();
     kick.withTx(tx).set({ n: kicks });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await settleServing(engine, clientRuntime, space);
   };
 
@@ -791,12 +794,12 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const seed = runtime.edit();
       argument.withTx(seed).set({ value: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     return { compiled, argument, result };
   };
@@ -934,7 +937,7 @@ describe("Phase 3 events-down (serving side)", () => {
       );
       const tx = clientRuntime.edit();
       poke.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await awaitActive();
     // Let the boot serve settle so the walk below is the only work.
@@ -1035,7 +1038,7 @@ describe("Phase 3 events-down (serving side)", () => {
       );
       const tx = clientRuntime.edit();
       poke.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await awaitActive();
     const bootSeq = Engine.serverSeq(engine);
@@ -1210,7 +1213,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const poke = clientRuntime.edit();
       clientRuntime.getCell<number>(space, "restart-activate", undefined)
         .withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
     }
     await awaitAdmitted(server, () => {
       const doc = Engine.read(engine, {
@@ -1233,7 +1236,7 @@ describe("Phase 3 events-down (serving side)", () => {
     const poke = clientRuntime.edit();
     clientRuntime.getCell<number>(space, "restart-poke", undefined)
       .withTx(poke).set(1);
-    expect((await poke.commit()).error).toBeUndefined();
+    expect((await poke.commit().settled).error).toBeUndefined();
     await awaitActive();
     // Give the loop a settle: the value must never reach 2. The
     // negative is sharpened past the bare value read (round-2 thread
@@ -1304,7 +1307,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const poke = clientRuntime.edit();
       clientRuntime.getCell<number>(space, "event-key-activate", undefined)
         .withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
     }
     await awaitAdmitted(server, () => storedKey() !== undefined);
 
@@ -1379,7 +1382,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const poke = clientRuntime.edit();
       clientRuntime.getCell<number>(space, "coalesce-activate", undefined)
         .withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
     }
 
     // All K non-idempotent effects apply exactly once: value === K.
@@ -1492,7 +1495,7 @@ describe("Phase 3 events-down (serving side)", () => {
       await gateCell.sync();
       const tx = clientRuntime.edit();
       gateCell.key("gate").withTx(tx).set(7);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
 
     await awaitAdmitted(
@@ -1571,12 +1574,12 @@ describe("Phase 3 events-down (serving side)", () => {
       const seed = clientRuntime.edit();
       gateCell.withTx(seed).set({ pending: true });
       argument.withTx(seed).set({ log: [], gate: gateCell });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -1629,7 +1632,7 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const tx = clientRuntime.edit();
       gateCell.withTx(tx).set(7);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await awaitAdmitted(server, () => storedLog().length === 2);
     // THE PIN: durable consequence order equals arrival order.
@@ -1668,12 +1671,12 @@ describe("Phase 3 events-down (serving side)", () => {
       const seed = clientRuntime.edit();
       gateCell.withTx(seed).set(7);
       argument.withTx(seed).set({ log: [], gate: gateCell });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -1708,7 +1711,7 @@ describe("Phase 3 events-down (serving side)", () => {
       {
         const tx = clientRuntime.edit();
         gateCell.withTx(tx).set({ pending: true });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await clientRuntime.storageManager.synced();
 
@@ -1743,7 +1746,7 @@ describe("Phase 3 events-down (serving side)", () => {
       {
         const tx = clientRuntime.edit();
         gateCell.withTx(tx).set(7);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       servingManager!.syncGateWhen = undefined;
       servingManager!.syncGate = undefined;
@@ -1875,7 +1878,7 @@ describe("Phase 3 events-down (serving side)", () => {
       );
       cell.set({ candidates: [{ name: "Bob" }] });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
@@ -2081,7 +2084,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const wake = clientRuntime.edit();
       clientRuntime.getCell<number>(space, "gated-retry-wake", undefined)
         .withTx(wake).set(1);
-      expect((await wake.commit()).error).toBeUndefined();
+      expect((await wake.commit().settled).error).toBeUndefined();
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
       await awaitEach(
@@ -3200,12 +3203,12 @@ describe("Phase 3 events-down (serving side)", () => {
         value: 0,
         target: child.result.key("bump"),
       } as never);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, parentCompiled, parentArg, parentResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelChildDemand = child.result.sink(() => {});
     const cancelParentDemand = parentResult.sink(() => {});
@@ -3221,7 +3224,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const poke = clientRuntime.edit();
       clientRuntime.getCell<number>(space, "c8d-activate", undefined)
         .withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
     }
     await awaitActive();
 
@@ -3261,7 +3264,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const poke = clientRuntime.edit();
       clientRuntime.getCell<number>(space, "c8d-settle-poke", undefined)
         .withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const pokeId = clientRuntime.getCell<number>(
@@ -3412,7 +3415,7 @@ describe("Phase 3 events-down (serving side)", () => {
       await cell.sync();
       const tx = clientRuntime.edit();
       cell.withTx(tx).set({ n: 0, seen: [] });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return cell;
     };
     const s1 = await mkStream(`${prefix}-s1`);
@@ -3426,7 +3429,7 @@ describe("Phase 3 events-down (serving side)", () => {
       const poke = clientRuntime.edit();
       clientRuntime.getCell<number>(space, `${prefix}-activate`, undefined)
         .withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
     }
     await awaitActive();
     // Let the boot cycle settle into wait-for-input before the pin acts
@@ -3441,7 +3444,7 @@ describe("Phase 3 events-down (serving side)", () => {
       );
       const poke = clientRuntime.edit();
       pokeCell.withTx(poke).set(1);
-      expect((await poke.commit()).error).toBeUndefined();
+      expect((await poke.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
       const pokeSeq = Engine.selectDocHead(engine, {
         id: pokeCell.getAsNormalizedFullLink().id,
@@ -3930,7 +3933,7 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const tx = clientRuntime.edit();
       sideClient.withTx(tx).set({ n: 0 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
     }
     const sideServing = w.serving.getCell<{ n?: number }>(
@@ -4056,7 +4059,7 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const tx = clientRuntime.edit();
       sideClient.withTx(tx).set({ n: 0 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
     }
     const sideServing = w.serving.getCell<{ n?: number }>(
@@ -4213,12 +4216,12 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const seed = clientRuntime.edit();
       argument.withTx(seed).set({ log: [] });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -4308,12 +4311,12 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const seed = clientRuntime.edit();
       argument.withTx(seed).set({ log: [] });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -4417,7 +4420,7 @@ describe("Phase 3 events-down (serving side)", () => {
         await wake.sync();
         const tx = clientRuntime.edit();
         wake.withTx(tx).set({ value });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       };
       await wakeCheckpointRetry("rejection", 1);
       await awaitEach(
@@ -4542,12 +4545,12 @@ describe("Phase 3 events-down (serving side)", () => {
     {
       const seed = clientRuntime.edit();
       argument.withTx(seed).set({ log: [] });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -4677,12 +4680,12 @@ describe("Phase 3 events-down (serving side)", () => {
       const seed = clientRuntime.edit();
       gateCell.withTx(seed).set(0);
       argument.withTx(seed).set({ log: [], gate: gateCell });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -5003,7 +5006,7 @@ describe("Phase 3 events-down (serving side)", () => {
       await noticeWake.sync();
       const wakeTx = clientRuntime.edit();
       noticeWake.withTx(wakeTx).set({ value: 1 });
-      expect((await wakeTx.commit()).error).toBeUndefined();
+      expect((await wakeTx.commit().settled).error).toBeUndefined();
       await awaitAdmitted(
         server,
         () =>

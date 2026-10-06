@@ -79,7 +79,7 @@ export async function readRecordList(items: number): Promise<unknown> {
       })),
     );
 
-    await tx.commit();
+    await tx.commit().settled;
   }
 
   const tx = runtime.edit();
@@ -87,7 +87,7 @@ export async function readRecordList(items: number): Promise<unknown> {
 
   // The read is what the transaction was for, so it is settled here rather
   // than left open behind the value, which converts the same either way.
-  await tx.commit();
+  await tx.commit().settled;
 
   return value;
 }

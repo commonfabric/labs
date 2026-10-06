@@ -4,8 +4,10 @@ Status: the direct setup of section 3 is implemented behind the
 `sharedMemoryConnection` experimental flag, which is off by default
 ([EXPERIMENTAL_OPTIONS.md](../../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)).
 The wire behavior it shipped is specified in [04-protocol.md](./04-protocol.md);
-where the two differ, that chapter describes the system. The router (section
-5) and attestation (section 6) are proposed and not implemented.
+where the two differ, that chapter describes the system. The opt-in Mode A router contract is implemented in
+[routed-mode-a.md](./routed-mode-a.md) and the companion infra Rust service.
+Public deployment requires the security acceptance and main-artifact gates.
+Mode B and attestation (section 6) remain proposed.
 
 ## 1. Two ways to reach a host
 

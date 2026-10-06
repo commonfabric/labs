@@ -35,6 +35,10 @@ import {
   REFERENT_HANDLE_TOKEN_PREFIX,
   REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
+import {
+  type HarnessCommandResultProvenance,
+  readHarnessCommandResultProvenance,
+} from "./contracts/client-command.ts";
 import type { HarnessSkillAcquisition } from "./contracts/skill.ts";
 import { isCfcLabelShape } from "./cfc-label-shape.ts";
 
@@ -144,7 +148,10 @@ export const defineOwnEntry = (
   });
 };
 
-/** Constructs an empty handle table salted with `salt` (the run id). */
+/**
+ * Constructs an empty handle table salted with `salt`, the id of the run
+ * creating it.
+ */
 export const createHarnessHandleTable = (
   salt: string,
 ): HarnessHandleTable => ({
@@ -277,10 +284,12 @@ export const mintAddressHandle = async (
 
 /** Helper for minting, which names a referent by everything but its token. */
 const referentIdentityKey = (
-  referent: Pick<
-    HarnessHandleReferent,
-    "kind" | "source" | "value" | "label" | "labelSource"
-  >,
+  referent:
+    & Pick<
+      HarnessHandleReferent,
+      "kind" | "source" | "value" | "label" | "labelSource"
+    >
+    & { provenance?: HarnessCommandResultProvenance },
 ): string =>
   hashStringOf([
     "referent",
@@ -289,6 +298,20 @@ const referentIdentityKey = (
     referent.value,
     referent.label,
     referent.labelSource,
+    // Only a command result carries provenance, so every other referent keeps
+    // the identity it was minted under. Absent fields are dropped, so a
+    // provenance reads as the same identity before and after it is persisted.
+    // A present `loomActor` distinguishes executor actors; omitting it keeps
+    // the identity of results whose writer supplied only `actor`.
+    ...(referent.provenance !== undefined
+      ? [
+        Object.fromEntries(
+          Object.entries(referent.provenance).filter(([, field]) =>
+            field !== undefined
+          ),
+        ) as Record<string, string | number>,
+      ]
+      : []),
   ]);
 
 /**
@@ -306,6 +329,9 @@ export const referentDraft = (
         value: referent.value,
         label: referent.label,
         labelSource: referent.labelSource,
+        ...(referent.provenance !== undefined
+          ? { provenance: referent.provenance }
+          : {}),
       };
     case "research":
       return {
@@ -330,7 +356,8 @@ export const referentDraft = (
  * Mints a referent handle for `referent` — content a tool observed, or an
  * admitted research kit, as its `kind` says — returning the updated table and
  * the token. Minting is idempotent per referent: the same kind, source,
- * content, label, and label source share one token, so a row a run retrieves
+ * content, label, label source, and (for a command result) provenance share
+ * one token, so a row a run retrieves
  * twice is held once, and a document and a research kit with the same content
  * are two referents. The suffix is derived the way an address handle's is.
  */
@@ -340,6 +367,18 @@ export const mintReferentHandle = async (
   options: { hasher?: HandleTokenHasher } = {},
 ): Promise<{ table: HarnessHandleTable; token: string }> => {
   const hasher = options.hasher ?? sha256Hasher;
+  // The table check refuses a command result without provenance and
+  // provenance on anything else, so neither is minted.
+  if (
+    referent.kind === "document" &&
+    (referent.labelSource === "command"
+      ? readHarnessCommandResultProvenance(referent.provenance) === undefined
+      : referent.provenance !== undefined)
+  ) {
+    throw new Error(
+      "a command result is minted with well-formed provenance, and nothing else carries provenance",
+    );
+  }
   const referents = table.referents ?? [];
   const key = referentIdentityKey(referent);
   const existing = referents.find((held) => referentIdentityKey(held) === key);
@@ -366,16 +405,16 @@ export const mintReferentHandle = async (
 
 /**
  * Folds the entries and referents of `incoming` into `current`, answering a
- * table that holds everything either held. Both were minted from one run's
- * table, and a mint only ever fills a field an entry left undefined, so an
+ * table that holds everything either held. Both were minted from one table,
+ * and a mint only ever fills a field an entry left undefined, so an
  * address present in both is merged field by field: each optional field is
  * taken from whichever side defines it, and from `current` where both do. A
  * writer's table carries a copy of every entry it read, so neither side's
  * copy of an entry can simply stand; two writers that each extended the
  * table they read both keep their additions, whichever recorded second.
  *
- * @throws Error when the tables carry different salts, since their tokens
- * were then derived from different runs and cannot share a table; or when
+ * @throws Error when the tables carry different salts, since they then grew
+ * from different tables and their tokens cannot share one; or when
  * two writers minting from one base drew different tokens for one address,
  * or one token for two different addresses or referents, none of which
  * either writer could see of the other.
@@ -386,7 +425,7 @@ export const mergeHarnessHandleTables = (
 ): HarnessHandleTable => {
   if (current.salt !== incoming.salt) {
     throw new Error(
-      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+      `handle tables first salted by different runs cannot merge: ${current.salt} and ${incoming.salt}`,
     );
   }
   const entries = [...current.entries];
@@ -732,11 +771,12 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has a malformed label`,
       );
     }
-    // A label source belongs to a kind: a row or a query labels a document,
-    // only research labels research, and only a child labels a return. A
+    // A label source belongs to a kind: a row, a query, or a command labels a
+    // document, only research labels research, and only a child labels a
+    // return. A
     // record pairing them otherwise was not minted by this module.
     const labelSources = kind === "document"
-      ? ["row", "query"]
+      ? ["row", "query", "command"]
       : kind === "research"
       ? ["research"]
       : ["child"];
@@ -747,6 +787,22 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
           String(labelSource)
         }\``,
+      );
+    }
+    // A command result says which command produced it, and only a command
+    // result carries provenance.
+    const provenance = Object.hasOwn(referent, "provenance")
+      ? referent.provenance
+      : undefined;
+    if (labelSource === "command") {
+      if (readHarnessCommandResultProvenance(provenance) === undefined) {
+        throw new Error(
+          `invalid handle table: command referent \`${token}\` has malformed provenance`,
+        );
+      }
+    } else if (provenance !== undefined) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` carries provenance without the command label source`,
       );
     }
     if (tokens.has(token)) {

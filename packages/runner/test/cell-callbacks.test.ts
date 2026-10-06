@@ -26,6 +26,7 @@ import {
 } from "../src/storage/interface.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -45,7 +46,7 @@ describe("Cell commit callbacks", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -67,7 +68,7 @@ describe("Cell commit callbacks", () => {
     });
 
     expect(callbackCalled).toBe(false);
-    await tx.commit();
+    await tx.commit().settled;
     expect(callbackCalled).toBe(true);
     expect(callbackTx).toBe(tx);
     expect(cell.get()).toBe(42);
@@ -91,7 +92,7 @@ describe("Cell commit callbacks", () => {
     });
 
     expect(callbackCalled).toBe(false);
-    await tx.commit();
+    await tx.commit().settled;
     expect(callbackCalled).toBe(true);
     expect(callbackTx).toBe(tx);
     expect(cell.get()).toBe(20);
@@ -128,7 +129,7 @@ describe("Cell commit callbacks", () => {
     expect(callback1Called).toBe(false);
     expect(callback2Called).toBe(false);
 
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(callback1Called).toBe(true);
     expect(callback2Called).toBe(true);
@@ -175,7 +176,7 @@ describe("Cell commit callbacks", () => {
       "the callback reports a rejected commit",
     );
 
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(isCfcEnforcementRejection(result.error)).toBe(true);
     expect(statuses).toEqual(["error"]);
   });
@@ -200,7 +201,7 @@ describe("Cell commit callbacks", () => {
       callback2Called = true;
     });
 
-    await tx.commit();
+    await tx.commit().settled;
 
     // First callback threw but second should still be called
     expect(callback1Called).toBe(true);
@@ -217,7 +218,7 @@ describe("Cell commit callbacks", () => {
 
     // Should work fine without callback (backward compatible)
     cell.set(42);
-    await tx.commit();
+    await tx.commit().settled;
     expect(cell.get()).toBe(42);
   });
 
@@ -239,7 +240,7 @@ describe("Cell commit callbacks", () => {
 
     // Cause the transaction to fail by aborting it, then commit
     tx.abort("intentional abort for test");
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(callbackCalled).toBe(true);
     expect(receivedTx).toBe(tx);
@@ -253,7 +254,7 @@ describe("Cell commit callbacks", () => {
     });
 
     tx.abort("diagnostic failure");
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(callbackStatuses).toEqual(["error"]);
   });
@@ -264,7 +265,7 @@ describe("Cell commit callbacks", () => {
       journal: {},
       clearReadOnly() {},
       status: () => ({ status: "ready", journal: {} }),
-      commit: () => Promise.reject(rejection),
+      commit: () => createTransactionCommitReceipt(Promise.reject(rejection)),
     } as unknown as IStorageTransaction;
     const extended = new ExtendedStorageTransaction(inner);
     const callbackErrors: unknown[] = [];
@@ -284,7 +285,7 @@ describe("Cell commit callbacks", () => {
 
     let thrown: unknown;
     try {
-      await extended.commit();
+      await extended.commit().settled;
     } catch (error) {
       thrown = error;
     }
@@ -946,7 +947,7 @@ describe("Cell commit callbacks", () => {
           tx,
         );
         output.set(["sentinel"]);
-        await tx.commit();
+        await tx.commit().settled;
 
         let runs = 0;
         const action = (actionTx: IExtendedStorageTransaction) => {
@@ -958,7 +959,7 @@ describe("Cell commit callbacks", () => {
         const setupTx = runtime.edit();
         action(setupTx);
         const log = txToReactivityLog(setupTx);
-        await setupTx.commit();
+        await setupTx.commit().settled;
         runtime.scheduler.subscribe(action, log, { isEffect: false });
         expect(await output.withTx().pull()).toEqual([]);
 
@@ -967,7 +968,7 @@ describe("Cell commit callbacks", () => {
           { children: ["green"] },
           { children: ["unchanged"] },
         ]);
-        await updateTx.commit();
+        await updateTx.commit().settled;
         expect(await output.withTx().pull()).toEqual(["green"]);
 
         const runsBeforeNeighborEdit = runs;
@@ -976,7 +977,7 @@ describe("Cell commit callbacks", () => {
           { children: ["green"] },
           { children: ["changed"] },
         ]);
-        await neighborTx.commit();
+        await neighborTx.commit().settled;
         expect(await output.withTx().pull()).toEqual(["green"]);
         expect(runs).toBe(runsBeforeNeighborEdit);
       });
@@ -1433,7 +1434,7 @@ describe("Cell commit callbacks", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });
@@ -1511,7 +1512,7 @@ describe("Cell commit callbacks", () => {
     it("should return the current cell value", async () => {
       const c = runtime.getCell<number>(space, "pull-test-1", undefined, tx);
       c.set(42);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const value = await c.pull();
@@ -1527,7 +1528,7 @@ describe("Cell commit callbacks", () => {
         tx,
       );
       source.set(5);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       // Create a computation that depends on source
@@ -1547,7 +1548,7 @@ describe("Cell commit callbacks", () => {
       const setupTx = runtime.edit();
       action(setupTx);
       const log = txToReactivityLog(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
 
       // Subscribe the computation
       runtime.scheduler.subscribe(action, log, {});
@@ -1563,7 +1564,7 @@ describe("Cell commit callbacks", () => {
       // the effect mechanism is used, which triggers pull-based execution.
       const c = runtime.getCell<number>(space, "pull-mode-cell", undefined, tx);
       c.set(42);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const value = await c.pull();
@@ -1572,7 +1573,7 @@ describe("Cell commit callbacks", () => {
       // Verify we can pull after updates
       const tx2 = runtime.edit();
       c.withTx(tx2).set(100);
-      await tx2.commit();
+      await tx2.commit().settled;
 
       const value2 = await c.pull();
       expect(value2).toBe(100);
@@ -1581,19 +1582,19 @@ describe("Cell commit callbacks", () => {
     it("should handle multiple sequential pulls", async () => {
       const c = runtime.getCell<number>(space, "pull-multi", undefined, tx);
       c.set(1);
-      await tx.commit();
+      await tx.commit().settled;
 
       expect(await c.pull()).toBe(1);
 
       const tx2 = runtime.edit();
       c.withTx(tx2).set(2);
-      await tx2.commit();
+      await tx2.commit().settled;
 
       expect(await c.pull()).toBe(2);
 
       const tx3 = runtime.edit();
       c.withTx(tx3).set(3);
-      await tx3.commit();
+      await tx3.commit().settled;
 
       expect(await c.pull()).toBe(3);
     });
@@ -1606,7 +1607,7 @@ describe("Cell commit callbacks", () => {
         tx,
       );
       c.set({ a: { b: 99 } });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const nested = c.key("a").key("b");
@@ -1630,7 +1631,7 @@ describe("Cell commit callbacks", () => {
         tx,
       );
       computed.set(0);
-      await tx.commit();
+      await tx.commit().settled;
 
       // Track how many times the computation runs
       let runCount = 0;
@@ -1646,7 +1647,7 @@ describe("Cell commit callbacks", () => {
       const setupTx = runtime.edit();
       action(setupTx);
       const log = txToReactivityLog(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
 
       // Subscribe the computation (as a computation, NOT an effect)
       // In pull mode, computations only run when pulled by effects
@@ -1655,7 +1656,7 @@ describe("Cell commit callbacks", () => {
       // Change source to mark the computation as dirty
       const tx1 = runtime.edit();
       source.withTx(tx1).set(6); // Change from 5 to 6 to trigger dirtiness
-      await tx1.commit();
+      await tx1.commit().settled;
 
       // Reset run count after marking dirty
       runCount = 0;
@@ -1670,7 +1671,7 @@ describe("Cell commit callbacks", () => {
       // Now change the source AFTER pull completed
       const tx2 = runtime.edit();
       source.withTx(tx2).set(7);
-      await tx2.commit();
+      await tx2.commit().settled;
 
       // Wait for any scheduled work to complete
       await runtime.scheduler.idle();

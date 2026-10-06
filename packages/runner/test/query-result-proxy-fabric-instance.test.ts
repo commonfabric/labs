@@ -54,7 +54,7 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -194,7 +194,7 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
       seedTx,
     );
     cell.set(Object.assign(new Error("boom"), { code: 42 }));
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     const readTx = runtime.edit();
     readTx.markLazyMaterialize(true);
@@ -206,7 +206,7 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
     const getExtra = view.getExtra;
     const clone = view.deepClone.bind(view);
     expect(getExtra("code")).toBe(42);
-    await readTx.commit();
+    await readTx.commit().settled;
 
     expect(() => getExtra("code")).toThrow("Transaction is complete");
     expect(() => clone(false)).toThrow("Transaction is complete");
@@ -324,7 +324,7 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
       seedTx,
     );
     cell.set(Object.assign(new Error("boom"), { code: 42 }));
-    await seedTx.commit();
+    await seedTx.commit().settled;
 
     const readTx = runtime.edit();
     readTx.markLazyMaterialize(true);
@@ -335,7 +335,7 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
     );
     expect(view.getExtra("code")).toBe(42);
     expect(view.message).toBe("boom");
-    await readTx.commit();
+    await readTx.commit().settled;
 
     expect(() => view.getExtra("code")).toThrow("Transaction is complete");
     expect(() => view.deepClone(false)).toThrow("Transaction is complete");

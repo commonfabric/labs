@@ -524,7 +524,7 @@ describe("operation storage capability", () => {
           path: [],
         }, { value: { body: "ac" } }).error,
       ).toBeUndefined();
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const replica = storage.open(space).replica;
       expect(hasOperationStorageCapability(replica)).toBe(true);

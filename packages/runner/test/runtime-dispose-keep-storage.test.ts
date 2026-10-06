@@ -206,7 +206,7 @@ describe("runtime.dispose({ closeStorage })", () => {
   const write = async (runtime: Runtime, cause: string, value: number) => {
     const tx = runtime.edit();
     runtime.getCell<{ value: number }>(space, cause, SCHEMA, tx).set({ value });
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
   };
 

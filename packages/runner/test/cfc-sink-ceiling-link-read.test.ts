@@ -66,7 +66,7 @@ const seedConfidentialCell = async (
     id: `cid:${CONFIDENTIAL_SCHEMA.taggedHashString}`,
     path: [],
   }, { value: CONFIDENTIAL_SCHEMA.schema });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 describe("CFC sink ceiling on values pulled through schema-less links", () => {
@@ -145,7 +145,7 @@ describe("CFC sink ceiling on values pulled through schema-less links", () => {
       },
     );
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
 
     expect(released).toBe(false);
     expect(isCfcEnforcementRejection(result.error)).toBe(true);
@@ -194,7 +194,7 @@ describe("CFC sink ceiling on values pulled through schema-less links", () => {
         () => {},
       );
       observeRuntime.prepareTxForCommit(tx);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
 
       expect(result.ok).toBeDefined();
       expect(
@@ -249,7 +249,7 @@ describe("CFC sink ceiling on values pulled through schema-less links", () => {
     expect(tx.getCfcState().prepare.status).toBe("invalidated");
 
     // Direct commit() — the chokepoint Codex's finding is about.
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
 
     expect(released).toBe(false);
     // Assert it is specifically the CFC enforcement rejection, not some other
@@ -296,7 +296,7 @@ describe("CFC sink ceiling on values pulled through schema-less links", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     await runtime.idle();
     // The fetch (if any) fires from a post-commit effect and writes its result

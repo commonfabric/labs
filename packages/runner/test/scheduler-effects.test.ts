@@ -45,7 +45,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     a.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const stats1 = runtime.scheduler.getStats();
@@ -76,7 +76,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     a.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const stats1 = runtime.scheduler.getStats();
@@ -105,7 +105,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     a.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const computation: Action = () => {};
@@ -150,7 +150,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     a.set(42);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const stats1 = runtime.scheduler.getStats();
@@ -190,7 +190,7 @@ describe("effect/computation tracking", () => {
     );
     observedCell.set(42);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let sinkCalled = false;
@@ -266,7 +266,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Action 1: reads source, writes intermediate
@@ -330,7 +330,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     data.set({ foo: 1, bar: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const effect: Action = (actionTx) => {
@@ -373,7 +373,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     data.set({ foo: 1, bar: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const effect: Action = (actionTx) => {
@@ -436,7 +436,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     childProcess.set({});
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const outputLink = output.getAsNormalizedFullLink();
@@ -496,7 +496,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     cellB.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const effect: Action = (actionTx) => {
@@ -538,7 +538,7 @@ describe("effect/computation tracking", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const effect: Action = (actionTx) => {
@@ -582,7 +582,7 @@ describe("effect/computation tracking", () => {
     );
     source.set(1);
     target.set({ value: 0, stable: 0 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let materializerRuns = 0;
@@ -612,7 +612,7 @@ describe("effect/computation tracking", () => {
 
     const updateTx = runtime.edit();
     source.withTx(updateTx).set(2);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
 
     expect(materializerRuns).toBe(2);
@@ -648,7 +648,7 @@ describe("effect/computation tracking", () => {
     output.set(0);
     sideTarget.set({ value: 0 });
     unrelated.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const observedOutput: number[] = [];
@@ -699,7 +699,7 @@ describe("effect/computation tracking", () => {
     const updateTx = runtime.edit();
     source.withTx(updateTx).set(1);
     unrelated.withTx(updateTx).set(1);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
 
     expect(observedOutput).toEqual([1]);
@@ -737,7 +737,7 @@ describe("effect/computation tracking", () => {
     );
     source.set(1);
     target.set({ changed: 0, stable: 0 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const materializer = Object.assign(
@@ -792,7 +792,7 @@ describe("effect/computation tracking", () => {
     );
     source.set(0);
     target.set({ value: 0 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let materializerRuns = 0;
@@ -825,7 +825,7 @@ describe("effect/computation tracking", () => {
     for (const value of [1, 2, 3]) {
       const updateTx = runtime.edit();
       source.withTx(updateTx).set(value);
-      commits.push(updateTx.commit());
+      commits.push(updateTx.commit().settled);
     }
     await clock.settle();
     await Promise.all(commits);
@@ -852,7 +852,7 @@ describe("effect/computation tracking", () => {
     target.set(Object.fromEntries(
       Array.from({ length: 12 }, (_, index) => [`k${index}`, 0]),
     ));
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let materializerRuns = 0;
@@ -892,7 +892,7 @@ describe("effect/computation tracking", () => {
 
     const updateTx = runtime.edit();
     source.withTx(updateTx).set(7);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
 
     expect(materializerRuns).toBe(1);
@@ -922,7 +922,7 @@ describe("effect/computation tracking", () => {
     source.set(1);
     trigger.set(0);
     target.set({ value: 1 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const observed: number[] = [];
@@ -957,11 +957,11 @@ describe("effect/computation tracking", () => {
     // scheduler pass — the premise this ordering test is about.
     const sourceUpdateTx = runtime.edit();
     source.withTx(sourceUpdateTx).set(2);
-    const sourceCommit = sourceUpdateTx.commit();
+    const sourceCommit = sourceUpdateTx.commit().settled;
 
     const triggerUpdateTx = runtime.edit();
     trigger.withTx(triggerUpdateTx).set(1);
-    const triggerCommit = triggerUpdateTx.commit();
+    const triggerCommit = triggerUpdateTx.commit().settled;
 
     await clock.settle();
     await Promise.all([sourceCommit, triggerCommit]);
@@ -991,7 +991,7 @@ describe("effect/computation tracking", () => {
     );
     source.set(1);
     target.set({ value: 1 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const observed: number[] = [];
@@ -1027,7 +1027,7 @@ describe("effect/computation tracking", () => {
 
     const updateTx = runtime.edit();
     source.withTx(updateTx).set(2);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), {});
     await runtime.idle();
 
@@ -1049,7 +1049,7 @@ describe("effect/computation tracking", () => {
     );
     source.set(1);
     target.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -1094,7 +1094,7 @@ describe("effect/computation tracking", () => {
     );
     source.set(1);
     target.set({ value: 0 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -1122,7 +1122,7 @@ describe("effect/computation tracking", () => {
 
     const updateTx = runtime.edit();
     source.withTx(updateTx).set(2);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.idle();
 
     expect(runs).toBe(2);

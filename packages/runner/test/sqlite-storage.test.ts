@@ -46,7 +46,7 @@ describe("storage provider sqlite passthrough (emulated server)", () => {
   ) => {
     const tx = runtime.edit();
     tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   it("writes (folded commit) and queries (provider) end to end", async () => {

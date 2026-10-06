@@ -49,7 +49,7 @@ describe("Cell", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -127,7 +127,7 @@ describe("Cell", () => {
     };
     expect(result.message).toBe("something went wrong");
     expect(typeof result.stack).toBe("string");
-    await localTx.commit();
+    await localTx.commit().settled;
     await rt.dispose();
     await sm.close();
   });
@@ -159,7 +159,7 @@ describe("Cell", () => {
     expect(result.message).toBe("wrapper error");
     expect(result.cause.message).toBe("root cause");
     expect(typeof result.cause.stack).toBe("string");
-    await localTx.commit();
+    await localTx.commit().settled;
     await rt.dispose();
     await sm.close();
   });
@@ -207,7 +207,7 @@ describe("Cell", () => {
     };
     expect(targetResult.message).toBe("through nested redirect");
 
-    await localTx.commit();
+    await localTx.commit().settled;
     await rt.dispose();
     await sm.close();
   });
@@ -281,7 +281,7 @@ describe("Cell", () => {
     expect(result?.[0].length).toBe(4);
     // Both should be structurally equal
     expect(result?.[0]).toEqual(result?.[1]);
-    await localTx.commit();
+    await localTx.commit().settled;
     await rt.dispose();
     await sm.close();
   });
@@ -536,7 +536,7 @@ describe("Cell", () => {
     );
     cell.set({ value: 1 });
     cell.setMetaRaw("slug", "first", rawMetaWriteAuthorization);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const seen: unknown[] = [];
@@ -550,7 +550,7 @@ describe("Cell", () => {
 
     const metaTx = runtime.edit();
     cell.withTx(metaTx).setMetaRaw("slug", "second", rawMetaWriteAuthorization);
-    await metaTx.commit();
+    await metaTx.commit().settled;
     await runtime.idle();
 
     expect(seen).toEqual(["first", "second"]);
@@ -558,7 +558,7 @@ describe("Cell", () => {
 
     const valueTx = runtime.edit();
     cell.withTx(valueTx).set({ value: 2 });
-    await valueTx.commit();
+    await valueTx.commit().settled;
     await runtime.idle();
 
     expect(seen).toEqual(["first", "second"]);
@@ -655,7 +655,7 @@ describe("Cell", () => {
       tx,
     );
     runtime.setup(tx, doublePattern, { input: 11 }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const reloadedResultCell = resultCell.withTx(tx);
@@ -688,7 +688,7 @@ describe("Cell circular references", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -789,7 +789,7 @@ describe("Cell utility functions", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -993,7 +993,7 @@ describe("Cell raw methods: frozen-or-not", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -1261,7 +1261,7 @@ describe(`Cell result-meta round-trip`, () => {
       // read to go through the storage layer (rather than the in-tx
       // novelty cache, which short-circuits serialization), so
       // `fabricFromJsonValue()` runs as the actual decode step.
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const retrievedResultLink = getMetaLink(
@@ -1296,7 +1296,7 @@ describe(`Cell result-meta round-trip`, () => {
       targetCell.set({ bar: "baz" });
       setResultCell(targetCell, resultCell);
 
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       // Raw read of `path: ["result"]` exercises the same storage-layer
@@ -1339,7 +1339,7 @@ describe(
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });
@@ -1458,7 +1458,7 @@ describe(
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });

@@ -76,7 +76,7 @@ const setup = async (legacy: "both" | "schema" | "label") => {
       .error,
   )
     .toBeUndefined();
-  expect((await seed.tx.commit()).error).toBeUndefined();
+  expect((await seed.tx.commit().settled).error).toBeUndefined();
   await storage.synced();
   const source = runtime.getCellFromLink<string[]>(link);
   await source.sync();
@@ -111,7 +111,7 @@ describe("cfc-current-principal-legacy", () => {
         fixture.source.asSchema(fixture.schema).withTx(tx).push(
           "Visitor submission",
         );
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "Stored CurrentPrincipal confidentiality",
         );
@@ -132,7 +132,7 @@ describe("cfc-current-principal-legacy", () => {
         properties: { books: { asCell: ["readonly"] } },
       }, tx);
       copy.set({ books: fixture.source.asSchema(fixture.schema) });
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "Stored CurrentPrincipal confidentiality",
       );

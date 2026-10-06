@@ -48,7 +48,7 @@ describe("Schema - Link Resolution", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -1868,7 +1868,7 @@ describe("Schema - Link Resolution", () => {
         cellASchema,
       );
 
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const cellAContents = cellA.asSchema({

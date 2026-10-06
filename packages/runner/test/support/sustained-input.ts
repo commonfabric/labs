@@ -169,7 +169,7 @@ export const openSustainedInputFixture = async (
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(`serving run failed: ${committed.error.message}`);
       }
@@ -220,7 +220,7 @@ export const openSustainedInputFixture = async (
     }
     const tx = client.edit();
     argument.withTx(tx).set({ n });
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     if (committed.error !== undefined) {
       throw new Error(`input write failed: ${committed.error.message}`);
     }

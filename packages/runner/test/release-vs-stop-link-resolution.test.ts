@@ -63,7 +63,7 @@ Deno.test("releasing a target before link resolution preserves the held start", 
     // reaches the registration instead of declining.
     runtime.run(tx, compiled, { value: input }, target);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     expect(runtime.runner.cancels.size).toBe(1);
 
@@ -105,7 +105,7 @@ Deno.test("releasing a target before link resolution preserves the held start", 
     ).toBe(0);
     const pointing = runtime.edit();
     link.withTx(pointing).setRaw(target.getAsLink());
-    expect((await pointing.commit()).error).toBeUndefined();
+    expect((await pointing.commit().settled).error).toBeUndefined();
     releaseSync.resolve();
 
     expect(await start).toBe(true);

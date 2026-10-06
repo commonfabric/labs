@@ -84,7 +84,7 @@ describe("CFC derivation into a computed cell", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -163,7 +163,7 @@ describe("CFC derivation into a computed cell", () => {
     const result = rt.run(tx, doubling, { value: input }, resultCell);
 
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await rt.idle();
 
@@ -200,7 +200,7 @@ describe("CFC derivation into a computed cell", () => {
     const result = rt.run(tx, doubling, { value: input }, resultCell);
 
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await rt.idle();
     expect((result.get() as { out?: { doubled?: number } }).out?.doubled)
@@ -209,7 +209,7 @@ describe("CFC derivation into a computed cell", () => {
     const update = rt.edit();
     input.withTx(update).set({ n: 50 });
     rt.prepareTxForCommit(update);
-    expect((await update.commit()).error).toBeUndefined();
+    expect((await update.commit().settled).error).toBeUndefined();
     await result.pull();
     await rt.idle();
 
@@ -247,7 +247,7 @@ describe("CFC derivation into a computed cell", () => {
     const result = rt.run(tx, describing, { value: input }, resultCell);
 
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await rt.idle();
 

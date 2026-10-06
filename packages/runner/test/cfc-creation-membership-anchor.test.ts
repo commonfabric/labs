@@ -72,7 +72,7 @@ describe("CFC: creation anchors membership at the canonical container path", () 
       },
     });
     rt.prepareTxForCommit(seed);
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -112,7 +112,7 @@ describe("CFC: creation anchors membership at the canonical container path", () 
     const listCell = runtime.getCell(space, "anchor-list", listSchema, setup);
     listCell.set([el0, el1]);
     runtime.prepareTxForCommit(setup);
-    expect((await setup.commit()).ok).toBeDefined();
+    expect((await setup.commit().settled).ok).toBeDefined();
     return listCell.getAsNormalizedFullLink().id;
   };
 
@@ -167,7 +167,7 @@ describe("CFC: creation anchors membership at the canonical container path", () 
     const out = runtime!.getCell(space, "anchor-out", undefined, readTx);
     out.set({ copied: true });
     runtime!.prepareTxForCommit(readTx);
-    expect((await readTx.commit()).ok).toBeDefined();
+    expect((await readTx.commit().settled).ok).toBeDefined();
 
     const outDerived = entriesOf(out.getAsNormalizedFullLink().id).find((e) =>
       e.origin === "derived" && e.observes === "value"

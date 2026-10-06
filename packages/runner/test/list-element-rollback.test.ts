@@ -6,6 +6,7 @@ import type { Cell } from "../src/cell.ts";
 import { getMetaLink } from "../src/link-utils.ts";
 import { Runtime as RuntimeClass } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import type { Runtime } from "../src/runtime.ts";
 import {
@@ -709,7 +710,11 @@ describe("a list coordinator whose first reconcile is discarded", () => {
       ) => {
         const moved = runtime.edit();
         elementResult.withTx(moved).setRaw("moved under the reconcile");
-        return moved.commit().then(() => originalCommit(...commitArgs));
+        return createTransactionCommitReceipt(
+          moved.commit().settled.then(() =>
+            originalCommit(...commitArgs).settled
+          ),
+        );
       }) as typeof reconcileTx.commit;
       return run;
     }) as typeof runtime.runner.run;
@@ -751,7 +756,7 @@ describe("a list coordinator whose first reconcile is discarded", () => {
       setupTx,
     );
     const result = runtime.run(setupTx, parentPattern, {}, parent);
-    expect((await setupTx.commit()).error).toBeUndefined();
+    expect((await setupTx.commit().settled).error).toBeUndefined();
     return result;
   }
 

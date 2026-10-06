@@ -1,7 +1,8 @@
 /**
- * What this package offers to tests alone. There are two kinds of thing here:
- * examples of every concrete class, and internals of the package that a test
- * reaches directly: steps it calls, and counts it reads.
+ * What this package offers to tests alone. There are three kinds of thing
+ * here: examples of every concrete class, the conformance cases for the
+ * `fvj1:` JSON encoding, and internals of the package that a test reaches
+ * directly: steps it calls, and counts it reads.
  *
  * The examples are of every concrete `FabricPrimitive` and `FabricInstance`
  * class, for a test that ranges over the classes to take its values from, so
@@ -19,6 +20,11 @@
  *   returns, and every class has at least two makers, so a class's first two
  *   makers give a pair that differs.
  *
+ * The conformance cases are built from the examples, so that every class is
+ * among them. They are what `test/fixtures/fvj1-conformance.json` is generated
+ * from: a language-neutral record of what this package's JSON codec does,
+ * against which an implementation of the format elsewhere tests itself.
+ *
  * An internal is here when a test of the package's public surface cannot reach
  * it dependably. Each one's doc comment says why that is.
  *
@@ -26,6 +32,7 @@
  * barrel, so that loading the classes constructs none of it.
  */
 
+import type { FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import {
   FabricError,
@@ -46,6 +53,18 @@ import {
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
+import {
+  fabricValueOfFvj1Descriptor,
+  type Fvj1ConformanceCase,
+  fvj1ConformanceCases,
+  fvj1ConformanceFixtureText,
+  type Fvj1DecodeOutcome,
+  fvj1DecodeOutcomeOf,
+  type Fvj1Descriptor,
+  fvj1DescriptorOf,
+  type Fvj1EncodeOutcome,
+  fvj1EncodeOutcomeOf,
+} from "./fvj1-conformance.ts";
 import { getFrozenObjectHashCacheHits } from "./value-hash/caching.ts";
 import { float64BytesOf } from "./value-hash/float64BytesOf.ts";
 import { getContainersHashed } from "./value-hash/ValueHasher.ts";
@@ -240,6 +259,68 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
     ] as const,
   ),
 });
+
+export type {
+  Fvj1ConformanceCase,
+  Fvj1DecodeOutcome,
+  Fvj1Descriptor,
+  Fvj1EncodeOutcome,
+};
+
+/**
+ * The conformance cases for the `fvj1:` JSON encoding, those in
+ * `fvj1-conformance.ts` and one for each example the tables above make.
+ */
+export const FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY:
+  readonly Fvj1ConformanceCase[] = fvj1ConformanceCases(
+    FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+    FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+  );
+
+/**
+ * `fvj1ConformanceFixtureText()` from `fvj1-conformance.ts`, which returns the
+ * text of the fixture for some conformance cases, running each through this
+ * package's default JSON codec. Given
+ * {@link FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY}, the result is what
+ * `test/fixtures/fvj1-conformance.json` holds.
+ */
+export const fvj1ConformanceFixtureTextForTestingOnly: (
+  cases: readonly Fvj1ConformanceCase[],
+) => string = fvj1ConformanceFixtureText;
+
+/**
+ * `fvj1DescriptorOf()` from `fvj1-conformance.ts`, which returns a value's
+ * descriptor in the notation `test/fixtures/fvj1-conformance.md` defines.
+ */
+export const fvj1DescriptorOfForTestingOnly: (
+  value: FabricValue,
+) => Fvj1Descriptor = fvj1DescriptorOf;
+
+/**
+ * `fabricValueOfFvj1Descriptor()` from `fvj1-conformance.ts`, the inverse of
+ * {@link fvj1DescriptorOfForTestingOnly}.
+ */
+export const fabricValueOfFvj1DescriptorForTestingOnly: (
+  descriptor: Fvj1Descriptor,
+) => FabricValue = fabricValueOfFvj1Descriptor;
+
+/**
+ * `fvj1EncodeOutcomeOf()` from `fvj1-conformance.ts`, which returns what
+ * encoding a value with this package's default JSON codec does, in the shape a
+ * fixture entry's `encode` holds.
+ */
+export const fvj1EncodeOutcomeOfForTestingOnly: (
+  value: FabricValue,
+) => Fvj1EncodeOutcome = fvj1EncodeOutcomeOf;
+
+/**
+ * `fvj1DecodeOutcomeOf()` from `fvj1-conformance.ts`, which returns what
+ * decoding a text with this package's default JSON codec does, in the shape a
+ * fixture entry's `decode` holds.
+ */
+export const fvj1DecodeOutcomeOfForTestingOnly: (
+  text: string,
+) => Fvj1DecodeOutcome = fvj1DecodeOutcomeOf;
 
 /**
  * `float64BytesOf()` from `value-hash/float64BytesOf.ts`, which returns the

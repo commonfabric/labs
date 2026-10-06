@@ -114,7 +114,7 @@ describe("piece-call-discovery", () => {
         runtime.getCell(space, "discovery-board", undefined, tx),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await root.pull();
 
       const piece = {

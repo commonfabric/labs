@@ -51,7 +51,7 @@ describe("in-process-link-schema", () => {
         schema: narrowSchema,
       }) as never,
     );
-    await tx.commit();
+    await tx.commit().settled;
     const mock = new MockDoc(
       '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
     );

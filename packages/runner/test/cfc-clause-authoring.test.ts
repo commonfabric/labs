@@ -50,7 +50,7 @@ describe("CFC authored disjunctive confidentiality", () => {
       const cell = runtime.getCell(signer.did(), "authored-or", schema, tx);
       cell.set("participant-readable");
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const metadata = readStoredCfcMetadata(readTx, {
@@ -58,7 +58,7 @@ describe("CFC authored disjunctive confidentiality", () => {
         id: runtime.getCell(signer.did(), "authored-or", schema, readTx)
           .getAsNormalizedFullLink().id,
       });
-      await readTx.commit();
+      await readTx.commit().settled;
 
       const conf = (metadata?.labelMap.entries ?? []).flatMap(
         (entry) => entry.label.confidentiality ?? [],
@@ -100,7 +100,7 @@ describe("CFC authored disjunctive confidentiality", () => {
       const cell = runtime.getCell(signer.did(), "mixed-version", schema, tx);
       cell.set("participant-readable");
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const readTx = runtime.edit();
       const metadata = readStoredCfcMetadata(readTx, {
@@ -108,7 +108,7 @@ describe("CFC authored disjunctive confidentiality", () => {
         id: runtime.getCell(signer.did(), "mixed-version", schema, readTx)
           .getAsNormalizedFullLink().id,
       });
-      await readTx.commit();
+      await readTx.commit().settled;
 
       const label = (metadata?.labelMap.entries ?? []).flatMap(
         (entry) => entry.label.confidentiality ?? [],
@@ -180,7 +180,7 @@ describe("CFC authored disjunctive confidentiality", () => {
       const cell = runtime.getCell(signer.did(), "authored-mixed", schema, tx);
       cell.set("ok");
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -210,7 +210,7 @@ describe("CFC authored disjunctive confidentiality", () => {
       cell.set("bad");
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("OR-clause alternative");
       expect(result.error?.message).toContain("Caveat");
     } finally {
@@ -276,7 +276,7 @@ describe("CFC authored disjunctive confidentiality", () => {
       );
       cell.set("bad");
       expect(tx.prepareCfc()).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("OR-clause alternative");
     } finally {
       await runtime.dispose();

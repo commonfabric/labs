@@ -88,7 +88,7 @@ describe("llmDialog drops messages added during a running turn", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -115,7 +115,7 @@ describe("llmDialog drops messages added during a running turn", () => {
 
     const resultCell = runtime.getCell(space, cause, resultSchema, tx);
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error) throw error;
     return result;
   };
@@ -266,7 +266,7 @@ describe("llmDialog drops messages added during a running turn", () => {
     });
     const pendingTx = runtime.edit();
     result.withTx(pendingTx).key("pending").set(true);
-    await pendingTx.commit();
+    await pendingTx.commit().settled;
     await runtime.settled();
 
     addMessage.send({ role: "user", content: "Second" });
@@ -306,7 +306,7 @@ describe("llmDialog drops messages added during a running turn", () => {
     });
     const pendingTx = runtime.edit();
     result.withTx(pendingTx).key("pending").set(true);
-    await pendingTx.commit();
+    await pendingTx.commit().settled;
     await runtime.settled();
 
     // No replica refreshed the heartbeat for longer than the bound, so the one

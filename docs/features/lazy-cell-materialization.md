@@ -44,9 +44,11 @@ the child's link and lets the front door decide what the child is.
 
 At the container it is built over: the value's type against the schema's, and
 the schema's `required` keys — that the value carries each of them, and that
-the
-schema selects each one it requires. Both come off the container read a
-view takes anyway, so neither descends.
+the schema selects each one it requires. Both come off the container read a
+view takes anyway, so neither descends into a child's value. The `required`
+check does observe each required child's existence, which is a read at that
+child's path and nothing below it; [agreeing with an eager
+read](#agreeing-with-an-eager-read) says why.
 
 Everything below is checked where the reader touches it. **A subtree the reader
 never reads is never validated.** That is the one behavior change a pattern
@@ -241,6 +243,20 @@ wrong. These rules hold that agreement:
   through the properties and an array's element through the items, on both
   paths. [How a step narrows](../specs/json_schema.md#how-a-step-narrows)
   states the whole rule, including how an enumeration narrows.
+- **Deciding by which keys are there observes each key's existence.** An eager
+  read walks every child it selects, and each of those reads consumes the
+  child's labels. A view decides whether a `required` key is there, and which
+  keys an enumeration lists, off the container alone, and a child's own path
+  can carry an existence label the container's does not. So the view registers
+  a non-recursive read at each such child's path, which the flow join
+  classifies as a `shape` observation: it consumes the child's existence label
+  and nothing below it, as the CFC specification's read-to-observation mapping
+  has a key-presence check and an enumeration do. Without it, a reader that
+  never touches a required child would produce output whose very existence
+  depends on that child, carrying none of the child's label. The read is kept
+  out of scheduling, since the container's own non-recursive read already runs
+  the reader again when a key comes or goes, and a write to the child's value
+  changes nothing the check saw.
 - **A read-only array method visits every element, even past one that does not
   match.** An eager read walks the whole array before it calls the array
   invalid, so each element is a dependency of the reader either way. Stopping at

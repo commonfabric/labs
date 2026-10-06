@@ -15,14 +15,10 @@
  *   stream bound to the submit click — the prefill never adds an alternate
  *   create path, and nothing is created at render time (no auto-submit).
  *
- * DELIBERATELY NOT COVERED HERE: actually firing `createProfile`. The create
- * pushes `ProfileHome.inSpace()` — a cross-space commit whose closure
- * replication is unavailable in the pattern-unit lane (it logs
- * `closure-replication-failed` pattern-manager errors there, and the lane
- * fails a test file on any console error). The full create flow — inSpace
+ * NOT COVERED HERE: firing `createProfile`. The create pushes
+ * `ProfileHome.inSpace()`, and the full create flow — the `inSpace()`
  * materialization and the owner-protected write included — is covered
- * end-to-end by packages/runner/test/profile-create-real-card-add.test.ts in
- * the runner lane, where cross-space commits work.
+ * end-to-end by packages/runner/test/profile-create-real-card-add.test.ts.
  *
  * Run: deno task cf test packages/patterns/system/profile-create.test.tsx --verbose
  */

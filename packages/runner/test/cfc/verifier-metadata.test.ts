@@ -114,7 +114,7 @@ describe("prepareBoundaryCommit()", () => {
       tx.prepareCfc();
       // The staged root has no confidentiality envelope, so the later gate's
       // empty confidentiality ceiling permits the commit.
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const verify = runtime.edit();
       try {
         expect(verify.readOrThrow({
@@ -163,7 +163,7 @@ describe("prepareBoundaryCommit()", () => {
             write.address.path[0] === "cfc",
         );
       expect(intermediateWrites.length).toBe(1);
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("maxConfidentiality");
     } finally {
       await runtime.dispose({ closeStorage: false });
@@ -180,7 +180,7 @@ describe("prepareBoundaryCommit()", () => {
         ifc: { integrity: ["existing-entry"] },
       }, seed).set({ value: "formerly public" });
       seed.prepareCfc();
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const tx = runtime.edit();
       const intermediate = runtime.getCell(
@@ -205,7 +205,7 @@ describe("prepareBoundaryCommit()", () => {
           write.address.path[0] === "cfc"
         ),
       ).toBe(true);
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "maxConfidentiality",
       );
     } finally {
@@ -228,7 +228,7 @@ describe("prepareBoundaryCommit()", () => {
         );
         intermediate.set({ value: "derived" });
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       };
       await deriveIntermediate();
 
@@ -255,7 +255,7 @@ describe("prepareBoundaryCommit()", () => {
           write.address.path[0] === "cfc"
         ),
       ).toEqual([]);
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "maxConfidentiality",
       );
     } finally {
@@ -303,7 +303,7 @@ describe("prepareBoundaryCommit()", () => {
           value: "opaque",
           cfc,
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const tx = runtime.edit();
         expect(
@@ -319,7 +319,7 @@ describe("prepareBoundaryCommit()", () => {
         tx.markCfcRelevant("test");
 
         tx.prepareCfc();
-        expect((await tx.commit()).error?.message).toContain(message);
+        expect((await tx.commit().settled).error?.message).toContain(message);
       } finally {
         await runtime.dispose({ closeStorage: false });
         await storageManager.close();

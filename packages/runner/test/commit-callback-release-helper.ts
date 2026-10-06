@@ -61,7 +61,7 @@ for (let round = 0; round < 3; round++) {
     });
   }
 
-  await tx.commit();
+  await tx.commit().settled;
   settledTransactions.push(tx);
 }
 

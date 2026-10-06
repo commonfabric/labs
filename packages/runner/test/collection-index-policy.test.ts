@@ -68,7 +68,7 @@ describe("collection index confidentiality", () => {
               },
             },
           });
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           const tx = runtime.edit();
           const output = runtime.run(
             tx,
@@ -84,7 +84,7 @@ describe("collection index confidentiality", () => {
             ),
           );
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           cancel = output.sink(() => {});
           await runtime.idle();
           expect(await output.key("titles").pull()).toEqual(
@@ -117,7 +117,7 @@ describe("collection index confidentiality", () => {
           const edit = runtime.edit();
           rows.withTx(edit).key(0).key("category").set("B");
           runtime.prepareTxForCommit(edit);
-          expect((await edit.commit()).error).toBeUndefined();
+          expect((await edit.commit().settled).error).toBeUndefined();
           await runtime.idle();
           expect(await output.key("titles").pull()).toEqual(
             operator === "groupBy" ? [] : [undefined],

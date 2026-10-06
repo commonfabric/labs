@@ -269,7 +269,7 @@ describe("ExecutorHost.runLifecycleVerb", () => {
           });
           marker(runtime).withTx(tx).set({ marker: "direct" });
           runtime.prepareTxForCommit(tx);
-          const outcome = await tx.commit();
+          const outcome = await tx.commit().settled;
           expect(outcome.error).toBeUndefined();
           // Still inside the verb, so the cycle's wave has not committed:
           // a reader opened now sees the write only if it committed on
@@ -305,7 +305,7 @@ describe("ExecutorHost.runLifecycleVerb", () => {
           });
           expect(written.error).toBeUndefined();
           runtime.prepareTxForCommit(tx);
-          return await tx.commit();
+          return await tx.commit().settled;
         },
       });
       expect(outcome.error?.message).toContain("direct commit rejected");
@@ -339,7 +339,7 @@ describe("ExecutorHost.runLifecycleVerb", () => {
           });
           expect(written.error).toBeUndefined();
           runtime.prepareTxForCommit(tx);
-          return await tx.commit();
+          return await tx.commit().settled;
         },
       });
       expect(outcome.error?.message).toContain("direct commit rejected");
@@ -379,7 +379,7 @@ describe("ExecutorHost.runLifecycleVerb", () => {
           runtime.getCell<{ marker: string }>(other, MARKER_CAUSE, undefined)
             .withTx(tx).set({ marker: "elsewhere" });
           runtime.prepareTxForCommit(tx);
-          return { stampRefusal, commit: await tx.commit() };
+          return { stampRefusal, commit: await tx.commit().settled };
         },
       });
       expect(seen.stampRefusal).toContain("only a bookkeeping run");

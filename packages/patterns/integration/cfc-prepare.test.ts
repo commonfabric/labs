@@ -298,7 +298,7 @@ describe({ name: "cfc-prepare", ignore: !enabled }, () => {
         );
         target.set({ copied: row });
         tx.prepareCfc();
-        const refusal = await tx.commit();
+        const refusal = await tx.commit().settled;
         expect(isCfcEnforcementRejection(refusal.error)).toBe(true);
         const strictReason = refusal.error!.message.replaceAll(
           target.getAsNormalizedFullLink().id,

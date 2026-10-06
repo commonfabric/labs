@@ -63,7 +63,7 @@ describe("lazy-materialization-runner", () => {
     const tx = runtime.edit();
     const inputCell = runtime.getCell(space, `${cause}-input`, undefined, tx);
     inputCell.set(input);
-    await tx.commit();
+    await tx.commit().settled;
 
     const readTx = runtime.edit();
     if (runtime.experimental.lazyMaterialization) {
@@ -75,7 +75,7 @@ describe("lazy-materialization-runner", () => {
     try {
       return body(argument);
     } finally {
-      await readTx.commit();
+      await readTx.commit().settled;
     }
   };
 

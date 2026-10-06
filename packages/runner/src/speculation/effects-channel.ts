@@ -422,7 +422,7 @@ export class EffectsChannel {
         scope: "session",
         path: ["acks", nonce],
       }).withTx(tx).set(true);
-      const committed = tx.commit();
+      const committed = tx.commit().settled;
       this.#runtime.trackAsyncWork(committed as Promise<unknown>);
       committed.then(({ error }) => {
         this.#acking.delete(key);

@@ -62,7 +62,7 @@ describe("injected on-disk source via the runner storage provider", () => {
         db: { id, tables: {} },
         sql: "INSERT INTO lookup (k, v) VALUES ('c', '3')",
       });
-      const res = await tx.commit();
+      const res = await tx.commit().settled;
       expect(res.error).toBeDefined();
     } finally {
       try {

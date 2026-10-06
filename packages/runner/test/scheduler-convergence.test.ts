@@ -47,7 +47,7 @@ describe("bounded convergence", () => {
       tx,
     );
     cell.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = () => {
@@ -91,7 +91,7 @@ describe("bounded convergence", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {
@@ -113,7 +113,7 @@ describe("bounded convergence", () => {
 
     // Trigger another run
     trigger.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await output.pull();
 
@@ -149,7 +149,7 @@ describe("bounded convergence", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let actionARunCount = 0;
@@ -242,7 +242,7 @@ describe("bounded convergence", () => {
       tx,
     );
     doubled.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Computation: doubles the counter
@@ -268,7 +268,7 @@ describe("bounded convergence", () => {
 
     // Update counter and run again
     counter.withTx(tx).send(5);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Subscribe again to re-run
@@ -310,7 +310,7 @@ describe("bounded convergence", () => {
       tx,
     );
     output.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCountA = 0;
@@ -399,7 +399,7 @@ describe("bounded convergence", () => {
         runtime.getCell<number>(space, `deep-chain-${i}`, undefined, tx),
     );
     cells[0].set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // comp[i] reads cells[i-1] (DISCOVERED — not declared) and writes cells[i]
@@ -507,7 +507,7 @@ describe("bounded convergence", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const computation: Action = (actionTx) => {
@@ -531,7 +531,7 @@ describe("bounded convergence", () => {
 
     // Change source
     source.withTx(tx).send(9);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Re-subscribe to force a re-run (simulating what happens in real usage)
@@ -575,7 +575,7 @@ describe("bounded convergence", () => {
       tx,
     );
     cellC.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // A → B → C → A cycle
@@ -680,7 +680,7 @@ describe("bounded convergence", () => {
       tx,
     );
     cell.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {
@@ -720,7 +720,7 @@ describe("bounded convergence", () => {
     cellC.set(0);
     const cellD = runtime.getCell<number>(space, "4cycle-D", undefined, tx);
     cellD.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let totalRuns = 0;
@@ -773,7 +773,7 @@ describe("bounded convergence", () => {
       tx,
     );
     counter.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -813,7 +813,7 @@ describe("bounded convergence", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {
@@ -839,7 +839,7 @@ describe("bounded convergence", () => {
 
     // Trigger another run by updating cell externally
     cell.withTx(tx).send(10);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     runtime.scheduler.subscribe(
@@ -894,7 +894,7 @@ describe("bounded convergence", () => {
       tx,
     );
     cycleB.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let acyclicRuns = 0;

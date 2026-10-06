@@ -105,7 +105,7 @@ describe("unloadable patternIdentity pointer vs a running pattern", () => {
       tx,
     );
     const running = rt.run(tx, v1, {}, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     expect((cell.getAsQueryResult() as { marker: string }).marker).toBe("v1");
     expect(getPatternIdentityRef(cell)?.identity).toBe(v1Ref.identity);
@@ -121,7 +121,7 @@ describe("unloadable patternIdentity pointer vs a running pattern", () => {
       identity,
       symbol: "default",
     }, rawMetaWriteAuthorization);
-    await tx.commit();
+    await tx.commit().settled;
     await rt.idle();
     // Deterministic: settles the watcher load chain and any roll-forward.
     await rt.runner.idlePointerMaintenance();
@@ -163,7 +163,7 @@ describe("unloadable patternIdentity pointer vs a running pattern", () => {
         { space, tx: otherTx },
       );
       v2Identity = other.patternManager.getArtifactEntryRef(v2)!.identity;
-      await otherTx.commit();
+      await otherTx.commit().settled;
       await other.idle();
     } finally {
       await other.dispose();
@@ -200,7 +200,7 @@ describe("unloadable patternIdentity pointer vs a running pattern", () => {
     );
     // deno-lint-ignore no-explicit-any
     const running = rt.run(tx, keylessPattern as any, {}, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     const keylessRef = getPatternIdentityRef(cell);
     if (keylessRef !== undefined) {

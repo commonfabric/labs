@@ -76,7 +76,7 @@ describe("profile-follow-migration", () => {
       );
       runtime.run(tx, pattern, { initialName: "Setup name" }, cell);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const profile = cell.withTx();
       await profile.pull();
       profile.key("setName").send({ name: "Saved name" });
@@ -136,7 +136,7 @@ export default pattern(() => ({ receive: receive({}) }));
       }, { space, tx: inboxTx });
       runtime.run(inboxTx, inboxPattern, {}, inbox);
       runtime.prepareTxForCommit(inboxTx);
-      expect((await inboxTx.commit()).error).toBeUndefined();
+      expect((await inboxTx.commit().settled).error).toBeUndefined();
       await inbox.withTx().pull();
       profile.key("setInbox").send({ inbox: inbox.withTx() });
       await runtime.idle();

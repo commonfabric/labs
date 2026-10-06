@@ -220,19 +220,49 @@ export default pattern((__cf_pattern_input) => {
             type: "boolean",
             asCell: ["cell"]
         } as const satisfies __cfHelpers.JSONSchema, {
-            anyOf: [{}, {
+            anyOf: [{
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                }, {
+                    $ref: "#/$defs/UIRenderable"
+                }, {
                     type: "object",
                     properties: {}
-                }]
+                }],
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "null"
         } as const satisfies __cfHelpers.JSONSchema, {
             anyOf: [{
                     type: "null"
-                }, {}, {
+                }, {
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                }, {
+                    $ref: "#/$defs/UIRenderable"
+                }, {
                     type: "object",
                     properties: {}
-                }]
+                }],
+            $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                }
+            }
         } as const satisfies __cfHelpers.JSONSchema, showAdmin, <div>
               <span>{__cfLift_3({ count: count })}</span>
               <ul>

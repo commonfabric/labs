@@ -38,6 +38,7 @@ import {
 } from "../src/result-writer.ts";
 import { seedStoredEnvelope } from "../../runner/test/cfc-seed-envelope.ts";
 import { isSealedOpaqueLinkObject } from "../src/structured-result.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("cf-harness result-writer");
 
@@ -110,7 +111,7 @@ describe("writeAgentResult()", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, name, bookSchema(atom), tx);
     cell.set({ title });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return cell.getAsNormalizedFullLink();
   };
 
@@ -577,12 +578,12 @@ describe("writeAgentResult()", () => {
           return abort(reason);
         }) as typeof tx.abort;
         tx.commit = (() =>
-          Promise.resolve({
+          createTransactionCommitReceipt(Promise.resolve({
             error: {
               name: "StorageTransactionAborted",
               message: "synthetic mint failure",
             },
-          })) as typeof tx.commit;
+          }))) as typeof tx.commit;
       }
       return cell;
     }) as Runtime["getCell"];
@@ -825,7 +826,7 @@ describe("writeAgentResult()", () => {
       value: { title: "Unlabeled" },
       cfc: { version: 99 },
     } as unknown as FabricValue);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const minted = await mintAddressHandle(
       handleTable,
       renderCellReference(unreadable.getAsNormalizedFullLink()),

@@ -38,6 +38,7 @@ import type {
   SchedulerGraphSnapshot,
   SettleStats,
   SettleStatsHistoryEntry,
+  StorageDiagnostics,
   TriggerTraceEntry,
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
@@ -175,6 +176,12 @@ export enum RequestType {
 
   /** Reads a cell's display CFC label, without its value. */
   CellGetCfcLabel = "cell:getCfcLabel",
+
+  /**
+   * Lists the fields a record cell holds, each as a ref to the field, with
+   * nothing of what the fields hold.
+   */
+  CellFields = "cell:fields",
 
   /** Prepares an exact snapshot and audience for trusted host confirmation. */
   SnapshotSharePrepare = "snapshotShare:prepare",
@@ -316,6 +323,9 @@ export enum RequestType {
    * round trip covering all four.
    */
   GetLoggerCounts = "runtime:getLoggerCounts",
+
+  /** Snapshot storage work without waiting for the durability barrier. */
+  GetStorageDiagnostics = "runtime:getStorageDiagnostics",
 
   /**
    * Answers with the pattern coverage collector's data, or `null` where this
@@ -1118,6 +1128,13 @@ export type CellPullRequest = BaseRequest & {
    * The cell whose producers to demand before reading its current value.
    */
   cell: CellRef;
+
+  /**
+   * Whether to cross the runtime-wide commit-aware barrier after demanding
+   * producers. Defaults to `false`: reads return reactive state while writes
+   * may remain unconfirmed, including absent values and empty objects.
+   */
+  awaitDurability?: boolean;
 };
 
 /** The {@link RequestType.CellInitialize} request. */
@@ -1241,6 +1258,16 @@ export type CellGetCfcLabelRequest = BaseRequest & {
 
   /**
    * The cell whose label to read.
+   */
+  cell: CellRef;
+};
+
+/** The {@link RequestType.CellFields} request. */
+export type CellFieldsRequest = BaseRequest & {
+  type: RequestType.CellFields;
+
+  /**
+   * The record whose fields to list.
    */
   cell: CellRef;
 };
@@ -1921,8 +1948,18 @@ export type GetGraphSnapshotRequest = BaseRequest & {
 };
 
 /**
- * The {@link RequestType.GetLoggerCounts} request, which carries no payload.
+ * The {@link RequestType.GetStorageDiagnostics} request, which carries no payload.
  */
+export type GetStorageDiagnosticsRequest = BaseRequest & {
+  type: RequestType.GetStorageDiagnostics;
+};
+
+/** The pending-storage snapshot, or null for a manager without diagnostics. */
+export type StorageDiagnosticsResponse = {
+  diagnostics: StorageDiagnostics | null;
+};
+
+/** The {@link RequestType.GetLoggerCounts} request, which carries no payload. */
 export type GetLoggerCountsRequest = BaseRequest & {
   type: RequestType.GetLoggerCounts;
 };
@@ -3230,6 +3267,7 @@ export type IPCClientRequest =
   | CellUnsubscribeRequest
   | CellResolveAsCellRequest
   | CellGetCfcLabelRequest
+  | CellFieldsRequest
   | SnapshotSharePrepareRequest
   | SnapshotShareCommitRequest
   | SnapshotShareCancelRequest
@@ -3256,6 +3294,7 @@ export type IPCClientRequest =
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
+  | GetStorageDiagnosticsRequest
   | GetLoggerCountsRequest
   | GetPatternCoverageRequest
   | SetLoggerLevelRequest
@@ -3381,41 +3420,120 @@ export type SpaceHostRegistrationResponse = {
   registration: SpaceHostRegistration;
 };
 
+declare const decidedByHostReadGate: unique symbol;
+
+/**
+ * The mark of an answer to a host's read of a cell that the worker's
+ * host-read gate made: the gate decides what of a cell a host may see, under
+ * the display ceiling the worker renders with, and is the one place that
+ * builds such an answer. The mark exists only in the type, never on the wire,
+ * so a handler that builds an answer of its own fails to type-check rather
+ * than handing the host a value nothing decided.
+ */
+export type HostReadDecided = { readonly [decidedByHostReadGate]: true };
+
+/**
+ * Why the worker returned nothing of a cell for a host's read: what refused
+ * it. A refusal is an answer of its own, never a value, so that a read the
+ * host could not make never reads as a cell that holds nothing.
+ */
+export type CellReadRefusal = {
+  /** The display ceiling the worker renders with refused the read. */
+  readonly refusedBy: "display-ceiling";
+};
+
 /**
  * A cell's value on its way _out_ of the worker. The two directions carry the
  * same domain, which they did not before the envelope was encoded: outbound
  * lost a `FabricPrimitive` to structured clone where inbound refused one
  * outright.
  */
-export type CellValueResponse = {
+export type CellValueAnswer = {
   /**
-   * The value read. A read that finds nothing is not distinguishable here:
-   * `undefined` is a `FabricValue` and a value a cell can hold, so it is what
-   * both answers look like.
+   * The value read. `undefined` is a `FabricValue`, and what a read of a cell
+   * holding nothing returns.
    */
   value: FabricValue;
+
+  /** A value is never also a refusal. */
+  refused?: never;
 };
 
 /**
- * A cell read's answer. `cfcLabel` is present only when the request asked for
- * it, and `cell` only when it asked and the read resolved to a cell -- a raw
- * metadata read has none to name.
+ * A host's read of a cell that was refused, carrying nothing of the cell: no
+ * value and no label view. Narrow an answer by `refused !== undefined`; the
+ * value arm declares `refused` too, as never present, so that one answer
+ * cannot be both.
  */
-export type CellGetResponse = CellValueResponse & {
-  /**
-   * The cell's display label, present only where the request set
-   * `includeCfcLabel`. `undefined` is a valid value, the cell carrying no
-   * label; the field is omitted rather than undefined when not requested.
-   */
-  cfcLabel?: CfcLabelView | undefined;
-
-  /**
-   * A ref to the cell the read resolved to, present only where the request
-   * set `includeRef` and the read reached a cell -- a raw metadata read has
-   * none to reference.
-   */
-  cell?: CellRef;
+export type CellRefusedAnswer = {
+  /** What refused the read. */
+  refused: CellReadRefusal;
+  value?: never;
+  cfcLabel?: never;
+  fields?: never;
 };
+
+/** A host-read gate's answer to a read of a cell's value. */
+export type CellValueResponse =
+  & HostReadDecided
+  & (CellValueAnswer | CellRefusedAnswer);
+
+/**
+ * A cell read's answer: the value, or the refusal that stands in its place.
+ * With a value, `cfcLabel` is present only when the request asked for it, and
+ * `cell` only when it asked and the read resolved to a cell -- a raw metadata
+ * read has none to name.
+ */
+export type CellGetResponse =
+  & HostReadDecided
+  & (
+    | (CellValueAnswer & {
+      /**
+       * The cell's display label, present only where the request set
+       * `includeCfcLabel`. `undefined` is a valid value, the cell carrying no
+       * label; the field is omitted rather than undefined when not requested.
+       */
+      cfcLabel?: CfcLabelView | undefined;
+
+      /**
+       * A ref to the cell the read resolved to, present only where the
+       * request set `includeRef` and the read reached a cell -- a raw metadata
+       * read has none to reference.
+       */
+      cell?: CellRef;
+    })
+    | (CellRefusedAnswer & {
+      /**
+       * A ref to the cell the refused read started from, present only where
+       * the request set `includeRef` and the read reached a cell. It carries
+       * no label view, since a refused read gives none, and nothing else of
+       * what the read was refused: it is an address, from which a caller may
+       * read the cell's parts one by one, each decided on its own.
+       */
+      cell?: CellRef;
+    })
+  );
+
+/**
+ * The fields a record holds, by name, each as the address of the field within
+ * the record, or the refusal that stands in place of the list. An address
+ * carries nothing the field holds and no label view: a read of a field is
+ * decided on its own.
+ */
+export type CellFieldsResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * Each field the record holds, by name, as its address. Absent where
+       * the cell holds no record: nothing at all, a list, or a single value.
+       */
+      fields?: { readonly [name: string]: CellRef };
+      /** A list is never also a refusal. */
+      refused?: never;
+    }
+    | CellRefusedAnswer
+  );
 
 /** Rows returned by {@link RequestType.SqliteQuery}. */
 export type SqliteQueryResponse = {
@@ -3592,28 +3710,31 @@ export type PatternCoverageResponse = {
 };
 
 /**
- * A new value for a subscribed cell. `cfcLabel` rides along only for a
- * subscription that opted in, so that a label change re-renders without a
- * second round trip.
+ * A new value for a subscribed cell, or the refusal that stands in its
+ * place. `cfcLabel` rides along with a value only for a subscription that
+ * opted in, so that a label change re-renders without a second round trip.
  */
-export type CellUpdateNotification = {
-  type: NotificationType.CellUpdate;
+export type CellUpdateNotification =
+  & HostReadDecided
+  & {
+    type: NotificationType.CellUpdate;
 
-  /**
-   * The cell that changed.
-   */
-  cell: CellRef;
-
-  /** Its new value, as {@link CellValueResponse} carries the pulled form. */
-  value: FabricValue;
-
-  /**
-   * The cell's current display label, present only for a subscription that
-   * opted in through `includeCfcLabel`, so the client re-renders on a label
-   * change without a separate round trip.
-   */
-  cfcLabel?: CfcLabelView | undefined;
-};
+    /**
+     * The cell that changed.
+     */
+    cell: CellRef;
+  }
+  & (
+    | (CellValueAnswer & {
+      /**
+       * The cell's current display label, present only for a subscription
+       * that opted in through `includeCfcLabel`, so the client re-renders on
+       * a label change without a separate round trip.
+       */
+      cfcLabel?: CfcLabelView | undefined;
+    })
+    | CellRefusedAnswer
+  );
 
 /**
  * One `console.*` call made by a pattern, with the arguments it was given.
@@ -3923,6 +4044,7 @@ export type RemoteResponse =
   | CellGetResponse
   | CellResponse
   | CfcLabelViewResponse
+  | CellFieldsResponse
   | SnapshotSharePreview
   | CustodySealPreview
   | CustodySealCommitResponse
@@ -3930,6 +4052,7 @@ export type RemoteResponse =
   | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
+  | StorageDiagnosticsResponse
   | LoggerCountsResponse
   | PatternCoverageResponse
   | SettleStatsResponse
@@ -4029,6 +4152,10 @@ export type Commands = {
   [RequestType.GetGraphSnapshot]: {
     request: GetGraphSnapshotRequest;
     response: GraphSnapshotResponse;
+  };
+  [RequestType.GetStorageDiagnostics]: {
+    request: GetStorageDiagnosticsRequest;
+    response: StorageDiagnosticsResponse;
   };
   [RequestType.GetLoggerCounts]: {
     request: GetLoggerCountsRequest;
@@ -4142,6 +4269,10 @@ export type Commands = {
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;
     response: CfcLabelViewResponse;
+  };
+  [RequestType.CellFields]: {
+    request: CellFieldsRequest;
+    response: CellFieldsResponse;
   };
   [RequestType.SnapshotSharePrepare]: {
     request: SnapshotSharePrepareRequest;

@@ -54,7 +54,7 @@ describe("prepareBoundaryCommit()", () => {
             },
           },
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const tx = runtime.edit();
         source.withTx(tx).get();
@@ -78,7 +78,7 @@ describe("prepareBoundaryCommit()", () => {
         // Revisit this budget if legitimate per-target work changes; repeated
         // input resolution on each target grows quadratically and exceeds it.
         expect(internalReads.length).toBeLessThanOrEqual(6 * targets + 10);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         const verify = runtime.edit();
         try {

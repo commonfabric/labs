@@ -458,7 +458,8 @@ construction. Observation ceilings for ordinary cells require concrete clauses.
 Database-owner and current-principal placeholders in a ceiling bind only at the
 SQLite query boundary; they do not admit a concrete label on an unrelated
 persisted cell. This differs from a fresh store's `User(CurrentPrincipal)`
-confidentiality declaration, which binds to its creator during commit.
+confidentiality declaration, which binds during commit to its creator, or to
+the stored readers of a private parent it is created beneath.
 
 Constructing an `asCell` handle may probe the terminal target's shape without
 reading its protected payload. Every intermediate redirect remains a pointer

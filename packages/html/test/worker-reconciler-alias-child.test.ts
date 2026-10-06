@@ -134,5 +134,5 @@ Deno.test("worker reconciler - $alias records in child position", async (t) => {
     },
   );
 
-  await dummyTx.commit();
+  await dummyTx.commit().settled;
 });

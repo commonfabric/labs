@@ -1,10 +1,9 @@
 /**
  * What an interactive turn opens with.
  *
- * A turn is its own run with its own handle table, so the references that run
- * holds — the well-known grants of its space, the input cells and published
- * patterns the request attached — have to be established and announced per
- * turn. Without that a
+ * A turn is its own run, so the references that run holds — the well-known
+ * grants of its space, the input cells and published patterns the request
+ * attached — have to be established and announced per turn. Without that a
  * console session had a fabric session it could not explore and no way to be
  * handed a cell at all, which is what these tests are about.
  */

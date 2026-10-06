@@ -35,7 +35,7 @@ An ingest channel has a **sink** — where an inbound POST lands.
 
 | | `stream` (today's webhook) | `journal` (new) |
 |---|---|---|
-| Write | `sendToStream` → `.send()` | `custodyIngest.update` append |
+| Write | `sendToStream` → `.send()` | `custodyIngest.appendAll` |
 | Semantics | transient event dispatch to handlers | durable, append-only record log |
 | Readable history | no (fire-and-react) | yes (an accumulated array cell) |
 | Provenance mark | none | `ExternalIngest`, minted per POST |
@@ -48,11 +48,12 @@ An ingest channel has a **sink** — where an inbound POST lands.
 One inbound POST → exactly one governed durable write:
 
 ```
-custodyIngest.update(targetCell, current => [...(current ?? []), ...records], channel)
+custodyIngest.appendAll(targetCell, records, channel)
 ```
 
-- `custodyIngest.update` (`custody-ingest.ts:169-180`) runs its mutate **inside** `editWithRetry`, re-reading the current array on every retry — no lost update under concurrent POSTs.
-- It mints one `ExternalIngest` mark per POST, bound to the digest of the written value, anchored at the target cell root (works for array appends, which diff element-wise and never touch the array path itself).
+- `custodyIngest.appendAll` (`custody-ingest.ts`) appends with the cell's `pushAll`, **inside** `editWithRetry`. The append commits as a mergeable op ([`mergeable-collection-writes.md`](../features/mergeable-collection-writes.md)), so POSTs that land on one partition at the same time each add their records, and none of them reads the list first. The append that creates the partition cell is the exception: it commits beside the mark as a whole document, so where two POSTs create the cell at once the store refuses one of them, and its retry appends to the cell the other created.
+- The append leaves the records already in the cell untouched: each record is a document of its own, and writing the whole array back from a copy would store every earlier record again under a new id on each POST.
+- It mints one `ExternalIngest` mark per POST, bound to the digest of the records that POST carried, anchored at the target cell root (works for array appends, which diff element-wise and never touch the array path itself).
 - The mark records `{ channel, audience, receivedAt, valueDigest }`; `channel` = the target cell's space, `audience` = a fixed source string. `receivedAt` is operator wall-clock captured before the write (never from the payload).
 - The sink does **no deduplication** — it appends. Idempotency is a consumer/read-side concern (see [Cross-repo contract](#cross-repo-contract-loom-read-side)).
 
@@ -78,7 +79,7 @@ Provenance at rest is the runtime-minted `ExternalIngest` mark — stronger and 
 ## What's reused vs. new (minimized surface)
 
 **Reused verbatim (zero new runtime primitives):**
-- `custodyIngest.update` — the entire write path.
+- `custodyIngest` — the entire write path.
 - The webhook bearer-auth flow: Bearer-present→401, registration lookup→502-on-storage-error, missing/disabled→dummy-hash-equalized verify→401, timing-safe verify→401 (`webhooks.handlers.ts:106-135`).
 - The service-space registry: get/save/delete + per-space index, keyed by `identity.did()` (`webhooks.utils.ts`).
 - The caller-cell resolution idiom (`getCellFromLink → asSchema → sync → synced`) and the `VouchedChannel` shape (OAuth precedent, `oauth2-common.utils.ts`).
@@ -86,7 +87,7 @@ Provenance at rest is the runtime-minted `ExternalIngest` mark — stronger and 
 **Genuinely new, and small:**
 - A `sink: "stream" | "journal"` field on the channel registration and one write-branch on ingest.
 - Validated **leaf-addressing**: a POST names a sub-path leaf appended to the registered base (charset/pattern-checked, traversal-guarded, confined to base+space).
-- The `journal` write itself (one `custodyIngest.update` per POST).
+- The `journal` write itself (one `custodyIngest.appendAll` per POST).
 
 ## Naming
 
@@ -153,7 +154,7 @@ The seam requires these changes on loom's side (Workstream A/D-read):
 - Ingest where the runtime never sees the raw bytes (Estuary is operator-trusted v1).
 - Per-record (vs per-POST) provenance attestation — would need `custodyIngest.append` (N marks); a future fork.
 - Retention/GC of old journal partitions (a future generic trail-management concern).
-- **Intra-partition size cap.** `appendToJournal` does `[...current, ...records]` with no per-partition ceiling, and `custodyIngest.update` re-serializes the whole value each write, so sustained appends to one partition are O(N²) and grow unbounded within per-POST limits. Confined to the token holder's own space and bounded in practice by per-day partitioning (one UTC day of genuine traffic); a cheap element-count backstop is a tracked follow-up, not v1.
+- **Intra-partition size cap.** `appendToJournal` appends with no per-partition ceiling, so the list of records one partition holds grows unbounded within per-POST limits. Confined to the token holder's own space and bounded in practice by per-day partitioning (one UTC day of genuine traffic); a cheap element-count backstop is a tracked follow-up, not v1.
 - **Extracting the shared bearer-auth crypto + registry.** (Still deferred: self-serve create landed without merging the registries, since the two stored-hash encodings must be format-tagged or migrated first — see the fast-follow below.) `verifyIngestSecret`, `randomBase62`, and the service-space registry are copied from `webhooks.utils.ts` (the proven path). A `lib/ingest-registry.ts` extraction shared by both routes is the fast-follow that avoids drift — deferred with the self-serve create work to keep this PR from churning shipped, re-vendored webhook code.
 
 ## Fast-follows (tracked, post-v1)
@@ -161,7 +162,7 @@ The seam requires these changes on loom's side (Workstream A/D-read):
 From the branch critique's P2 list — deliberately NOT in this PR; each has a named trigger:
 
 - **Extract shared bearer-secret crypto** into `lib/channel-secret.ts` — *trigger: the next PR touching either route.* Webhooks keep their async hex `sha256`, ingest its sync base64url; the two stored-hash encodings must be format-tagged or migrated before any registry merge. (Same item as the shared-crypto bullet in Out of scope.)
-- **Per-partition element-count backstop** (~50k) inside the `custodyIngest.update` closure, mapped to a loud 413 — *trigger: before any always-on beacon ships.* Never re-partition server-side. (Same item as the intra-partition size cap in Out of scope.)
+- **Per-partition element-count backstop** (~50k) on the `journal` write, mapped to a loud 413 — *trigger: before any always-on beacon ships.* Checking the count reads the list's length, so an append that checks it conflicts with a concurrent one and retries. Never re-partition server-side. (Same item as the intra-partition size cap in Out of scope.)
 - ~~**Revocation**~~ — **DONE**, and better than the planned `--disable` flag: `POST /api/ingest-channels/revoke` (`cf ingest revoke`) flips `enabled: false` and records `revoked: {at, by}` as an audit record rather than deleting. Rotation is `cf ingest rotate`.
 - **Test gaps** (opportunistic): a `>1 MB` `app.request` asserting the 413 bodyLimit body; a second-append test pinning mark coalescing per (path, origin) (`prepare.ts`); dedup the `ingestMarks` test helper into shared support.
 - **Per-install rate limiting** (429) on the *data plane* — loom's `plan.md` Workstream-D step 3 specifies it; ingest still has only the body cap + `MAX_BATCH`. The *control* plane is now rate-limited (`packages/toolshed/lib/rate-limit.ts`, keyed by client address — a DID-keyed bucket is useless since DIDs are free to generate). Still deferred for ingest itself.

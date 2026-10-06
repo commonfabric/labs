@@ -64,7 +64,7 @@ async function cleanup(
   _storageManager: ReturnType<typeof StorageManager.emulate>,
   tx?: IExtendedStorageTransaction,
 ) {
-  await tx?.commit();
+  await tx?.commit().settled;
   await runtime.dispose();
 }
 

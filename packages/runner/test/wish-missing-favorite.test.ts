@@ -27,7 +27,7 @@ describe("wish favorite discovery", () => {
           { cell: present, tags: ["resources"] },
         ],
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const { commonfabric } = createTrustedBuilder(runtime);
       const pattern = commonfabric.pattern(() => ({
@@ -49,7 +49,7 @@ describe("wish favorite discovery", () => {
           };
         }>(space, "discovery consumer", undefined, run),
       );
-      expect((await run.commit()).error).toBeUndefined();
+      expect((await run.commit().settled).error).toBeUndefined();
       const found = result.key("found").resolveAsCell();
       cancel = found.sink(() => {});
       await result.pull();
@@ -70,7 +70,7 @@ describe("wish favorite discovery", () => {
 
       const restore = runtime.edit();
       missing.withTx(restore).set({ version: 1, name: "Restored provider" });
-      expect((await restore.commit()).error).toBeUndefined();
+      expect((await restore.commit().settled).error).toBeUndefined();
       // The wish builtin is debounced; move logical time past the window.
       await clock.tick(100);
       await runtime.idle();
@@ -99,7 +99,7 @@ describe("wish favorite discovery", () => {
           tags: ["resources"],
         }],
       });
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       const { commonfabric } = createTrustedBuilder(runtime);
       const pattern = commonfabric.pattern(() => ({
         found: commonfabric.wish({
@@ -115,7 +115,7 @@ describe("wish favorite discovery", () => {
         {},
         runtime.getCell(space, "consumer", undefined, tx),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await result.pull();
       await storageManager.synced();
       await runtime.idle();

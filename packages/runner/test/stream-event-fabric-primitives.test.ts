@@ -142,7 +142,7 @@ describe("stream event payloads carrying a FabricPrimitive", () => {
           tx,
         );
         const run = runtime.run(tx, compiled, {}, resultCell);
-        await tx.commit();
+        await tx.commit().settled;
         await run.pull();
 
         run.key("record").send({

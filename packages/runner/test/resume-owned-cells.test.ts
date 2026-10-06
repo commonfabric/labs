@@ -158,7 +158,7 @@ describe("resume owned-cell pre-sync", () => {
       tx0,
     );
     const h1 = rt1.run(tx0, compiled1, { seed: 7 }, rc1);
-    await tx0.commit();
+    await tx0.commit().settled;
     for (let k = 0; k < 10; k++) {
       await h1.pull();
       await rt1.idle();
@@ -183,7 +183,7 @@ describe("resume owned-cell pre-sync", () => {
         compiled1.resultSchema,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const started = await rt2.start(rc2);
       expect(started).toBe(true);
@@ -221,7 +221,7 @@ describe("resume owned-cell pre-sync", () => {
       tx0,
     );
     const h1 = rt1.run(tx0, compiled1, { a: 1, b: 2, c: 3 }, rc1);
-    await tx0.commit();
+    await tx0.commit().settled;
     for (let k = 0; k < 10; k++) {
       await h1.pull();
       await rt1.idle();
@@ -248,7 +248,7 @@ describe("resume owned-cell pre-sync", () => {
         compiled1.resultSchema,
         tx,
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const started = await rt2.start(rc2);
       expect(started).toBe(true);

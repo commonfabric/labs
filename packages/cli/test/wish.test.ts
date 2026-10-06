@@ -71,7 +71,7 @@ describe("cf wish headless read (resolveWish)", () => {
       elements: [],
     });
     profileSpaceCell.key("defaultPattern").set(profileDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     tx = runtime.edit();
@@ -87,7 +87,7 @@ describe("cf wish headless read (resolveWish)", () => {
     ]);
     // deno-lint-ignore no-explicit-any
     (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
   }
 

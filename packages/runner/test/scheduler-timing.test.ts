@@ -104,7 +104,7 @@ describe("debounce and throttling", () => {
   it("should delay action execution when debounce is set", async () => {
     const cell = runtime.getCell<number>(space, "debounce-test", undefined, tx);
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -146,7 +146,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -191,7 +191,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -239,7 +239,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -264,7 +264,7 @@ describe("debounce and throttling", () => {
     expect(result.get()).toBe(10);
 
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await clock.settle();
@@ -273,7 +273,7 @@ describe("debounce and throttling", () => {
 
     await clock.tick(25);
     source.withTx(tx).send(3);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     await clock.tick(30);
@@ -297,7 +297,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -412,7 +412,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Create a slow action (simulated with artificial delay tracking)
@@ -538,7 +538,7 @@ describe("debounce and throttling", () => {
   it("should not auto-debounce fast actions", async () => {
     const cell = runtime.getCell<number>(space, "fast-action", undefined, tx);
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {
@@ -598,7 +598,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runCount = 0;
@@ -642,7 +642,7 @@ describe("debounce and throttling", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {

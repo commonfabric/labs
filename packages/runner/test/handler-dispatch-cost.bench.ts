@@ -187,7 +187,7 @@ async function prepare(size: number, readStats: boolean) {
     tx,
   );
   runtime.run(tx, compiled, argument, result);
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error) throw new Error("Benchmark seeding failed");
   await runtime.idle();
 
@@ -228,7 +228,7 @@ async function prepare(size: number, readStats: boolean) {
     const write = runtime.edit();
     if (workload === "mutate") votes.withTx(write).set(rows);
     out.withTx(write).set(0);
-    const written = await write.commit();
+    const written = await write.commit().settled;
     if (written.error) throw new Error("Benchmark re-seeding failed");
     await drain();
   };

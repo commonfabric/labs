@@ -1,0 +1,7 @@
+{
+  "command": "loom.inspect",
+  "actor": "agent",
+  "loomId": "loom-0123456789abcdef",
+  "version": 12,
+  "originLoomId": "loom-fedcba9876543210"
+}

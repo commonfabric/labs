@@ -84,7 +84,7 @@ describe("profile-home verified external identities", () => {
         initialName: "Ada Lovelace",
       }, resultCell);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await result.pull();
 
       // Loom's verifier writes the assertion as a builtin, the only author
@@ -106,14 +106,14 @@ describe("profile-home verified external identities", () => {
         verifiedAt: "2026-07-15T20:00:00.000Z",
       });
       runtime.prepareTxForCommit(assertionTx);
-      expect((await assertionTx.commit()).error).toBeUndefined();
+      expect((await assertionTx.commit().settled).error).toBeUndefined();
 
       const publishTx = runtime.edit();
       result.withTx(publishTx).key("publishVerifiedIdentities").send({
         identities: [assertion.withTx(publishTx)],
       });
       runtime.prepareTxForCommit(publishTx);
-      expect((await publishTx.commit()).error).toBeUndefined();
+      expect((await publishTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
 
@@ -144,7 +144,7 @@ describe("profile-home verified external identities", () => {
       // marks the transaction cfc-relevant, and a relevant transaction must be
       // prepared before commit — same as the publish above.
       runtime.prepareTxForCommit(revokeTx);
-      expect((await revokeTx.commit()).error).toBeUndefined();
+      expect((await revokeTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
       expect(result.key("verifiedIdentities").get()).toEqual([]);
@@ -181,7 +181,7 @@ describe("profile-home verified external identities", () => {
         ),
       );
       runtime.prepareTxForCommit(setupTx);
-      expect((await setupTx.commit()).error).toBeUndefined();
+      expect((await setupTx.commit().settled).error).toBeUndefined();
       await result.pull();
 
       const assertionTx = runtime.edit();
@@ -197,7 +197,7 @@ describe("profile-home verified external identities", () => {
         verifiedAt: "2026-07-15T20:00:00.000Z",
       });
       runtime.prepareTxForCommit(assertionTx);
-      expect((await assertionTx.commit()).error).toBeUndefined();
+      expect((await assertionTx.commit().settled).error).toBeUndefined();
       for (const field of ["type", "value", "verifiedAt"]) {
         expect(integrityAtoms(assertion.key(field))).not.toContain(INTEGRITY);
       }
@@ -207,7 +207,7 @@ describe("profile-home verified external identities", () => {
         identities: [assertion.withTx(publishTx)],
       });
       runtime.prepareTxForCommit(publishTx);
-      expect((await publishTx.commit()).error).toBeUndefined();
+      expect((await publishTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
       expect(result.key("verifiedIdentities").get()).toEqual([]);
@@ -240,7 +240,7 @@ describe("profile-home verified external identities", () => {
         ),
       );
       runtime.prepareTxForCommit(setupTx);
-      expect((await setupTx.commit()).error).toBeUndefined();
+      expect((await setupTx.commit().settled).error).toBeUndefined();
       await result.pull();
 
       const assertionTx = runtime.edit();
@@ -256,14 +256,14 @@ describe("profile-home verified external identities", () => {
         verifiedAt: "2026-07-15T20:00:00.000Z",
       });
       runtime.prepareTxForCommit(assertionTx);
-      expect((await assertionTx.commit()).error).toBeUndefined();
+      expect((await assertionTx.commit().settled).error).toBeUndefined();
 
       const publishTx = runtime.edit();
       result.withTx(publishTx).key("publishVerifiedIdentities").send({
         identities: [assertion.withTx(publishTx)],
       });
       runtime.prepareTxForCommit(publishTx);
-      expect((await publishTx.commit()).error).toBeUndefined();
+      expect((await publishTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await result.pull();
       expect(result.key("verifiedIdentities").get()).toEqual([]);

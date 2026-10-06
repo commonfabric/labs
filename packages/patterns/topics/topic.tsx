@@ -942,6 +942,17 @@ export const TOPICS_THEME = {
   },
 };
 
+/**
+ * Style for the screen a Topics view fills. `cf-theme` sets its colors as
+ * custom properties and paints nothing itself, so without this the host's
+ * page shows behind the header — a dark one under a dark host theme, where
+ * the theme's dark text cannot be read.
+ */
+export const TOPICS_SCREEN_STYLE = {
+  background: "var(--cf-theme-color-background)",
+  color: "var(--cf-theme-color-text)",
+};
+
 // ===== Pure helpers =====
 
 const MONTHS = [
@@ -2481,7 +2492,7 @@ export default pattern<TopicInput, TopicOutput>(
     // two of them.
     const view = (
       <cf-theme theme={TOPICS_THEME}>
-        <cf-screen>
+        <cf-screen style={TOPICS_SCREEN_STYLE}>
           <cf-vstack slot="header" gap="1" padding="4">
             {editingTitle
               ? (

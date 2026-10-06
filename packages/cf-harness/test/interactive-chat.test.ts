@@ -171,6 +171,39 @@ Deno.test("interactive chat request envelopes bind methods to params", () => {
   assertEquals(request.params.workspace.hostPath, "/workspace");
 });
 
+Deno.test("interactive chat request envelopes carry a typed settlement on resolve_client_action", () => {
+  const typed = {
+    type: HARNESS_CHAT_REQUEST_TYPE,
+    protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+    requestId: "req-resolve-typed",
+    method: "resolve_client_action",
+    params: {
+      sessionId: "chat-session-1",
+      actionId: "action-1",
+      settlement: {
+        status: "failed_to_deliver",
+        reason: "the Weaver could not reach the service",
+        landed: "no",
+      },
+    },
+  } satisfies HarnessChatRequestEnvelope<"resolve_client_action">;
+  const answer = {
+    type: HARNESS_CHAT_REQUEST_TYPE,
+    protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+    requestId: "req-resolve-answer",
+    method: "resolve_client_action",
+    params: {
+      sessionId: "chat-session-1",
+      actionId: "action-2",
+      outcome: "done",
+      result: "Opened Reading.",
+    },
+  } satisfies HarnessChatRequestEnvelope<"resolve_client_action">;
+
+  assertEquals(typed.params.settlement.status, "failed_to_deliver");
+  assertEquals(answer.params.outcome, "done");
+});
+
 Deno.test("interactive chat contract supports reusable turn cancel", () => {
   const service = new InMemoryInteractiveChatContract();
   const browserAccess: HarnessChatBrowserAccessLease = {

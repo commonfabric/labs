@@ -85,6 +85,12 @@ import {
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
+import {
+  diagnosticPrefix,
+  type PendingCommitContext,
+  type SpaceStorageDiagnostic,
+  type StorageDiagnostics,
+} from "./diagnostics.ts";
 import type { Cell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import {
@@ -140,6 +146,7 @@ import {
   IStorageSubscription,
   IStorageTransaction,
   IStorageTransactionInconsistent,
+  NativeCommitOptions,
   NativeStorageCommit,
   PullError,
   PushError,
@@ -152,7 +159,6 @@ import {
   StorageTransactionRejected,
   StoreReadThrough,
   toReplicaLoadFailureError,
-  TransactionCommitOptions,
   UnexaminedAbsence,
   Unit,
   type ViewInterestLease,
@@ -1211,7 +1217,13 @@ export class StorageManager implements IStorageManager {
    * carries cross-space _read_ work (link-target loads) and so must not gate
    * questions of whether there are unconfirmed writes.
    */
-  #pendingCommits = new Set<Promise<unknown>>();
+  #pendingCommits = new Map<Promise<unknown>, {
+    id: number;
+    startedAt: number;
+    context?: () => PendingCommitContext;
+  }>();
+
+  #nextPendingCommitId = 1;
 
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
@@ -2135,11 +2147,18 @@ export class StorageManager implements IStorageManager {
     return () => this.#spaceAccessChangeObservers.delete(observer);
   }
 
-  trackPendingCommit(promise: Promise<unknown>): void {
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void {
     // Normalize so a rejected commit settles the barrier instead of leaking an
     // unhandled rejection; the caller keeps the original promise for results.
     const tracked = promise.then(() => {}, () => {});
-    this.#pendingCommits.add(tracked);
+    this.#pendingCommits.set(tracked, {
+      id: this.#nextPendingCommitId++,
+      startedAt: performance.now(),
+      context,
+    });
     if (this.#pendingCommits.size === 1) {
       this.#notifyPendingCommits(true);
     }
@@ -2151,12 +2170,35 @@ export class StorageManager implements IStorageManager {
     });
   }
 
+  /** @inheritDoc */
+  getDiagnostics(): StorageDiagnostics {
+    const now = performance.now();
+    const pendingCommits = diagnosticPrefix(this.#pendingCommits.values()).map(
+      ({ id, startedAt, context }) => ({
+        ...context?.() ?? { kind: "unknown" as const },
+        id,
+        ageMs: Math.max(0, now - startedAt),
+      }),
+    );
+    const spaces = diagnosticPrefix(this.#providers.values()).map(
+      (provider) => provider.replica.getDiagnostics(),
+    );
+    return {
+      pendingCommitCount: this.#pendingCommits.size,
+      pendingCommits,
+      pendingCommitsOmitted: this.#pendingCommits.size - pendingCommits.length,
+      pendingCrossSpaceCount: this.pendingCrossSpacePromiseCount(),
+      spaces,
+      spacesOmitted: this.#providers.size - spaces.length,
+    };
+  }
+
   hasPendingCommits(): boolean {
     return this.#pendingCommits.size > 0;
   }
 
   async pendingCommitsSettled(): Promise<void> {
-    await Promise.allSettled([...this.#pendingCommits]);
+    await Promise.allSettled(this.#pendingCommits.keys());
   }
 
   /**
@@ -4137,6 +4179,23 @@ export class SpaceReplica
     return this.#space;
   }
 
+  /** Current session progress without starting I/O or waiting for commits. */
+  getDiagnostics(): SpaceStorageDiagnostic {
+    return {
+      space: this.#space,
+      sessionId: this.#sessionSession?.sessionId,
+      caughtUpLocalSeq: this.#caughtUpLocalSeq,
+      pendingCommitCount: this.#commitPromises.size,
+      pendingReadCount: this.#syncPromises.size,
+      unsettledLocalSeqs: diagnosticPrefix(this.#commitOutcomeBySeq.keys()),
+      unsettledCount: this.#commitOutcomeBySeq.size,
+      repairLocalSeqs: diagnosticPrefix(this.#rejectedPendingLayers.keys()),
+      repairCount: this.#rejectedPendingLayers.size,
+      parkedAcceptLocalSeqs: diagnosticPrefix(this.#parkedAccepts.keys()),
+      parkedAcceptCount: this.#parkedAccepts.size,
+    };
+  }
+
   /**
    * The scope INSTANCE key a local address keys under (see `docKey`):
    * the address's explicit `scopeKey` when it names one; else the scope
@@ -5677,7 +5736,7 @@ export class SpaceReplica
   async commitNative(
     transaction: NativeStorageCommit,
     source?: IStorageTransaction,
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const preconditions = activeCommitPreconditions(transaction.preconditions);
     const operations = withCommitTiming(
@@ -6447,7 +6506,7 @@ export class SpaceReplica
     source?: IStorageTransaction,
     preconditions: readonly CommitPrecondition[] = [],
     sqliteOps: readonly SqliteOperation[] = [],
-    commitOptions?: TransactionCommitOptions,
+    commitOptions?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     if (
@@ -6703,7 +6762,7 @@ export class SpaceReplica
     options: {
       routeSources?: readonly IStorageTransaction[];
       prepareIssue?: (commit: ClientCommit) => boolean;
-      commitOptions?: TransactionCommitOptions;
+      commitOptions?: NativeCommitOptions;
     } = {},
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const routeSources = options.routeSources ??
@@ -8803,10 +8862,9 @@ export class SpaceReplica
     // contract is "storage fully settled", which under parking includes the
     // fan-out of this replica's own accepted writes (CT-1950). The push
     // promise resolves at the verdict, so the barrier needs its own hold.
-    // A verdict-resolving commit opts out of the hold — its premise is
-    // "accepted but not fanned out", which a synced() that forces the
-    // fan-out through would destroy — while its SETTLEMENT timeline still
-    // drains coverage; only the caller's returned promise resolves early.
+    // Native verdict mode disables this hold for controlled-staleness
+    // callers. Transaction receipts still drain coverage in settlement;
+    // observing their verdict selects the earlier outcome independently.
     if (!resolveAtVerdict) {
       const hold: Promise<Result<Unit, StorageTransactionRejected>> = settled
         .promise.then(() => ({ ok: {} }));

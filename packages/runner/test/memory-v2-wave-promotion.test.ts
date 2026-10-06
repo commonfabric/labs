@@ -340,7 +340,7 @@ describe("memory-v2-wave-promotion", () => {
     try {
       const seed = runtime.edit();
       doc.withTx(seed).set({ items: [] });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const phases: string[] = [];
       const receipts: Array<{ localSeq: number; seq: number }> = [];
       const observed: Promise<void>[] = [];
@@ -374,7 +374,7 @@ describe("memory-v2-wave-promotion", () => {
           kind: "derivation",
         });
         doc.withTx(tx).key("items").push(item);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       };
       const first = newWave();
       runtime.installSealDestination(first);
@@ -476,7 +476,7 @@ describe("memory-v2-wave-promotion", () => {
     try {
       const seed = runtime.edit();
       doc.withTx(seed).set({ items: [] });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const replica = manager.open(foreign).replica as SpaceReplica;
       const receipts: Array<{ localSeq: number; seq: number }> = [];
       const observed: Promise<void>[] = [];
@@ -527,7 +527,7 @@ describe("memory-v2-wave-promotion", () => {
         )
           .withTx(tx).set(item);
         doc.withTx(tx).key("items").push(item);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       runtime.clearSealDestination();
       const outcome = await wave.commitWave(sink);

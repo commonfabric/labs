@@ -21,6 +21,7 @@ import {
   fileSuite,
   type Invocation,
   type Location,
+  reachedByChange,
   type Suite,
   unavailableFrom,
 } from "./suite.ts";
@@ -149,7 +150,23 @@ async function patternIntegrationSuites(
         unavailable: oppositeLane.enabled ? on.unavailable : [],
       }],
     }),
-  ];
+  ].map((suite) => ({
+    ...suite,
+    unitsForChange(changed: ReadonlySet<string>) {
+      // Catalog conflict and receipt behavior is exercised by the compiled
+      // Home integration, including cases the authored test cannot observe.
+      const catalogChanged = reachedByChange([
+        `${packageDir}/system/home.tsx`,
+        `${packageDir}/system/shared-space-catalog.ts`,
+      ], changed);
+      return suite.units.filter((unit) =>
+        changed.has(unit) ||
+        (catalogChanged &&
+          unit ===
+            `${packageDir}/integration/home-shared-space-catalog.test.ts`)
+      );
+    },
+  }));
 }
 
 /**

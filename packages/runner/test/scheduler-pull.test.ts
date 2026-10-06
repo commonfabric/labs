@@ -63,7 +63,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let handlerRuns = 0;
@@ -100,7 +100,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -133,7 +133,7 @@ describe("pull-based scheduling", () => {
 
     // Change source - in pull mode, computation should be marked dirty
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Give time for the storage notification to process
@@ -156,7 +156,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     target.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let writerRuns = 0;
@@ -212,7 +212,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     unrelatedResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectRuns = 0;
@@ -289,7 +289,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childSubscribed = false;
@@ -376,7 +376,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -421,7 +421,7 @@ describe("pull-based scheduling", () => {
     expect(effectResult.get()).toBe(1);
 
     source.withTx(tx).send(3);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
 
@@ -431,7 +431,7 @@ describe("pull-based scheduling", () => {
     expect(effectResult.get()).toBe(1);
 
     source.withTx(tx).send(4);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
 
@@ -463,7 +463,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectRuns = 0;
@@ -516,7 +516,7 @@ describe("pull-based scheduling", () => {
     source.withTx(tx).send(2);
     await expectSemanticCommitNotifiesSynchronously(
       storageManager,
-      () => tx.commit(),
+      () => tx.commit().settled,
     );
     tx = runtime.edit();
     await effectResult.pull();
@@ -546,7 +546,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -596,7 +596,7 @@ describe("pull-based scheduling", () => {
     // coverage round trip — so reshape the marked-but-unrun state before
     // awaiting, then let the single pass run it.
     source.withTx(tx).send(2);
-    const invalidateCommit = tx.commit();
+    const invalidateCommit = tx.commit().settled;
     tx = runtime.edit();
 
     const schedulerInternal = getStaleSchedulerInternals(runtime.scheduler);
@@ -628,7 +628,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     derived.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -698,7 +698,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childSubscribed = false;
@@ -790,7 +790,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     parentResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let childSubscribed = false;
@@ -843,7 +843,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     childResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectRuns = 0;
@@ -917,7 +917,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     rightResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -982,7 +982,7 @@ describe("pull-based scheduling", () => {
 
     const updateTx = runtime.edit();
     source.withTx(updateTx).send(2);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     tx = runtime.edit();
     await runtime.scheduler.idle();
 
@@ -1022,7 +1022,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let comp1Runs = 0;
@@ -1086,7 +1086,7 @@ describe("pull-based scheduling", () => {
 
     const tx2 = runtime.edit();
     source.withTx(tx2).send(5);
-    await tx2.commit();
+    await tx2.commit().settled;
     tx = runtime.edit();
     await effectResult.pull();
 
@@ -1132,7 +1132,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     effectResult.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let effectRuns = 0;
@@ -1182,7 +1182,7 @@ describe("pull-based scheduling", () => {
     // Switch computation to sourceB
     const toggleTx = runtime.edit();
     selector.withTx(toggleTx).send(true);
-    await toggleTx.commit();
+    await toggleTx.commit().settled;
     tx = runtime.edit();
     await effectResult.pull();
 
@@ -1192,7 +1192,7 @@ describe("pull-based scheduling", () => {
     // Updating sourceA should not dirty the computation any more
     const tx3 = runtime.edit();
     sourceA.withTx(tx3).send(999);
-    await tx3.commit();
+    await tx3.commit().settled;
     tx = runtime.edit();
     await effectResult.pull();
 
@@ -1203,7 +1203,7 @@ describe("pull-based scheduling", () => {
     // Updating sourceB should still run the computation
     const tx4 = runtime.edit();
     sourceB.withTx(tx4).send(6);
-    await tx4.commit();
+    await tx4.commit().settled;
     tx = runtime.edit();
     await effectResult.pull();
 
@@ -1219,7 +1219,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     source.set(1);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const computation: Action = () => {};
@@ -1275,7 +1275,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     sink.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const actionA: Action = (actionTx) => {
@@ -1322,7 +1322,7 @@ describe("pull-based scheduling", () => {
     // Assert the marked-but-unrun shape before awaiting.
     const updateTx = runtime.edit();
     source.withTx(updateTx).send(2);
-    const updateCommit = updateTx.commit();
+    const updateCommit = updateTx.commit().settled;
 
     const schedulerInternal = getStaleSchedulerInternals(runtime.scheduler);
     expect(runtime.scheduler.isDirty(actionA)).toBe(true);
@@ -1348,7 +1348,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     output.set({ children: [] });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computationRuns = 0;
@@ -1439,7 +1439,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     sink.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let stableRuns = 0;
@@ -1495,7 +1495,7 @@ describe("pull-based scheduling", () => {
 
     const updateTx = runtime.edit();
     source.withTx(updateTx).send(2);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await runtime.scheduler.idle();
 
     expect(stableRuns).toBe(1);
@@ -1538,7 +1538,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     sink.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let downstreamRuns = 0;
@@ -1586,7 +1586,7 @@ describe("pull-based scheduling", () => {
     downstreamRuns = 0;
     const updateTx = runtime.edit();
     source.withTx(updateTx).send(2);
-    await updateTx.commit();
+    await updateTx.commit().settled;
     await sink.pull();
 
     expect(downstreamRuns).toBe(1);
@@ -1630,7 +1630,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let upstreamRuns = 0;
@@ -1681,7 +1681,7 @@ describe("pull-based scheduling", () => {
     downstreamRuns = 0;
     const updateTx = runtime.edit();
     source.withTx(updateTx).send(4);
-    await updateTx.commit();
+    await updateTx.commit().settled;
 
     runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 5);
     await result.pull();
@@ -1752,7 +1752,7 @@ describe("pull-based scheduling", () => {
         cell.set(0);
         fanCells.push(cell);
       }
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const sharedWriter: Action = (actionTx) => {
@@ -1867,7 +1867,7 @@ describe("pull-based scheduling", () => {
     materialized.set(0);
     eventStream.set(0);
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let materializerRuns = 0;
@@ -1911,7 +1911,7 @@ describe("pull-based scheduling", () => {
     // Invalidate the materializer via its source; `materialized` is now stale.
     const updateTx = runtime.edit();
     source.withTx(updateTx).send(5);
-    await updateTx.commit();
+    await updateTx.commit().settled;
 
     runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 7);
     await result.pull();
@@ -1978,7 +1978,7 @@ describe("pull-based scheduling", () => {
         tx,
       );
       result.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       for (let i = 0; i < N; i++) {
@@ -2034,7 +2034,7 @@ describe("pull-based scheduling", () => {
       // Invalidate exactly one of the 200 upstream writers.
       const updateTx = runtime.edit();
       sources[0].withTx(updateTx).send(1);
-      await updateTx.commit();
+      await updateTx.commit().settled;
 
       runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 9);
       await result.pull();
@@ -2090,7 +2090,7 @@ describe("pull-based scheduling", () => {
       tx,
     );
     sink.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const action: Action = (actionTx) => {
@@ -2127,7 +2127,7 @@ describe("pull-based scheduling", () => {
 
     const switchTx = runtime.edit();
     selector.withTx(switchTx).send(1);
-    await switchTx.commit();
+    await switchTx.commit().settled;
     await sink.pull();
     expect(sink.get()).toBe(10);
 
@@ -2136,7 +2136,7 @@ describe("pull-based scheduling", () => {
     // Assert the marking at that synchronous point, on both sides.
     const updateOldSourceTx = runtime.edit();
     sourceA.withTx(updateOldSourceTx).send(2);
-    const updateOldSourceCommit = updateOldSourceTx.commit();
+    const updateOldSourceCommit = updateOldSourceTx.commit().settled;
 
     const schedulerInternal = getStaleSchedulerInternals(runtime.scheduler);
     expect(runtime.scheduler.isDirty(action)).toBe(false);
@@ -2145,7 +2145,7 @@ describe("pull-based scheduling", () => {
 
     const updateNewSourceTx = runtime.edit();
     sourceB.withTx(updateNewSourceTx).send(11);
-    const updateNewSourceCommit = updateNewSourceTx.commit();
+    const updateNewSourceCommit = updateNewSourceTx.commit().settled;
     expect(runtime.scheduler.isDirty(action)).toBe(true);
     expect(schedulerInternal.isInvalid(action)).toBe(true);
     await updateNewSourceCommit;

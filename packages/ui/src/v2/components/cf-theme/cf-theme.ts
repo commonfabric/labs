@@ -4,6 +4,7 @@ import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import {
   applyThemeToElement,
   type CFTheme,
@@ -17,7 +18,10 @@ export function unwrapThemeCellValues(
   seen = new WeakSet<object>(),
 ): unknown {
   if (isCellHandle(value)) {
-    return value.get();
+    // A theme value the worker will not show, or has not answered, reads as
+    // `undefined`, which the object branch below leaves out, so the default
+    // takes its place.
+    return valueForDisplay(value);
   }
 
   if (!value || typeof value !== "object") {
@@ -35,7 +39,10 @@ export function unwrapThemeCellValues(
 
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    out[key] = unwrapThemeCellValues(child, seen);
+    const unwrapped = unwrapThemeCellValues(child, seen);
+    // Left out rather than set to `undefined`, which a merge would take
+    // over the default.
+    if (unwrapped !== undefined) out[key] = unwrapped;
   }
   return out;
 }
@@ -51,13 +58,14 @@ export function subscribeToThemeCellValues(
     if (isCellHandle(current)) {
       const cellVal = current as CellHandle<unknown>;
       let didReceiveInitialValue = false;
-      const off = cellVal.subscribe(() => {
+      const changed = () => {
         if (!didReceiveInitialValue) {
           didReceiveInitialValue = true;
           return;
         }
         onChange();
-      });
+      };
+      const off = cellVal.subscribe(changed, { onRefused: changed });
       unsubs.push(off);
       return;
     }

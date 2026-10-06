@@ -76,7 +76,7 @@ for (const count of [500, 2000, 4000]) {
       labelMap: { version: 1, entries },
     },
   });
-  const committed = await seed.commit();
+  const committed = await seed.commit().settled;
   if (committed.error) throw committed.error;
   const output = runtime.getCell(space, `witness-out-${count}`, undefined)
     .getAsNormalizedFullLink();

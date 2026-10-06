@@ -1,7 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CellScope } from "@commonfabric/api";
-import { $conn, CellHandle, RequestType } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  $onCellRefused,
+  $onCellUpdate,
+  CellHandle,
+  RequestType,
+} from "@commonfabric/runtime-client";
 import type {
   CellRef,
   PieceSourceRevisionSourceView,
@@ -3589,14 +3595,20 @@ function statefulPiece(
     result = {},
     argument: initialArgument = {} as unknown,
     argumentRef,
+    argumentRefused = false,
     getPieceFails = false,
     deferGetPiece = false,
     sendFails = false,
     scope = "space",
     pieceSchema = { type: "object" } as Record<string, unknown>,
+    fields = {},
+    unsubscribable,
   }: {
     result?: Record<string, unknown>;
     argument?: unknown;
+
+    /** When true, the argument read is refused, with its ref when it has one. */
+    argumentRefused?: boolean;
 
     /** The scope the piece's own cell was reached through. */
     scope?: CellScope;
@@ -3611,30 +3623,77 @@ function statefulPiece(
 
     sendFails?: boolean;
     pieceSchema?: Record<string, unknown>;
+
+    /**
+     * The fields the worker lists for each document, by id: `"refused"` where
+     * it refuses even the list, `"no record"` where the document holds none,
+     * and `"pending"` where it has not answered yet. A document left out
+     * fails the list.
+     */
+    fields?: Readonly<
+      Record<string, readonly string[] | "refused" | "no record" | "pending">
+    >;
+
+    /** A field of the piece whose subscription cannot be opened. */
+    unsubscribable?: string;
   } = {},
 ) {
   const requests: Array<Record<string, unknown>> = [];
   const counters = { subscribes: 0, unsubscribes: 0 };
   const argument = initialArgument;
+  const subscribed: CellHandle[] = [];
   const conn = {
-    subscribe: () => {
+    subscribe: (handle: CellHandle) => {
+      if (
+        unsubscribable !== undefined &&
+        handle.ref().path.join("/") === unsubscribable
+      ) {
+        throw new Error(`no subscription for ${unsubscribable}`);
+      }
       counters.subscribes++;
+      subscribed.push(handle);
     },
     unsubscribe: () => {
       counters.unsubscribes++;
       return Promise.resolve();
     },
+    peersOf: () => [],
     request: (request: Record<string, unknown>) => {
       requests.push(request);
       if (request.type === RequestType.CellGet) {
+        const answer = argumentRefused
+          ? { refused: { refusedBy: "display-ceiling" } }
+          : { value: argument };
         return Promise.resolve(
           request.includeRef && argumentRef
-            ? { value: argument, cell: argumentRef }
-            : { value: argument },
+            ? { ...answer, cell: argumentRef }
+            : answer,
         );
       }
       if (request.type === RequestType.CellSet) {
         return Promise.resolve({});
+      }
+      if (request.type === RequestType.CellFields) {
+        const { id, space, scope, path } = request.cell as CellRef;
+        const listed = fields[id];
+        if (listed === undefined) {
+          return Promise.reject(new Error(`no fields listed for ${id}`));
+        }
+        if (listed === "refused") {
+          return Promise.resolve({ refused: { refusedBy: "display-ceiling" } });
+        }
+        if (listed === "no record") return Promise.resolve({});
+        if (listed === "pending") return new Promise(() => {});
+        return Promise.resolve({
+          fields: Object.fromEntries(
+            listed.map((name) => [name, {
+              id,
+              space,
+              scope,
+              path: [...path, name],
+            }]),
+          ),
+        });
       }
       if (request.type === RequestType.CellSend) {
         return sendFails
@@ -3672,7 +3731,7 @@ function statefulPiece(
     path: [],
     schema: pieceSchema,
   } as unknown as CellRef;
-  const cell = new CellHandle(rt, pieceRef, result);
+  const cell = new CellHandle(rt, pieceRef, { value: result });
   const pieceHandle = { cell: () => cell };
 
   /** Resolve the oldest still-pending deferred getPiece call. */
@@ -3700,6 +3759,22 @@ function statefulPiece(
       schema: eventSchema,
     } as unknown as CellRef);
 
+  /**
+   * The handle the panels subscribed at `path` of the document `id`, the
+   * last one when several were, through which a test delivers what the
+   * worker would.
+   */
+  const subscribedAt = (id: string, path: string[]): CellHandle => {
+    const found = subscribed.findLast((handle) =>
+      handle.ref().id === id &&
+      JSON.stringify(handle.ref().path) === JSON.stringify(path)
+    );
+    if (found === undefined) {
+      throw new Error(`nothing subscribed at ${id} ${path.join("/")}`);
+    }
+    return found;
+  };
+
   return {
     cell,
     requests,
@@ -3708,9 +3783,27 @@ function statefulPiece(
     streamHandle,
     handlerHandle,
     resolveGetPiece,
+    subscribedAt,
     rt,
   };
 }
+
+const REFUSED = { refusedBy: "display-ceiling" } as const;
+
+/**
+ * The address a refused read of a piece's argument names, whose schema the
+ * host holds only as an interned reference.
+ */
+const ARGUMENT_REF: CellRef = {
+  id: "of:fid1:argument",
+  space: SPACE,
+  scope: "space",
+  path: [],
+  schema: { $ref: "cid:fid1:interned-argument-schema" },
+};
+
+/** What the data panel says beneath a value it shows field by field. */
+const FIELD_BY_FIELD_NOTE = "is shown on its own";
 
 describe("the data panel", () => {
   it("shows the argument and the result", async () => {
@@ -3756,6 +3849,275 @@ describe("the data panel", () => {
       (request) => request.type === RequestType.CellGet,
     );
     expect(argumentReads.length).toBe(1);
+  });
+
+  it("shows a result the worker answers holding nothing as such, not as one it waits for", async () => {
+    const piece = statefulPiece();
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("data");
+
+    piece.cell[$onCellUpdate](undefined);
+
+    const rendered = shows(menu);
+    expect(rendered).not.toContain("Waiting for a value");
+  });
+
+  describe("for a piece whose whole result the worker refuses", () => {
+    // A piece holding one field the viewer may not see, such as a
+    // credential, is shown field by field: everything the display ceiling
+    // admits, and a mark at each field it refuses. The worker lists the
+    // fields, so a piece whose schema the host holds only as an interned
+    // reference is shown field by field too.
+    const schema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        auth: { type: "object" },
+        sync: { asCell: ["stream"] },
+      },
+    };
+    const fields = { "of:fid1:piece": ["title", "auth", "sync"] };
+
+    it("shows every field of a piece with an interned schema, and marks only the refused one", async () => {
+      const piece = statefulPiece({
+        pieceSchema: { $ref: "cid:fid1:interned-piece-schema" },
+        fields: { "of:fid1:piece": ["title", "count", "auth"] },
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+      piece.subscribedAt("of:fid1:piece", ["title"])[$onCellUpdate](
+        "Inbox importer",
+      );
+      piece.subscribedAt("of:fid1:piece", ["count"])[$onCellUpdate](3);
+      piece.subscribedAt("of:fid1:piece", ["auth"])[$onCellRefused](REFUSED);
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"title": "Inbox importer"');
+      expect(rendered).toContain('"count": 3');
+      expect(rendered).toContain('"auth": "[hidden by policy]"');
+      expect(rendered.match(/\[hidden by policy\]/g)).toHaveLength(1);
+    });
+
+    for (
+      const [answer, listed, mark] of [
+        ["has not answered", "pending", "Waiting for a value"],
+        ["could not read", undefined, "[could not be read]"],
+        ["found no record in", "no record", "[hidden by policy]"],
+      ] as const
+    ) {
+      it(`shows a result whose list of fields the worker ${answer} as such, not as an empty record`, async () => {
+        const piece = statefulPiece({
+          pieceSchema: schema,
+          argument: { account: "owner account" },
+          fields: listed === undefined ? {} : { "of:fid1:piece": listed },
+        });
+        const menu = openMenu(piece.cell);
+        await menu.showPanel("data");
+
+        piece.cell[$onCellRefused](REFUSED);
+        await settled();
+
+        const rendered = shows(menu);
+        expect(rendered).toContain(mark);
+        expect(rendered).not.toContain("{}");
+        // Nothing is shown field by field, so nothing says it is.
+        expect(rendered).not.toContain(FIELD_BY_FIELD_NOTE);
+      });
+    }
+
+    it("shows a field the worker has not answered for as waiting, not as one holding nothing", async () => {
+      const piece = statefulPiece({ pieceSchema: schema, fields });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"title": "[waiting]"');
+      expect(rendered).toContain('"auth": "[waiting]"');
+    });
+
+    it("marks a field whose read cannot be opened as not read", async () => {
+      const piece = statefulPiece({
+        pieceSchema: schema,
+        fields,
+        unsubscribable: "title",
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      expect(shows(menu)).toContain('"title": "[could not be read]"');
+    });
+
+    it("says it shows a result field by field where it does", async () => {
+      const piece = statefulPiece({ pieceSchema: schema, fields });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      expect(shows(menu)).toContain(FIELD_BY_FIELD_NOTE);
+    });
+
+    it("lists again at each refusal, showing a field added and dropping one removed meanwhile", async () => {
+      const listed: Record<string, readonly string[]> = {
+        "of:fid1:piece": ["title", "removed"],
+      };
+      const piece = statefulPiece({ pieceSchema: schema, fields: listed });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+      const title = piece.subscribedAt("of:fid1:piece", ["title"]);
+      title[$onCellUpdate]("Inbox importer");
+      piece.subscribedAt("of:fid1:piece", ["removed"])[$onCellUpdate]("gone");
+
+      listed["of:fid1:piece"] = ["title", "added"];
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+      piece.subscribedAt("of:fid1:piece", ["added"])[$onCellUpdate]("new");
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"title": "Inbox importer"');
+      expect(rendered).toContain('"added": "new"');
+      expect(rendered).not.toContain('"removed"');
+      // A field still listed keeps the read it had.
+      expect(piece.subscribedAt("of:fid1:piece", ["title"])).toBe(title);
+    });
+
+    it("shows a field the schema does not declare", async () => {
+      const piece = statefulPiece({
+        pieceSchema: schema,
+        fields: { "of:fid1:piece": ["title", "notes"] },
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+      piece.subscribedAt("of:fid1:piece", ["notes"])[$onCellUpdate](
+        "undeclared",
+      );
+
+      expect(shows(menu)).toContain('"notes": "undeclared"');
+    });
+
+    it("marks the whole result where the worker refuses even its list of fields", async () => {
+      const piece = statefulPiece({
+        pieceSchema: schema,
+        fields: { "of:fid1:piece": "refused" },
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      const rendered = shows(menu);
+      expect(rendered).toContain("[hidden by policy]");
+      expect(rendered).not.toContain('"title"');
+      expect(rendered).not.toContain(FIELD_BY_FIELD_NOTE);
+    });
+
+    it("shows the whole result again once the worker admits it", async () => {
+      const piece = statefulPiece({ pieceSchema: schema, fields });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+      piece.subscribedAt("of:fid1:piece", ["auth"])[$onCellRefused](REFUSED);
+
+      piece.cell[$onCellUpdate]({ title: "Inbox importer", auth: "admitted" });
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"auth": "admitted"');
+      expect(rendered).not.toContain("[hidden by policy]");
+    });
+
+    it("opens no field reads for a list that arrives after the whole was admitted", async () => {
+      const piece = statefulPiece({ pieceSchema: schema, fields });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      piece.cell[$onCellRefused](REFUSED);
+      piece.cell[$onCellUpdate]({ title: "Inbox importer" });
+
+      await settled();
+
+      expect(() => piece.subscribedAt("of:fid1:piece", ["title"])).toThrow(
+        "nothing subscribed",
+      );
+      expect(shows(menu)).toContain('"title": "Inbox importer"');
+    });
+
+    it("lists the handlers the schema declares", async () => {
+      const piece = statefulPiece({ pieceSchema: schema, fields });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("actions");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      expect(shows(menu)).toContain("piece-action-sync");
+    });
+
+    it("lists a handler the schema declares that the value does not carry", async () => {
+      const piece = statefulPiece({ pieceSchema: schema });
+      await piece.cell.set({ title: "Inbox importer" });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("actions");
+
+      expect(shows(menu)).toContain("piece-action-sync");
+    });
+
+    it("shows a refused argument field by field when its address is given", async () => {
+      const piece = statefulPiece({
+        argumentRefused: true,
+        argumentRef: ARGUMENT_REF,
+        fields: { "of:fid1:argument": ["account"] },
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.subscribedAt("of:fid1:argument", [])[$onCellRefused](REFUSED);
+      await settled();
+      piece.subscribedAt("of:fid1:argument", ["account"])[$onCellUpdate](
+        "owner account",
+      );
+
+      expect(shows(menu)).toContain('"account": "owner account"');
+    });
+
+    it("never shows a refused argument whose address is given as one holding nothing", async () => {
+      const piece = statefulPiece({
+        argumentRefused: true,
+        argumentRef: ARGUMENT_REF,
+        fields: { "of:fid1:argument": "pending" },
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      await settled();
+
+      // Its read was refused, and the list of its fields has not answered:
+      // the panel waits, before the argument's own subscription says so.
+      expect(shows(menu)).toContain("Reading argument");
+    });
+
+    it("marks an argument refused before its address could be given", async () => {
+      const piece = statefulPiece({ argumentRefused: true });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      const rendered = shows(menu);
+      expect(rendered).toContain("[hidden by policy]");
+      expect(rendered).not.toContain("Could not read");
+    });
   });
 
   it("reports a data read that failed", async () => {

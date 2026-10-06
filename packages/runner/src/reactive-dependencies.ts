@@ -192,7 +192,32 @@ export function determineTriggeredActions(
   startPath: readonly MemoryAddressPathComponent[] = [],
   options?: DetermineTriggeredActionsOptions,
 ): Action[] {
-  const triggeredActions: Action[] = [];
+  return determineActionTriggers(
+    dependencies,
+    before,
+    after,
+    startPath,
+    options,
+  ).map(({ action }) => action);
+}
+
+/**
+ * {@link determineTriggeredActions}, naming for each triggered action a read
+ * path of its whose value changed. That one path is reason enough for the
+ * action to run, so it is the address that caused the run to be scheduled,
+ * whatever else the same write changed.
+ */
+export function determineActionTriggers(
+  dependencies: Map<Action, SortedAndCompactPaths>,
+  before: FabricValue,
+  after: FabricValue,
+  startPath: readonly MemoryAddressPathComponent[] = [],
+  options?: DetermineTriggeredActionsOptions,
+): { action: Action; path: readonly MemoryAddressPathComponent[] }[] {
+  const triggered: {
+    action: Action;
+    path: readonly MemoryAddressPathComponent[];
+  }[] = [];
 
   let subscribers: { action: Action; paths: SortedAndCompactPaths }[] = Array
     .from(
@@ -301,7 +326,9 @@ export function determineTriggeredActions(
 
     if (hasChanged) {
       // If the value changed, trigger the actions
-      for (const { action } of current) triggeredActions.push(action);
+      for (const { action } of current) {
+        triggered.push({ action, path: targetPath });
+      }
     } else {
       // Otherwise, queue up the next path, keeping subscribers sorted by path
       for (const subscriber of current) {
@@ -321,7 +348,7 @@ export function determineTriggeredActions(
     }
   }
 
-  return triggeredActions;
+  return triggered;
 }
 
 export function arraysOverlap(

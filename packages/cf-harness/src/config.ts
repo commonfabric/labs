@@ -3,6 +3,10 @@ import {
   validateLoomAuthoringConfig,
 } from "./loom-authoring.ts";
 import {
+  type HarnessLoomCommandsConfig,
+  validateLoomCommandsConfig,
+} from "./loom-commands.ts";
+import {
   type HarnessLoomRetrievalConfig,
   validateLoomRetrievalConfig,
 } from "./loom-retrieval.ts";
@@ -41,6 +45,10 @@ import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import type { DockerRunscSandboxConfig } from "./sandbox/types.ts";
 
 export const DEFAULT_GATEWAY_BASE_URL = "https://llm.stage.commontools.dev/";
+
+/** The model selected for a new run when neither flags nor environment name one. */
+export const DEFAULT_HARNESS_MODEL = "gpt-6.1-sol";
+
 export const DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE =
   "enforce-strict" as const satisfies CfcEnforcementMode;
 export type HarnessGatewayAuthMode = "bearer" | "none";
@@ -259,6 +267,9 @@ interface HarnessCommonConfig {
   /** Explicit host retrieval backing; never inferred from a model input. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
+  /** Explicit host command broker; never inferred from a model input. */
+  loomCommands?: HarnessLoomCommandsConfig;
+
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
   sandbox?: DockerRunscSandboxConfig;
@@ -337,6 +348,9 @@ export interface ResolveHarnessConfigOptions {
 
   /** Explicit host retrieval backing; never inferred from a model input. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /** Explicit host command broker; never inferred from a model input. */
+  loomCommands?: HarnessLoomCommandsConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -706,6 +720,9 @@ export const resolveHarnessConfig = (
   if (options.loomRetrieval !== undefined) {
     validateLoomRetrievalConfig(options.loomRetrieval);
   }
+  if (options.loomCommands !== undefined) {
+    validateLoomCommandsConfig(options.loomCommands);
+  }
   const modelProvider = options.modelProvider ?? "openai-compatible-gateway";
   if (
     options.credentialOwner !== undefined &&
@@ -807,6 +824,9 @@ export const resolveHarnessConfig = (
       : {}),
     ...(options.loomRetrieval !== undefined
       ? { loomRetrieval: structuredClone(options.loomRetrieval) }
+      : {}),
+    ...(options.loomCommands !== undefined
+      ? { loomCommands: structuredClone(options.loomCommands) }
       : {}),
     ...(options.patternIndex !== undefined
       ? { patternIndex: options.patternIndex }

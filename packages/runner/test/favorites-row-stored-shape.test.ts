@@ -180,7 +180,7 @@ describe("a stored favorite row instantiates in favorites-manager", () => {
     rt.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
       hostCell as never,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await hostRunning.pull();
     await rt.idle();
 
@@ -209,7 +209,7 @@ describe("a stored favorite row instantiates in favorites-manager", () => {
         userTags: [],
       },
     ] as never);
-    await seedTx.commit();
+    await seedTx.commit().settled;
     await rt.idle();
 
     // The REAL shipped pattern, over that stored row.
@@ -225,7 +225,7 @@ describe("a stored favorite row instantiates in favorites-manager", () => {
       managerTx,
     );
     const managerRunning = rt.run(managerTx, manager, {}, managerCell);
-    await managerTx.commit();
+    await managerTx.commit().settled;
     await managerRunning.pull();
     await rt.idle();
 
@@ -256,7 +256,7 @@ describe("a stored favorite row instantiates in favorites-manager", () => {
       identity: v2Ref.identity,
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await v2Tx.commit();
+    await v2Tx.commit().settled;
     await rt.idle();
     await rt.runner.idlePointerMaintenance();
     await rt.idle();

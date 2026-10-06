@@ -155,7 +155,7 @@ every write it makes lands on an id beginning with `cid:`. The flow derivation
 consults no `cid:` document on any of its three channels:
 
 - a write target whose id begins with `cid:` is skipped by `valueWriteTargets`;
-- a read of one is skipped by `flowReadExcluded`;
+- a read of one is skipped by `forEachFlowObservation`;
 - a trigger read naming one is skipped by `forEachFlowObservation`, on top of
   the same filter applied when trigger reads are recorded;
 - a link written into a labeled document that names a `cid:` source records

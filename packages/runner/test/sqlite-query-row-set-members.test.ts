@@ -166,7 +166,7 @@ describe("sqlite-query-row-set-members", () => {
   ): Promise<void> => {
     const tx = runtime.edit();
     tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** Two rows in `c-alpha` and one in `c-beta`. */
@@ -212,7 +212,7 @@ describe("sqlite-query-row-set-members", () => {
       type: "boolean",
     }, tx);
     useLabeled.set(false);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return { plain, labeled, useLabeled };
   };
 
@@ -290,7 +290,7 @@ describe("sqlite-query-row-set-members", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     return result.key("rows") as Cell<any>;
   };
@@ -320,7 +320,7 @@ describe("sqlite-query-row-set-members", () => {
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     return result.key("rows") as Cell<any>;
   };
@@ -345,14 +345,14 @@ describe("sqlite-query-row-set-members", () => {
   const selectLabeled = async (source: ParameterSource) => {
     const tx = runtime.edit();
     source.useLabeled.withTx(tx).set(true);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** Moves the parameter back to the unlabeled cell, which selects `c-beta`. */
   const selectUnlabeled = async (source: ParameterSource) => {
     const tx = runtime.edit();
     source.useLabeled.withTx(tx).set(false);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** Moves the labeled parameter to another container. */
@@ -362,14 +362,14 @@ describe("sqlite-query-row-set-members", () => {
   ) => {
     const tx = runtime.edit();
     source.labeled.withTx(tx).set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** Moves the unlabeled parameter to another container. */
   const selectPlain = async (source: ParameterSource, value: string) => {
     const tx = runtime.edit();
     source.plain.withTx(tx).set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   };
 
   /** What the row document behind `link` holds. */
@@ -773,7 +773,7 @@ describe("sqlite-query-row-set-members", () => {
         { ...saltLink, type: "application/json", path: ["value"] },
         "planted",
       );
-      expect((await plant.commit()).error).toBeUndefined();
+      expect((await plant.commit().settled).error).toBeUndefined();
       expect(storedSalt()).toBe("planted");
 
       const rows = await saltedRows("salt-planted");
@@ -941,7 +941,7 @@ describe("sqlite-query-row-set-members", () => {
           seedTx,
         );
         target.set({ name: "Ada" });
-        expect((await seedTx.commit()).error).toBeUndefined();
+        expect((await seedTx.commit().settled).error).toBeUndefined();
         await seed(
           db,
           "INSERT INTO messages (container_id, target_cf_link) VALUES (?, ?)",

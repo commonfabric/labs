@@ -1036,7 +1036,7 @@ site-table value that was synchronized. The entry contains the DID, normalized
 host, operation-specific source, and an ISO timestamp assigned by the worker.
 The transaction keeps the synchronized table value as a commit precondition.
 
-The operation awaits `transaction.commit()` and inspects its result. It returns
+The operation awaits `transaction.commit().settled` and inspects its result. It returns
 success only for an `ok` result. A resolved result containing `ConflictError` or
 `StoreError` fails the operation, as does a thrown commit error. The operation
 does not retry any of these failures automatically. A live route accepted

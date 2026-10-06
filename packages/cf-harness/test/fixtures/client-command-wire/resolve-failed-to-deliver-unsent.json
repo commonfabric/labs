@@ -1,0 +1,9 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-7",
+  "settlement": {
+    "status": "failed_to_deliver",
+    "reason": "the request's args are larger than 16384 bytes",
+    "landed": "no"
+  }
+}

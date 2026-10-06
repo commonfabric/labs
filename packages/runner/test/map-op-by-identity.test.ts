@@ -103,7 +103,7 @@ describe("map op passed by identity", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -149,7 +149,7 @@ describe("map op passed by identity", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     // A map sets up its own scheduler actions; drive them with a sink + idle.
     const cancelSink = result.sink(() => {});
@@ -188,7 +188,7 @@ describe("map op passed by identity", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const cancelSink = result.sink(() => {});
     await runtime.idle();

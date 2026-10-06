@@ -54,7 +54,7 @@ describe("editWithRetry conflict aggregation", () => {
         of: staleA.getAsNormalizedFullLink().id,
         scope,
       }));
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await writerStorage.synced();
 
       readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });

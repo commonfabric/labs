@@ -194,6 +194,33 @@ Deno.test("createHarnessCfcInvocationContext derives integrity prompt-slot influ
   assertEquals(context.cfcInputLabels, undefined);
 });
 
+Deno.test("createHarnessCfcInvocationContext labels no prompt-slot influence when no input path is selected", async () => {
+  const context = await createHarnessCfcInvocationContext({
+    sequence: 1,
+    runId: "run-no-label-paths",
+    createdAt: "2026-05-14T17:00:00.000Z",
+    toolId: "bash",
+    operation: "shell",
+    cfcEnforcementMode: "enforce-explicit",
+    cwd: "/workspace",
+    promptSlot: {
+      type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+      source: { type: "cf-harness.test-input", surface: "cli" },
+      role: "direct-command",
+      kernelName: "cf-harness",
+      surface: "cli",
+      subject: "did:key:user",
+      eventId: "evt-1",
+    },
+    runManifest: { present: false },
+    command: "printf hello",
+    cfcInputLabelPaths: [],
+  });
+
+  assertEquals(context.promptSlotInfluenceLabels, undefined);
+  assertEquals(context.cfcInputLabels, undefined);
+});
+
 Deno.test("createHarnessCfcInvocationContext can label prompt-slot and model-context inputs separately", async () => {
   const promptSlot = {
     type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,

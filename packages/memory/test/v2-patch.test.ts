@@ -16,6 +16,8 @@ import {
   assertStrictEquals,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 
 import { FabricInstance } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -415,6 +417,42 @@ Deno.test("memory v2 append and splice take more values than one call's argument
   assertEquals(spliced.value.at(-1), -3);
 });
 
+describe("memory v2 append onto a slot holding `undefined`", () => {
+  // A slot holding `undefined` is what a writer leaves by setting a list to
+  // `undefined`. A writer appending to it sees no list, as at a missing path.
+
+  it("creates the array at an object key", () => {
+    expect(applyPatch({ value: undefined }, [
+      { op: "append", path: "/value", values: ["x"] },
+    ])).toEqual({ value: ["x"] });
+    expect(applyPatch({ value: { items: undefined, n: 1 } }, [
+      { op: "append", path: "/value/items", values: [1, 2] },
+    ])).toEqual({ value: { items: [1, 2], n: 1 } });
+  });
+
+  it("creates the array at an array index", () => {
+    expect(applyPatch({ value: ["a", undefined] }, [
+      { op: "append", path: "/value/1", values: ["x"] },
+    ])).toEqual({ value: ["a", ["x"]] });
+  });
+
+  it("throws when the path goes through a slot holding `undefined`", () => {
+    expect(() =>
+      applyPatch({ value: undefined }, [
+        { op: "append", path: "/value/items", values: ["x"] },
+      ])
+    ).toThrow("path is not traversable at /value/items");
+  });
+
+  it("throws for `null`, which is a value and not an absence", () => {
+    expect(() =>
+      applyPatch({ value: null }, [
+        { op: "append", path: "/value", values: ["x"] },
+      ])
+    ).toThrow();
+  });
+});
+
 Deno.test("memory v2 append rejects a non-array target", () => {
   let threw = false;
   try {
@@ -453,6 +491,14 @@ Deno.test("memory v2 add-unique creates the array when absent", () => {
     { op: "add-unique", path: "/value", values: ["x", "x"] },
   ]) as { value: string[] };
   assertEquals(out, { value: ["x"] });
+});
+
+describe("memory v2 add-unique onto a slot holding `undefined`", () => {
+  it("creates the array, holding each distinct value once", () => {
+    expect(applyPatch({ value: undefined }, [
+      { op: "add-unique", path: "/value", values: ["x", "x", "y"] },
+    ])).toEqual({ value: ["x", "y"] });
+  });
 });
 
 Deno.test("memory v2 add-unique compares by stored value (objects)", () => {

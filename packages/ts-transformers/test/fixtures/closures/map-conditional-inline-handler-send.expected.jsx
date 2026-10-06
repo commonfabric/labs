@@ -168,17 +168,47 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
               {__cfHelpers.when({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
                 type: "boolean"
-            }, {}, {
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, state.key("canVote"), <button type="button" onClick={__cfHandler_1({
         boundCastVote: boundCastVote,
         item: {

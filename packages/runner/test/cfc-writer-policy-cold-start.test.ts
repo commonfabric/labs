@@ -167,7 +167,7 @@ describe("writer-policied inputs of a sub-piece", () => {
     const cell = runtime.getCell<Piece>(space, name, undefined, tx);
     const running = runtime.run(tx, pattern, {}, cell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
     await send(runtime, running, "submit", { seat: 1 });
@@ -233,17 +233,17 @@ describe("writer-policied inputs of a sub-piece", () => {
       ) {
         const append = runtime.edit();
         source.withTx(append).key("entries").push({ seat: 9, digest: "x" });
-        expect((await append.commit()).error?.message).toContain(
+        expect((await append.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         const overwrite = runtime.edit();
         source.withTx(overwrite).key("frozen").set({ seat: 9, digest: "x" });
-        expect((await overwrite.commit()).error?.message).toContain(
+        expect((await overwrite.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         const empty = runtime.edit();
         source.withTx(empty).key("entries").set([]);
-        expect((await empty.commit()).error?.message).toContain(
+        expect((await empty.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
       }
@@ -275,7 +275,7 @@ describe("writer-policied inputs of a sub-piece", () => {
       const rewrite = creator.edit();
       const current = argument.withTx(rewrite).get();
       argument.withTx(rewrite).set({ ...current, topic: "lunch" });
-      expect((await rewrite.commit()).error?.message).toContain(
+      expect((await rewrite.commit().settled).error?.message).toContain(
         "writeAuthorizedBy",
       );
 
@@ -284,7 +284,7 @@ describe("writer-policied inputs of a sub-piece", () => {
         ...argument.withTx(forge).get(),
         frozen: { seat: 9, digest: "x" },
       });
-      expect((await forge.commit()).error?.message).toContain(
+      expect((await forge.commit().settled).error?.message).toContain(
         "writeAuthorizedBy",
       );
 
@@ -329,7 +329,7 @@ describe("writer-policied inputs of a sub-piece", () => {
           "writer-policy-replay-changes",
         );
         argument.withTx(tx).key("frozen").set({ seat: 0, digest: "forged" });
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         await runtime.idle();
@@ -353,7 +353,7 @@ describe("writer-policied inputs of a sub-piece", () => {
           ...argument.withTx(tx).get(),
           topic: "lunch",
         });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(argument.get().topic).toBe("lunch");
         expect(argument.get().frozen.digest).toBe("first");
@@ -373,7 +373,7 @@ describe("writer-policied inputs of a sub-piece", () => {
           ...argument.withTx(tx).get(),
           frozen: { seat: 0, digest: "forged" },
         });
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         await runtime.idle();
@@ -395,7 +395,7 @@ describe("writer-policied inputs of a sub-piece", () => {
         (argument.withTx(tx) as unknown as { set(value: unknown): void }).set(
           "replaced",
         );
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         await runtime.idle();
@@ -422,7 +422,7 @@ describe("writer-policied inputs of a sub-piece", () => {
         expect(tx.isAuthoritativeWrites?.()).toBe(true);
         const frozen = argument.withTx(tx).key("frozen");
         frozen.set({ ...frozen.get() });
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
       } finally {
@@ -486,7 +486,7 @@ describe("writer-policied inputs of a sub-piece", () => {
         const frozen = argument.asSchema(relabeled as JSONSchema).withTx(tx)
           .key("frozen");
         frozen.set({ ...(frozen.get() as object) } as never);
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "writeAuthorizedBy",
         );
         await runtime.idle();

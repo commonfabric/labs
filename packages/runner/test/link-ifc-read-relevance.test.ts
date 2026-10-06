@@ -68,7 +68,7 @@ describe("link-ifc-read-relevance", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -229,7 +229,7 @@ describe("link-ifc-read-relevance at resolution and handle hops", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -344,7 +344,7 @@ describe("link-ifc-read-relevance closure, narrowing, and raw readers", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

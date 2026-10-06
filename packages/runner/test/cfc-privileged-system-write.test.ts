@@ -76,7 +76,7 @@ describe("CFC privileged system write (S18)", () => {
       // Prepared, so the commit's rejection carries the S18 reason itself
       // rather than the generic relevant-but-unprepared guard.
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
         "unprivileged write to protected runtime surface",
@@ -114,7 +114,7 @@ describe("CFC privileged system write (S18)", () => {
         path: ["cfc"],
       }, forgedMetadata);
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(
         tx.getCfcState().diagnostics.some((d) =>
@@ -145,7 +145,7 @@ describe("CFC privileged system write (S18)", () => {
       // And nothing under the tx wrapper exposes it either.
       const inner = (tx as unknown as { tx?: Record<string, unknown> }).tx;
       expect(inner?.runPrivilegedSystemWrite).toBeUndefined();
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -181,7 +181,7 @@ describe("CFC privileged system write (S18)", () => {
       );
       cell.set({ secret: "value" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -229,7 +229,7 @@ describe("CFC privileged system write (S18)", () => {
 
       tx.setCfcEnforcementMode("enforce-explicit");
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
         "unprivileged write to protected runtime surface",
@@ -271,7 +271,7 @@ describe("CFC privileged system write (S18)", () => {
         path: ["cfc"],
       }, forgedMetadata);
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -296,7 +296,7 @@ describe("CFC privileged system write (S18)", () => {
         tx,
       );
       plain.set({ note: "hello" });
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -337,7 +337,7 @@ describe("CFC privileged system write (S18)", () => {
         "unprivileged-cfc-forgery",
       );
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -394,7 +394,7 @@ describe("CFC privileged system write (S18)", () => {
       value: { note: "one" },
       cfc: storedMetadata,
     });
-    const seedResult = await seed.commit();
+    const seedResult = await seed.commit().settled;
     expect(seedResult.ok).toBeDefined();
     return address;
   };
@@ -425,7 +425,7 @@ describe("CFC privileged system write (S18)", () => {
       expect(after.readOrThrow({ ...address, path: ["cfc"] })).toEqual(
         storedMetadata,
       );
-      await after.commit();
+      await after.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -454,7 +454,7 @@ describe("CFC privileged system write (S18)", () => {
 
       const before = runtime.edit();
       expect(storedCfcMetadataAppliesToPath(before, target)).toBe(true);
-      await before.commit();
+      await before.commit().settled;
 
       const tx = runtime.edit();
       const envelope = tx.readOrThrow(address) as Record<string, unknown>;
@@ -470,12 +470,12 @@ describe("CFC privileged system write (S18)", () => {
       expect(tx.getCfcState().diagnostics).toContain(
         "unprivileged-cfc-forgery",
       );
-      expect((await tx.commit()).error).toBeDefined();
+      expect((await tx.commit().settled).error).toBeDefined();
 
       // The stored label map survives the refused commit.
       const after = runtime.edit();
       expect(storedCfcMetadataAppliesToPath(after, target)).toBe(true);
-      await after.commit();
+      await after.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -509,7 +509,7 @@ describe("CFC privileged system write (S18)", () => {
       tx.writeOrThrow(address, { value: { note: "two" } });
       expect(tx.getCfcState().unprivilegedSystemWrites.length).toBe(0);
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -556,7 +556,7 @@ describe("CFC privileged system write (S18)", () => {
           labelMap: { version: 1, entries: [entry("alpha", "beta")] },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.writeOrThrow(address, {
@@ -573,7 +573,7 @@ describe("CFC privileged system write (S18)", () => {
       expect(tx.getCfcState().diagnostics).toContain(
         "unprivileged-cfc-forgery",
       );
-      expect((await tx.commit()).error).toBeDefined();
+      expect((await tx.commit().settled).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -597,7 +597,7 @@ describe("CFC privileged system write (S18)", () => {
       tx.writeOrThrow(address, { ...envelope, value: { note: "two" } });
       expect(tx.getCfcState().unprivilegedSystemWrites.length).toBe(0);
 
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -728,7 +728,7 @@ describe("CFC privileged system write (S18)", () => {
 
       const tx = runtime.edit();
       tx.writeOrThrow(address, { value: { note: "two" } });
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.ok).toBeDefined();
       expect(
         tx.getCfcState().diagnostics.some((d) =>
@@ -785,7 +785,7 @@ describe("CFC privileged system write (S18)", () => {
         value: { note: "two" },
         cfc: forgedMetadata,
       });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       expect(tx.getCfcState().diagnostics).toContain(
         `unprivileged write to protected runtime surface ${address.id}/cfc`,
       );
@@ -814,7 +814,7 @@ describe("CFC privileged system write (S18)", () => {
         `${address.id}/cfc`,
       ]);
       tx.setCfcEnforcementMode("enforce-explicit");
-      expect((await tx.commit()).error).toBeDefined();
+      expect((await tx.commit().settled).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -856,7 +856,7 @@ describe("CFC privileged system write (S18)", () => {
       expect(tx.getCfcState().diagnostics).toContain(
         "unprivileged-source-write",
       );
-      expect((await tx.commit()).error).toBeDefined();
+      expect((await tx.commit().settled).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -894,7 +894,7 @@ describe("CFC privileged system write (S18)", () => {
       expect(tx.getCfcState().diagnostics).toContain(
         "unprivileged-source-forgery",
       );
-      expect((await tx.commit()).error).toBeDefined();
+      expect((await tx.commit().settled).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -929,7 +929,7 @@ describe("CFC privileged system write (S18)", () => {
         path: [],
       }, { value: { note: "one" }, cfc: forgedMetadata });
       expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([]);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -981,7 +981,7 @@ describe("CFC privileged system write (S18)", () => {
       expect(tx.getCfcState().unprivilegedSystemWrites).toEqual(
         ids.map((id) => `${id}/cfc`),
       );
-      expect((await tx.commit()).error).toBeDefined();
+      expect((await tx.commit().settled).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -1017,7 +1017,7 @@ describe("CFC privileged system write (S18)", () => {
       );
       cell.set({ secret: "one" });
       first.prepareCfc();
-      expect((await first.commit()).ok).toBeDefined();
+      expect((await first.commit().settled).ok).toBeDefined();
 
       // The label persistence stored a map; a second labeled write reruns the
       // whole privileged persistence pass over the same document.
@@ -1030,7 +1030,7 @@ describe("CFC privileged system write (S18)", () => {
       );
       again.set({ secret: "two" });
       second.prepareCfc();
-      expect((await second.commit()).ok).toBeDefined();
+      expect((await second.commit().settled).ok).toBeDefined();
 
       const after = runtime.edit();
       expect(
@@ -1041,7 +1041,7 @@ describe("CFC privileged system write (S18)", () => {
           path: ["cfc"],
         }),
       ).toBeDefined();
-      await after.commit();
+      await after.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -1085,7 +1085,7 @@ describe("CFC privileged system write (S18)", () => {
             type: "application/json",
             path: [],
           }, { value: { note: "one" }, cfc: storedMetadata });
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
           await storage.synced();
         } finally {
           await runtime.dispose();
@@ -1112,7 +1112,7 @@ describe("CFC privileged system write (S18)", () => {
             path: [],
           }, { value: { note: "erased" } });
           expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([]);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           await storage.synced();
         } finally {
           await runtime.dispose();
@@ -1139,7 +1139,7 @@ describe("CFC privileged system write (S18)", () => {
             type: "application/json",
             path: [],
           })).toEqual({ value: { note: "erased" } });
-          await tx.commit();
+          await tx.commit().settled;
         } finally {
           await runtime.dispose();
           await storage.close();

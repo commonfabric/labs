@@ -138,6 +138,13 @@ inspection can run to megabytes and exceeds any bound a tool result can carry. A
 refused with `schema_version_mismatch`; one that states none is read as version
 1, which is what the pinned loom emits.
 
+`loom_page_discover.kind` is one of `all`, `project`, `projects`, `entity`, or
+`entities`; omitted, it defaults to `all`. The plural spellings are aliases.
+Both the tool schema and the host-command argument builder enforce these kinds.
+An unknown kind returns `invalid_input` with the valid choices before a host
+process starts. Discovery lists canonical project and entity Pages in the File
+Cabinet. Loom records and their panels are a separate inventory.
+
 What the model may pass is what the table shows and nothing else. Routing flags
 (`--rpc-queue`, `--instance`, `--engine`, `--peek`, `--list-sources`,
 `--person-ref`, `--chat`) are not offered. A free-text value is bounded at 500

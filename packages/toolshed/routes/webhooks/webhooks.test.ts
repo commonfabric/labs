@@ -286,7 +286,7 @@ describe("Webhook Utilities", () => {
         ...(tx.getReadActivities?.() ?? tx.tx.getReadActivities?.() ?? []),
       ];
       expect(reads.map((read) => read.id)).toContain(entityId);
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 });

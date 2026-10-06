@@ -43,7 +43,7 @@ describe("query-result-proxy transaction lifetime", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell<Nested>(space, cause, undefined, tx);
     cell.set({ outer: { middle: { leaf: 1 } } });
-    await tx.commit();
+    await tx.commit().settled;
     return cell;
   };
 
@@ -66,7 +66,7 @@ describe("query-result-proxy transaction lifetime", () => {
       const view = pinnedView(cell, readTx);
       expect(view.outer.middle.leaf).toBe(1);
 
-      await readTx.commit();
+      await readTx.commit().settled;
 
       expect(() => view.outer).toThrow("Transaction is complete");
     });
@@ -93,7 +93,7 @@ describe("query-result-proxy transaction lifetime", () => {
       const middle = view.outer.middle;
       expect(middle.leaf).toBe(1);
 
-      await readTx.commit();
+      await readTx.commit().settled;
 
       expect(() => middle.leaf).toThrow("Transaction is complete");
     });
@@ -107,7 +107,7 @@ describe("query-result-proxy transaction lifetime", () => {
         const tx = runtime.edit();
         const cell = runtime.getCell<number[]>(space, cause, undefined, tx);
         cell.set([1, 2, 3]);
-        await tx.commit();
+        await tx.commit().settled;
         return cell;
       };
 
@@ -131,7 +131,7 @@ describe("query-result-proxy transaction lifetime", () => {
         cell.withTx(readTx).set([1, 2, 3, 4]);
 
         expect([...view]).toEqual([1, 2, 3]);
-        await readTx.commit();
+        await readTx.commit().settled;
       });
 
       it("runs the caller's callback outside the instant", async () => {
@@ -143,7 +143,7 @@ describe("query-result-proxy transaction lifetime", () => {
         const other = runtime.getCell<number>(space, "callback-other");
         const setup = runtime.edit();
         other.withTx(setup).set(10);
-        await setup.commit();
+        await setup.commit().settled;
 
         const readTx = runtime.edit();
         const view = pinnedList(cell, readTx);
@@ -154,7 +154,7 @@ describe("query-result-proxy transaction lifetime", () => {
           100,
           100,
         ]);
-        await readTx.commit();
+        await readTx.commit().settled;
       });
 
       it("maps over the elements it was taken over", async () => {
@@ -165,7 +165,7 @@ describe("query-result-proxy transaction lifetime", () => {
         cell.withTx(readTx).set([9, 9, 9]);
 
         expect(view.map((n) => n)).toEqual([1, 2, 3]);
-        await readTx.commit();
+        await readTx.commit().settled;
       });
     });
 
@@ -186,7 +186,7 @@ describe("query-result-proxy transaction lifetime", () => {
         ).outer.middle.leaf,
       ).toBe(2);
 
-      await readTx.commit();
+      await readTx.commit().settled;
     });
 
     it("constructs no transaction of its own for a deep walk", async () => {
@@ -209,7 +209,7 @@ describe("query-result-proxy transaction lifetime", () => {
       }
 
       expect(constructed).toBe(0);
-      await readTx.commit();
+      await readTx.commit().settled;
     });
   });
 
@@ -225,7 +225,7 @@ describe("query-result-proxy transaction lifetime", () => {
       );
       expect(handle.outer.middle.leaf).toBe(1);
 
-      await readTx.commit();
+      await readTx.commit().settled;
 
       // The transaction it was made against is gone, and the handle still
       // reads — from current committed state, not from a refusal.
@@ -233,7 +233,7 @@ describe("query-result-proxy transaction lifetime", () => {
 
       const update = runtime.edit();
       cell.withTx(update).key("outer").key("middle").key("leaf").set(3);
-      await update.commit();
+      await update.commit().settled;
 
       expect(handle.outer.middle.leaf).toBe(3);
     });

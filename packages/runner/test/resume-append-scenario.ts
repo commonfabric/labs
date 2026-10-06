@@ -181,7 +181,7 @@ async function build(scenario: AppendScenario): Promise<void> {
     tx0,
   );
   rt.run(tx0, compiled, { items }, rc);
-  await tx0.commit();
+  await tx0.commit().settled;
   // Drive the aggregate to convergence: pull() reads to quiescence and settled()
   // waits for the scheduler, storage sync, and any async builtin work — both
   // converge internally, so no pump loop here.
@@ -231,7 +231,7 @@ export async function runResumeAppendScenario(
       compiled.resultSchema,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     // Not awaited yet: the resume pre-sync names the per-element result
     // documents and the gate holds them, so the start stays pending for the
@@ -266,7 +266,7 @@ export async function runResumeAppendScenario(
       const nextItems = scenario.updateItems?.(cur) ??
         [...cur, scenario.appended];
       rc2.withTx(tx1).key("items").set(nextItems);
-      await tx1.commit();
+      await tx1.commit().settled;
       // idle() drives whatever the scheduler holds to quiescence without
       // blocking on the held documents the way pull() would.
       await rt2.idle();

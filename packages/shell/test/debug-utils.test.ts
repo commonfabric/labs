@@ -2,14 +2,17 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import type {
-  RuntimeClient,
-  TriggerTraceEntry,
+import {
+  $conn,
+  CellReadRefusedError,
+  type RuntimeClient,
+  type TriggerTraceEntry,
 } from "@commonfabric/runtime-client";
 
 import {
   clearRuntimeDebugGlobals,
   type CommonfabricDebugState,
+  createDebugUtils,
   createViewSettled,
   exposeCommonfabricGlobals,
   summarizeDebugValue,
@@ -233,6 +236,62 @@ describe("runtime debug globals", () => {
     expect(compressionModes).toEqual([false]);
   });
 
+  it("names a read the worker refuses, rather than returning an empty cell", async () => {
+    const refusal = { refusedBy: "display-ceiling" } as const;
+    const connection = {
+      request: () => Promise.resolve({ refused: refusal }),
+      subscribe: () => Promise.resolve(),
+      unsubscribe: () => Promise.resolve(),
+      peersOf: () => [],
+      signal: new AbortController().signal,
+    };
+    const runtime = {
+      [$conn]: () => connection,
+      getTriggerTrace: () =>
+        Promise.resolve(
+          [{
+            recordedAt: 1,
+            notificationType: "commit",
+            changeIndex: 1,
+            matchedActionCount: 0,
+            mode: "pull",
+            writerActionId: "writer:a",
+            space: "did:key:space",
+            entityId: "of:sealed",
+            path: ["secret"],
+            before: { kind: "undefined" },
+            after: { kind: "object", size: 1 },
+            triggered: [],
+          }] satisfies TriggerTraceEntry[],
+        ),
+    } as unknown as RuntimeClient;
+    const global: Globals = {};
+    exposeCommonfabricGlobals(global, runtime, () => runtime, () => undefined);
+    const cf = global.commonfabric!;
+    const logged: unknown[][] = [];
+    const log = stub(console, "log", (...args: unknown[]) => {
+      logged.push(args);
+    });
+    try {
+      for (const read of [cf.readCell!, cf.readArgumentCell!]) {
+        await expect(read({ space: "did:key:space", id: "of:sealed" }))
+          .rejects.toThrow(CellReadRefusedError);
+      }
+      const explained = await cf.explainTriggerTrace!();
+      expect(explained?.topChanges[0].currentValueSummary).toEqual({
+        kind: "refused",
+        refusedBy: "display-ceiling",
+      });
+    } finally {
+      log.restore();
+    }
+    expect(logged).toContainEqual(["[debug] readCell refused:", refusal]);
+    expect(logged).toContainEqual([
+      "[debug] read argument cell refused:",
+      refusal,
+    ]);
+  });
+
   it("clearRuntimeDebugGlobals clears runtime-bound helpers", () => {
     const global: Globals = {
       commonfabric: {
@@ -251,5 +310,40 @@ describe("runtime debug globals", () => {
     const global: Globals = {};
     clearRuntimeDebugGlobals(global);
     expect(global.commonfabric).toBeUndefined();
+  });
+});
+
+describe("readCell", () => {
+  it("rejects with the refusal when the worker refuses a metadata read", async () => {
+    const requests: unknown[] = [];
+    const runtime = {
+      [$conn]: () => ({
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ refused: { refusedBy: "display-ceiling" } });
+        },
+      }),
+    } as unknown as RuntimeClient;
+    const { readCell } = createDebugUtils(
+      () => "did:key:z6Mk-debug-utils-space",
+      () => runtime,
+    );
+
+    const log = stub(console, "log", () => {});
+    try {
+      const read = readCell({ id: "of:debug-utils-piece", meta: "slug" });
+      await expect(read).rejects.toThrow(CellReadRefusedError);
+      await read.catch((error: CellReadRefusedError) => {
+        expect(error.refusal).toEqual({ refusedBy: "display-ceiling" });
+      });
+    } finally {
+      log.restore();
+    }
+    expect(requests).toEqual([
+      expect.objectContaining({
+        cell: expect.objectContaining({ id: "of:debug-utils-piece", path: [] }),
+        meta: "slug",
+      }),
+    ]);
   });
 });

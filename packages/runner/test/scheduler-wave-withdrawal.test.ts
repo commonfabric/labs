@@ -173,11 +173,11 @@ describe("reactive wave withdrawal", () => {
       const seed = runtime.edit();
       input.withTx(seed).set({ draft: "a0" });
       if (bindingOutput) output.withTx(seed).set("before");
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       let wave = newWave();
       const authored = runtime.edit();
       input.withTx(authored).key("draft").set("b0");
-      expect((await authored.commit()).error).toBeUndefined();
+      expect((await authored.commit().settled).error).toBeUndefined();
 
       if (boundary === "accepted") wave = newWave();
       let flushing = false;
@@ -210,7 +210,7 @@ describe("reactive wave withdrawal", () => {
         kind: "derivation",
       });
       input.withTx(initializer).key("note").set("session-default");
-      expect((await initializer.commit()).error).toBeUndefined();
+      expect((await initializer.commit().settled).error).toBeUndefined();
       const recoveryStarted = Promise.withResolvers<void>();
       let runs = 0;
       let override: string | undefined;
@@ -450,7 +450,7 @@ describe("reactive wave withdrawal", () => {
           ),
         );
       }
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const wave = newWave();
       runtime.installSealDestination(wave);
       if (!confirmed) {
@@ -460,7 +460,7 @@ describe("reactive wave withdrawal", () => {
           kind: "derivation",
         });
         producer.writeValueOrThrow(storageLink, value);
-        expect((await producer.commit()).error).toBeUndefined();
+        expect((await producer.commit().settled).error).toBeUndefined();
       }
       const consumer = runtime.edit();
       stampWaveRunContext(consumer, {
@@ -515,7 +515,7 @@ describe("reactive wave withdrawal", () => {
             expect(isReadMarkedAsAttemptedWrite(read.meta)).toBe(false);
           }
         } else expect(basis).toEqual([]);
-        expect((await consumer.commit()).error).toBeUndefined();
+        expect((await consumer.commit().settled).error).toBeUndefined();
         expect(waveSettlementOf(consumer) !== undefined).toBe(
           retained || overwrite,
         );
@@ -542,7 +542,7 @@ describe("reactive wave withdrawal", () => {
         );
         const seed = runtime.edit();
         output.withTx(seed).set("confirmed");
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const wave = newWave();
         runtime.installSealDestination(wave);
         const pending = runtime.edit();
@@ -551,7 +551,7 @@ describe("reactive wave withdrawal", () => {
           kind: "derivation",
         });
         output.withTx(pending).set("pending");
-        expect((await pending.commit()).error).toBeUndefined();
+        expect((await pending.commit().settled).error).toBeUndefined();
         const noop = runtime.edit();
         stampWaveRunContext(noop, { actionId: "non-reactive-output", kind });
         if (plumbing === "raw") {
@@ -566,7 +566,7 @@ describe("reactive wave withdrawal", () => {
             "pending",
           );}
         expect(hasPendingWriteElision(noop)).toBe(true);
-        expect((await noop.commit()).error).toBeUndefined();
+        expect((await noop.commit().settled).error).toBeUndefined();
         expect(waveSettlementOf(noop)).toBeUndefined();
         wave.abandon("test cleanup");
         await wave.settled();
@@ -586,12 +586,12 @@ describe("reactive wave withdrawal", () => {
       const output = runtime.getCell<string>(space, "direct-output", undefined);
       const seed = runtime.edit();
       output.withTx(seed).set("initial");
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const wave = newWave();
       if (refusal === "output supersession") {
         const authored = runtime.edit();
         output.withTx(authored).set("authored");
-        expect((await authored.commit()).error).toBeUndefined();
+        expect((await authored.commit().settled).error).toBeUndefined();
       }
       const foreignSigner = await Identity.fromPassphrase("withdrawal foreign");
       const foreign = foreignSigner.did() as MemorySpace;
@@ -761,7 +761,7 @@ describe("reactive wave withdrawal", () => {
                 0,
               );
           }
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           expect(
             Engine.readState(engine, {
               id: input.getAsNormalizedFullLink().id,
@@ -856,7 +856,7 @@ describe("reactive wave withdrawal", () => {
           authored.tx.scopeKeyIdentity = identities[0];
           peerInput.withTx(authored).key("note").set("authored-note");
           peerShared.withTx(authored).set(1);
-          expect((await authored.commit()).error).toBeUndefined();
+          expect((await authored.commit().settled).error).toBeUndefined();
           await storageManager.synced();
           const initializer = runtime.edit();
           initializer.tx.scopeKeyIdentity = identities[0];
@@ -866,7 +866,7 @@ describe("reactive wave withdrawal", () => {
             scopeKeyIdentity: identities[0],
           });
           input.withTx(initializer).key("note").set("session-default");
-          expect((await initializer.commit()).error).toBeUndefined();
+          expect((await initializer.commit().settled).error).toBeUndefined();
         } finally {
           dispatch.restore();
         }

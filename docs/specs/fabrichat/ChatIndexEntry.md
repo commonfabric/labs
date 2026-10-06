@@ -23,7 +23,16 @@ interface ChatIndexEntry {
 
 - **`room`** links the room ([`ChatRoomOutput`](ChatRoomOutput.md)). An entry is
   a link and never a copy: what a room holds is read from the room, under the
-  reader's own access.
+  reader's own access. The link declares the part of the room a manager reads
+  through it: `about`, and `messages.count` and `messages.newestAt`, which say
+  how many messages the room holds and when the newest was sent. Those are
+  what the room's space shares with every member, derived from the room's
+  messages alone. The rest of the room's output, its `canSend` decided per
+  reader, its `messages.windows` kept per session, and its `messages.latest`,
+  which holds up to `maxWindowCount` messages, is read from the room itself:
+  the link's schema is part of every manager handler's declared reads, and a
+  served handler whose declared reads reach a member's own documents never
+  runs.
 - **`kind`** repeats the room's own `about.kind`
   ([`ChatRoomAbout`](ChatRoomAbout.md)), so a client can list and filter rooms
   without reading each one.

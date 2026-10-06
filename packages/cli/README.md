@@ -1280,7 +1280,8 @@ What the runner does, in order:
 | ----------------------------------------------------- | ---------------------------- |
 | produced a result the writer wrote                    | `completed`                  |
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
-| failed in the model, a tool, or its result            | `failed`, `PROVIDER_FAILURE` |
+| finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
+| failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
@@ -1611,11 +1612,15 @@ beside it — so a selected value stays under the label of the field it came fro
 They leave out the keys that bind or vouch for the writer of the source field:
 `writeAuthorizedBy`, `writePolicyAnyOf`, `uiContract`, `ownerPrincipal`,
 `requiredIntegrity`, `maxConfidentiality`, `integrity`, `addIntegrity`,
-`exactCopyOf`, `projection`, `collection` and `flowPrecisionClaim`. The
-selection is not that writer, so selecting a field that only its owner's handler
-may write, as every owner-protected field of a profile is, is not refused on
-that account, and the copy asserts none of the integrity the source's writer
-vouched for.
+`exactCopyOf`, `projection`, `collection` and `flowPrecisionClaim`. A position
+the source schema writes as a reference to a content-addressed schema document
+is read through that document, so a claim the document states is left out the
+same way. Where the reading process does not hold that document, the reference
+is kept as written, and a write claim inside it refuses the read rather than
+being dropped. The selection is not that writer, so selecting a field that only
+its owner's handler may write, as every owner-protected field of a profile is,
+is not refused on that account, and the copy asserts none of the integrity the
+source's writer vouched for.
 
 #### Which keywords a `--schema` projection may contain
 

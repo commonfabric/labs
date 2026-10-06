@@ -32,7 +32,7 @@ describe("createProxy", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -71,7 +71,7 @@ describe("createProxy", () => {
       tx,
     );
     c.setRaw({ x: { $alias: { path: ["y"] } }, y: 42 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const proxy = c.getAsQueryResult([], tx);
@@ -306,7 +306,7 @@ describe("createProxy", () => {
       setupTx,
     );
     c.set([1, 2, 3]);
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     const proxy = c.withTx(tx).getAsQueryResult([], tx);
     const result = proxy.find((x: any) => x === 2);
@@ -334,7 +334,7 @@ describe("createProxy", () => {
       setupTx,
     );
     c.set({ a: [1, 2, 3] });
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     const proxy = c.withTx(tx).getAsQueryResult([], tx);
     const result = proxy.a.map((x: any) => x + 1);
@@ -367,7 +367,7 @@ describe("Proxy", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

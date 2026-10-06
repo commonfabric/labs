@@ -52,7 +52,7 @@ async function prepareRows(
         },
       },
     });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const tx = runtime.edit();
     try {
@@ -214,7 +214,7 @@ describe("CFC attempted-write inspection", () => {
         ...target,
         id: `cid:${schema.taggedHashString}`,
       }, { value: schema.schema });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       for (const indexed of [true, false]) {
         const tx = runtime.edit();

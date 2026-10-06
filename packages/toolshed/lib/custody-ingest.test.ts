@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import { parseLink, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
@@ -155,5 +155,77 @@ describe("custodyIngest", () => {
     expect(first.length).toBe(1);
     expect(second.length).toBe(1);
     expect(second[0].valueDigest).not.toBe(first[0].valueDigest);
+  });
+
+  describe("appendAll()", () => {
+    it("appends every element in order and mints one mark", async () => {
+      const cell = runtime.getCell<{ at: string }[]>(space, "batch-events");
+      const id = cell.getAsNormalizedFullLink().id;
+
+      await custodyIngest.appendAll(cell, [{ at: "first" }], channel);
+      await custodyIngest.appendAll(
+        cell,
+        [{ at: "second" }, { at: "third" }],
+        channel,
+      );
+
+      expect(cell.get()).toEqual([
+        { at: "first" },
+        { at: "second" },
+        { at: "third" },
+      ]);
+      const marks = ingestMarks(id);
+      expect(marks.length).toBe(1);
+      expect(markType(marks[0])).toBe(CFC_ATOM_TYPE.ExternalIngest);
+    });
+
+    it("binds the mark digest to the batch appended, not to the accumulated list", async () => {
+      // The same batch appended to two lists of different contents yields the
+      // same digest only when the digest covers the batch alone.
+
+      const batch = [{ at: "shared" }];
+      const empty = runtime.getCell<{ at: string }[]>(space, "digest-empty");
+      const seeded = runtime.getCell<{ at: string }[]>(space, "digest-seeded");
+      await custodyIngest.appendAll(seeded, [{ at: "earlier" }], channel);
+
+      await custodyIngest.appendAll(empty, batch, channel);
+      await custodyIngest.appendAll(seeded, batch, channel);
+
+      const digestOf = (cell: typeof empty) =>
+        (ingestMarks(cell.getAsNormalizedFullLink().id) as {
+          valueDigest: string;
+        }[])[0].valueDigest;
+      expect(digestOf(seeded)).toBe(digestOf(empty));
+      expect(digestOf(empty)).toMatch(/^sha256:/);
+    });
+
+    it("keeps the document behind each earlier element", async () => {
+      const cell = runtime.getCell<{ at: string }[]>(space, "stable-events");
+      const elementIds = () =>
+        ((cell.getRaw() ?? []) as readonly unknown[]).map((link) =>
+          parseLink(link, cell)?.id
+        );
+
+      await custodyIngest.appendAll(cell, [{ at: "first" }], channel);
+      const [first] = elementIds();
+      await custodyIngest.appendAll(cell, [{ at: "second" }], channel);
+
+      expect(typeof first).toBe("string");
+      expect(elementIds()[0]).toBe(first);
+      expect(new Set(elementIds()).size).toBe(2);
+    });
+
+    it("lands every element of concurrent appends", async () => {
+      const cell = runtime.getCell<{ n: number }[]>(space, "concurrent-events");
+
+      await Promise.all(
+        [1, 2, 3, 4].map((n) =>
+          custodyIngest.appendAll(cell, [{ n }], channel)
+        ),
+      );
+
+      const landed = (cell.get() ?? []).map((element) => element.n);
+      expect([...landed].sort()).toEqual([1, 2, 3, 4]);
+    });
   });
 });

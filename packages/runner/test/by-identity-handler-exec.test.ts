@@ -62,7 +62,7 @@ describe("resume the fuse-exec piece by identity and invoke its handler", () => 
         tx1,
       );
       const r1 = rt1.run(tx1, cold, {}, resultCell1);
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
       // CONTROL: full-source handler executes in the originating runtime.
       r1.key("recordMessage").send({ message: "hello" });
@@ -82,7 +82,7 @@ describe("resume the fuse-exec piece by identity and invoke its handler", () => 
         undefined,
         tx2,
       );
-      await tx2.commit();
+      await tx2.commit().settled;
       // Force the storage-rehydration path (as cf exec hits it): the resumed
       // piece's nodes come from the PERSISTED graph (module.implementation is a
       // ref, not a live function), so resolution relies solely on by-identity

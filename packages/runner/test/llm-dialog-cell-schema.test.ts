@@ -56,7 +56,7 @@ describe("getCellSchema", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -70,7 +70,7 @@ describe("getCellSchema", () => {
     );
     await result.pull();
     await runtime.idle();
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     return result;
   }
@@ -113,7 +113,7 @@ describe("getCellSchema", () => {
       tx,
     );
     (holder as any).key("ref").set(minimalView);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const bareRef = runtime
@@ -141,7 +141,7 @@ describe("getCellSchema", () => {
     // schema can then only be recovered by resolving the reference to the
     // result document and reading its meta "schema".
     (holder as any).key("ref").set((result as any).asSchema(undefined));
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const bareRef = runtime
@@ -166,7 +166,7 @@ describe("getCellSchema", () => {
       tx,
     );
     plain.set({ alpha: 1, beta: "two" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const bare = runtime.getCell(space, "get-cell-schema-plain", undefined, tx);

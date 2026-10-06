@@ -17,6 +17,12 @@ import { encodeSqliteParams } from "../src/index.ts";
 import { decodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { areNormalizedLinksSame } from "../src/link-utils.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 type SqliteDbCell = {
   exec(
@@ -101,7 +107,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     );
     marker.set({ ok: true });
     db.exec("INSERT INTO notes (body) VALUES (?)", ["hi"]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -113,7 +119,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       runtime.getCell<{ ok: boolean }>(space, "exec-marker", undefined, tx2)
         .withTx(tx2).get(),
     ).toEqual({ ok: true });
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 
   it("reads the handle via getRaw even when the cell schema shapes it to {}", async () => {
@@ -144,7 +150,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     expect(db.get()).toEqual({});
     // ...but exec still records the write from the raw handle.
     db.exec("INSERT INTO notes (body) VALUES (?)", ["hi"]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
     const provider = storageManager.open(space);
     const r = await provider.sqliteQuery!(dbRef, "SELECT body FROM notes");
@@ -188,7 +194,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     expect(value.id).toBe(dbRef.id);
     expect(value.rev).toBe(3);
     expect(value.tables).toEqual(dbRef.tables);
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   it("throws on an undefined param, allows null", async () => {
@@ -202,7 +208,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       .toThrow();
     // null is allowed (SQL NULL).
     db.exec("INSERT INTO notes (body) VALUES (?)", [null]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
     const provider = storageManager.open(space);
     const r = await provider.sqliteQuery!(
@@ -229,7 +235,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     author.set({ name: "Ada" });
     const db = sqliteDb(dbRef, tx, "db-h");
     db.exec("INSERT INTO people (author_cf_link) VALUES (?)", [author]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -248,7 +254,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
         author.getAsNormalizedFullLink(),
       ),
     ).toBe(true);
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 
   it("encodes nested cells before a JSON bind reaches storage", async () => {
@@ -271,7 +277,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       payload: { links: [author] },
     });
 
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -304,7 +310,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       { links: [author] },
     ]);
 
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
 
     const provider = storageManager.open(space);
@@ -340,7 +346,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       "INSERT INTO people (author_cf_link) VALUES (?), (?)",
       [a, b],
     );
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeUndefined();
     const provider = storageManager.open(space);
     const r = await provider.sqliteQuery!(
@@ -348,6 +354,68 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       "SELECT count(*) AS c FROM people",
     );
     expect((r.rows[0] as { c: number }).c).toBe(2);
+  });
+
+  it("refuses a bound cell whose label cannot be read under a column ceiling", async () => {
+    // A user-scoped instance whose own envelope this build cannot read,
+    // beside a space instance labeled outside the column's ceiling.
+    const seed = runtime.edit();
+    const link = runtime.getCell(space, "ceiling-scoped", undefined, seed)
+      .getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: "slot",
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{ path: [], label: { confidentiality: ["secret"] } }],
+        },
+      },
+    });
+    seedStoredEnvelope(seed, {
+      ...toMemorySpaceAddress({ ...link, scope: "user" }),
+      path: [],
+    }, {
+      value: "narrowed",
+      cfc: {
+        version: 99,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const tx = runtime.edit();
+    const db = sqliteDb(
+      {
+        id: `of:exec-ceiling-${crypto.randomUUID()}`,
+        tables: {
+          people: table({
+            id: "integer primary key",
+            author_cf_link: {
+              sqlType: "text",
+              type: "string",
+              ifc: { maxConfidentiality: ["support"] },
+            },
+          }),
+        },
+      },
+      tx,
+      "db-h",
+    );
+    const scoped = runtime.getCell(
+      space,
+      "ceiling-scoped",
+      undefined,
+      tx,
+      "user",
+    );
+    expect(() =>
+      db.exec("INSERT INTO people (author_cf_link) VALUES (?)", [scoped])
+    ).toThrow(/maxConfidentiality/);
+    tx.abort();
   });
 
   it("rejects a Cell bound where the target column can't be verified", () => {
@@ -420,7 +488,7 @@ describe("SqliteDb .exec (commit-folded write)", () => {
     marker.set({ touched: true });
     // null into a NOT NULL column -> fails inside applyCommit -> abort.
     db.exec("INSERT INTO notes (body) VALUES (?)", [null]);
-    const res = await tx.commit();
+    const res = await tx.commit().settled;
     expect(res.error).toBeDefined();
 
     const tx2 = runtime.edit();
@@ -433,6 +501,6 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       )
         .withTx(tx2).get(),
     ).toBeUndefined();
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 });

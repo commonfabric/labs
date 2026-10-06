@@ -2,8 +2,10 @@
 import {
   action,
   assert,
+  currentPrincipal,
   NAME,
   pattern,
+  principalOf,
   TESTS,
   UI,
   Writable,
@@ -105,38 +107,30 @@ export default pattern(() => {
   const moveLastFromUI = action(() => clickFirstPanel(loom[UI], "Move last"));
   const moveFirstFromUI = action(() => clickFirstPanel(loom[UI], "Move first"));
   const removeFromUI = action(() => clickFirstPanel(loom[UI], "Remove"));
-  const alice = "did:key:z6MkAliceAddsPanelsToTheSharedLoom";
+  const me = new Writable("");
+  const recordMe = action(() => me.set(currentPrincipal() ?? ""));
   // DID Core admits empty inner segments and percent-encodings.
-  const bob = "did:web:example.com%3A8443::bob";
+  const claimedAdder = "did:web:example.com%3A8443::alice";
   const attributed = Loom({});
   const attributedPiece = new Writable({ title: "Attributed target" });
-  const attributedUrl = new Writable<Panel>({
+  // An occurrence a caller made, whose `addedBy` claims someone else. The
+  // label entry its writer's run mints there names that writer.
+  const claimedUrl = new Writable<Panel>({
     kind: "url",
     url: "https://example.com/attributed",
-    addedBy: alice,
+    addedBy: claimedAdder,
   });
-  const addAttributedUrl = action(() =>
-    attributed.addPanel.send({ panel: attributedUrl })
+  const addClaimedUrl = action(() =>
+    attributed.addPanel.send({ panel: claimedUrl })
   );
   const addAttributedPiece = action(() =>
-    attributed.addPiece.send({ piece: attributedPiece, addedBy: alice })
+    attributed.addPiece.send({ piece: attributedPiece })
   );
   const addAttributedPieceAgain = action(() =>
-    attributed.addPiece.send({ piece: attributedPiece, addedBy: bob })
+    attributed.addPiece.send({ piece: attributedPiece })
   );
-  const duplicateUnattributed = action(() =>
-    attributed.duplicatePanel.send({ panel: attributedUrl })
-  );
-  // Exactly at the 195-character bound.
-  const longestAdder = `did:key:z${"6".repeat(186)}`;
-  const duplicateAsLongestAdder = action(() =>
-    attributed.duplicatePanel.send({
-      panel: attributedUrl,
-      addedBy: longestAdder,
-    })
-  );
-  const duplicateAsBob = action(() =>
-    attributed.duplicatePanel.send({ panel: attributedUrl, addedBy: bob })
+  const duplicateClaimed = action(() =>
+    attributed.duplicatePanel.send({ panel: claimedUrl })
   );
   return {
     [TESTS]: [
@@ -317,47 +311,45 @@ export default pattern(() => {
       { assertion: assert(() => !loom.panels[0].equals(documentPanel)) },
       { action: removeFromUI },
       { assertion: assert(() => loom.panels.length === 4) },
-      // Every occurrence above was added without `addedBy`, and none gained one.
+      // Each occurrence the root created records the principal its event
+      // acted for; the occurrences a caller made and linked record none.
+      { action: recordMe },
       {
         assertion: assert(() =>
-          loom.panels.every((panel) => panel.get().addedBy === undefined)
+          me.get() !== "" &&
+          loom.panels.every((panel) =>
+            panel.equals(url) || panel.equals(documentPanel)
+              ? panel.get().addedBy === undefined
+              : panel.get().addedBy === me.get()
+          )
         ),
       },
-      { action: addAttributedUrl },
+      { action: addClaimedUrl },
       { action: addAttributedPiece },
       {
         assertion: assert(() =>
           attributed.panels.length === 2 &&
-          attributed.panels[0].get().addedBy === alice &&
+          attributed.panels[0].get().addedBy === claimedAdder &&
+          principalOf(attributed.panels[0].key("addedBy"), "authored-by") ===
+            me.get() &&
           attributed.panels[1].get().kind === "piece" &&
-          attributed.panels[1].get().addedBy === alice
+          attributed.panels[1].get().addedBy === me.get() &&
+          principalOf(attributed.panels[1].key("addedBy"), "authored-by") ===
+            me.get()
         ),
       },
-      // Registering a piece again changes nothing, its adder included.
+      // Registering a piece again changes nothing.
       { action: addAttributedPieceAgain },
+      { assertion: assert(() => attributed.panels.length === 2) },
+      // A duplicate is added by whoever duplicates; it never inherits the
+      // source's adder.
+      { action: duplicateClaimed },
       {
         assertion: assert(() =>
-          attributed.panels.length === 2 &&
-          attributed.panels[1].get().addedBy === alice
-        ),
-      },
-      // A duplicate is added by whoever duplicates; it never inherits the source's adder.
-      { action: duplicateUnattributed },
-      { action: duplicateAsBob },
-      {
-        assertion: assert(() =>
-          attributed.panels.length === 4 &&
-          attributed.panels[2].get().addedBy === undefined &&
-          attributed.panels[3].get().addedBy === bob &&
-          attributed.panels[3].get().kind === "url" &&
-          attributedUrl.get().addedBy === alice
-        ),
-      },
-      { action: duplicateAsLongestAdder },
-      {
-        assertion: assert(() =>
-          longestAdder.length === 195 && attributed.panels.length === 5 &&
-          attributed.panels[4].get().addedBy === longestAdder
+          attributed.panels.length === 3 &&
+          attributed.panels[2].get().kind === "url" &&
+          attributed.panels[2].get().addedBy === me.get() &&
+          claimedUrl.get().addedBy === claimedAdder
         ),
       },
     ],

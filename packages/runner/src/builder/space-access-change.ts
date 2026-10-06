@@ -111,7 +111,7 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
       throw error;
     }
     runtime.prepareTxForCommit(tx);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error === undefined) continue;
     if (isStaleReadConflict(error)) {
       await runtime.awaitCommitRetryReadiness(error);

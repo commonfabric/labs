@@ -69,7 +69,7 @@ Deno.test("lift error through CTS pipeline has correct source line", async () =>
   const argumentCell = resultCell.getArgumentCell<{ input: number }>()!;
   const tx = runtime.edit();
   argumentCell.withTx(tx).set({ input: 20 });
-  await tx.commit();
+  await tx.commit().settled;
   await resultCell.pull();
   await runtime.scheduler.idle();
 
@@ -223,7 +223,7 @@ Deno.test("lift error stack has multiple frames with correct source line", async
   const argumentCell = resultCell.getArgumentCell<{ n: number }>()!;
   const tx = runtime.edit();
   argumentCell.withTx(tx).set({ n: -5 });
-  await tx.commit();
+  await tx.commit().settled;
   await resultCell.pull();
   await runtime.scheduler.idle();
 

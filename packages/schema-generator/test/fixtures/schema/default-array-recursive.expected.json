@@ -27,8 +27,11 @@
       "default": []
     },
     "moreItems": {
-      "$ref": "#/$defs/AnonymousType_1",
-      "default": []
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RecursiveItem"
+      },
+      "type": "array"
     }
   },
   "required": [

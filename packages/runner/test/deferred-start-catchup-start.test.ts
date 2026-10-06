@@ -313,7 +313,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -375,7 +375,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           installed.nth(2),
@@ -431,7 +431,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -487,7 +487,7 @@ describe("deferred-start-catchup-start", () => {
         );
         expect(cancelDeferredStart).toBeDefined();
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           installed.nth(2),
@@ -565,7 +565,7 @@ describe("deferred-start-catchup-start", () => {
         );
         expect(cancelDeferredStart).toBeDefined();
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -638,7 +638,7 @@ describe("deferred-start-catchup-start", () => {
         expect(cancelDeferredStart).toBeDefined();
         parentCancel = cancelDeferredStart;
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -683,7 +683,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -736,7 +736,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await runtime.runner.idleDeferredStartCatchUps();
         await runtime.idle();
@@ -783,7 +783,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -847,7 +847,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           installed.nth(2),
@@ -924,7 +924,7 @@ describe("deferred-start-catchup-start", () => {
         const installed = observeContextInstalls(runtime, key(result));
         try {
           runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
 
           await waitForSignal(
             injector.refusalsReach(1),
@@ -981,7 +981,7 @@ describe("deferred-start-catchup-start", () => {
       };
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),
@@ -1095,7 +1095,7 @@ describe("deferred-start-catchup-start", () => {
           { value: 3 },
           false,
         );
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           refusalWaiter.promise,
@@ -1154,7 +1154,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           installed.nth(2),
@@ -1223,7 +1223,7 @@ describe("deferred-start-catchup-start", () => {
       const installed = observeContextInstalls(runtime, key(result));
       try {
         runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         await waitForSignal(
           injector.refusalsReach(1),

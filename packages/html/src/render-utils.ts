@@ -4,6 +4,13 @@ export type SetPropHandler = <T>(
   value: unknown,
 ) => void;
 
+/**
+ * What a render shows in place of content its confidentiality ceiling
+ * refuses, and what a host showing a value it was refused shows instead, so
+ * that the two say the same thing.
+ */
+export const CFC_POLICY_PLACEHOLDER_TEXT = "Content hidden by policy";
+
 export const isEventProp = (key: string) => key.startsWith("on");
 
 /**

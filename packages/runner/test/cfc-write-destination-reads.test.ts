@@ -165,7 +165,7 @@ const wholeObjectWrite = async (
   const tx = runtime.edit();
   runtime.getCell(space, name, schema, tx).set(value);
   tx.prepareCfc();
-  const refusal = refusalOf(await tx.commit());
+  const refusal = refusalOf(await tx.commit().settled);
   await runtime.storageManager.synced();
   return refusal;
 };
@@ -252,7 +252,7 @@ describe("CFC write-destination reads", () => {
           runtime.getCell(space, "row-note", rootSchemaOf(NOTE_ATOM), tx)
             .set({ text });
           tx.prepareCfc();
-          const refusal = refusalOf(await tx.commit());
+          const refusal = refusalOf(await tx.commit().settled);
           await runtime.storageManager.synced();
           return refusal;
         };
@@ -331,7 +331,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell(space, "per-key", MIXED_SCHEMA, tx)
           .key("secret").set("updated");
         tx.prepareCfc();
-        expect(refusalOf(await tx.commit())).toBeUndefined();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
       });
     });
   });
@@ -351,7 +351,7 @@ describe("CFC write-destination reads", () => {
         cell.key("note").get();
         cell.key("secret").set("updated");
         tx.prepareCfc();
-        const refusal = refusalOf(await tx.commit());
+        const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain("/secret");
         expect(refusal).toContain(NOTE_ATOM);
@@ -371,7 +371,7 @@ describe("CFC write-destination reads", () => {
         const cell = runtime.getCell(space, "spread", MIXED_SCHEMA, tx);
         cell.set({ ...cell.get(), secret: "updated" });
         tx.prepareCfc();
-        expect(refusalOf(await tx.commit())).toContain(
+        expect(refusalOf(await tx.commit().settled)).toContain(
           "writer-fit confidentiality misfit",
         );
       });
@@ -391,7 +391,7 @@ describe("CFC write-destination reads", () => {
         cell.key("note").get();
         cell.set({ secret: "updated", note: "n" });
         tx.prepareCfc();
-        expect(refusalOf(await tx.commit())).toContain(
+        expect(refusalOf(await tx.commit().settled)).toContain(
           "writer-fit confidentiality misfit",
         );
       });
@@ -417,7 +417,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell(space, "source", SOURCE_SCHEMA, seed).set({ v: "x" });
         const dest = runtime.getCell(space, "tainted", MIXED_SCHEMA, seed);
         dest.set({ secret: "one", note: "n" });
-        expect(refusalOf(await seed.commit())).toBeUndefined();
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
         const id = dest.getAsNormalizedFullLink().id;
 
@@ -427,7 +427,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell(space, "tainted", MIXED_SCHEMA, tainted)
           .set({ secret: "two", note: "n" });
         tainted.prepareCfc();
-        expect(refusalOf(await tainted.commit())).toBeUndefined();
+        expect(refusalOf(await tainted.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
         expect(derivedValueClauses(runtime, id, "secret")).toContain(
           SOURCE_ATOM,
@@ -439,7 +439,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell(space, "tainted", MIXED_SCHEMA, clean)
           .set({ secret: "three", note: "n" });
         clean.prepareCfc();
-        expect(refusalOf(await clean.commit())).toBeUndefined();
+        expect(refusalOf(await clean.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
         expect(derivedValueClauses(runtime, id, "secret")).not.toContain(
           SOURCE_ATOM,
@@ -471,7 +471,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell<{ n: number }>(space, "rooted-pair-sink", undefined, tx)
           .set({ n: 1 });
         tx.prepareCfc();
-        expect(refusalOf(await tx.commit())).toBeUndefined();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
       });
     });
 
@@ -489,7 +489,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell<{ n: number }>(space, "rooted-read-sink", undefined, tx)
           .set({ n: 1 });
         tx.prepareCfc();
-        expect(refusalOf(await tx.commit())).toContain(
+        expect(refusalOf(await tx.commit().settled)).toContain(
           "writer-fit confidentiality misfit",
         );
       });
@@ -521,14 +521,14 @@ describe("CFC write-destination reads", () => {
         holder.key("slot").setRaw(
           target.key("landed").getAsWriteRedirectLink(),
         );
-        expect(refusalOf(await setup.commit())).toBeUndefined();
+        expect(refusalOf(await setup.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
 
         const tx = runtime.edit();
         runtime.getCell(space, "redirect-holder", SLOT_SCHEMA, tx)
           .set({ slot: "after" });
         tx.prepareCfc();
-        const refusal = refusalOf(await tx.commit());
+        const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
         expect(target.get()).toEqual({ landed: "before" });
@@ -553,14 +553,14 @@ describe("CFC write-destination reads", () => {
           setup,
         );
         holder.key("slot").setRaw(instance.getAsLink());
-        expect(refusalOf(await setup.commit())).toBeUndefined();
+        expect(refusalOf(await setup.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
 
         const tx = runtime.edit();
         runtime.getCell(space, "scoped-holder", SLOT_SCHEMA, tx)
           .set({ slot: "after" });
         tx.prepareCfc();
-        const refusal = refusalOf(await tx.commit());
+        const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
         expect(instance.get()).toBe("before");
@@ -584,7 +584,7 @@ describe("CFC write-destination reads", () => {
           box: { s: "x" },
         });
         seed.prepareCfc();
-        expect(refusalOf(await seed.commit())).toBeUndefined();
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
 
         const tx = runtime.edit();
@@ -594,7 +594,7 @@ describe("CFC write-destination reads", () => {
           .set({ copied: "plain" });
         tx.prepareCfc();
 
-        const refusal = refusalOf(await tx.commit());
+        const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
       });
@@ -632,7 +632,7 @@ describe("CFC write-destination reads", () => {
           items: [{ note: "a" }],
         });
         seed.prepareCfc();
-        expect(refusalOf(await seed.commit())).toBeUndefined();
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
         await runtime.storageManager.synced();
 
         const tx = runtime.edit();
@@ -641,7 +641,7 @@ describe("CFC write-destination reads", () => {
         });
         tx.prepareCfc();
 
-        const refusal = refusalOf(await tx.commit());
+        const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
       });
@@ -672,7 +672,7 @@ describe("CFC write-destination reads", () => {
         runtime.getCell<{ copied?: string }>(space, "elsewhere", undefined, tx)
           .set({ copied: "plain" });
         tx.prepareCfc();
-        const refusal = refusalOf(await tx.commit());
+        const refusal = refusalOf(await tx.commit().settled);
         cancel();
 
         expect(refusal).toBeUndefined();
@@ -700,7 +700,7 @@ describe("CFC write-destination reads", () => {
         // The marker is what the cell still holds: the send was delivered, not
         // stored over the top of it.
         expect(stream.getRaw()).toEqual({ $stream: true });
-        expect(refusalOf(await tx.commit())).toBeUndefined();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
       });
     });
 
@@ -714,7 +714,7 @@ describe("CFC write-destination reads", () => {
           tx,
         );
         cell.set({ tag: "hello" });
-        expect(refusalOf(await tx.commit())).toBeUndefined();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
         expect(cell.get()).toEqual({ tag: "hello" });
       });
     });

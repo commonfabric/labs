@@ -212,7 +212,7 @@ describe("SpaceServer", () => {
       });
       const tx = creator.edit();
       creator.run(tx, compiled, {}, root);
-      const committed = tx.commit();
+      const committed = tx.commit().settled;
       await settle(admitted.promise);
       return async () => {
         expect((await settle(committed)).error).toBeUndefined();
@@ -317,7 +317,7 @@ describe("SpaceServer", () => {
             await settle(root.sync());
             const tx = creator.edit();
             creator.run(tx, compiled, {}, root);
-            expect((await settle(tx.commit())).error).toBeUndefined();
+            expect((await settle(tx.commit().settled)).error).toBeUndefined();
             await settle(creator.storageManager.synced());
             await Promise.all(publications);
             server.setServerExecutionObserver({

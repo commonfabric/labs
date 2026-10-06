@@ -262,7 +262,7 @@ Deno.bench({
       for (let run = 0; run < RUNS; run++) {
         cell.set(values[run]!);
       }
-      await tx.commit();
+      await tx.commit().settled;
       b.end();
     } finally {
       popFrame(frame);
@@ -301,7 +301,7 @@ Deno.bench({
     try {
       ({ value: currentValue, docs } = makeValueWithDocs(0));
       setupCell.set(currentValue);
-      await setupTx.commit();
+      await setupTx.commit().settled;
     } finally {
       popFrame(setupFrame);
     }
@@ -348,7 +348,7 @@ Deno.bench({
           // Exercise the top-level Cell.set() diff path after mutating the
           // retained in-memory tree.
           cell.set(currentValue);
-          await tx.commit();
+          await tx.commit().settled;
         } finally {
           popFrame(frame);
           if (tx.status().status === "ready") {

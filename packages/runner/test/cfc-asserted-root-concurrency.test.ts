@@ -83,7 +83,7 @@ describe("a whole-value stamp beside a peer's member", () => {
         votes: ["reject"],
       });
       writer.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -104,7 +104,7 @@ describe("a whole-value stamp beside a peer's member", () => {
       peerNote.withTx(tx).get();
       peerCommitted.withTx(tx).key("extra").set("planted");
       peer.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `peer: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -128,7 +128,7 @@ describe("a whole-value stamp beside a peer's member", () => {
       writer.getCell(space, "note", SECRET_SCHEMA, tx).get();
       committed.withTx(tx).key("votes").set(["approve", "reject"]);
       writer.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `writer: ${JSON.stringify(res.error)}`)
         .toBeUndefined();
     }

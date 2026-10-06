@@ -66,7 +66,7 @@ describe("idle consults head-event park with a wake timer armed", () => {
     );
     source.set(0);
     derived.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let runs = 0;
@@ -115,7 +115,7 @@ describe("idle consults head-event park with a wake timer armed", () => {
       { effects: { total: number }; stream: unknown }
     >(space, "idle-park-piece", undefined, tx);
     const root = runtime.run(tx, rootPattern, {}, rootCell);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await runtime.idle();
 
@@ -133,7 +133,7 @@ describe("idle consults head-event park with a wake timer armed", () => {
     // The parked re-run is a pull computation that nothing demands, so
     // draining does not run it.
     source.withTx(tx).send(5);
-    const invalidationCommit = tx.commit();
+    const invalidationCommit = tx.commit().settled;
     tx = runtime.edit();
     await clock.settle();
     await invalidationCommit;

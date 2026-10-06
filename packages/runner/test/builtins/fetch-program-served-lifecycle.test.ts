@@ -127,7 +127,7 @@ describe("fetch-program-served-lifecycle", () => {
         for (const staged of txs) {
           const tx = typeof staged === "function" ? staged() : staged;
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         if (withdraw) wave.abandon("fixture withdrawal");
         else {
@@ -173,7 +173,7 @@ describe("fetch-program-served-lifecycle", () => {
 
   async function commit(tx: IExtendedStorageTransaction) {
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.settled();
   }
 

@@ -155,7 +155,7 @@ const seedLabeled = async (
       labelMap: { version: 1, entries: [...entries] },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 /** A room-confidential document holding one member's sealed note. */
@@ -178,7 +178,7 @@ const seedPublic = async (
   const id = runtime.getCell(space, cause, undefined, tx)
     .getAsNormalizedFullLink().id;
   tx.writeOrThrow({ space, scope: "space", id, path: ["value"] }, value);
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
 };
 
 /**
@@ -218,7 +218,7 @@ const transform = async (
     tx.writeOrThrow({ space, scope: "space", id: scratch, path: ["value"] }, 1);
   }
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   expect(result.error).toBeUndefined();
 };
 
@@ -481,7 +481,7 @@ describe("TransformedBy input witnesses", () => {
           chosen,
         ] as never);
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         const tallyTx = runtime.edit();
         setCfcImplementationIdentity(tallyTx, TALLY);
@@ -498,7 +498,7 @@ describe("TransformedBy input witnesses", () => {
           tally(selected),
         );
         tallyTx.prepareCfc();
-        expect((await tallyTx.commit()).error).toBeUndefined();
+        expect((await tallyTx.commit().settled).error).toBeUndefined();
 
         expect(refusedByCeiling(publish(runtime, "ballot"))).toBe(true);
       });
@@ -528,7 +528,7 @@ describe("TransformedBy input witnesses", () => {
           chosen,
         ] as never);
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         const tallyTx = runtime.edit();
         setCfcImplementationIdentity(tallyTx, TALLY);
@@ -556,7 +556,7 @@ describe("TransformedBy input witnesses", () => {
           tally([committed, selected]),
         );
         tallyTx.prepareCfc();
-        expect((await tallyTx.commit()).error).toBeUndefined();
+        expect((await tallyTx.commit().settled).error).toBeUndefined();
 
         expect(refusedByCeiling(publish(runtime, "public-ballot"))).toBe(true);
       });
@@ -682,7 +682,7 @@ describe("TransformedBy input witnesses", () => {
       runtime.getCell(space, "alice-note", undefined, tx).getRaw();
       set(runtime.getCell(space, "committed", undefined, tx));
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     it("releases what the commit step set over a crafted value", async () => {
@@ -743,7 +743,7 @@ describe("TransformedBy input witnesses", () => {
           votes: [...previous, "approve", "reject"],
         });
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
         expect(publish(runtime, "ballot")).toEqual([]);
       });
@@ -778,7 +778,7 @@ describe("TransformedBy input witnesses", () => {
           votes: ["approve", "reject"],
         } as never);
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         const tallyTx = runtime.edit();
         setCfcImplementationIdentity(tallyTx, TALLY);
@@ -791,7 +791,7 @@ describe("TransformedBy input witnesses", () => {
           tally([ballot]),
         );
         tallyTx.prepareCfc();
-        expect((await tallyTx.commit()).error).toBeUndefined();
+        expect((await tallyTx.commit().settled).error).toBeUndefined();
         expect(publish(runtime, "ballot")).toEqual([]);
       });
     });
@@ -874,7 +874,7 @@ describe("TransformedBy input witnesses", () => {
         "committed",
       );
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     /** The tally over the committed votes alone. */
@@ -890,7 +890,7 @@ describe("TransformedBy input witnesses", () => {
         tally([{ votes }]),
       );
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     const released = async (
@@ -939,7 +939,7 @@ describe("TransformedBy input witnesses", () => {
             "ref" as never,
           ).set(runtime.getCell(space, "bob-note", undefined, tx) as never);
           tx.prepareCfc();
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }),
       ).toBe(false);
     });
@@ -953,7 +953,7 @@ describe("TransformedBy input witnesses", () => {
         "ref" as never,
       ).set(runtime.getCell(space, "bob-note", undefined, tx) as never);
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     };
 
     it("stamps a destination holding the reference the runtime recorded at its path", async () => {
@@ -1016,7 +1016,7 @@ describe("TransformedBy input witnesses", () => {
               open: "public",
             } as never);
             tx.prepareCfc();
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
           }
           const tx = runtime.edit();
           const metadata = readStoredCfcMetadata(
@@ -1058,7 +1058,7 @@ describe("TransformedBy input witnesses", () => {
           votes: ["reject", "approve"],
         });
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
         expect(publish(runtime, "ballot")).toEqual([]);
       });
@@ -1086,7 +1086,7 @@ describe("TransformedBy input witnesses", () => {
           votes: ["approve", "reject"],
         });
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
         expect(publish(runtime, "ballot")).toEqual([]);
       });
@@ -1116,7 +1116,7 @@ describe("TransformedBy input witnesses", () => {
           value as never,
         );
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       };
       const writersAtA = (runtime: Runtime): unknown[] => {
         const tx = runtime.edit();
@@ -1146,7 +1146,7 @@ describe("TransformedBy input witnesses", () => {
           b: { vote: "none" },
         } as never);
         setup.prepareCfc();
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         await setMember(runtime, COMMIT, "a", { vote: "approve" });
         await setMember(runtime, COMMIT, "b", { vote: "reject" });
         expect(writersAtA(runtime)).toEqual([{
@@ -1175,7 +1175,7 @@ describe("TransformedBy input witnesses", () => {
         committed.set({ votes: ["approve"] });
         committed.key("note" as never).set("committed" as never);
         tx.prepareCfc();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await transform(runtime, TALLY, ["committed"], "ballot", tally);
         expect(refusedByCeiling(publish(runtime, "ballot"))).toBe(true);
       });

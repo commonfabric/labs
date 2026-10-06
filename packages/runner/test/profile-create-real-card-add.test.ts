@@ -111,13 +111,13 @@ describe("profile-create real card-add (REAL patterns, cross-space)", () => {
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, parent as any, {}, resultCell1);
       rt1.prepareTxForCommit(tx1);
-      const commit1 = await tx1.commit();
+      const commit1 = await tx1.commit().settled;
       expect(commit1.error).toBeUndefined();
       await r1.pull();
 
       const tx2 = rt1.edit();
       r1.withTx(tx2).key("createProfile").send({ name: "AdaTest" });
-      const commit2 = await tx2.commit();
+      const commit2 = await tx2.commit().settled;
       expect(commit2.error).toBeUndefined();
       await r1.pull();
       await rt1.idle();
@@ -153,7 +153,7 @@ describe("profile-create real card-add (REAL patterns, cross-space)", () => {
       // an enforcing rung refuses a relevant transaction that arrives
       // unprepared.
       rt2.prepareTxForCommit(writeTx);
-      const writeCommit = await writeTx.commit();
+      const writeCommit = await writeTx.commit().settled;
       // The regression site. Pre-fix: "writeAuthorizedBy must remain stable".
       expect(writeCommit.error).toBeUndefined();
       await profileCell.pull();

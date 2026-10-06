@@ -1,0 +1,64 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-0",
+  "settlement": {
+    "status": "executed",
+    "catalog": {
+      "entries": [
+        {
+          "command": "connector.connectDevice",
+          "summary": "Connect a device to a connector.",
+          "scope": "global",
+          "executes": "loom",
+          "effect": "mutation",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "device": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "device"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "command": "wish.choose_facet",
+          "summary": "Choose a facet for a wish.",
+          "scope": "loom",
+          "executes": "loom",
+          "effect": "mutation",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "facet"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "command": "loom.inspect",
+          "summary": "Read a loom's manifest: its panels, selection and version.",
+          "scope": "loom",
+          "executes": "loom",
+          "effect": "read",
+          "approval": "automatic",
+          "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

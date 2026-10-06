@@ -134,7 +134,7 @@ describe("list builtins defer-settle when their input hydrates after resume", ()
       tx1,
     );
     const r1 = rt1.run(tx1, cold, {}, resultCell1);
-    await tx1.commit();
+    await tx1.commit().settled;
     await r1.pull();
 
     for (const value of [1, 2, 3, 4]) {
@@ -198,7 +198,7 @@ describe("list builtins defer-settle when their input hydrates after resume", ()
         undefined,
         tx2,
       );
-      await tx2.commit();
+      await tx2.commit().settled;
 
       await resultCell2.sync();
       const started = await rt2.start(resultCell2);

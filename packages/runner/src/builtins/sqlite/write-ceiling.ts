@@ -1,6 +1,6 @@
 // CFC write-ceiling check (Phase 2): a value bound to a labeled column must fit
 // that column's `ifc.maxConfidentiality`. The label rides the bound value (a Cell
-// or any carried-label value — read via `cfcLabelViewForCell` at the call site);
+// or any carried-label value — read via `cfcLabelViewForCellFailClosed` at the call site);
 // this module is pure (the reader is injected) so it stays free of cell.ts.
 //
 // FAIL CLOSED: if a value carries confidentiality but its target column can't be

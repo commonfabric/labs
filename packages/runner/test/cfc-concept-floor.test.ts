@@ -347,7 +347,7 @@ describe("CFC concept-level integrity floors (D5)", () => {
             seed,
           ).set(`value-${index}`);
           seed.prepareCfc();
-          expect((await seed.commit()).ok).toBeDefined();
+          expect((await seed.commit().settled).ok).toBeDefined();
         }
         const tx = runtime.edit();
         for (const [index, integrity] of sources.entries()) {
@@ -383,7 +383,7 @@ describe("CFC concept-level integrity floors (D5)", () => {
           tx,
         ).set({ out: "derived" });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           ok: result.ok !== undefined,
           message: (result.error as Error | undefined)?.message,
@@ -476,7 +476,7 @@ describe("CFC concept-level integrity floors (D5)", () => {
           tx,
         ).set({ out: "written" });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           ok: result.ok !== undefined,
           message: (result.error as Error | undefined)?.message,
@@ -610,7 +610,7 @@ describe("CFC concept-level integrity floors (D5)", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const catalog = llmToolExecutionHelpers.buildToolCatalog(
@@ -655,7 +655,7 @@ describe("CFC concept-level integrity floors (D5)", () => {
         );
         cell.set(value);
         seedTx.prepareCfc();
-        expect((await seedTx.commit()).ok).toBeDefined();
+        expect((await seedTx.commit().settled).ok).toBeDefined();
         await runtime.idle();
         // Premise: the concrete atom really landed on the stored label.
         const readTx = runtime.edit();

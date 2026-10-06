@@ -2,6 +2,8 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  type CellRefusedAnswer,
+  type CellValueAnswer,
   ClientNotificationType,
   NotificationType,
   RequestType,
@@ -75,5 +77,28 @@ describe("types", () => {
         ),
       ).toEqual([]);
     });
+  });
+});
+
+describe("a read's answer", () => {
+  it("is a value or a refusal, never both", () => {
+    // Checked by the compiler: each of these fails to type-check, which the
+    // `@ts-expect-error` above it requires. The bodies run only so that the
+    // answers are used.
+    const refusal = { refusedBy: "display-ceiling" } as const;
+    // @ts-expect-error A refusal carries no value.
+    const both: CellValueAnswer | CellRefusedAnswer = {
+      value: "shown",
+      refused: refusal,
+    };
+    const labeled: CellRefusedAnswer = {
+      refused: refusal,
+      // @ts-expect-error A refusal carries no label view.
+      cfcLabel: { version: 1, entries: [] },
+    };
+    // @ts-expect-error A value is never also a refusal.
+    const valued: CellValueAnswer = { value: "shown", refused: refusal };
+
+    expect([both, labeled, valued]).toHaveLength(3);
   });
 });

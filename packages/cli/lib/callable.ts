@@ -1955,7 +1955,7 @@ export async function executeResolvedCallable(
   try {
     await runtime.idle();
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     // A tool's result cell is durable, so a transaction that wrote one is a
     // write to the space like a handler's is. Neither `commit()` resolving
     // nor a `done` status proves that: an empty transaction commits

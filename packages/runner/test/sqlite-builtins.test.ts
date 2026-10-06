@@ -37,7 +37,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -128,7 +128,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
         tx,
       );
       const result = runtime.run(tx, queryPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
 
       // Observe the result so the effect runs in pull mode. `idle()` returns
       // before the latency-bounded flush completes (still pending); `settled()`
@@ -259,7 +259,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
       tx,
     );
     const result = runtime.run(tx, queryPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
 
     const view = result as unknown as {
       get: () => QueryState;
@@ -374,7 +374,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
         tx,
       );
       const result = runtime.run(tx, queryPattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
 
       const view = result as unknown as {
         get: () => QueryState;
@@ -476,7 +476,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
       });
       const resultCell = runtime.getCell(space, label, undefined, tx);
       runtime.run(tx, pattern, {}, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
 
       const qCell = resultCell.key("q").resolveAsCell() as unknown as {
         get: () => QueryState;
@@ -505,7 +505,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
           exec(sql: string, params?: readonly unknown[]): void;
         };
         db.exec("INSERT INTO notes (body) VALUES (?)", ["seed"]);
-        expect((await execTx.commit()).error).toBeUndefined();
+        expect((await execTx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         const secondHash = qCell.get().requestHash;
         expect(secondHash).not.toBe(firstHash);
@@ -550,7 +550,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
       { tick },
       runtime.getCell(space, "sqlite-hole-result", pattern.resultSchema, tx),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancel = result.key("pending").sink(() => {});
     try {
       await runtime.settled();
@@ -559,7 +559,7 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
 
       const next = runtime.edit();
       tick.withTx(next).setRawUntyped([undefined]);
-      expect((await next.commit()).error).toBeUndefined();
+      expect((await next.commit().settled).error).toBeUndefined();
       await runtime.settled();
       expect(result.key("requestHash").get()).not.toBe(first);
     } finally {

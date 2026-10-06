@@ -31,42 +31,24 @@ const __cfLift_1 = __cfHelpers.lift<{
     type: "object",
     properties: {
         annotated: {
-            anyOf: [{
-                    type: "object",
-                    properties: {
-                        nextSeq: {
-                            type: "number"
-                        }
-                    },
-                    required: ["nextSeq"]
-                }, {
-                    $ref: "#/$defs/Counters",
-                    "default": {
-                        nextSeq: 1,
-                        expiredThrough: 0
-                    }
-                }],
+            type: "object",
+            properties: {
+                nextSeq: {
+                    type: "number"
+                }
+            },
+            required: ["nextSeq"],
+            "default": {
+                nextSeq: 1,
+                expiredThrough: 0
+            },
             asCell: [{
                     kind: "readonly",
                     scope: "session"
                 }]
         }
     },
-    required: ["annotated"],
-    $defs: {
-        Counters: {
-            type: "object",
-            properties: {
-                nextSeq: {
-                    type: "number"
-                },
-                expiredThrough: {
-                    type: "number"
-                }
-            },
-            required: ["nextSeq", "expiredThrough"]
-        }
-    }
+    required: ["annotated"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
@@ -78,30 +60,17 @@ const __cfLift_2 = __cfHelpers.lift<{
     type: "object",
     properties: {
         satisfying: {
-            anyOf: [{
-                    type: "object",
-                    properties: {
-                        expiredThrough: {
-                            type: "number"
-                        }
-                    },
-                    required: ["expiredThrough"]
-                }, {
-                    type: "object",
-                    properties: {
-                        nextSeq: {
-                            type: "number"
-                        },
-                        expiredThrough: {
-                            type: "number"
-                        }
-                    },
-                    required: ["nextSeq", "expiredThrough"],
-                    "default": {
-                        nextSeq: 1,
-                        expiredThrough: 0
-                    }
-                }],
+            type: "object",
+            properties: {
+                expiredThrough: {
+                    type: "number"
+                }
+            },
+            required: ["expiredThrough"],
+            "default": {
+                nextSeq: 1,
+                expiredThrough: 0
+            },
             asCell: [{
                     kind: "readonly",
                     scope: "user"

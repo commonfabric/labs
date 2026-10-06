@@ -93,7 +93,7 @@ describe("agent sink governance", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await runtime.dispose();
       await storageManager.close();
@@ -117,7 +117,7 @@ describe("agent sink governance", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<{ error?: string }>(
         runtime,
@@ -164,7 +164,7 @@ describe("agent sink governance", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<{ error?: string }>(
         runtime,
@@ -199,7 +199,7 @@ describe("agent sink governance", () => {
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       // The record is what the post-commit effect creates, so its appearance
       // is the evidence that the staging transaction committed.

@@ -90,7 +90,7 @@ describe("cold start of a piece with trusted sub-pieces", () => {
       draftBody: "Body",
     }, cell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
     await runtime.storageManager.synced();

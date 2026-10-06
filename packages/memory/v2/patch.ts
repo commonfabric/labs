@@ -322,23 +322,58 @@ const spliceAtPath = (
   return newRoot;
 };
 
+/**
+ * Thaws the array a tail op (`append` or `add-unique`, named by `op` for the
+ * error message) adds to, creating it where there is no list yet: where the
+ * path is missing, in which case the path to it is created too, and where its
+ * slot holds `undefined`. A writer adding to either sees no list, so both
+ * take the array holding only what the op adds. Any other value that is not
+ * an array is refused. `validateAddSpine()` keeps the parent descent from
+ * fabricating missing array indices, exactly as `add` does.
+ */
+const thawTailArray = (
+  root: FabricValue,
+  path: string[],
+  op: string,
+): { root: FabricValue; array: FabricValue[] } => {
+  validateAddSpine(root, path);
+  const trace = tracePath(root, path);
+  if (
+    path.length > 0 && trace.end === "complete" && trace.value === undefined
+  ) {
+    const { root: newRoot, container } = thawSpine(
+      root,
+      path.slice(0, -1),
+      path,
+    );
+    const key = path[path.length - 1]!;
+    const array: FabricValue[] = [];
+    if (Array.isArray(container)) {
+      container[requireExistingArrayIndex(container, key, path)] = array;
+    } else {
+      container[key] = array;
+    }
+    return { root: newRoot, array };
+  }
+  const { root: newRoot, container } = thawSpine(root, path, path, "0");
+  if (!Array.isArray(container)) {
+    throw new PatchApplyError(
+      `${op} target is not an array at ${encodePointer(path)}`,
+    );
+  }
+  return { root: newRoot, array: container };
+};
+
 // A tail-relative append resolves its position against the array's live state
-// rather than any client-supplied index, and creates the array (and the path to
-// it) when absent. `validateAddSpine` keeps the parent descent from fabricating
-// missing array indices, exactly as `add` does.
+// rather than any client-supplied index, and creates the array where there is
+// none (see `thawTailArray()`).
 const appendAtPath = (
   root: FabricValue,
   path: string[],
   values: FabricValue[],
 ): FabricValue => {
-  validateAddSpine(root, path);
-  const { root: newRoot, container } = thawSpine(root, path, path, "0");
-  if (!Array.isArray(container)) {
-    throw new PatchApplyError(
-      `append target is not an array at ${encodePointer(path)}`,
-    );
-  }
-  for (const value of values) container.push(cloneValue(value));
+  const { root: newRoot, array } = thawTailArray(root, path, "append");
+  for (const value of values) array.push(cloneValue(value));
   return newRoot;
 };
 
@@ -357,13 +392,11 @@ const addUniqueAtPath = (
   path: string[],
   values: FabricValue[],
 ): FabricValue => {
-  validateAddSpine(root, path);
-  const { root: newRoot, container } = thawSpine(root, path, path, "0");
-  if (!Array.isArray(container)) {
-    throw new PatchApplyError(
-      `add-unique target is not an array at ${encodePointer(path)}`,
-    );
-  }
+  const { root: newRoot, array: container } = thawTailArray(
+    root,
+    path,
+    "add-unique",
+  );
   const adding = new ValueSet();
   // `Array.from()` reads a hole in `values` as `undefined`, which is then
   // added like any other value.

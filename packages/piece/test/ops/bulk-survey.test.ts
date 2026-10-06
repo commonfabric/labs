@@ -67,7 +67,10 @@ function holderProgram(): RuntimeProgram {
       name: "/main.tsx",
       contents: [
         "import { NAME, pattern } from 'commonfabric';",
-        "export default pattern<{ members?: unknown[] }>(({ members }) => ({",
+        "export default pattern<",
+        "  { members?: unknown[] },",
+        "  { [NAME]: string; members?: unknown[] }",
+        ">(({ members }) => ({",
         "  [NAME]: 'Holder',",
         "  members,",
         "}));",
@@ -792,7 +795,10 @@ describe("bulk-survey", () => {
           name: "/main.tsx",
           contents: [
             "import { NAME, pattern } from 'commonfabric';",
-            "export default pattern<{ holder?: unknown[] }>(({ holder }) => ({",
+            "export default pattern<",
+            "  { holder?: unknown[] },",
+            "  { [NAME]: string; holder?: unknown[] }",
+            ">(({ holder }) => ({",
             "  [NAME]: 'Colliding',",
             "  holder,",
             "}));",

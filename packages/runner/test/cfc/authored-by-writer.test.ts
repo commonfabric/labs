@@ -198,7 +198,7 @@ describe("authored-by-writer", () => {
       });
     }
     runtime.prepareTxForCommit(tx);
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     return { error: error?.message, cell: runtime.getCell(space, cause) };
   };
 
@@ -248,7 +248,7 @@ describe("authored-by-writer", () => {
       client.getCell(space, "initialized-note-holder", undefined, tx)
         .set({ seed });
       client.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(authoredBy(client, seed)).toEqual([bob.did()]);
     });
 
@@ -318,7 +318,7 @@ describe("authored-by-writer", () => {
       serving.getCell(space, "actorless-seed-holder", undefined, tx)
         .set({ seed });
       serving.prepareTxForCommit(tx);
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "current-principal integrity requires the run's actor",
       );
     });
@@ -336,7 +336,7 @@ describe("authored-by-writer", () => {
       serving.getCell(space, "unattributed-seed-holder", undefined, tx)
         .set({ seed });
       serving.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const inspect = serving.edit();
       expect(inspect.readValueOrThrow(seed.getAsNormalizedFullLink())).toBe(
         "a default",
@@ -437,12 +437,12 @@ describe("authored-by-writer", () => {
       {
         const tx = client.edit();
         argument.withTx(tx).set({ notes: [], seen: "" });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = client.edit();
         client.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       return result;
     };

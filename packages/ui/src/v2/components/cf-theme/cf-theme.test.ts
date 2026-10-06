@@ -2,8 +2,10 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   createMockCellHandle,
+  pushRefusal,
   pushUpdate,
 } from "../../test-utils/mock-cell-handle.ts";
+import { defaultTheme, mergeWithDefaultTheme } from "../theme-context.ts";
 import { subscribeToThemeCellValues, unwrapThemeCellValues } from "./index.ts";
 
 describe("cf-theme reactive theme values", () => {
@@ -38,6 +40,19 @@ describe("cf-theme reactive theme values", () => {
         },
       },
     });
+  });
+
+  it("leaves out a color the worker refuses or has not answered, so the default stands", () => {
+    const primary = createMockCellHandle("#121826");
+    pushRefusal(primary);
+    const accent = createMockCellHandle<string>();
+
+    const unwrapped = unwrapThemeCellValues({ colors: { primary, accent } });
+
+    expect(unwrapped).toEqual({ colors: {} });
+    const merged = mergeWithDefaultTheme(unwrapped);
+    expect(merged.colors.primary).toEqual(defaultTheme.colors.primary);
+    expect(merged.colors.accent).toEqual(defaultTheme.colors.accent);
   });
 
   it("subscribes to nested CellHandle values without firing for initial values", () => {

@@ -7,6 +7,8 @@
  * which include both ancestors and descendants.
  */
 
+import type { NonDocumentPath } from "@commonfabric/memory/v2";
+
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import { isPrefix } from "./path-prefix-index.ts";
 import type { LabelMapEntry } from "./types.ts";
@@ -83,7 +85,7 @@ export class ConsumedLabelIndex {
    * `path` is a logical path, as the entries' paths are.
    */
   overlapping(
-    path: readonly string[],
+    path: NonDocumentPath,
     includeDescendants = true,
   ): readonly IndexedEntry[] {
     this.#onQuery?.(path.includes("*"));

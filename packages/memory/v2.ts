@@ -772,6 +772,15 @@ export type DocumentPath = readonly string[] & {
 export type ValuePath = readonly string[] & {
   readonly __memoryV2ValuePath: unique symbol;
 };
+
+/**
+ * Any path except a {@link DocumentPath}. A parameter of this type takes a
+ * plain path or a {@link ValuePath} and refuses one branded as rooted at the
+ * stored document, which has to be converted before it gets there.
+ */
+export type NonDocumentPath = readonly string[] & {
+  readonly __memoryV2DocumentPath?: never;
+};
 export type ReadPath = DocumentPath;
 export type DocumentSchemaPathSelector =
   & Omit<SchemaPathSelector, "path">
@@ -812,14 +821,16 @@ export type PatchOp =
     add: FabricValue[];
   }
   // A tail-relative append: `values` are inserted at the array's current tail,
-  // with the array (and the path to it) created if absent. Carries no index, so
-  // concurrent appends merge against durable state rather than clobbering via a
-  // position computed from a stale base. `createsKey` — see below.
+  // with the array (and the path to it) created if absent, or if its slot holds
+  // `undefined`. Carries no index, so concurrent appends merge against durable
+  // state rather than clobbering via a position computed from a stale base.
+  // `createsKey` — see below.
   | { op: "append"; path: string; values: FabricValue[]; createsKey?: true }
   // Set-add by identity: each of `values` is appended at the tail only if no
   // existing element of the array equals it (by stored-value equality), with the
-  // array created if absent. Idempotent and commutative, so concurrent adds of
-  // distinct elements merge and a repeated add is a no-op against durable state.
+  // array created where `append` creates it. Idempotent and commutative, so
+  // concurrent adds of distinct elements merge and a repeated add is a no-op
+  // against durable state.
   | { op: "add-unique"; path: string; values: FabricValue[]; createsKey?: true }
   // Remove every element of the array at `path` that equals `value` by
   // stored-value equality. Idempotent (removing an absent value is a no-op) and
@@ -1232,6 +1243,8 @@ export type MemoryProtocolFlags = {
    * false, and a client then signs each `session.open`.
    */
   connectionAuth?: boolean;
+  /** The peer supports router-scoped binary connection authentication. */
+  routedAuthV1?: boolean;
 };
 
 /**
@@ -1262,6 +1275,7 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
+  routedAuthV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1285,6 +1299,8 @@ export type SessionOpenChallenge = {
 export type SessionOpenAuthMetadata = {
   challenge: SessionOpenChallenge;
   audience: string;
+  /** Deployment identifier signed when this peer is a Mode A router. */
+  deployment?: string;
 };
 
 export type SessionDescriptor = {
@@ -1897,6 +1913,8 @@ export type ConnectionAuthRequest = {
   requestId: string;
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
+  /** Canonical base64url statement when routedAuthV1 is negotiated. */
+  statement?: string;
 };
 
 /** The `ok` of the response to a `connection.auth`. */
@@ -2353,6 +2371,7 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
+  routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2373,6 +2392,11 @@ export const parseMemoryProtocolFlags = (
   value: unknown,
 ): MemoryProtocolFlags | null => {
   if (!isPlainObject(value)) {
+    return null;
+  }
+  if (
+    value.routedAuthV1 !== undefined && typeof value.routedAuthV1 !== "boolean"
+  ) {
     return null;
   }
 
@@ -2572,6 +2596,7 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
+    routedAuthV1: value.routedAuthV1 === true,
   };
 };
 
@@ -2604,6 +2629,7 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
+  routedAuthV1: flags.routedAuthV1,
 });
 
 /**

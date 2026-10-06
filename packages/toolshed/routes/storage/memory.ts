@@ -1,3 +1,4 @@
+import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import * as FS from "@std/fs";
 
 import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
@@ -5,6 +6,7 @@ import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import { experimentalOptionsFromEnv } from "@commonfabric/runner/experimental-posture";
 
+import { MemoryRouterPolicy } from "./memory-router.ts";
 import { memoryEngineStoreUrl } from "./memory-store-url.ts";
 import env from "@/env.ts";
 import { identity } from "@/lib/identity.ts";
@@ -14,6 +16,28 @@ import {
 } from "@/lib/server-execution-flag.ts";
 
 const memoryAudience = identity.did();
+const routerPolicy = env.MEMORY_ROUTER_CONFIG_FILE === ""
+  ? undefined
+  : new MemoryRouterPolicy(env.MEMORY_ROUTER_CONFIG_FILE);
+if (
+  routerPolicy !== undefined &&
+  (env.MEMORY_ACL_MODE !== "enforce" || env.DB_PATH)
+) {
+  throw new Error(
+    "Mode A requires directory storage and enforced explicit ACLs",
+  );
+}
+
+if (routerPolicy !== undefined) {
+  if (experimentalOptionsFromEnv(Deno.env.get).modernCellRep !== true) {
+    throw new Error(
+      "Mode A requires EXPERIMENTAL_MODERN_CELL_REP=true in tracked configuration",
+    );
+  }
+  // Runtime startup later reads the same required flag; initialize the Memory
+  // encoder before the private listener advertises its capabilities.
+  setModernCellRepConfig(true);
+}
 
 // Server-execution v2 (OW31, RULED 2026-08-18/19): under the flag this
 // process's own identity is a DELEGATING principal — the serving loop's
@@ -81,7 +105,7 @@ await FS.ensureDir(memoryEngineStoreUrl);
 export const memoryServer = new MemoryServer.Server({
   store: memoryEngineStoreUrl,
   authorizeSessionOpen,
-  ...(sharedMemoryConnection
+  ...(sharedMemoryConnection || routerPolicy !== undefined
     ? { authorizeConnection: verifyConnectionAuthorization }
     : {}),
   sessionOpenAuth: {
@@ -92,14 +116,31 @@ export const memoryServer = new MemoryServer.Server({
     serviceDids: memoryAclPrincipals.serviceDids,
     delegatingDids: memoryAclPrincipals.delegatingDids,
   },
+  ...(routerPolicy !== undefined
+    ? {
+      ownsSpace: (space: string) => routerPolicy.ownership(space) !== undefined,
+      requireExplicitAcl: true,
+    }
+    : {}),
   documentCacheBudgetBytes: env.MEMORY_DOCUMENT_CACHE_BUDGET_BYTES,
   documentCacheMaxEntries: env.MEMORY_DOCUMENT_CACHE_MAX_ENTRIES,
   documentCacheTotalBudgetBytes: env.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
 });
+const routedListener = await routerPolicy?.start(memoryServer);
 export const memory = {
   async close(): Promise<
     { ok: Record<PropertyKey, never> } | { error: unknown }
   > {
+    try {
+      await routedListener?.close();
+    } catch (error) {
+      try {
+        await memoryServer.close();
+      } catch (cleanup) {
+        throw new AggregateError([error, cleanup], "Memory cleanup failed");
+      }
+      throw error;
+    }
     await memoryServer.close();
     return { ok: {} };
   },

@@ -55,7 +55,7 @@ describe("aggregate resume", () => {
         setup,
       );
       parent.set({});
-      await setup.commit();
+      await setup.commit().settled;
       await firstStorage.synced();
       const coldInputs = second.getCellFromLink<
         { list: number[]; operation: "count" }
@@ -83,7 +83,7 @@ describe("aggregate resume", () => {
       await builtin.action(reconcile);
       expect(output.withTx(reconcile).get()).toBe(3);
       second.prepareTxForCommit(reconcile);
-      const committed = await reconcile.commit();
+      const committed = await reconcile.commit().settled;
       expect(committed.error).toBeUndefined();
       expect(await output.pull()).toBe(3);
     } finally {
@@ -151,7 +151,7 @@ describe("aggregate resume", () => {
           ),
         );
         first.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
         cancelFirst = result.sink(() => {});
         await first.idle();
         expect(await result.pull()).toEqual({
@@ -170,7 +170,7 @@ describe("aggregate resume", () => {
         if (clearBeforeResume) {
           const clear = first.edit();
           numbers.asSchema(true).withTx(clear).set(undefined);
-          await clear.commit();
+          await clear.commit().settled;
           await firstStorage.synced();
         }
         await first.dispose({ closeStorage: false });
@@ -217,7 +217,7 @@ describe("aggregate resume", () => {
           undefined,
           edit,
         ).set([10, 20, 30]);
-        await edit.commit();
+        await edit.commit().settled;
         await second.idle();
         expect(await restored.pull()).toEqual({
           sum: 60,

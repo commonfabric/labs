@@ -44,7 +44,7 @@ Deno.bench("Storage tx path - root read x100", async () => {
       });
     }
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await cleanup(runtime, storageManager);
   }
 });
@@ -68,7 +68,7 @@ Deno.bench("Storage tx path - single sibling write x100", async () => {
       }, index);
     }
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await cleanup(runtime, storageManager);
   }
 });
@@ -139,7 +139,7 @@ Deno.bench("Storage tx path - five sibling writes x100", async () => {
       ]);
     }
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await cleanup(runtime, storageManager);
   }
 });

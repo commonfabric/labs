@@ -103,7 +103,7 @@ async function setupList(prefix: string, size: number): Promise<ListEnv> {
     children: childCells,
   });
 
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
   return { env, rootCell, childCells };
 }
@@ -176,7 +176,7 @@ for (const size of [8, 32, 128]) {
     const tx = listEnv.env.runtime.edit();
     const target = listEnv.childCells[revision++ % listEnv.childCells.length];
     target.withTx(tx).set(noteChipVNode(1000 + revision));
-    await tx.commit();
+    await tx.commit().settled;
     await listEnv.env.runtime.idle();
   });
 }

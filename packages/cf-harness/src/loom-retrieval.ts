@@ -97,10 +97,22 @@ export interface LoomSearchInput {
   rank?: "recency" | "score";
 }
 
+/** Page kinds and aliases accepted by Loom's Page discovery route. */
+export const LOOM_PAGE_DISCOVERY_KINDS = [
+  "all",
+  "project",
+  "projects",
+  "entity",
+  "entities",
+] as const;
+
+/** One of {@link LOOM_PAGE_DISCOVERY_KINDS}. */
+export type LoomPageDiscoveryKind = (typeof LOOM_PAGE_DISCOVERY_KINDS)[number];
+
 /** Arguments of `loom page discover`. */
 export interface LoomPageDiscoverInput {
-  /** Page kind filter. */
-  kind?: string;
+  /** Page kind filter; `all` when absent. */
+  kind?: LoomPageDiscoveryKind;
 
   /** Maximum pages, a positive integer. */
   limit?: number;
@@ -459,7 +471,10 @@ export const loomRetrievalArgv = (
         "discover",
         "--json",
         "--concise",
-        ...option("--kind", textValue(input, "kind")),
+        ...option(
+          "--kind",
+          choiceValue(input, "kind", LOOM_PAGE_DISCOVERY_KINDS),
+        ),
         ...option("--limit", countValue(input, "limit")),
       ];
     case "page.inspect":

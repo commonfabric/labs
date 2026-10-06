@@ -394,7 +394,7 @@ describe("setsrc compatibility preflight", () => {
         }
         pieces.getArgument(piece.getCell()).withTx(tx).asSchema(undefined)
           .set({ seed: "hello", extra: next });
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error).toBeUndefined();
       } finally {
         if (tx.status().status === "ready") tx.abort();

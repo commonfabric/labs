@@ -68,7 +68,7 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
       '"/missing.tsx" not found in files',
     );
 
-    await tx.commit();
+    await tx.commit().settled;
   } finally {
     await runtime.dispose();
     await storageManager.close();
@@ -127,7 +127,7 @@ Deno.test("compileAndRun runs a program that reads an attached data file", async
       dataFiles: ["/data/cities.json"],
     });
     action(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     // The compile runs outside the scheduler and writes what it produced when
     // it finishes, so wait on that write. Waiting on `pending` going false

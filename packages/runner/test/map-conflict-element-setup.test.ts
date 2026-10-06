@@ -226,7 +226,7 @@ describe("map element setup across a commit conflict", () => {
       mapped: number[];
     }>(space, "map conflict element setup", undefined, setupTx);
     const result = rtB.run(setupTx, parentPattern, {}, parent);
-    expect((await setupTx.commit()).error).toBeUndefined();
+    expect((await setupTx.commit().settled).error).toBeUndefined();
 
     // The mapped container converged to two slots — resolved by the sink
     // below once the retry's container write lands. Both slots present is
@@ -245,7 +245,7 @@ describe("map element setup across a commit conflict", () => {
         const tx = rtB.edit();
         result.key("items").withTx(tx).set([1]);
         rtB.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await rtB.scheduler.idleWithPendingCommits();
       expect(await result.key("mapped").pull()).toEqual([2]);
@@ -263,7 +263,7 @@ describe("map element setup across a commit conflict", () => {
         const tx = rtA.edit();
         containerA.withTx(tx).set([]);
         rtA.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await storageA.synced();
 
@@ -275,7 +275,7 @@ describe("map element setup across a commit conflict", () => {
       const appendTx = rtB.edit();
       result.key("items").withTx(appendTx).set([1, 2]);
       rtB.prepareTxForCommit(appendTx);
-      const appendCommit = appendTx.commit();
+      const appendCommit = appendTx.commit().settled;
       // The verdict is what to wait for here: the rejection surfaces as a
       // revert only once its retry gate has the catch-up, and that rides the
       // held frames. The waits here and below carry no bound, per the

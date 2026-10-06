@@ -111,7 +111,7 @@ const compileInto = async (
   });
   await rt.patternManager.flushCompileCacheWrites();
   const entry = rt.patternManager.getArtifactEntryRef(pattern)!.identity;
-  await tx.commit();
+  await tx.commit().settled;
   // Make the write-back durable before another runtime reads this space.
   await rt.storageManager.synced();
   return entry;

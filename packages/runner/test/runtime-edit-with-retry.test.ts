@@ -24,7 +24,7 @@ describe("Runtime.editWithRetry", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -37,7 +37,7 @@ describe("Runtime.editWithRetry", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     const { ok, error } = await runtime.editWithRetry((t) => {
       cell.withTx(t).send(1);
@@ -58,7 +58,7 @@ describe("Runtime.editWithRetry", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     // Track attempts and force early aborts to trigger retry
     let attempts = 0;
@@ -87,7 +87,7 @@ describe("Runtime.editWithRetry", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     let attempts = 0;
     const max = 3;
@@ -111,7 +111,7 @@ describe("Runtime.editWithRetry", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
 
     let attempts = 0;
     const { error } = await runtime.editWithRetry((t) => {
@@ -248,7 +248,7 @@ describe("Runtime.editWithRetry", () => {
       tx,
     );
     cell.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const statuses: string[] = [];

@@ -18,7 +18,10 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   projected as a list in the contract.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
-- The times the room has used, so it can make each new one unique.
+- The times the room has used, so it can make each new one unique, each kept
+  as long as a request is remembered: no new time is chosen from before the
+  proposed-time window, which that span covers.
+
 `participants` is computed from the participants the space's default pattern
 lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
 profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
@@ -102,9 +105,10 @@ write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
 the runtime's write policies can split one document this way is a prerequisite
 to check.
 
-`about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
-handler that creates the room, so it is labeled with its creator. `canSend` is
-computed for each viewer from their access and whether their profile resolves.
+`about.record` is stored as `AuthoredByCurrentUser`, written once by the handler
+that creates the room, so it is labeled with its creator, and `about` links it.
+`canSend` is computed for each viewer from their access and whether their
+profile resolves.
 
 Every handler that changes the room's own record appends its `recentActivity`
 entry in the same transaction as the change, so the log never disagrees with the

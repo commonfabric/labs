@@ -115,7 +115,7 @@ describe("transaction abandon", () => {
     stageEffect(tx, "a", seen);
 
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     tx.abandonStagedWork(refusal);
 

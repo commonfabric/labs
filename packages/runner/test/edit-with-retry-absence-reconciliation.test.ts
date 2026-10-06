@@ -18,6 +18,7 @@ import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { excludeReadFromConflict } from "../src/storage/reactivity-log.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("absence reconciliation test");
 const space = signer.did();
@@ -51,7 +52,7 @@ describe("editWithRetry absence reconciliation", () => {
       const txA = runtimeA.edit();
       runtimeA.getCell(space, "shared-absence-doc", valueSchema, txA)
         .set({ value: 42 });
-      await txA.commit();
+      await txA.commit().settled;
       await smA.synced();
 
       // Client B is a cold replica of the same space.
@@ -145,7 +146,7 @@ describe("editWithRetry absence reconciliation", () => {
       );
       shared.set({ value: 5 });
       const address = toMemorySpaceAddress(shared.getAsNormalizedFullLink());
-      await txA.commit();
+      await txA.commit().settled;
       await smA.synced();
 
       smB = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -213,7 +214,7 @@ describe("editWithRetry absence reconciliation", () => {
       };
       const seed = writerRuntime.edit();
       seed.writeValueOrThrow(excludedAddress, { value: 17 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await writerStorage.synced();
 
       readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -315,7 +316,7 @@ describe("editWithRetry absence reconciliation", () => {
       const txA = runtimeA.edit();
       runtimeA.getCell(space, "landed-beside-failure", valueSchema, txA)
         .set({ value: 3 });
-      await txA.commit();
+      await txA.commit().settled;
       await smA.synced();
 
       smB = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -405,7 +406,10 @@ describe("editWithRetry absence reconciliation", () => {
     try {
       const result = await runtime.editWithRetry((tx) => {
         attempted = tx;
-        tx.commit = (() => Promise.reject(failure)) as typeof tx.commit;
+        tx.commit = (() =>
+          createTransactionCommitReceipt(
+            Promise.reject(failure),
+          )) as typeof tx.commit;
         return "uncommitted";
       }, 0);
 
@@ -436,7 +440,7 @@ describe("editWithRetry absence reconciliation", () => {
     try {
       editing = runtime.editWithRetry((tx) => {
         tx.commit = (() =>
-          Promise.resolve({
+          createTransactionCommitReceipt(Promise.resolve({
             error: {
               name: "ConflictError",
               message: "synthetic conflict with a stuck catch-up gate",
@@ -445,7 +449,7 @@ describe("editWithRetry absence reconciliation", () => {
                 return readiness.promise;
               },
             },
-          })) as typeof tx.commit;
+          }))) as typeof tx.commit;
       });
       await waiting.promise;
 
@@ -614,7 +618,7 @@ describe("editWithRetry absence reconciliation", () => {
       const seed = actorRuntime.edit();
       userCell.withTx(seed).set({ value: 11 });
       sessionCell.withTx(seed).set({ value: 22 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await actorStorage.synced();
       const userId = userCell.getAsNormalizedFullLink().id;
       const sessionId = sessionCell.getAsNormalizedFullLink().id;
@@ -742,7 +746,7 @@ describe("editWithRetry absence reconciliation", () => {
       const txA = runtimeA.edit();
       runtimeA.getCell(space, "provider-level-doc", valueSchema, txA)
         .set({ value: 7 });
-      await txA.commit();
+      await txA.commit().settled;
       await smA.synced();
 
       smB = EmulatedStorageManager.connectTo(server, { as: signer });

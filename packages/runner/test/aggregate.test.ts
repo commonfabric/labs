@@ -62,29 +62,29 @@ describe("aggregate", () => {
     );
     const result = runtime.run(tx, compiled, { list }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
       expect(await result.key("value").pull()).toBe(10);
       const edit = runtime.edit();
       list.withTx(edit).key(1).set(12);
-      await edit.commit();
+      await edit.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBe(20);
       const replace = runtime.edit();
       list.withTx(replace).set([10, 20]);
-      await replace.commit();
+      await replace.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBe(30);
       const clear = runtime.edit();
       list.asSchema(true).withTx(clear).set(undefined);
-      await clear.commit();
+      await clear.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBeUndefined();
       const restore = runtime.edit();
       list.withTx(restore).set([7, 8]);
-      await restore.commit();
+      await restore.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBe(15);
     } finally {
@@ -138,14 +138,14 @@ describe("aggregate", () => {
     );
     const result = runtime.run(tx, compiled, { list }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
       expect(await result.key("value").pull()).toBeUndefined();
       const arrive = runtime.edit();
       absent.withTx(arrive).set(7);
-      await arrive.commit();
+      await arrive.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBe(167);
     } finally {
@@ -202,7 +202,7 @@ describe("aggregate", () => {
       output,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -219,7 +219,7 @@ describe("aggregate", () => {
       items.withTx(edit).key(0, "n").set(10);
       numbers.withTx(edit).key(0).set(10);
       threshold.withTx(edit).set(2);
-      await edit.commit();
+      await edit.commit().settled;
       await runtime.idle();
       expect(await result.pull()).toEqual({
         count: 3,
@@ -266,7 +266,7 @@ describe("aggregate", () => {
     );
     const result = runtime.run(tx, compiled, { items }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -277,7 +277,7 @@ describe("aggregate", () => {
       });
       const edit = runtime.edit();
       items.withTx(edit).key(2, "n").set(10);
-      await edit.commit();
+      await edit.commit().settled;
       await runtime.idle();
       expect(await result.pull()).toEqual({
         count: 3,
@@ -338,7 +338,7 @@ describe("aggregate", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -355,7 +355,7 @@ describe("aggregate", () => {
       ) {
         const edit = runtime.edit();
         b.withTx(edit).set(membership);
-        await edit.commit();
+        await edit.commit().settled;
         await runtime.idle();
       }
       expect(await result.pull()).toEqual({ a: 1, b: 1 });
@@ -364,7 +364,7 @@ describe("aggregate", () => {
       ) {
         const edit = runtime.edit();
         values[1].withTx(edit).set(intermediate);
-        await edit.commit();
+        await edit.commit().settled;
         await runtime.idle();
       }
       expect(await result.pull()).toEqual({ a: 1, b: 1 });
@@ -419,7 +419,7 @@ describe("aggregate", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -431,31 +431,31 @@ describe("aggregate", () => {
       expect(Object.is(await result.key("max").pull(), 0)).toBe(true);
       const reorder = runtime.edit();
       items.withTx(reorder).set([...rows].reverse());
-      await reorder.commit();
+      await reorder.commit().settled;
       await runtime.idle();
       expect(await result.key("minimum", "name").pull()).toBe(winner);
       expect(await result.key("maximum", "name").pull()).toBe(winner);
       const rename = runtime.edit();
       rows[winner === "a" ? 0 : 1].withTx(rename).key("name").set("renamed");
-      await rename.commit();
+      await rename.commit().settled;
       await runtime.idle();
       expect(await result.key("minimum", "name").pull()).toBe("renamed");
       const nanScore = runtime.edit();
       rows[0].withTx(nanScore).key("n").set(NaN);
       rows[1].withTx(nanScore).key("n").set(Infinity);
-      await nanScore.commit();
+      await nanScore.commit().settled;
       await runtime.idle();
       expect(await result.key("minimum", "n").pull()).toBeNaN();
       expect(await result.key("maximum", "n").pull()).toBeNaN();
       const tiedScores = runtime.edit();
       rows[1].withTx(tiedScores).key("n").set(NaN);
-      await tiedScores.commit();
+      await tiedScores.commit().settled;
       await runtime.idle();
       expect(await result.key("minimum", "name").pull()).toBe("renamed");
       expect(await result.key("maximum", "name").pull()).toBe("renamed");
       const nonfinite = runtime.edit();
       numbers.withTx(nonfinite).set([Infinity, -Infinity, NaN]);
-      await nonfinite.commit();
+      await nonfinite.commit().settled;
       await runtime.idle();
       for (const key of ["sum", "min", "max"]) {
         expect(await result.key(key).pull()).toBeNaN();
@@ -465,7 +465,7 @@ describe("aggregate", () => {
       sparseNumbers[1] = 4;
       sparseNumbers[3] = -2;
       numbers.withTx(sparse).set(sparseNumbers);
-      await sparse.commit();
+      await sparse.commit().settled;
       await runtime.idle();
       expect(await result.key("sum").pull()).toBe(2);
       expect(await result.key("min").pull()).toBe(-2);
@@ -473,7 +473,7 @@ describe("aggregate", () => {
       const empty = runtime.edit();
       items.withTx(empty).set([]);
       numbers.withTx(empty).set([]);
-      await empty.commit();
+      await empty.commit().settled;
       await runtime.idle();
       expect(await result.key("count").pull()).toBe(0);
       expect(await result.key("sum").pull()).toBe(0);
@@ -573,7 +573,7 @@ describe("aggregate", () => {
         );
         const result = runtime.run(tx, compiled, { list }, output);
         runtime.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
         const cancel = result.sink(() => {});
         try {
           await runtime.idle();
@@ -588,7 +588,7 @@ describe("aggregate", () => {
           });
           const edit = runtime.edit();
           values[0].withTx(edit).set(100);
-          await edit.commit();
+          await edit.commit().settled;
           await runtime.idle();
           expect(await result.key("value").pull()).toBe(
             size * (size - 1) / 2 + 100,

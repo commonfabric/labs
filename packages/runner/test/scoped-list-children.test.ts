@@ -107,7 +107,7 @@ describe("scoped-list-children", () => {
         ),
       );
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       cancel = result.sink(() => {});
       await runtime.idle();
       const childScopes: string[] = [];
@@ -126,7 +126,7 @@ describe("scoped-list-children", () => {
         childScopes.length = 0;
         tx = runtime.edit();
         selected.withTx(tx).set(lists[index]);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         expect(await result.pull()).toEqual(values);
         expect(childScopes).toEqual(
@@ -142,7 +142,7 @@ describe("scoped-list-children", () => {
       }
       tx = runtime.edit();
       first.withTx(tx).key("n").set(3);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.pull()).toEqual({
         mapped: [3, 2],
@@ -188,7 +188,7 @@ describe("scoped-list-children", () => {
         ),
       );
       first.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       const cancelFirst = result.sink(() => {});
       cancellations.push(cancelFirst);
       await first.idle();
@@ -203,7 +203,7 @@ describe("scoped-list-children", () => {
       await otherResult.sync();
       tx = second.edit();
       otherResult.key("selected").withTx(tx).set(2);
-      await tx.commit();
+      await tx.commit().settled;
       cancellations.push(otherResult.sink(() => {}));
       expect(await second.start(otherResult)).toBe(true);
       await second.idle();
@@ -226,7 +226,7 @@ describe("scoped-list-children", () => {
       expect(await restored.key("flat").pull()).toEqual([1]);
       tx = resumed.edit();
       restored.key("selected").withTx(tx).set(2);
-      await tx.commit();
+      await tx.commit().settled;
       await resumed.idle();
       expect(await restored.key("flat").pull()).toEqual([2]);
     } finally {
@@ -265,7 +265,7 @@ describe("scoped-list-children", () => {
           ),
         );
         runtime.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
         cancel = result.sink(() => {});
         const expected = (selected: number) => ({
           selected,
@@ -283,7 +283,7 @@ describe("scoped-list-children", () => {
         expect(getLogger("normalizeAndDiff").counts.warn).toBe(warnings);
         tx = runtime.edit();
         result.key("selected").withTx(tx).set(2);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         expect(await result.pull()).toEqual(expected(2));
         expect(getLogger("normalizeAndDiff").counts.warn).toBe(warnings);

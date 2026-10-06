@@ -146,7 +146,7 @@ const oneEntryCommit = async (
   expect(
     seed.write({ space, id, type, path: [] }, { value: keyedMap(length) }).ok,
   ).toBeTruthy();
-  expect((await seed.commit()).ok).toBeTruthy();
+  expect((await seed.commit().settled).ok).toBeTruthy();
   for (const manager of [storage, peer]) {
     // Watching the document is what has the server send later commits back.
     expect(
@@ -162,7 +162,7 @@ const oneEntryCommit = async (
     tx.write({ space, id, type, path: ["value", "key-0", "name"] }, "edited")
       .ok,
   ).toBeTruthy();
-  expect((await tx.commit()).ok).toBeTruthy();
+  expect((await tx.commit().settled).ok).toBeTruthy();
   await storage.pullOpenSpacesToHead();
   const containersHashed = getContainersHashedForTestingOnly() - before;
   const changedPaths = pathsSince(notified, "commit");
@@ -177,7 +177,7 @@ const oneEntryCommit = async (
       "edited elsewhere",
     ).ok,
   ).toBeTruthy();
-  expect((await foreign.commit()).ok).toBeTruthy();
+  expect((await foreign.commit().settled).ok).toBeTruthy();
   await storage.pullOpenSpacesToHead();
 
   return {
@@ -215,14 +215,14 @@ const revertedWriteCommits = async (length: number): Promise<number> => {
       seed.write({ space, id, type, path: [] }, { value: keyedMap(length) })
         .ok,
     ).toBeTruthy();
-    expect((await seed.commit()).ok).toBeTruthy();
+    expect((await seed.commit().settled).ok).toBeTruthy();
     const seeded = commits;
 
     const tx = storage.edit();
     const path = ["value", "key-0", "name"];
     expect(tx.write({ space, id, type, path }, "changed").ok).toBeTruthy();
     expect(tx.write({ space, id, type, path }, "entry-0").ok).toBeTruthy();
-    expect((await tx.commit()).ok).toBeTruthy();
+    expect((await tx.commit().settled).ok).toBeTruthy();
     return commits - seeded;
   } finally {
     await storage.close();
@@ -267,7 +267,7 @@ const largeCopiesAddingKeys = async (
         value: recordsOfSize(size, "key"),
       }).ok,
     ).toBeTruthy();
-    expect((await seed.commit()).ok).toBeTruthy();
+    expect((await seed.commit().settled).ok).toBeTruthy();
 
     const tx = storage.edit();
     for (const [key, record] of Object.entries(recordsOfSize(added, "added"))) {
@@ -288,7 +288,7 @@ const largeCopiesAddingKeys = async (
       return assign(target, ...sources);
     }) as typeof Object.assign;
     try {
-      expect((await tx.commit()).ok).toBeTruthy();
+      expect((await tx.commit().settled).ok).toBeTruthy();
     } finally {
       Object.assign = assign;
     }
@@ -328,7 +328,7 @@ const listingsValidatingRepeatedShallowReads = async (
         value: recordsOfSize(size, "key"),
       }).ok,
     ).toBeTruthy();
-    expect((await seed.commit()).ok).toBeTruthy();
+    expect((await seed.commit().settled).ok).toBeTruthy();
 
     const reader = storage.edit();
     reader.validateReactiveReads = true;
@@ -344,7 +344,7 @@ const listingsValidatingRepeatedShallowReads = async (
       writer.write({ ...address, path: ["value", "key-0", "name"] }, "renamed")
         .ok,
     ).toBeTruthy();
-    expect((await writer.commit()).ok).toBeTruthy();
+    expect((await writer.commit().settled).ok).toBeTruthy();
 
     const keys = Object.keys;
     let listings = 0;
@@ -355,7 +355,7 @@ const listingsValidatingRepeatedShallowReads = async (
     }) as typeof Object.keys;
     let accepted;
     try {
-      accepted = (await reader.commit()).error === undefined;
+      accepted = (await reader.commit().settled).error === undefined;
     } finally {
       Object.keys = keys;
     }
@@ -393,7 +393,7 @@ const transactionOverEditedValue = async (id: URI) => {
   const seed = storage.edit();
   expect(seed.write({ ...address, path: [] }, { value: { x: 1 } }).ok)
     .toBeTruthy();
-  expect((await seed.commit()).ok).toBeTruthy();
+  expect((await seed.commit().settled).ok).toBeTruthy();
   const tx = storage.edit();
   expect(tx.write({ ...address, path: ["value"] }, { x: 2 }).ok).toBeTruthy();
   return { storage, address, tx };
@@ -405,7 +405,7 @@ const committedValue = async (
   address: { space: typeof space; id: URI; type: typeof type },
   tx: ReturnType<ReturnType<typeof StorageManager.emulate>["edit"]>,
 ): Promise<unknown> => {
-  expect((await tx.commit()).ok).toBeTruthy();
+  expect((await tx.commit().settled).ok).toBeTruthy();
   return storage.edit().read({ ...address, path: ["value"] }).ok?.value;
 };
 
@@ -515,7 +515,7 @@ describe("v2-transaction", () => {
           .toBeDefined();
         expect([...tx.getPotentiallyExternalReadActivities!()!].length)
           .toBeGreaterThan(0);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect([...tx.getReadActivities!()]).toEqual([]);
         expect([...tx.getPotentiallyExternalReadActivities!()!]).toEqual([]);
       } finally {
@@ -721,7 +721,7 @@ describe("v2-transaction", () => {
         const seed = storage.edit();
         expect(seed.write({ ...address, path: [] }, { value: { arr: [1] } }).ok)
           .toBeDefined();
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
         const tx = storage.edit();
 
         const result = writeBatchEndingInOutOfRangeLength(tx, address);
@@ -731,7 +731,7 @@ describe("v2-transaction", () => {
           arr: [1],
           x: 9,
         });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect(
           storage.edit().read({ ...address, path: ["value"] }).ok?.value,
         ).toEqual({ arr: [1], x: 9 });
@@ -763,7 +763,7 @@ describe("v2-transaction", () => {
           arr: [1],
           x: 9,
         });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect(
           storage.edit().read({ ...address, path: ["value"] }).ok?.value,
         ).toEqual({ arr: [1], x: 9 });
@@ -809,7 +809,7 @@ describe("v2-transaction", () => {
               value: { x: [1, 2], n: 5 },
             }).ok,
           ).toBeTruthy();
-          expect((await seed.commit()).ok).toBeTruthy();
+          expect((await seed.commit().settled).ok).toBeTruthy();
 
           const tx = storage.edit();
           expect(tx.write({ ...address, path: ["value", "e"] }, 1).ok)
@@ -945,7 +945,7 @@ describe("v2-transaction", () => {
 
         expect(tx.read({ ...address, path: ["value"] }).ok?.value)
           .toEqual({ list: [1], z: 5 });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect(storage.edit().read({ ...address, path: ["value"] }).ok?.value)
           .toEqual({ list: [1], z: 5 });
       } finally {
@@ -990,7 +990,7 @@ describe("v2-transaction", () => {
           .toBe(5);
         expect(tx.read({ ...address, path: ["value", "y"] }).ok?.value)
           .toBe(6);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect(storage.edit().read({ ...address, path: ["value"] }).ok?.value)
           .toEqual({ list: [2], z: 5, y: 6 });
       } finally {
@@ -1049,7 +1049,7 @@ describe("v2-transaction", () => {
       const seed = storage.edit();
       expect(seed.write({ ...address, path: [] }, { value: { a: 1 } }).ok)
         .toBeTruthy();
-      expect((await seed.commit()).ok).toBeTruthy();
+      expect((await seed.commit().settled).ok).toBeTruthy();
       return { storage, address, tx: storage.edit() };
     };
 

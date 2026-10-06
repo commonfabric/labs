@@ -72,7 +72,7 @@ describe("LLM builtin no-request paths", () => {
 
   afterEach(async () => {
     resetMockMode();
-    await tx.commit();
+    await tx.commit().settled;
     releaseHeldRequest?.();
     releaseHeldRequest = undefined;
     // The built-in's request chain is async work `idle()` returns ahead of;

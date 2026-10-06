@@ -43,7 +43,7 @@ async function commitAndReopen(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
 ): Promise<IExtendedStorageTransaction> {
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) {
     throw new Error(result.error.message);
   }
@@ -67,7 +67,7 @@ describe("frozen proxy target: link resolution through frozen objects", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -133,7 +133,7 @@ describe("frozen proxy target: proxy wrapping and trap behavior", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -463,7 +463,7 @@ describe("frozen proxy target: v2 committed reads", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -533,7 +533,7 @@ describe("frozen proxy target: committed reads", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

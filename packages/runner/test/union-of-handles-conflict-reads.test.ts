@@ -160,7 +160,7 @@ describe("union-of-handles-conflict-reads", () => {
           runtime.getCell(space, cause, undefined, write).setRaw(
             placement.value(profile.getAsLink()) as never,
           );
-          await write.commit();
+          await write.commit().settled;
           const profileId = profile.getAsNormalizedFullLink().id;
 
           const tx = runtime.edit();
@@ -255,7 +255,7 @@ describe("union-of-handles-conflict-reads", () => {
           writer.getCell(space, "holder", undefined, seed).setRaw(
             { profile: profile.getAsLink() } as never,
           );
-          await seed.commit({ resolveAt: "verdict" });
+          await seed.commit({ holdSyncedUntilCovered: false }).verdict;
           await writerStorage.synced();
           for (const cause of ["holder", "profile"]) {
             await reader.getCell(space, cause).sync();
@@ -278,11 +278,14 @@ describe("union-of-handles-conflict-reads", () => {
           const change = writer.edit();
           (profile.withTx(change) as Cell<Record<string, string>>).key(key)
             .set("Grace");
-          expect((await change.commit({ resolveAt: "verdict" })).error)
+          expect(
+            (await change.commit({ holdSyncedUntilCovered: false }).verdict)
+              .error,
+          )
             .toBeUndefined();
           await writerStorage.synced();
 
-          return await tx.commit({ resolveAt: "verdict" });
+          return await tx.commit({ holdSyncedUntilCovered: false }).verdict;
         }
 
         for (

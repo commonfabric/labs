@@ -156,7 +156,7 @@ describe("collection naming under concurrent creates", () => {
       itemOf(aliceRuntime, member).withTx(tx).set({ title: member });
     }
     namesOf(aliceRuntime).withTx(tx).set({ [SEED_NAME]: seedItem });
-    await tx.commit({ resolveAt: "verdict" });
+    await tx.commit({ holdSyncedUntilCovered: false }).verdict;
     await aliceStorage.synced();
 
     await namesOf(bobRuntime).sync();
@@ -340,7 +340,7 @@ describe("collection naming under concurrent creates", () => {
       namesOf(aliceRuntime).withTx(tx).key(FOREIGN_KEY).set(
         itemOf(aliceRuntime, "seed-item"),
       );
-      await tx.commit({ resolveAt: "verdict" });
+      await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       await aliceStorage.synced();
     });
 
@@ -375,7 +375,8 @@ describe("collection naming under concurrent creates", () => {
         readTheKeys ? names : withoutKeysetRead(names),
         itemOf(bobRuntime, "bob-item"),
       );
-      const { error } = await tx.commit({ resolveAt: "verdict" });
+      const { error } = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       return { name, error };
     }
 

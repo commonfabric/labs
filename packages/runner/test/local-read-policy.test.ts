@@ -103,7 +103,7 @@ describe("local-read-policy", () => {
       expect(localReadFailure(tx)?.address.id).toBe(
         missing.getAsNormalizedFullLink().id,
       );
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.name).toBe("StorageTransactionAborted");
       expect(rolledBack).toBe(true);
       expect(syncCell.calls.length).toBe(0);
@@ -154,7 +154,7 @@ describe("local-read-policy", () => {
     const tx = runtime.edit();
     restrictToLocalReads(tx.tx);
     output.withTx(tx).set(undefined);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     expect(output.get()).toBeUndefined();
   });
@@ -230,7 +230,7 @@ describe("local-read-policy", () => {
     restrictToLocalReads(tx.tx);
     const missing = runtime.getCell(space, "read-only missing", undefined, tx);
     expect(() => missing.get()).toThrow(LocalReadUnavailable);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error?.name).toBe("StorageTransactionAborted");
     expect(tx.status().status).toBe("error");
   });
@@ -423,7 +423,7 @@ describe("local-read-policy", () => {
           expect(() => missing.withTx(tx).get()).toThrow(LocalReadUnavailable);
         } else missing.withTx(tx).get();
       });
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(preparation.calls).toHaveLength(1);
       expect(result.error?.name).toBe("StorageTransactionAborted");
       expect(output.get()).toBe("confirmed");
@@ -444,7 +444,7 @@ describe("local-read-policy", () => {
       assertLocalReadAvailable(tx, address, () => covered);
       covered = false;
       const result = disposition === "commit"
-        ? await tx.commit()
+        ? await tx.commit().settled
         : await tx.sealInto!({
           sealSpaceCommit: () => {
             seals++;
@@ -603,7 +603,7 @@ describe("local-read-policy", () => {
       throw failure;
     });
     try {
-      await expect(tx.commit()).rejects.toBe(failure);
+      await expect(tx.commit().settled).rejects.toBe(failure);
       expect(output.get()).toBe("confirmed");
     } finally {
       tx.abort();

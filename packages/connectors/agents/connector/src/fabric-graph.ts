@@ -248,7 +248,7 @@ export async function pushStableCellGraph(
     throw error;
   }
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) {
     throw new Error(commitErrorMessage(result.error), { cause: result.error });
   }

@@ -37,7 +37,7 @@ describe("scheduler-stale-noop", () => {
           const seed = runtime.edit();
           input.withTx(seed).set(initial);
           output.withTx(seed).set(initial);
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           if (destination === "seal") {
             runtime.installSealDestination({
               seal: (tx) => {
@@ -72,7 +72,7 @@ describe("scheduler-stale-noop", () => {
           await read.promise;
           const update = runtime.edit();
           input.withTx(update).set(1);
-          expect((await update.commit()).error).toBeUndefined();
+          expect((await update.commit().settled).error).toBeUndefined();
           resume.resolve();
           await runtime.idle();
           expect(output.get()).toBe(1);

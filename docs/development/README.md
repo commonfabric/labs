@@ -28,6 +28,10 @@ mapped in [`../README.md`](../README.md).
   testing documents
 - [`debugging/`](debugging/README.md) — the error reference and the debugging
   workflows, including a large catalog of specific gotchas
+- [`cfc-spec-correspondence.md`](cfc-spec-correspondence.md) — changing
+  Contextual Flow Control: where the specification lives, how to classify a
+  change, when the specification moves first, and what a pending ruling
+  permits
 
 ## Dependencies and configuration
 

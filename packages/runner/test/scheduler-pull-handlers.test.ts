@@ -80,7 +80,7 @@ describe("handler dependency pulling", () => {
     );
     result.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computedRuns = 0;
@@ -138,7 +138,7 @@ describe("handler dependency pulling", () => {
 
     // Change source value - this marks computedAction as dirty
     source.withTx(tx).send(20);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // The computed action should NOT run yet (pull mode, no reader)
@@ -196,7 +196,7 @@ describe("handler dependency pulling", () => {
     // The labeled schema makes this seed CFC-relevant, so it lands only when
     // it is prepared the way the runtime's own commit paths prepare.
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
     await labeledSource.pull();
 
@@ -265,7 +265,7 @@ describe("handler dependency pulling", () => {
     );
     result.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computedRuns = 0;
@@ -312,7 +312,7 @@ describe("handler dependency pulling", () => {
 
     // Mark the computation dirty by changing its source.
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 3);
@@ -371,7 +371,7 @@ describe("handler dependency pulling", () => {
     );
     result.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computed1Runs = 0;
@@ -445,7 +445,7 @@ describe("handler dependency pulling", () => {
     // Change both sources
     source1.withTx(tx).send(20);
     source2.withTx(tx).send(200);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Neither should run yet (pull mode)
@@ -509,7 +509,7 @@ describe("handler dependency pulling", () => {
     );
     result.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computed1Runs = 0;
@@ -582,7 +582,7 @@ describe("handler dependency pulling", () => {
     // Change source - this makes computed1 dirty, and when computed1 runs,
     // it will make computed2 dirty
     source.withTx(tx).send(10);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     // Queue event
@@ -631,7 +631,7 @@ describe("handler dependency pulling", () => {
     );
     result.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computedRuns = 0;
@@ -672,7 +672,7 @@ describe("handler dependency pulling", () => {
     );
 
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     runtime.scheduler.resetFilterStats();
@@ -727,7 +727,7 @@ describe("handler dependency pulling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computedRuns = 0;
@@ -783,7 +783,7 @@ describe("handler dependency pulling", () => {
     );
 
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 3);
@@ -813,7 +813,7 @@ describe("handler dependency pulling", () => {
       tx,
     );
     result.set(0);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const errors: string[] = [];
@@ -884,7 +884,7 @@ describe("handler dependency pulling", () => {
         tx,
       );
       result.set(0);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       runtime.scheduler.addEventHandler(
@@ -933,7 +933,7 @@ describe("handler dependency pulling", () => {
     );
     eventStream.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let computedRuns = 0;
@@ -971,7 +971,7 @@ describe("handler dependency pulling", () => {
     );
 
     source.withTx(tx).send(2);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     runtime.scheduler.queueEvent(eventStream.getAsNormalizedFullLink(), 1);
@@ -1043,7 +1043,7 @@ describe("handler dependency pulling", () => {
     );
     liftOutput.set(0);
 
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     let handlerARuns = 0;

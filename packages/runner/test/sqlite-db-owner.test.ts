@@ -68,7 +68,7 @@ describe("sqliteDatabase handle owner", () => {
       tx,
     );
     const result = runtime.run(tx, dbPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
 
     const minted = await waitForCellValue<SqliteDbRef>(
       runtime,
@@ -85,7 +85,7 @@ describe("sqliteDatabase handle owner", () => {
     acting = "did:test:bob";
     const tx2 = runtime.edit();
     runtime.run(tx2, dbPattern, {}, resultCell);
-    await tx2.commit();
+    await tx2.commit().settled;
 
     // A correct re-initialization leaves the handle value UNCHANGED, so there
     // is no value transition to wait for — a `waitForCellValue(owner defined)`

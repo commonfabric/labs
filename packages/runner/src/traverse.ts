@@ -94,7 +94,6 @@ import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
-  type CommitError,
   createReadOnlyTransactionError,
   type IAttestation,
   type IExtendedStorageTransaction,
@@ -106,6 +105,7 @@ import {
   type ITransactionJournal,
   type ReadError,
   type StorageTransactionStatus,
+  type TransactionCommitReceipt,
   type WriteError,
   type WriterError,
 } from "./storage/interface.ts";
@@ -1879,7 +1879,7 @@ export class ManagedStorageTransaction implements IStorageTransaction {
     this.#assertWritable("abort()");
     throw new Error("Method not implemented.");
   }
-  commit(): Promise<Result<Unit, CommitError>> {
+  commit(): TransactionCommitReceipt {
     this.#assertWritable("commit()");
     throw new Error("Method not implemented.");
   }

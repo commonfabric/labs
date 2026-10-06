@@ -93,7 +93,7 @@ describe("fetch builtins: taking over a claim", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -414,7 +414,7 @@ describe("fetch builtins: taking over a claim", () => {
         lastActivity: Date.now() - claimAgeMs,
         inputHash: computeInputHashFromValue(inputs),
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const claim = await tryClaimMutex(
@@ -510,7 +510,7 @@ describe("fetch builtins: taking over a claim", () => {
         lastActivity: 0,
         inputHash: computeInputHashFromValue(inputs),
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const claim = await tryClaimMutex(

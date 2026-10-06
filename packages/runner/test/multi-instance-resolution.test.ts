@@ -73,7 +73,7 @@ describe("multi-instance verified-function resolution", () => {
       );
       // deno-lint-ignore no-explicit-any
       const r = runtime!.run(tx0, pattern, {}, resultCell) as any;
-      await tx0.commit();
+      await tx0.commit().settled;
       await r.pull();
       return r;
     };

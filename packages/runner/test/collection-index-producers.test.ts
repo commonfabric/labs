@@ -63,7 +63,7 @@ describe("collection index producers", () => {
         ),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cancel = result.sink(() => {});
       await runtime.idle();
       expect(await result.pull()).toEqual({ bare: [], fallthrough: [] });
@@ -123,7 +123,7 @@ describe("collection index producers", () => {
         otherTx,
       );
       other.set("equal");
-      expect((await otherTx.commit()).error).toBeUndefined();
+      expect((await otherTx.commit().settled).error).toBeUndefined();
       owner.set("equal");
       const first = runtime.getCell<Row>(signer.did(), "first", undefined, tx);
       const second = runtime.getCell<Row>(
@@ -166,7 +166,7 @@ describe("collection index producers", () => {
         >(signer.did(), "result", compiled.resultSchema, tx),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cancellations.push(output.sink(() => {}));
       await runtime.idle();
       expect(output.key("members").get()).toEqual(["First"]);
@@ -185,18 +185,18 @@ describe("collection index producers", () => {
       try {
         tx = runtime.edit();
         owner.withTx(tx).set("changed contents");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(output.key("members").get()).toEqual(["First"]);
         expect(writingRuns).toBe(0);
         tx = runtime.edit();
         rows.withTx(tx).set([primitive, second, first]);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(output.key("winner").get()).toBe(winner);
         tx = runtime.edit();
         second.withTx(tx).key("owner").set(owner);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(output.key("members").get()).toEqual(
           expect.arrayContaining(["First", "Second"]),
@@ -208,7 +208,7 @@ describe("collection index producers", () => {
         )!;
         tx = runtime.edit();
         winningRow.withTx(tx).key("label").set("");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(output.key("winner").get()).not.toBe(winner);
         expect(

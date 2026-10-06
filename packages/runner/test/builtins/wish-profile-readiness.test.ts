@@ -110,7 +110,7 @@ describe("wish-profile-readiness", () => {
           },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
@@ -121,7 +121,7 @@ describe("wish-profile-readiness", () => {
       expect(present).toBe(true);
       output.withTx(tx).set({ present });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const inspect = runtime.edit();
       try {
         const metadata = readStoredCfcMetadata(
@@ -222,7 +222,7 @@ describe("wish-profile-readiness", () => {
           const address = alias.getAsNormalizedFullLink();
           tx.writeOrThrow({ ...address, path: ["value"] }, profile.getAsLink());
           seed.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         const homeDefault = seed.getCell(user.did(), "home-result");
         {
@@ -232,7 +232,7 @@ describe("wish-profile-readiness", () => {
             defaultPattern: homeDefault.getAsLink(),
           });
           seed.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         const parent = seed.getCell(board.did(), "consumer");
         const inputs = seed.getCell(board.did(), "wish-inputs");
@@ -253,7 +253,7 @@ describe("wish-profile-readiness", () => {
             },
           });
           seed.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         // A successful warm wish leaves the labeled state a cold client revisits.
         const seedAction = wish(
@@ -269,7 +269,7 @@ describe("wish-profile-readiness", () => {
           seedWish,
         );
         seed.prepareTxForCommit(seedWish);
-        expect((await seedWish.commit()).error).toBeUndefined();
+        expect((await seedWish.commit().settled).error).toBeUndefined();
         await seedManager.synced();
         const input = runtime.getCellFromLink(inputs.getAsNormalizedFullLink());
         const owner = runtime.getCellFromLink(parent.getAsNormalizedFullLink());
@@ -386,12 +386,12 @@ describe("wish-profile-readiness", () => {
           defaultPattern: { profiles: [profile.getAsLink()] },
         });
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         tx = runtime.edit();
         owner.withTx(tx).set({});
         inputs.withTx(tx).set({ query: "#profile", headless: true });
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         manager.syncCell = async (cell, options) => {
           if (cell.space === persona.did()) {
             await release.promise;
@@ -438,7 +438,7 @@ describe("wish-profile-readiness", () => {
             name: "Profile arriving after cancel",
           });
           runtime.prepareTxForCommit(arrived);
-          expect((await arrived.commit()).error).toBeUndefined();
+          expect((await arrived.commit().settled).error).toBeUndefined();
           const lateAttempt = runtime.edit();
           try {
             result.action(lateAttempt);
@@ -464,7 +464,7 @@ describe("wish-profile-readiness", () => {
           const arrived = runtime.edit();
           profile.withTx(arrived).set({ name: "Recovered profile" });
           runtime.prepareTxForCommit(arrived);
-          expect((await arrived.commit()).error).toBeUndefined();
+          expect((await arrived.commit().settled).error).toBeUndefined();
           await runtime.idle();
           expect(output!.withTx(undefined).key("error").get()).toBeUndefined();
           expect(output!.withTx(undefined).key("result").key("name").get())
@@ -518,12 +518,12 @@ describe("wish-profile-readiness", () => {
           roster.withTx(tx).setRaw([profile.getAsLink()]);
         }
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         tx = runtime.edit();
         owner.withTx(tx).set({});
         inputs.withTx(tx).set({ query: "#profile", headless: true });
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await manager.synced();
         provider.sync = (id, ...rest) => {
           if (id === missing.getAsNormalizedFullLink().id) {
@@ -565,7 +565,7 @@ describe("wish-profile-readiness", () => {
         const arrivedProfile = runtime.edit();
         profile.withTx(arrivedProfile).set({ name: "Recovered profile" });
         runtime.prepareTxForCommit(arrivedProfile);
-        expect((await arrivedProfile.commit()).error).toBeUndefined();
+        expect((await arrivedProfile.commit().settled).error).toBeUndefined();
         const arrived = runtime.edit();
         home.withTx(arrived).setRaw({
           defaultPattern: defaultPattern.getAsLink(),
@@ -573,7 +573,7 @@ describe("wish-profile-readiness", () => {
         defaultPattern.withTx(arrived).setRaw({ profiles: roster.getAsLink() });
         roster.withTx(arrived).setRaw([profile.getAsLink()]);
         runtime.prepareTxForCommit(arrived);
-        expect((await arrived.commit()).error).toBeUndefined();
+        expect((await arrived.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(output!.withTx(undefined).key("error").get()).toBeUndefined();
         expect(output!.withTx(undefined).key("result").key("name").get())

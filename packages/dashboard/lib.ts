@@ -90,8 +90,11 @@ const GITHUB_ERROR_BODY_BYTES = 4_096;
 const GITHUB_LOG_DETAIL_CHARS = 300;
 
 export interface GitHubRequestOptions {
-  // These expected HTTP responses stay quiet while transport failures still log.
+  /** Expected HTTP responses that stay quiet while transport failures log. */
   ignoreStatuses?: readonly number[];
+
+  /** The REST API version required by an endpoint newer than the default. */
+  apiVersion?: string;
 }
 
 export interface GitHubDownload {
@@ -271,12 +274,17 @@ interface GitHubResponseResult {
   operation: ActiveGitHubOperation;
 }
 
-function githubRequest(path: string, token: string, withTimeout: boolean): Promise<Response> {
+function githubRequest(
+  path: string,
+  token: string,
+  withTimeout: boolean,
+  apiVersion = "2022-11-28",
+): Promise<Response> {
   const init: RequestInit = {
     headers: {
       authorization: `Bearer ${token}`,
       accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
+      "x-github-api-version": apiVersion,
     },
   };
   if (withTimeout) init.signal = AbortSignal.timeout(15_000);
@@ -311,6 +319,7 @@ async function githubResponse(
   token: string,
   performance: boolean,
   withTimeout: boolean,
+  apiVersion?: string,
 ): Promise<GitHubResponseResult> {
   const normalizedPath = path.replace(/^\//, "");
   const operation: ActiveGitHubOperation = {
@@ -334,7 +343,7 @@ async function githubResponse(
       );
       operation.stage = "requesting GitHub";
     }
-    response = await githubRequest(path, token, withTimeout);
+    response = await githubRequest(path, token, withTimeout, apiVersion);
   } catch (error) {
     failed = true;
     operationError = error;
@@ -369,6 +378,7 @@ async function githubJson<T>(
     token,
     performance,
     true,
+    options.apiVersion,
   );
   if (!res.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(res.status);
@@ -468,6 +478,7 @@ async function githubDownloadResponse(
     token,
     performance,
     false,
+    options.apiVersion,
   );
   if (!response.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(response.status);

@@ -45,7 +45,7 @@ async function prepareRows(cooperative: boolean, closed: boolean) {
     const seed = runtime.edit();
     const source = runtime.getCell(space, "source", rowSchema, seed);
     source.set({ content: "message" });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     try {
       const content = source.withTx(tx).key("content").get();
@@ -111,7 +111,7 @@ describe("preparation-cancellation", () => {
       await new TransactionWrapper(write).prepareForCommitCooperatively(
         controller.signal,
       );
-      expect((await write.commit()).error?.name).toBe(
+      expect((await write.commit().settled).error?.name).toBe(
         "StorageTransactionAborted",
       );
       expect(write.getCfcState().prepare.status).toBe("unprepared");
@@ -250,7 +250,9 @@ describe("preparation-cancellation", () => {
       );
       await tx.prepareForCommitCooperatively(controller.signal);
       expect(controller.signal.aborted).toBe(true);
-      expect((await tx.commit()).error?.name).toBe("StorageTransactionAborted");
+      expect((await tx.commit().settled).error?.name).toBe(
+        "StorageTransactionAborted",
+      );
       expect(preparedTargets.size).toBe(0);
       expect(holder.withTx(runtime.readTx()).get()).toBeUndefined();
     } finally {
@@ -275,7 +277,7 @@ describe("preparation-cancellation", () => {
         if (cooperative) {
           await tx.prepareForCommitCooperatively(new AbortController().signal);
         } else tx.prepareForCommit();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         return [holder, ...nodes].map((cell) =>
           readStoredCfcMetadata(
             runtime.readTx(),
@@ -403,7 +405,7 @@ describe("preparation-cancellation", () => {
             );
           turn.resolve();
           await preparation;
-          expect((await tx.commit()).error?.name).toBe(
+          expect((await tx.commit().settled).error?.name).toBe(
             "StorageTransactionAborted",
           );
           expect(tx.getCfcState().prepare.status).toBe("unprepared");

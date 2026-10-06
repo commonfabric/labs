@@ -103,7 +103,7 @@ describe("generateObject under a refused commit", () => {
 
   afterEach(async () => {
     setMockResponseGate(undefined);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -160,7 +160,7 @@ describe("generateObject under a refused commit", () => {
   it("settles with a refusal error that withholds the rule's detail", async () => {
     const result = runRefusedRequest("generateObject-cfc-refusal-settles");
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
     // The settle writeback is tracked async builtin work, which `idle()` — and
@@ -209,7 +209,7 @@ describe("generateObject under a refused commit", () => {
     try {
       const result = runRefusedRequest("generateObject-cfc-refusal-run-count");
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
 
       await waitForLlmSettled(runtime, result);
       await runtime.settled();

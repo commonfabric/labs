@@ -98,7 +98,7 @@ async function observeAcrossUpdate(
         resultCell,
       );
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
 
       const cancel = result.sink(() => {});
@@ -111,7 +111,7 @@ async function observeAcrossUpdate(
 
     return [await observe(first), await observe(second)];
   } finally {
-    await tx.commit().catch(() => {});
+    await tx.commit().settled.catch(() => {});
     await runtime.dispose();
     await storageManager.close();
   }

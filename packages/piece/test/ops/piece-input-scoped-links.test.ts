@@ -154,7 +154,7 @@ describe("piece-controller", () => {
         tx,
       );
       other.set({ n: 42 });
-      await tx.commit();
+      await tx.commit().settled;
       const piece = await create({
         myName: other.key("n").getAsLink(),
         title: "before",

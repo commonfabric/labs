@@ -171,7 +171,7 @@ async function seedLabelledSecret(
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return createLLMFriendlyLink(sourceCell.getAsNormalizedFullLink(), space);
 }
 

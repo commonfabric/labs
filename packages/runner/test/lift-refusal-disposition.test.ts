@@ -66,7 +66,7 @@ describe("lift refusal disposition", () => {
       tx,
     );
     runtime.run(tx, compiled, argument, result);
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
     const second = result.key("second");
     const errors: Error[] = [];
@@ -79,13 +79,13 @@ describe("lift refusal disposition", () => {
       const before = second.get();
       const write = runtime.edit();
       items.key(1).withTx(write).set({ note: 2 } as unknown as Item);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       await runtime.settled(Infinity);
       const after = second.get();
 
       const repair = runtime.edit();
       items.key(1).withTx(repair).set({ label: "recovered" });
-      expect((await repair.commit()).error).toBeUndefined();
+      expect((await repair.commit().settled).error).toBeUndefined();
       await runtime.settled(Infinity);
       return { before, after, recovered: second.get(), errors };
     } finally {

@@ -37,7 +37,7 @@ describe("getAsLink method", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -317,7 +317,7 @@ describe("getAsWriteRedirectLink method", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -400,7 +400,7 @@ describe("getImmutableCell", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });

@@ -68,7 +68,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
    * every run context — the unit-level stand-in for the SpaceServer's
    * stamper seam. */
   const passThroughDestination = (): TransactionSealDestination => ({
-    seal: (tx: IExtendedStorageTransaction) => tx.tx.commit(),
+    seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled,
   });
 
   const recordingStamper = (
@@ -314,7 +314,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       { n: 21 },
       parentCell,
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
 
@@ -425,7 +425,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
         { items: [1, 2] },
         parentCell,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
       await runtime.idle();
 
@@ -477,7 +477,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
         pieceRootIds.includes(parentRootId) ? [alice, bob] : [],
     });
     const running = runtime.runner.run(tx, parentPattern, { n: 5 }, parentCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await running.pull();
     await runtime.idle();
     const principals = childDerivationPrincipals();
@@ -539,7 +539,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
         true,
         { originTx },
       );
-      expect((await originTx.commit()).error).toBeUndefined();
+      expect((await originTx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await handled.promise;
 
@@ -802,7 +802,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
             },
           }));
         }
-        const result = tx.tx.commit();
+        const result = tx.tx.commit().settled;
         committed = result;
         return result;
       },
@@ -916,7 +916,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
             },
           }));
         }
-        const result = tx.tx.commit();
+        const result = tx.tx.commit().settled;
         committed = result;
         return result;
       },
@@ -1085,7 +1085,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
       tx,
     );
     const running = runtime.runner.run(tx, v1, { limit: 3 }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     runtime.runner.stop(cell);
     const tx2 = runtime.edit();
@@ -1093,7 +1093,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
       identity: v3Ref.identity,
       symbol: v3Ref.symbol,
     }, rawMetaWriteAuthorization);
-    await tx2.commit();
+    await tx2.commit().settled;
     return cell;
   };
 
@@ -1118,7 +1118,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
             },
           });
         }
-        return tx.tx.commit();
+        return tx.tx.commit().settled;
       },
     }, {
       runStamper: (tx, info) => {
@@ -1171,7 +1171,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
       tx,
     );
     const running = runtime.runner.run(tx, v1, { limit: 3 }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     runtime.runner.stop(cell);
 
@@ -1192,7 +1192,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
             },
           });
         }
-        return sealTx.tx.commit();
+        return sealTx.tx.commit().settled;
       },
     }, {
       runStamper: (stampTx, info) => {
@@ -1232,7 +1232,7 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
     const cell = await brickedPiece();
     const stamps: ServerRunInfo[] = [];
     runtime.installSealDestination({
-      seal: (tx: IExtendedStorageTransaction) => tx.tx.commit(),
+      seal: (tx: IExtendedStorageTransaction) => tx.tx.commit().settled,
     }, {
       runStamper: (tx, info) => {
         stamps.push(info);

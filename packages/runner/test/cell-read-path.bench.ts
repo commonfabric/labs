@@ -24,7 +24,7 @@ async function cleanup(
   storageManager: ReturnType<typeof StorageManager.emulate>,
   tx?: IExtendedStorageTransaction,
 ) {
-  await tx?.commit();
+  await tx?.commit().settled;
   await runtime.dispose();
   await storageManager.close();
 }
@@ -46,7 +46,7 @@ Deno.bench({
         value: i,
       })),
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     for (let i = 0; i < 100; i++) {
       cell.key("items").key(i % 100).key("value").get();
@@ -72,7 +72,7 @@ Deno.bench({
         value: i,
       })),
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     for (let i = 0; i < 100; i++) {
       cell.key("items").key(50).key("value").get();
@@ -98,7 +98,7 @@ Deno.bench({
         value: i,
       })),
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     const valueCell = cell.key("items").key(50).key("value");
     for (let i = 0; i < 100; i++) {
@@ -148,7 +148,7 @@ Deno.bench({
       tags: ["a", "b", "c"],
       nested: { value: 123 },
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     for (let i = 0; i < 100; i++) {
       const value = cell.get();
@@ -210,7 +210,7 @@ Deno.bench({
         notifications: true,
       },
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     for (let i = 0; i < 100; i++) {
       const value = cell.get();

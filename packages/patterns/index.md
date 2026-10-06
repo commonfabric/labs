@@ -115,14 +115,16 @@ App and integration directories: `activity-log/`, `agent/`, `base/`,
 `card-piles/`, `collection-naming/` (the member-naming library and the board
 that exercises it; the library is the reference, the board is a demo),
 `contacts/`, `cozy-poll/`, `examples/`, `experimental/` (explicitly unhardened
-explorations), `fabrichat/` (a group chat among real profiles whose messages are
-written only through a reviewed send surface), `file-share/` (a minimal
-file-sharing example: bytes go to the blob store, cells hold descriptors),
-`habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
-`project-list/`, [`recommend-a-book/`](recommend-a-book/README.md) (personal
-reading shelf and private visitor recommendations), `router/`,
-`scoped-group-chat/`, `scoped-user-directory/`, `scrabble/`, `shared-note/` (a
-shared Markdown document whose live cursors carry each viewer's profile name),
+explorations), `fabrichat/` (chat among real profiles: a room per conversation,
+whose messages and reactions are written only through reviewed surfaces, each
+user's manager of their rooms, and placements that show a room in other spaces),
+`file-share/` (a minimal file-sharing example: bytes go to the blob store, cells
+hold descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`,
+`profile-group-chat/`, `project-list/`,
+[`recommend-a-book/`](recommend-a-book/README.md) (personal reading shelf and
+private visitor recommendations), `router/`, `scoped-group-chat/`,
+`scoped-user-directory/`, `scrabble/`, `shared-note/` (a shared Markdown
+document whose live cursors carry each viewer's profile name),
 `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
 `weekly-calendar/`.
 

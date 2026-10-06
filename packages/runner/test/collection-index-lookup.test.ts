@@ -147,7 +147,7 @@ describe("collection index lookup", () => {
     );
     const result = runtime.run(tx, compiled, { index, selected }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -155,19 +155,19 @@ describe("collection index lookup", () => {
       expect(await result.key("keys").pull()).toEqual(["a", "b"]);
       tx = runtime.edit();
       index.withTx(tx).key("buckets").key(a).set([1, 3]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.key("values").pull()).toEqual([1, 3]);
       tx = runtime.edit();
       selected.withTx(tx).set("b");
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.key("values").pull()).toEqual([2]);
       tx = runtime.edit();
       selected.withTx(tx).set("missing");
       index.withTx(tx).key("keys").set(["b"]);
       index.withTx(tx).key("keyEntries").set([{ kind: "value", value: "b" }]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.key("values").pull()).toEqual([]);
       expect(await result.key("keys").pull()).toEqual(["b"]);
@@ -175,7 +175,7 @@ describe("collection index lookup", () => {
       index.withTx(tx).key("buckets").key(
         collectionKeyBucket({ kind: "string", value: "missing" }),
       ).set([9]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.key("values").pull()).toEqual([9]);
     } finally {
@@ -226,7 +226,7 @@ describe("collection index lookup", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -243,7 +243,7 @@ describe("collection index lookup", () => {
           [collectionKeyBucket({ kind: "string", value: "a" })]: [1, 2],
         },
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(errors.map((error) => error.message)).toEqual([]);
       expect(await result.key("size").pull()).toBe(2);
@@ -294,7 +294,7 @@ describe("collection index lookup", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -309,7 +309,7 @@ describe("collection index lookup", () => {
         keyEntries: [{ kind: "value", value: "a" }],
         buckets: { [collectionKeyBucket({ kind: "string", value: "a" })]: 4 },
       });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(errors.map((error) => error.message)).toEqual([]);
       expect(await result.key("matched").pull()).toBe(true);
@@ -362,7 +362,7 @@ describe("collection index lookup", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     try {
       await runtime.idle();
@@ -441,7 +441,7 @@ describe("collection index lookup", () => {
     );
     const result = runtime.run(tx, compiled, { index }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     let runs = 0;
     const collect = (event: Event) => {
@@ -461,23 +461,23 @@ describe("collection index lookup", () => {
         { kind: "value", value: "b" },
         { kind: "value", value: "c" },
       ]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(runs).toBe(0);
       tx = runtime.edit();
       index.withTx(tx).key("buckets").key(a).set(10);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(runs).toBeGreaterThan(0);
       expect(await result.key("value").pull()).toBe(10);
       tx = runtime.edit();
       index.withTx(tx).key("buckets").key(a).set(null);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBeNull();
       tx = runtime.edit();
       index.withTx(tx).key("buckets").key(a).asSchema(true).set(undefined);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(await result.key("value").pull()).toBeUndefined();
     } finally {
@@ -505,7 +505,7 @@ describe("collection index lookup", () => {
     first.set("equal");
     second.set("equal");
     selected.set(first);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const a = collectionKeyBucket(
       resolveCollectionKey(runtime, tx, first)!.identity,
@@ -538,7 +538,7 @@ describe("collection index lookup", () => {
       data: { lookup: "look", keys: "up" },
     }, output);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     let runs = 0;
     const collect = (event: Event) => {
@@ -555,12 +555,12 @@ describe("collection index lookup", () => {
       runtime.telemetry.addEventListener("telemetry", collect);
       tx = runtime.edit();
       first.withTx(tx).set("changed");
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(runs).toBe(0);
       tx = runtime.edit();
       selected.withTx(tx).set(second);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(runs).toBeGreaterThan(0);
       expect(await result.key("value").pull()).toBe(2);
@@ -610,7 +610,7 @@ describe("collection index lookup", () => {
       ),
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = result.sink(() => {});
     let runs = 0;
     const collect = (event: Event) => {
@@ -626,7 +626,7 @@ describe("collection index lookup", () => {
       runtime.telemetry.addEventListener("telemetry", collect);
       tx = runtime.edit();
       row.withTx(tx).key("name").set("second");
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(runs).toBe(0);
       expect(await result.key("values").pull()).toEqual([{ name: "second" }]);
@@ -634,7 +634,7 @@ describe("collection index lookup", () => {
       index.withTx(tx).key("buckets").key(
         collectionKeyBucket({ kind: "string", value: "a" }),
       ).set([]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       expect(runs).toBeGreaterThan(0);
       expect(await result.key("values").pull()).toEqual([]);

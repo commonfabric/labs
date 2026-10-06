@@ -161,11 +161,11 @@ export function isReadIgnoredForCommit(meta?: Metadata): boolean {
 }
 
 // Rejection listeners, registered per inner transaction (CT-1950). A
-// rejected commit's promise resolves only after finalizeRejection's
+// rejected commit's `receipt.settled` resolves after `finalizeRejection()`'s
 // read-repair gate — the caller's retry needs the repaired base — but the
 // commit's FATE is sealed the moment the rejection is received, and the
 // verdict-gated effect layer (verdict callbacks, outbox clearing) must not
-// wait out the repair round trip; commit callbacks ride the promise and DO
+// wait out the repair round trip; commit callbacks ride settlement and DO
 // wait. The transaction registers its verdict resolver at commit() entry;
 // the push path notifies every contributing source at rejection receipt,
 // and finalizeRejection covers the cascade paths. Rejections only: an
@@ -197,7 +197,7 @@ export function notifyCommitRejected(
 // Fan-out coverage waits, recorded per transaction (CT-1950). The push path
 // resolves its result at the server verdict and records the parked
 // application's promise here; the transaction layer drains the record so
-// that its commit() promise resolves only once the subscribed view reflects
+// that `commit().settled` resolves once the subscribed view reflects
 // the committed write. The split exists so post-commit effects gated on
 // durability alone (verdict callbacks, the outbox flush) can hook the
 // verdict instead of inheriting the fan-out window.

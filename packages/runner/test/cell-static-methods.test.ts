@@ -99,7 +99,7 @@ describe("Cell Static Methods", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -1070,7 +1070,7 @@ describe("Cell Static Methods", () => {
           localTx,
           () => fn(cellApi, rt, localTx),
         );
-        await localTx.commit();
+        await localTx.commit().settled;
         await sm.synced();
       } finally {
         await rt.dispose().catch(() => {});

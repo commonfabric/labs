@@ -15,6 +15,9 @@ import type {
 /** A runtime read whose backing document is still loading. */
 export class DocumentPending extends Error {}
 
+/** A document synchronization failure, distinct from pending or absent data. */
+export class DocumentLoadError extends Error {}
+
 /**
  * A document confirmation's pending, completed, or failed outcome. A pending
  * one holds the scope identity of each read waiting on it, `undefined` for a
@@ -23,7 +26,7 @@ export class DocumentPending extends Error {}
 type Confirmation =
   | { status: "pending"; waiters: Set<ScopeKeyIdentity | undefined> }
   | { status: "confirmed" }
-  | { status: "failed"; error: Error };
+  | { status: "failed"; error: DocumentLoadError };
 
 /**
  * Holds missing-document reads until synchronization establishes presence or
@@ -67,14 +70,25 @@ export function createDocumentReadiness(
      * Gates loads reached while reading linked fields or schemas. Uses the
      * transaction's read set so unrelated background loads cannot park an
      * action. Completed failures remain visible until their data arrives.
+     * `optionalDocuments` exempts only their completed load failures; pending
+     * loads still park the action.
      */
-    requireLoadedReads(tx: IExtendedStorageTransaction): void {
+    requireLoadedReads(
+      tx: IExtendedStorageTransaction,
+      optionalDocuments: Iterable<Cell<unknown>> = [],
+    ): void {
       const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
       const pending = new Set(
         (runtime.storageManager.pendingLoadAddresses?.() ?? [])
           .map((address) => entityKey(address, identity)),
       );
       if (pending.size === 0 && confirmations.size === 0) return;
+      const optional = new Set(
+        Array.from(
+          optionalDocuments,
+          (cell) => entityKey(cell.getAsNormalizedFullLink(), identity),
+        ),
+      );
       const log = txToReactivityLog(tx);
       const checked = new Set<string>();
       for (const read of [...log.reads, ...log.shallowReads]) {
@@ -82,6 +96,9 @@ export function createDocumentReadiness(
         if (checked.has(key)) continue;
         checked.add(key);
         if (!pending.has(key) && !confirmations.has(key)) continue;
+        if (optional.has(key) && confirmations.get(key)?.status === "failed") {
+          continue;
+        }
         this.requireDocument(
           runtime.getCellFromLink({
             ...read,
@@ -94,7 +111,7 @@ export function createDocumentReadiness(
     },
     /**
      * Returns document presence. Throws `DocumentPending` while loading and
-     * the confirmation's error if loading fails.
+     * `DocumentLoadError` if loading fails.
      */
     requireDocument(
       cell: Cell<unknown>,
@@ -160,7 +177,7 @@ export function createDocumentReadiness(
             (cause: unknown) =>
               finish({
                 status: "failed",
-                error: new Error("Could not load document", {
+                error: new DocumentLoadError("Could not load document", {
                   cause,
                 }),
               }),

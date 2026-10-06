@@ -3,6 +3,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -261,25 +262,38 @@ Deno.test("events - serializeEvent", async (t) => {
   });
 
   await t.step("captures data-ui markers from composed event paths", () => {
+    // A click on the button in a component's shadow tree, as the listener on
+    // the component's host receives it: retargeted to the host, with the
+    // shadow tree's nodes first on the composed path.
+
+    const control = {
+      dataset: {
+        uiAction: "TrustedSaveTitle",
+        ordinaryHandlerData: "preserved",
+      },
+    };
     const event = new MockEvent("click", {
       isTrusted: true,
-      target: { dataset: { ordinaryHandlerData: "preserved" } },
+      target: control,
     }) as MockEvent & { composedPath: () => unknown[] };
     event.composedPath = () => [
       { dataset: { cfButton: "" } },
-      { dataset: { uiAction: "TrustedSaveTitle" } },
+      control,
       {
         dataset: {
           uiPattern: "TrustedSaveSurface",
           uiEventIntegrity: "TrustedSaveSurface",
         },
       },
-      event.target,
     ];
 
-    const serialized = serializeEvent(event as unknown as Event);
+    const serialized = serializeEvent(
+      event as unknown as Event,
+      control as unknown as EventTarget,
+    );
 
     assertEquals(serialized.target?.dataset, {
+      uiAction: "TrustedSaveTitle",
       ordinaryHandlerData: "preserved",
     });
     assertEquals(serialized.provenance, {
@@ -294,6 +308,64 @@ Deno.test("events - serializeEvent", async (t) => {
       },
     });
   });
+
+  await t.step(
+    "captures no data-ui markers from nodes between the target and the listener",
+    () => {
+      // The listener sits on an ancestor of the surface, as one a pattern
+      // binds on its own element around a trusted surface does.
+
+      const wrapper = { dataset: {} };
+      const event = new MockEvent("click", {
+        isTrusted: true,
+        target: { dataset: { uiAction: "TrustedSaveTitle" } },
+      }) as MockEvent & { composedPath: () => unknown[] };
+      event.composedPath = () => [
+        event.target,
+        {
+          dataset: {
+            uiPattern: "TrustedSaveSurface",
+            uiEventIntegrity: "TrustedSaveSurface",
+          },
+        },
+        wrapper,
+      ];
+
+      const serialized = serializeEvent(
+        event as unknown as Event,
+        wrapper as unknown as EventTarget,
+      );
+
+      expect(serialized.provenance).toStrictEqual({
+        origin: "dom",
+        trusted: true,
+      });
+    },
+  );
+
+  await t.step(
+    "captures no data-ui markers for an event serialized without a bound node",
+    () => {
+      const event = new MockEvent("click", {
+        isTrusted: true,
+        target: {
+          dataset: {
+            uiAction: "TrustedSaveTitle",
+            uiPattern: "TrustedSaveSurface",
+            uiEventIntegrity: "TrustedSaveSurface",
+          },
+        },
+      }) as MockEvent & { composedPath: () => unknown[] };
+      event.composedPath = () => [event.target];
+
+      const serialized = serializeEvent(event as unknown as Event);
+
+      expect(serialized.provenance).toStrictEqual({
+        origin: "dom",
+        trusted: true,
+      });
+    },
+  );
 
   await t.step("serializes keyboard event properties", () => {
     const event = new MockKeyboardEvent("keydown", {

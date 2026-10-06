@@ -260,19 +260,16 @@ const __cfHandler_4 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
                 },
                 contentType: {
                     type: "string"
                 }
             },
             required: ["id", "name", "type"]
-        },
-        AnonymousType_1: {
-            type: "array",
-            items: {
-                $ref: "#/$defs/Entry"
-            }
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, (_, { handleOpenFile, item }) => handleOpenFile.send({ item }));
@@ -350,19 +347,16 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
                 },
                 contentType: {
                     type: "string"
                 }
             },
             required: ["id", "name", "type"]
-        },
-        AnonymousType_1: {
-            type: "array",
-            items: {
-                $ref: "#/$defs/Entry"
-            }
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, {
@@ -494,13 +488,13 @@ export default pattern((__cf_pattern_input) => {
     type: "object",
     properties: {
         entries: {
-            $ref: "#/$defs/AnonymousType_1",
+            $ref: "#/$defs/AnonymousType_2",
             "default": []
         }
     },
     required: ["entries"],
     $defs: {
-        AnonymousType_1: {
+        AnonymousType_2: {
             type: "array",
             items: {
                 $ref: "#/$defs/Entry"
@@ -519,7 +513,7 @@ export default pattern((__cf_pattern_input) => {
                     "enum": ["file", "folder"]
                 },
                 children: {
-                    $ref: "#/$defs/AnonymousType_1"
+                    $ref: "#/$defs/AnonymousType_2"
                 },
                 contentType: {
                     type: "string"

@@ -25,7 +25,7 @@ describe("object-formatter", () => {
 
   it("classifies generic callable members from their instantiated arguments", async () => {
     const schema = await schemaFor(`
-type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
 type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
 declare const h: () => Stream<void>;
 declare const cellFactory: () => Cell<string>;
@@ -77,7 +77,7 @@ interface SchemaRoot {
 
   it("retains collapsed writer alternatives through a generic member", async () => {
     const schema = await schemaFor(`
-type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
 type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
 declare const f: (event: string) => void;
 declare const g: typeof f;

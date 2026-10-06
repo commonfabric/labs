@@ -4,7 +4,10 @@ import type { RuntimeClient } from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
+import {
+  createMockCellHandle,
+  pushRefusal,
+} from "../../test-utils/mock-cell-handle.ts";
 import { CFCustodyAnswer } from "./index.ts";
 
 type Publish = RuntimeClient["publishCustodyAnswer"];
@@ -105,6 +108,26 @@ describe("cf-custody-answer", () => {
     // Published: no further requests.
     await state.element.accessForTestingOnly.publish();
     expect(state.requests).toHaveLength(1);
+  });
+
+  it("asks nothing for a policy the worker refuses", async () => {
+    const state = setup([]);
+    pushRefusal(state.policy);
+
+    await state.element.accessForTestingOnly.publish();
+
+    expect(state.requests).toEqual([]);
+  });
+
+  it("asks nothing for a policy the worker has not answered", async () => {
+    const state = setup([]);
+    state.element.policy = createMockCellHandle<unknown>(undefined, {
+      id: "of:unanswered-policy",
+    });
+
+    await state.element.accessForTestingOnly.publish();
+
+    expect(state.requests).toEqual([]);
   });
 
   it("asks again after a refusal, and shows an answer another member published", async () => {

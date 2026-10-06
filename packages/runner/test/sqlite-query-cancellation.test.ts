@@ -51,7 +51,7 @@ describe("sqlite-query-cancellation", () => {
           undefined,
           setup,
         );
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         const builtin = sqliteQuery(
           inputs,
           (_tx, cell) => result = cell,
@@ -64,7 +64,7 @@ describe("sqlite-query-cancellation", () => {
         if (phase === "action") cancel();
         builtin.action(tx);
         if (phase === "flush") cancel();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await tx.postCommitEffectsSettled();
 
         expect(queries).toBe(phase === "response" ? 1 : 0);
@@ -191,7 +191,7 @@ describe("sqlite-query-cancellation", () => {
             options,
           ),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cancelView = result.sink(() => {});
       await runtime.settled();
       expect(preparedRows.size).toBeGreaterThan(0);
@@ -212,7 +212,7 @@ describe("sqlite-query-cancellation", () => {
 
       const restart = runtime.edit();
       runtime.run(restart, pattern, {}, resultCell);
-      expect((await restart.commit()).error).toBeUndefined();
+      expect((await restart.commit().settled).error).toBeUndefined();
       await runtime.settled();
       expect(queries).toBe(2);
       expect(result.get()).toMatchObject({ pending: false, result: rows });

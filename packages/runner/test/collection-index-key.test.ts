@@ -69,7 +69,7 @@ describe("collection index keys", () => {
       tx,
     );
     parent.set({ left: 1, right: 1 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const left = resolveCollectionKey(runtime, tx, parent.key("left"))!;
     const right = resolveCollectionKey(runtime, tx, parent.key("right"))!;
@@ -106,7 +106,7 @@ describe("collection index keys", () => {
     first.set({ name: "same" });
     second.set({ name: "same" });
     alias.set(first);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const a = resolveCollectionKey(runtime, tx, first)!;
     const b = resolveCollectionKey(runtime, tx, second)!;
@@ -117,7 +117,7 @@ describe("collection index keys", () => {
     expect(resolveCollectionKey(runtime, tx, first.asSchema(true))!.identity)
       .toEqual(a.identity);
     alias.withTx(tx).set(second);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     expect(resolveCollectionKey(runtime, tx, alias)!.identity).toEqual(
       b.identity,
@@ -132,15 +132,15 @@ describe("collection index keys", () => {
       (await Identity.fromPassphrase("collection-index-other-space")).did();
     const local = runtime.getCell(space, "scoped", undefined, tx);
     local.set({ name: "same" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const remote = runtime.getCell(otherSpace, "scoped", undefined, tx);
     remote.set({ name: "same" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const user = scopedCell(runtime, tx, local, "user");
     user.set({ name: "same" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const localKey = resolveCollectionKey(runtime, tx, local)!;
     const remoteKey = resolveCollectionKey(runtime, tx, remote)!;
@@ -154,7 +154,7 @@ describe("collection index keys", () => {
     const missing = runtime.getCell(space, "unarrived", undefined, tx);
     const alias = runtime.getCell(space, "unarrived-alias", undefined, tx);
     alias.set(missing);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     expect(() => resolveCollectionKey(runtime, tx, alias)).toThrow(
       UnresolvedInputError,
@@ -162,7 +162,7 @@ describe("collection index keys", () => {
     tx.abort();
     tx = runtime.edit();
     missing.withTx(tx).set({ name: "arrived" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     expect(resolveCollectionKey(runtime, tx, alias)!.identity).toEqual(
       resolveCollectionKey(runtime, tx, missing)!.identity,
@@ -186,7 +186,7 @@ describe("collection index keys", () => {
     first.set({ name: "first" });
     second.set({ name: "second" });
     alias.set(first);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const keys: CollectionKeyIdentity[] = [];
     const observe = (read: IExtendedStorageTransaction) => {
@@ -202,12 +202,12 @@ describe("collection index keys", () => {
       await runtime.settled(Infinity);
       expect(keys).toHaveLength(1);
       first.withTx(tx).key("name").set("updated");
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.settled(Infinity);
       expect(keys).toHaveLength(1);
       alias.withTx(tx).set(second);
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       await runtime.settled(Infinity);
       expect(keys).toHaveLength(2);

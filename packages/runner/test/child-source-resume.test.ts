@@ -59,7 +59,9 @@ describe("child-source-resume", () => {
             ...(serving ? { experimental: { serverExecution: true } } : {}),
           });
           if (serving) {
-            runtime.installSealDestination({ seal: (tx) => tx.tx.commit() }, {
+            runtime.installSealDestination({
+              seal: (tx) => tx.tx.commit().settled,
+            }, {
               runStamper: (tx, info) =>
                 stampWaveRunContext(tx, {
                   actionId: info.actionId,
@@ -103,7 +105,7 @@ export default pattern(() => ({ child: Child${
             sourceOrigin: "system:system/parent.tsx",
           });
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await result.pull();
           await runtime.scheduler.idleWithPendingCommits();
           const child = result.key("child").resolveAsCell();
@@ -175,7 +177,7 @@ export default pattern(() => ({ child: Child${
               resumedChild.getArgumentCell()!.withTx(inputTx).key("value").set(
                 "after restart",
               );
-              expect((await inputTx.commit()).error).toBeUndefined();
+              expect((await inputTx.commit().settled).error).toBeUndefined();
               await reader.scheduler.idleWithPendingCommits();
               expect(resumedChild.key("marker").get()).toBe(
                 "updated after restart",
@@ -239,7 +241,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
         tracked ? { sourceOrigin: "system:system/parent.tsx" } : {},
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await parent.pull();
       await runtime.idle();
       const child = parent.key("child").resolveAsCell();
@@ -259,7 +261,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
         else {
           runtime.runner.stop(parent);
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         await runtime.idle();
         expect(runtime.runner.isRunning(child)).toBe(false);
@@ -316,7 +318,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
           const tx = runtime.edit();
           runtime.runner.run(tx, pattern, { value: "parent" }, parent);
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await entered.promise;
           artifact.restore();
           if (failLoad) release.reject(failure);
@@ -350,7 +352,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
       const tx = runtime.edit();
       runtime.runner.run(tx, pattern, { value: "parent" }, parent);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       const key = runtime.runner.accessForTestingOnly.getDocKey(child);
       const original = runtime.runner.cancels.get(key);
@@ -359,7 +361,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
       const replacement = runtime.edit();
       runtime.runner.run(replacement, undefined, undefined, child);
       runtime.prepareTxForCommit(replacement);
-      expect((await replacement.commit()).error).toBeUndefined();
+      expect((await replacement.commit().settled).error).toBeUndefined();
       await runtime.idle();
       const current = runtime.runner.cancels.get(key);
       expect(current).toBeDefined();
@@ -375,7 +377,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
         const tx = runtime.edit();
         runtime.runner.run(tx, pattern, { value: "changed" }, parent);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await parent.pull();
         await child.pull();
         expect(child.key("marker").get()).toBe("original changed");
@@ -405,7 +407,7 @@ export default pattern<{ value: string }>(({ value }) => ({
       const tx = runtime.edit();
       runtime.runner.run(tx, changedParent, { value: "parent" }, parent);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await parent.pull();
       await runtime.idle();
       expect(runtime.runner.isRunning(child)).toBe(true);

@@ -93,6 +93,7 @@ class SeverableTransport implements Transport {
   #receiver: (payload: string) => void = () => {};
   #closeReceiver: (error?: Error) => void = () => {};
   #helloCount = 0;
+  #helloAccepted = false;
   #openCount = 0;
   readonly #reconnectHello: ReconnectHello;
 
@@ -111,7 +112,13 @@ class SeverableTransport implements Transport {
   /** Drops the connection by firing the close receiver the client registered,
    *  which is the same entry point a real transport's socket loss takes. */
   sever(): void {
+    this.reset();
     this.#closeReceiver(new Error("socket lost"));
+  }
+
+  /** Drops the scripted connection's handshake state. */
+  reset(): void {
+    this.#helloAccepted = false;
   }
 
   send(payload: string): Promise<void> {
@@ -121,6 +128,10 @@ class SeverableTransport implements Transport {
     };
     switch (message.type) {
       case "hello":
+        if (this.#helloAccepted) {
+          throw new Error("scripted connection already accepted hello");
+        }
+        this.#helloAccepted = true;
         this.#helloCount += 1;
         this.#respondToHello();
         return Promise.resolve();

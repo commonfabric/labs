@@ -59,7 +59,7 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
       return { storageManager, runtime, sourceId };
     } catch (error) {
       await runtime.dispose();
@@ -105,7 +105,7 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
     const cidWrites = [...tx.getWriteDetails?.(space) ?? []]
       .map((detail) => detail.address.id)
       .filter((id) => id.startsWith("cid:"));
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const stored = (runtime.storageManager.open(space).replica as unknown as {
       getDocument(id: string): { cfc?: { schemaHash?: string } } | undefined;
     }).getDocument(targetId);

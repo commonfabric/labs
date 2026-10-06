@@ -319,7 +319,7 @@ describe("resume node plan pre-sync", () => {
     // deno-lint-ignore no-explicit-any
     const r1 = rt1.run(tx1, compiled as any, argument, resultCell1);
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     await r1.pull();
     await rt1.idle();
     await rt1.patternManager.flushCompileCacheWrites();
@@ -351,7 +351,7 @@ describe("resume node plan pre-sync", () => {
       tx,
     );
     profile.withTx(tx).set({ name: "Ada", friend });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const conflictsBefore = commitConflictCount();
     const skipsBefore = presyncSkipCount();
@@ -390,7 +390,7 @@ describe("resume node plan pre-sync", () => {
       tx,
     );
     holder.withTx(tx).set({ counter });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const resumed = await createAndResume(
       HANDLE_PROGRAM,
@@ -428,7 +428,7 @@ describe("resume node plan pre-sync", () => {
       tx,
     );
     counter.withTx(tx).set({ n: 1 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const resumed = await createAndResume(
       DIRECT_HANDLE_PROGRAM,
@@ -475,7 +475,7 @@ describe("resume node plan pre-sync", () => {
       tx,
     );
     holder.withTx(tx).set({ counter });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const resumed = await createAndResume(
       DIRECT_HANDLE_PROGRAM,
@@ -486,7 +486,7 @@ describe("resume node plan pre-sync", () => {
 
     const tx2 = rt1.edit();
     counter.withTx(tx2).set({ n: 1 });
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     await rt1.storageManager.synced();
     await rt2.storageManager.synced();
     // Read nothing here: a read of the document would kick its load and
@@ -527,7 +527,7 @@ describe("resume node plan pre-sync", () => {
     );
     profile.withTx(tx1).set({ name: "Ada", friend });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     const before = commitConflictCount();
     const skipsBefore = presyncSkipCount();
@@ -561,7 +561,7 @@ describe("resume node plan pre-sync", () => {
     );
     top.withTx(tx1).set({ next: leafDoc });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     const before = commitConflictCount();
     const resumed = await createAndResume(
@@ -601,7 +601,7 @@ describe("resume node plan pre-sync", () => {
     );
     top.withTx(tx1).set({ next: midDoc });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     await rt1.storageManager.synced();
 
     // Runtime 2 has never seen any of these documents: the run is fresh on a
@@ -675,7 +675,7 @@ describe("resume node plan pre-sync", () => {
     );
     leafDoc.withTx(txP).set({ name: "Ada" });
     rt1.prepareTxForCommit(txP);
-    expect((await txP.commit()).error).toBeUndefined();
+    expect((await txP.commit().settled).error).toBeUndefined();
     const tx1 = rt1.edit();
     const midDoc = rt1.getCell<{ next?: unknown }>(
       space,
@@ -692,7 +692,7 @@ describe("resume node plan pre-sync", () => {
     );
     top.withTx(tx1).set({ next: midDoc });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     let leafLocalAfterPresync: boolean | undefined;
     rt2.runner.accessForTestingOnly.dependencySyncer = async (
@@ -781,7 +781,7 @@ describe("resume node plan pre-sync", () => {
     );
     top.withTx(tx1).set({ next: midDoc });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     const resumed = await createAndResume(
       DEEP_READ_PROGRAM,
@@ -807,7 +807,7 @@ describe("resume node plan pre-sync", () => {
     );
     leafDoc.withTx(txP).set({ name: "Ada" });
     rt1.prepareTxForCommit(txP);
-    expect((await txP.commit()).error).toBeUndefined();
+    expect((await txP.commit().settled).error).toBeUndefined();
     const tx1 = rt1.edit();
     const midDoc = rt1.getCell<{ next?: unknown }>(
       space,
@@ -824,7 +824,7 @@ describe("resume node plan pre-sync", () => {
     );
     top.withTx(tx1).set({ next: midDoc });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     const managerD = TestStorageManager.create(
       { as: signer, memoryHost: new URL("memory://") },
@@ -868,7 +868,7 @@ describe("resume node plan pre-sync", () => {
     );
     leafDoc.withTx(txP).set({ name: "Ada" });
     rt1.prepareTxForCommit(txP);
-    expect((await txP.commit()).error).toBeUndefined();
+    expect((await txP.commit().settled).error).toBeUndefined();
     const tx1 = rt1.edit();
     const midDoc = rt1.getCell<{ next?: unknown }>(
       space,
@@ -885,7 +885,7 @@ describe("resume node plan pre-sync", () => {
     );
     top.withTx(tx1).set({ next: midDoc });
     rt1.prepareTxForCommit(tx1);
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
 
     const unrelated = Promise.withResolvers<void>();
     managerB.trackUntilSettled(unrelated.promise);
@@ -970,7 +970,7 @@ describe("resume node plan pre-sync", () => {
       );
       leaf.set({ name: "Ada" });
       rt1.prepareTxForCommit(txP);
-      expect((await txP.commit()).error).toBeUndefined();
+      expect((await txP.commit().settled).error).toBeUndefined();
       const tx1 = rt1.edit();
       const mid = rt1.getCell<{ next?: unknown }>(
         space,
@@ -987,7 +987,7 @@ describe("resume node plan pre-sync", () => {
       );
       top.set({ next: mid });
       rt1.prepareTxForCommit(tx1);
-      expect((await tx1.commit()).error).toBeUndefined();
+      expect((await tx1.commit().settled).error).toBeUndefined();
       const compiled = await rt1.patternManager.compilePattern(
         DEEP_READ_PROGRAM,
         { space },
@@ -1088,7 +1088,7 @@ describe("resume node plan pre-sync", () => {
       tx,
     );
     top.withTx(tx).set({ next: mid });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const conflictsBefore = commitConflictCount();
     const resumed = await createAndResume(

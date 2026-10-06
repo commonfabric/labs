@@ -121,7 +121,7 @@ describe("sqlite-served-identity", () => {
       rt,
     );
     builtin.action(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return handle!.get() as SqliteDbRef & { owner?: string };
   };
 
@@ -146,7 +146,7 @@ describe("sqlite-served-identity", () => {
       undefined,
       setup,
     );
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
     const handles: SqliteDbRef[] = [];
     const builtin = sqliteDatabase(
       inputs,
@@ -162,7 +162,7 @@ describe("sqlite-served-identity", () => {
       const tx = runtime.edit();
       demandedStamp(tx, serviceSigner.did(), session);
       builtin.action(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     expect(handles).toHaveLength(2);
     expect(handles[0].id).toBe(handles[1].id);
@@ -264,7 +264,7 @@ describe("sqlite-served-identity", () => {
     const retry = runtime.edit();
     builtin.action(retry);
     expect(handle!.withTx(retry).get()).toBeDefined();
-    expect((await retry.commit()).error).toBeUndefined();
+    expect((await retry.commit().settled).error).toBeUndefined();
 
     expect(handle!.get()).toBeDefined();
     expect(publications).toBe(2);
@@ -289,7 +289,7 @@ describe("sqlite-served-identity", () => {
       undefined,
       setup,
     );
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
 
     // This test abandons rather than commits the wave, so the basis sequence
     // is not consulted.
@@ -326,7 +326,7 @@ describe("sqlite-served-identity", () => {
         kind: "derivation",
       });
       builtin.action(first);
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
       settlement = waveSettlementOf(first);
       expect(settlement).toBeDefined();
     } finally {
@@ -341,7 +341,7 @@ describe("sqlite-served-identity", () => {
     const retry = runtime.edit();
     builtin.action(retry);
     expect(handle!.withTx(retry).get()).toBeDefined();
-    expect((await retry.commit()).error).toBeUndefined();
+    expect((await retry.commit().settled).error).toBeUndefined();
     expect(handle!.get()).toBeDefined();
     expect(publications).toBe(2);
   });
@@ -386,7 +386,7 @@ describe("sqlite-served-identity", () => {
         "bob-only",
       ],
     });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     const setupTx = runtime.edit();
     const parent = runtime.getCell(
@@ -406,7 +406,7 @@ describe("sqlite-served-identity", () => {
       undefined,
       setupTx,
     );
-    expect((await setupTx.commit()).error).toBeUndefined();
+    expect((await setupTx.commit().settled).error).toBeUndefined();
 
     let resultCell: Cell<QueryState> | undefined;
     const builtin = sqliteQuery(
@@ -431,7 +431,7 @@ describe("sqlite-served-identity", () => {
         undefined,
         ptx,
       );
-      expect((await ptx.commit()).error).toBeUndefined();
+      expect((await ptx.commit().settled).error).toBeUndefined();
       let cell: Cell<QueryState> | undefined;
       const b = sqliteQuery(
         inputs as never,
@@ -469,7 +469,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const aliceHash = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     const tx2 = runtime.edit();
@@ -477,7 +477,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx2);
     const bobHash = (result().withTx(tx2).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     expect(aliceHash).toBeDefined();
@@ -505,7 +505,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const hashOne = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     const tx2 = runtime.edit();
@@ -513,7 +513,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx2);
     const hashTwo = (result().withTx(tx2).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     expect(hashOne).toBeDefined();
@@ -543,7 +543,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const first = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     const second = await makeBuiltin();
@@ -553,7 +553,7 @@ describe("sqlite-served-identity", () => {
     const restaged = (second.result().withTx(tx2).get() as
       | QueryState
       | undefined)?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     expect(first).toBeDefined();
@@ -578,7 +578,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const hashOne = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
+    expect((await tx1.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     const tx2 = runtime.edit();
@@ -586,7 +586,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx2);
     const hashTwo = (result().withTx(tx2).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
+    expect((await tx2.commit().settled).error).toBeUndefined();
     await runtime.settled();
 
     expect(hashOne).toBeDefined();

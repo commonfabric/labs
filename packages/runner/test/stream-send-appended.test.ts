@@ -40,7 +40,7 @@ describe("a stream send's appended hook off server execution", () => {
         tx,
       );
       runtime.run(tx, counter, { value: 0 }, result);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const settled: string[] = [];
@@ -87,7 +87,7 @@ describe("a stream send's appended hook off server execution", () => {
         tx2,
       );
       runtime.run(tx2, declining, { value: 0 }, declined);
-      await tx2.commit();
+      await tx2.commit().settled;
       await runtime.idle();
       let refused: EventAppendDeliveryOutcome | undefined;
       let failedStatus: string | undefined;

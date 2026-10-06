@@ -208,7 +208,9 @@ describe("prompt-loop with a browser host", () => {
         ], requestBodies),
       });
 
-      await loop.runPrompt({ prompt: "What does the page show?" });
+      const result = await loop.runPrompt({
+        prompt: "What does the page show?",
+      });
 
       const afterShot = chatViewOfRequest(requestBodies[2]).messages;
       const shot = afterShot.find((message) => message.role === "tool");
@@ -219,6 +221,17 @@ describe("prompt-loop with a browser host", () => {
       });
       expect(String(shot?.content)).not.toContain(artifactRoot);
       expect(image).toContain(`data:image/png;base64,${PNG_BASE64}`);
+      // The child saw only pixels, which carry the page's caveat as its text
+      // would, and its reply brings the caveat to the parent.
+      expect(result.runState.cfcModelContext?.label.confidentiality).toEqual([{
+        type: CFC_ATOM_TYPE.Caveat,
+        kind: CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+        source: {
+          type: CFC_ATOM_TYPE.Resource,
+          class: "WebPage",
+          subject: "https://shop.example",
+        },
+      }]);
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }
@@ -301,6 +314,7 @@ describe("prompt-loop with a browser host", () => {
               additionalProperties: false,
             },
           }),
+          toolCallTurn("call-look", "browser", { action: "snapshot" }),
           finalTurn(JSON.stringify({ url: "https://shop.example/item/7" })),
           toolCallTurn("call-open", "delegate_task", {
             profile: "browser",
@@ -333,14 +347,108 @@ describe("prompt-loop with a browser host", () => {
       )?.content ?? "";
     expect(answered).toContain(`Opened ${referent?.token}.`);
     expect(answered).not.toContain("https://shop.example/item/7");
-    expect(host.operations).toEqual([{
-      action: "open",
-      url: {
-        kind: "handle-value",
-        text: "https://shop.example/item/7",
-        description: "a value an agent found",
+    expect(referent?.label).toEqual({
+      confidentiality: [{
+        type: CFC_ATOM_TYPE.Caveat,
+        kind: CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+        source: {
+          type: CFC_ATOM_TYPE.Resource,
+          class: "WebPage",
+          subject: "https://shop.example",
+        },
+      }],
+    });
+    expect(host.operations).toEqual([
+      { action: "snapshot", interactive: false },
+      {
+        action: "open",
+        url: {
+          kind: "handle-value",
+          text: "https://shop.example/item/7",
+          description: "a value an agent found",
+        },
       },
-    }]);
+    ]);
+  });
+
+  it("keeps a string sealed, and mints no referent, when the browser child that returned it holds no label", async () => {
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-browser-host-unread",
+        model: "gpt-5.4",
+        cfcEnforcementMode: "disabled",
+        browserHost: new RecordingBrowserHost(),
+      }),
+      allowedToolIds: ["delegate_task"],
+      allowedSubagentProfiles: ["browser"],
+      fetchFn: scriptedFetch([
+        toolCallTurn("call-find", "delegate_task", {
+          profile: "browser",
+          goal: "Find the item's page.",
+          returnSchema: {
+            type: "object",
+            properties: { url: { type: "string" } },
+            required: ["url"],
+            additionalProperties: false,
+          },
+        }),
+        finalTurn(JSON.stringify({ url: "https://shop.example/item/7" })),
+        finalTurn("Found it."),
+      ], []),
+    });
+
+    const result = await loop.runPrompt({ prompt: "Find the item's page." });
+
+    const delegated = JSON.parse(
+      result.transcript.findLast((message) =>
+        message.role === "tool" && message.toolName === "delegate_task"
+      )?.content ?? "{}",
+    );
+    expect(delegated.subagent.structuredReturn.value.url).toEqual({
+      "@link": "opaque:run-browser-host-unread.subagent.1#/url",
+    });
+    expect(result.runState.handleTable?.referents ?? []).toEqual([]);
+  });
+
+  it("seals a browser child's reply in words once a hand-off was sent", async () => {
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-browser-host-prose",
+        model: "gpt-5.4",
+        cfcEnforcementMode: "disabled",
+        browserHost: new RecordingBrowserHost(),
+      }),
+      allowedToolIds: ["delegate_task"],
+      allowedSubagentProfiles: ["browser"],
+      fetchFn: scriptedFetch([
+        toolCallTurn("call-balance", "delegate_task", {
+          profile: "browser",
+          goal: "Read the balance once the owner signs in.",
+        }),
+        toolCallTurn("call-hand", "browser", {
+          action: "handoff",
+          reason: "sign-in",
+        }),
+        finalTurn("Your balance is 4,210.17."),
+        finalTurn("Read it."),
+      ], []),
+    });
+
+    const result = await loop.runPrompt({ prompt: "What is my balance?" });
+
+    const delegated = JSON.parse(
+      result.transcript.findLast((message) =>
+        message.role === "tool" && message.toolName === "delegate_task"
+      )?.content ?? "{}",
+    );
+    expect(delegated.subagent.summary).toBe(
+      "The browser child's reply is sealed: a hand-off to the owner was sent, so a page it read may show their account.",
+    );
+    expect(JSON.stringify(result.transcript)).not.toContain("4,210.17");
   });
 
   it("keeps a browser child's strings sealed once the owner has finished a hand-off", async () => {
@@ -502,7 +610,7 @@ describe("prompt-loop with a browser host", () => {
       "ok",
     ]);
     expect(outputs[2].message).toBe(
-      "the owner finished a hand-off on https://shop.example, so the page may show their account, which no CFC label describes; a run under enforce-strict can only hand the page back to them",
+      "the page was handed to the owner on https://shop.example, so it may show their account, which no CFC label describes; a run under enforce-strict can only hand the page back to them",
     );
     expect(host.operations.map((operation) => operation.action)).toEqual([
       "open",

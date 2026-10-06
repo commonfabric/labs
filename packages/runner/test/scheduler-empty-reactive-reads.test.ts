@@ -77,7 +77,7 @@ describe("scheduler-empty-reactive-reads", () => {
         seed.tx.enableMultiSpaceWrites!();
         input.withTx(seed).set(0);
         for (const output of outputs) output.withTx(seed).set(0);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const tx = runtime.edit();
         tx.tx.enableMultiSpaceWrites!();
@@ -90,12 +90,12 @@ describe("scheduler-empty-reactive-reads", () => {
         if (stale) {
           const update = runtime.edit();
           input.withTx(update).set(1);
-          expect((await update.commit()).error).toBeUndefined();
+          expect((await update.commit().settled).error).toBeUndefined();
         }
 
         const reads = tx.tx.getReactivityLog!().reads;
         expect(reads.length).toBeGreaterThan(0);
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         if (stale) {
           expect(result.error).toMatchObject({
             name: "StorageTransactionInconsistent",
@@ -134,7 +134,7 @@ describe("scheduler-empty-reactive-reads", () => {
           shallowReads: [],
           writes: [],
         });
-        expect((await tx.commit()).error).toMatchObject({
+        expect((await tx.commit().settled).error).toMatchObject({
           name: "StorageTransactionAborted",
           abortedBeforeStorage: true,
           reason:
@@ -160,7 +160,7 @@ describe("scheduler-empty-reactive-reads", () => {
       try {
         const seed = runtime.edit();
         input.withTx(seed).set(0);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         if (sealing) runtime.installSealDestination(destination);
         runtime.scheduler.addEventHandler(async (tx) => {
           attempts++;
@@ -189,7 +189,7 @@ describe("scheduler-empty-reactive-reads", () => {
         await read.promise;
         const update = runtime.edit();
         input.withTx(update).set(1);
-        expect((await update.commit()).error).toBeUndefined();
+        expect((await update.commit().settled).error).toBeUndefined();
         resume.resolve();
         await runtime.settled();
         expect(attempts).toBe(1);
@@ -215,7 +215,7 @@ describe("scheduler-empty-reactive-reads", () => {
       try {
         const seed = runtime.edit();
         input.withTx(seed).set({ value: 0, noise: 0 });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const action = async (tx: IExtendedStorageTransaction) => {
           runs++;
           if (shallow) {
@@ -230,7 +230,7 @@ describe("scheduler-empty-reactive-reads", () => {
           if (runs === 1) {
             const update = runtime.edit();
             input.withTx(update).key("noise").set(1);
-            expect((await update.commit()).error).toBeUndefined();
+            expect((await update.commit().settled).error).toBeUndefined();
           }
         };
         cancel = runtime.scheduler.subscribe(action, { isEffect: true });
@@ -256,7 +256,7 @@ describe("scheduler-empty-reactive-reads", () => {
         try {
           const seed = runtime.edit();
           input.withTx(seed).set(initiallyPresent ? { field: undefined } : {});
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           cancel = runtime.scheduler.subscribe(async (tx) => {
             expect(tx.tx.read(address, { nonRecursive: shallow }).error)
               .toBeUndefined();
@@ -265,7 +265,7 @@ describe("scheduler-empty-reactive-reads", () => {
               input.withTx(update).set(
                 initiallyPresent ? {} : { field: undefined },
               );
-              expect((await update.commit()).error).toBeUndefined();
+              expect((await update.commit().settled).error).toBeUndefined();
             }
           }, { isEffect: true });
           await runtime.settled();
@@ -286,7 +286,7 @@ describe("scheduler-empty-reactive-reads", () => {
     try {
       const seed = runtime.edit();
       input.withTx(seed).set({ first: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       cancel = runtime.scheduler.subscribe(async (tx) => {
         expect(
           tx.tx.read(toMemorySpaceAddress(input.getAsNormalizedFullLink()), {
@@ -296,7 +296,7 @@ describe("scheduler-empty-reactive-reads", () => {
         if (++runs === 1) {
           const update = runtime.edit();
           input.withTx(update).key("second").set(1);
-          expect((await update.commit()).error).toBeUndefined();
+          expect((await update.commit().settled).error).toBeUndefined();
         }
       }, { isEffect: true });
       await runtime.settled();
@@ -317,13 +317,13 @@ describe("scheduler-empty-reactive-reads", () => {
     try {
       const seed = runtime.edit();
       input.withTx(seed).set(0);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       cancel = runtime.scheduler.subscribe(async (tx) => {
         seen = input.withTx(tx).get();
         if (++runs <= changes) {
           const update = runtime.edit();
           input.withTx(update).set(runs);
-          expect((await update.commit()).error).toBeUndefined();
+          expect((await update.commit().settled).error).toBeUndefined();
         }
       }, { isEffect: true });
       await runtime.settled();
@@ -346,14 +346,14 @@ describe("scheduler-empty-reactive-reads", () => {
         const seed = runtime.edit();
         input.withTx(seed).set(0);
         output.withTx(seed).set(0);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const action = Object.assign(
           async (tx: IExtendedStorageTransaction) => {
             const value = input.withTx(tx).get();
             if (++runs === 1) {
               const update = runtime.edit();
               input.withTx(update).set(1);
-              expect((await update.commit()).error).toBeUndefined();
+              expect((await update.commit().settled).error).toBeUndefined();
             }
             output.withTx(tx).set(value);
           },
@@ -386,13 +386,13 @@ describe("scheduler-empty-reactive-reads", () => {
     try {
       const seed = runtime.edit();
       input.withTx(seed).set(0);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const action = async (tx: IExtendedStorageTransaction) => {
         seen = input.withTx(tx).get();
         if (++runs === 2) {
           const update = runtime.edit();
           input.withTx(update).set(2);
-          expect((await update.commit()).error).toBeUndefined();
+          expect((await update.commit().settled).error).toBeUndefined();
         }
       };
       cancel = runtime.scheduler.subscribe(action, { isEffect: true });
@@ -401,7 +401,7 @@ describe("scheduler-empty-reactive-reads", () => {
       runtime.scheduler.setThrottle(action, 1000);
       const update = runtime.edit();
       input.withTx(update).set(1);
-      const committed = update.commit();
+      const committed = update.commit().settled;
       await clock.settle();
       expect((await committed).error).toBeUndefined();
       await clock.tick(1000);
@@ -436,7 +436,7 @@ describe("scheduler-empty-reactive-reads", () => {
     try {
       const seed = runtime.edit();
       shared.withTx(seed).set(0);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       runtime.installSealDestination(destination, {
         runStamper: (tx, info) =>
           stampWaveRunContext(tx, {
@@ -466,7 +466,7 @@ describe("scheduler-empty-reactive-reads", () => {
       expect(runs).toEqual(identities.map(({ principal }) => principal));
       const update = runtime.edit();
       shared.withTx(update).set(1);
-      expect((await update.commit()).error).toBeUndefined();
+      expect((await update.commit().settled).error).toBeUndefined();
       resumeBob.resolve();
       await runtime.settled();
       expect(observed.get(identities[0].principal)).toEqual([0, 1]);

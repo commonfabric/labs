@@ -314,12 +314,12 @@ describe("current-principal", () => {
         {
           const tx = client.edit();
           argument.withTx(tx).set({ seen: "no event yet" });
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         {
           const tx = client.edit();
           client.run(tx, compiled, argument, result);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         const cancel = result.sink(() => {});
         await client.idle();
@@ -396,7 +396,7 @@ describe("current-principal", () => {
         },
       });
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
 
       const verify = edit(client);
       const stored = verify.readOrThrow({ ...target, path: [] }) as {

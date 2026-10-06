@@ -71,6 +71,7 @@ import {
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
+import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 export interface WorkerRequest {
@@ -370,6 +371,17 @@ const handlers: Record<
       // internally (see createStorageAddressResolver).
       memoryHost: new URL(args.apiUrl as string),
     });
+    patternCoverage = typeof args.patternCoverageDir === "string"
+      ? new PatternCoverageCollector()
+      : undefined;
+    patternCoveragePath = typeof args.patternCoverageDir === "string"
+      ? patternCoverageOutputPath(
+        args.patternCoverageDir,
+        args.testPath as string,
+        args.participant as string,
+      )
+      : undefined;
+    patternCoverageRoot = typeof args.root === "string" ? args.root : undefined;
     // `runtimePresets.patternTest` carries the shared first-party posture
     // (CT-1814) and the same env-honored experimental flags as the
     // single-user runner (this worker previously ignored EXPERIMENTAL_*, so
@@ -380,6 +392,12 @@ const handlers: Record<
       experimental: experimentalOptionsFromEnv(Deno.env.get),
       errorHandlers: [(error: Error) => runtimeErrors.push(String(error))],
       moduleByteCache: getDefaultModuleByteCache(),
+      // The collector is the runtime's, which makes every compile an
+      // instrumented one and names the instrumented variant wherever the
+      // runtime reads or writes a compiled closure. Replicating a pattern
+      // instantiated with `inSpace()` reads the participant's closure that
+      // way, so the variant it asks for is the one the compile below wrote.
+      ...(patternCoverage !== undefined ? { patternCoverage } : {}),
       ...(flowLabels !== undefined ? { cfcFlowLabels: flowLabels } : {}),
       ...(requestedMode !== undefined
         ? { cfcEnforcementMode: requestedMode }
@@ -415,17 +433,6 @@ const handlers: Record<
     // splits verified-load/source-map state and breaks CFC verified-binding
     // identities under enforcement.
     engine = runtime.harness;
-    patternCoverage = typeof args.patternCoverageDir === "string"
-      ? new PatternCoverageCollector()
-      : undefined;
-    patternCoveragePath = typeof args.patternCoverageDir === "string"
-      ? patternCoverageOutputPath(
-        args.patternCoverageDir,
-        args.testPath as string,
-        args.participant as string,
-      )
-      : undefined;
-    patternCoverageRoot = typeof args.root === "string" ? args.root : undefined;
 
     const program = await resolveLocalProgram((r) => engine!.resolve(r), {
       main: args.testPath as string,
@@ -442,7 +449,7 @@ const handlers: Record<
     // replicated from it.
     const evalResult = await runtime.patternManager.compileAndRegisterModules(
       program,
-      { patternCoverage },
+      undefined,
       { space },
     );
     const { main } = evalResult;
@@ -500,7 +507,7 @@ const handlers: Record<
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       rt().prepareTxForCommit?.(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await rt().idle();
     }
 
@@ -519,7 +526,7 @@ const handlers: Record<
       await setupCell.sync();
       rt().run(tx, descriptor.setup, {}, setupCell);
       rt().prepareTxForCommit?.(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await settle();
     }
 
@@ -537,7 +544,7 @@ const handlers: Record<
       resultCell,
     );
     rt().prepareTxForCommit?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
     if (args.continuousUI === true) {
       continuousUiCancel = await mountTestVDOM(
         resultCell.key("$UI") as Cell<unknown>,
@@ -636,14 +643,7 @@ const handlers: Record<
     const tx = rt().edit();
     markersCellFor(selfParticipant!).withTx(tx).key(marker as string).set(true);
     rt().prepareTxForCommit?.(tx);
-    // A dropped marker is a wait that never ends, so the commit's verdict is
-    // read rather than assumed.
-    const result = await tx.commit();
-    if (result.error) {
-      throw new Error(
-        `Announcing marker "${marker}" failed: ${result.error.message}`,
-      );
-    }
+    await waitForMarkerCommit(marker as string, tx.commit());
     await settle();
     return {};
   },

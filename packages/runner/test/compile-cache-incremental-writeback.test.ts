@@ -172,7 +172,7 @@ describe("chunked compile-cache write-back (interruption survivability)", () => 
       tx,
     );
     tx.prepareCfc();
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     expect(error).toBeUndefined();
   }
 
@@ -389,7 +389,7 @@ describe("descendant-missing compiled closure degrades to a clean recompile", ()
         tx,
       );
       tx.prepareCfc();
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await smA.synced();
 
       // Cold replica: confirm the pre-state actually exercises the intended

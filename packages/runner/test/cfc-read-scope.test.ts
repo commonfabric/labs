@@ -82,7 +82,7 @@ const seedRecord = async (runtime: Runtime, name: string) => {
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 describe("CFC flow-join read scope", () => {
@@ -119,7 +119,7 @@ describe("CFC flow-join read scope", () => {
       const derivedId = derived.getAsNormalizedFullLink().id;
       const sourceId = source.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The sibling that was not read carries the atom the derived document
       // must not pick up, and the stored value pins the derived document the
@@ -166,7 +166,7 @@ describe("CFC flow-join read scope", () => {
       );
       derived.set({ doubled: raw.amount * 2 });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message ?? "").toContain(
         "writer-fit confidentiality misfit",
       );

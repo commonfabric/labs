@@ -146,7 +146,7 @@ async function runFresh(
       tx0,
     );
     rt.run(tx0, compiled, { items }, rc);
-    await tx0.commit();
+    await tx0.commit().settled;
 
     const trajectory: (unknown[] | null)[] = [];
     const cancel = rc.key("out").sink((v) => {

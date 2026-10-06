@@ -82,7 +82,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     return { storageManager, runtime, sourceId, fullCaveat };
   };
@@ -144,7 +144,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
       cfcLabelView,
     });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return parseLink(target.getAsLink()).id!;
   };
 
@@ -363,7 +363,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const target = runtime.getCell(
@@ -396,7 +396,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
         },
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const persistedId = parseLink(target.getAsLink()).id!;
       const replica = storageManager.open(signer.did()).replica as unknown as {

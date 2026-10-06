@@ -360,12 +360,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
         : await options.argExtras(alice);
       const seed = alice.edit();
       aliceArg.withTx(seed).set({ n: 1, ...extras });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, aliceArg, aliceResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -412,7 +412,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       await arg.sync();
       const tx = runtime.edit();
       arg.key("draft").withTx(tx).set(value);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await runtime.storageManager.synced();
     };
@@ -587,12 +587,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const seed = alice.edit();
       aliceArg.withTx(seed).set({ n: 7 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, aliceArg, aliceResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -846,12 +846,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       {
         const seed = rt.edit();
         arg.withTx(seed).set({ n: 1 });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
       }
       {
         const tx = rt.edit();
         rt.run(tx, compiled, arg, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await rt.idle();
       await rt.storageManager.synced();
@@ -931,7 +931,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const tx = alice.edit();
       soloArg.key("n").withTx(tx).set(2);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await alice.idle();
       await alice.storageManager.synced();
     }
@@ -947,7 +947,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const tx = alice.edit();
       sharedArg.key("n").withTx(tx).set(2);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await alice.idle();
       await alice.storageManager.synced();
     }
@@ -1070,12 +1070,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const seed = creator.edit();
       cArg.withTx(seed).set({ n: 1, slot: holder });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = creator.edit();
       creator.run(tx, compiled, cArg, cResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await creator.idle();
     await creator.storageManager.synced();
@@ -1157,7 +1157,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       await arg.sync();
       const tx = runtime.edit();
       arg.key("draft").withTx(tx).set(value);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await runtime.storageManager.synced();
     };
@@ -1331,7 +1331,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const tx = carolClient.runtime.edit();
       carolTarget.withTx(tx).set("hello");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await carolClient.runtime.idle();
     await carolClient.runtime.storageManager.synced();
@@ -1415,12 +1415,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const seed = alice.edit();
       bArg.withTx(seed).set({ n: 5 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, leaf, bArg, bResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const holder = alice.getCell<unknown>(space, "dp-x-holder", undefined);
     const aArg = alice.getCell<Record<string, unknown>>(
@@ -1439,12 +1439,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const seed = alice.edit();
       aArg.withTx(seed).set({ slot: holder, list: holder, target: bResult });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, p1, aArg, aResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -1503,7 +1503,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     {
       const tx = carol.edit();
       carolBArg.key("n").withTx(tx).set(6);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await carol.idle();
       await carol.storageManager.synced();
     }

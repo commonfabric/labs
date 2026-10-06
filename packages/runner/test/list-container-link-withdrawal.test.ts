@@ -190,7 +190,7 @@ describe("list container link withdrawal", () => {
     );
     const seed = runtime.edit();
     source.withTx(seed).set({ list });
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     await waves.storageManager.synced();
     return source;
   };
@@ -226,7 +226,7 @@ describe("list container link withdrawal", () => {
       setup,
     );
     runtime.run(setup, compiled, { items: source.key("list") }, resultCell);
-    expect((await setup.commit()).error).toBeUndefined();
+    expect((await setup.commit().settled).error).toBeUndefined();
     const stopReading = resultCell.key("aggregate").sink(() => {});
     await runtime.scheduler.idleWithPendingCommits();
     return { resultCell, stopReading };
@@ -247,7 +247,7 @@ describe("list container link withdrawal", () => {
         waves.openWave();
         const authored = runtime.edit();
         source.withTx(authored).key("tag").set("authored");
-        expect((await authored.commit()).error).toBeUndefined();
+        expect((await authored.commit().settled).error).toBeUndefined();
         waves.serve();
         const doomed = runtime.edit();
         stampWaveRunContext(doomed, {
@@ -255,7 +255,7 @@ describe("list container link withdrawal", () => {
           kind: "derivation",
         });
         source.withTx(doomed).key("list").set([0]);
-        expect((await doomed.commit()).error).toBeUndefined();
+        expect((await doomed.commit().settled).error).toBeUndefined();
 
         const { resultCell, stopReading } = await start(
           coordinator.name,

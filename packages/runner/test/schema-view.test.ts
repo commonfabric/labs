@@ -44,7 +44,7 @@ describe("schema-view", () => {
   ) => {
     const write = runtime.edit();
     runtime.getCell(space, cause, undefined, write).set(value);
-    await write.commit();
+    await write.commit().settled;
 
     const read = (lazy: boolean): {
       tx: IExtendedStorageTransaction;
@@ -187,8 +187,8 @@ describe("schema-view", () => {
             JSON.parse(JSON.stringify(eager.get())),
           );
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
     }
@@ -221,12 +221,12 @@ describe("schema-view", () => {
       const value = lazy.get() as { wanted: { leaf: number } };
       expect(value.wanted.leaf).toBe(1);
       const lazyPaths = pathsRead(lazy.tx);
-      await lazy.tx.commit();
+      await lazy.tx.commit().settled;
 
       const eager = read(false);
       eager.get();
       const eagerPaths = pathsRead(eager.tx);
-      await eager.tx.commit();
+      await eager.tx.commit().settled;
 
       expect(lazyPaths.some((path) => path.includes("untouched"))).toBe(false);
       expect(eagerPaths.some((path) => path.includes("untouched"))).toBe(true);
@@ -254,7 +254,7 @@ describe("schema-view", () => {
       expect(value.xs.length).toBe(3);
       expect(value.xs[0].n).toBe(1);
       const paths = pathsRead(lazy.tx);
-      await lazy.tx.commit();
+      await lazy.tx.commit().settled;
 
       // An element is its own document, so the element's own fields are read
       // under that document rather than under `xs/<i>`. What the slot read
@@ -282,8 +282,8 @@ describe("schema-view", () => {
         expect(lazy.get()).toBeUndefined();
         expect(eager.get()).toBeUndefined();
       } finally {
-        await lazy.tx.commit();
-        await eager.tx.commit();
+        await lazy.tx.commit().settled;
+        await eager.tx.commit().settled;
       }
     });
 
@@ -315,7 +315,7 @@ describe("schema-view", () => {
         }
         expect(isSchemaMismatchError(thrown)).toBe(true);
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -350,8 +350,8 @@ describe("schema-view", () => {
         expect(Object.keys(lazyValue)).toContain("nothing");
         expect("nothing" in lazyValue).toBe(true);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -371,7 +371,7 @@ describe("schema-view", () => {
         const value = lazy.get() as { n: unknown };
         expect(() => value.n).toThrow("Schema mismatch");
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -398,8 +398,8 @@ describe("schema-view", () => {
         // that did not resolve.
         expect(lazy.tx.takeSchemaRefusal()).toBeUndefined();
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -434,8 +434,8 @@ describe("schema-view", () => {
         expect((eager.get() as { wanted: number }).wanted).toBe(1);
         expect((lazy.get() as { wanted: number }).wanted).toBe(1);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -467,7 +467,7 @@ describe("schema-view", () => {
         expect(pathsRead(lazy.tx).some((path) => path.endsWith("inner")))
           .toBe(true);
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
   });
@@ -529,8 +529,8 @@ describe("schema-view", () => {
         expect(typeof eagerAuthor?.get).toBe("function");
         expect(typeof lazyAuthor?.get).toBe("function");
       } finally {
-        await lazy.tx.commit();
-        await eager.tx.commit();
+        await lazy.tx.commit().settled;
+        await eager.tx.commit().settled;
       }
     });
   });
@@ -552,7 +552,7 @@ describe("schema-view", () => {
     const opened = async (cause: string, value: unknown) => {
       const write = runtime.edit();
       runtime.getCell(space, cause, undefined, write).set(value);
-      await write.commit();
+      await write.commit().settled;
 
       const tx = runtime.edit();
       tx.markLazyMaterialize(true);
@@ -571,7 +571,7 @@ describe("schema-view", () => {
         // Taking the read again is how the reader sees what it wrote.
         expect((cell.get() as { title: string }).title).toBe("after");
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -588,7 +588,7 @@ describe("schema-view", () => {
         expect(value.title).toBe("first");
         expect((cell.get() as { title: string }).title).toBe("second");
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -605,7 +605,7 @@ describe("schema-view", () => {
         expect(first.title).toBe("before");
         expect(second.title).toBe("middle");
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -622,7 +622,7 @@ describe("schema-view", () => {
         // read, so the pinning above is the instant and not a stale container.
         expect((cell.get() as { xs: number[] }).xs[1]).toBe(99);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -648,7 +648,7 @@ describe("schema-view", () => {
         }
         expect(visited).toEqual([1, 2, 3]);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -669,7 +669,7 @@ describe("schema-view", () => {
         }
         expect(visited).toEqual([1, 2]);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -689,7 +689,7 @@ describe("schema-view", () => {
         expect(fresh.length).toBe(2);
         expect(fresh[0]).toBe(7);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -706,7 +706,7 @@ describe("schema-view", () => {
         // looks, because the reader never asked.
         expect(pathsRead(tx).some((path) => path.includes("xs"))).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
 
@@ -717,7 +717,7 @@ describe("schema-view", () => {
         runtime.getCell(space, cause, undefined, write).set({
           scratch: { n: 1 },
         });
-        await write.commit();
+        await write.commit().settled;
 
         const tx = runtime.edit();
         if (lazy) tx.markLazyMaterialize(true);
@@ -741,7 +741,7 @@ describe("schema-view", () => {
 
         argument.scratch.set({ n: 42 });
         const seen = argument.scratch.get()?.n;
-        await tx.commit();
+        await tx.commit().settled;
         return seen;
       };
 
@@ -768,8 +768,8 @@ describe("schema-view", () => {
         expect(eager.get()).toEqual([]);
         expect(lazy.get()).toEqual([]);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -799,7 +799,7 @@ describe("schema-view", () => {
         write,
       );
       arg.setRaw({ n: holder.key("x").getAsLink() });
-      await write.commit();
+      await write.commit().settled;
 
       const tx = runtime.edit();
       tx.markLazyMaterialize(true);
@@ -818,7 +818,7 @@ describe("schema-view", () => {
         expect(contentReads(tx).filter((read) => read.startsWith(targetId)))
           .toContain(`${targetId}/value`);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
   });
@@ -856,8 +856,8 @@ describe("schema-view", () => {
           of(eager.get()).map((i) => i.n),
         );
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -871,7 +871,7 @@ describe("schema-view", () => {
         for (const item of xs) seen.push(item.n);
         expect(seen).toEqual([1, 2, 3]);
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -883,7 +883,7 @@ describe("schema-view", () => {
         expect(() => xs.push({ n: 4 })).toThrow("it is a read");
         expect(() => xs.sort()).toThrow("it is a read");
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -901,8 +901,8 @@ describe("schema-view", () => {
         expect(9 in lazyXs).toBe(false);
         expect(lazyXs.length).toBe(3);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -914,7 +914,7 @@ describe("schema-view", () => {
         const cell = (xs[toCell] as () => { get: () => unknown })();
         expect(typeof cell.get).toBe("function");
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -950,7 +950,7 @@ describe("schema-view", () => {
         expect(paths.some((path) => path.endsWith("xs/1"))).toBe(true);
         expect(paths.some((path) => path.endsWith("xs/2"))).toBe(true);
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
   });
@@ -979,7 +979,7 @@ describe("schema-view", () => {
         write,
       );
       arg.setRaw({ p: target.getAsLink(), q: 1 });
-      await write.commit();
+      await write.commit().settled;
 
       const schema = {
         type: "object",
@@ -1022,8 +1022,8 @@ describe("schema-view", () => {
           expect("p" in value).toBe(false);
           expect(Object.keys(value)).toEqual(["q"]);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1048,7 +1048,7 @@ describe("schema-view", () => {
             .map((activity) => activity.id);
           expect(ids.includes(targetId)).toBe(false);
         } finally {
-          await lazy.tx.commit();
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1068,8 +1068,8 @@ describe("schema-view", () => {
           expect(eager.get()).toBe(undefined);
           expect(lazy.get()).toBe(undefined);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
     }
@@ -1100,8 +1100,8 @@ describe("schema-view", () => {
             JSON.parse(JSON.stringify(eager.get())),
           );
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1125,8 +1125,8 @@ describe("schema-view", () => {
           expect("driver" in row).toBe(false);
           expect(row.driver).toBe(undefined);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1142,8 +1142,8 @@ describe("schema-view", () => {
           expect(eager.get()).toBe(undefined);
           expect(lazy.get()).toBe(undefined);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1169,8 +1169,8 @@ describe("schema-view", () => {
           expect(Object.keys(value)).toEqual(["id"]);
           expect("driver" in value).toBe(false);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1220,8 +1220,8 @@ describe("schema-view", () => {
               expect("driver" in row).toBe(false);
               expect(row.driver).toBe(undefined);
             } finally {
-              await eager.tx.commit();
-              await lazy.tx.commit();
+              await eager.tx.commit().settled;
+              await lazy.tx.commit().settled;
             }
           });
         }
@@ -1255,8 +1255,8 @@ describe("schema-view", () => {
           expect("driver" in value).toBe(false);
           expect(value.driver).toBe(undefined);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1277,8 +1277,8 @@ describe("schema-view", () => {
           expect("driver" in value).toBe(false);
           expect(value.driver).toBe(undefined);
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
 
@@ -1299,8 +1299,8 @@ describe("schema-view", () => {
           expect("driver" in value).toBe(true);
           expect(value.driver).toBe("x");
         } finally {
-          await eager.tx.commit();
-          await lazy.tx.commit();
+          await eager.tx.commit().settled;
+          await lazy.tx.commit().settled;
         }
       });
     });
@@ -1396,8 +1396,8 @@ describe("schema-view", () => {
               JSON.parse(JSON.stringify(eager.get())),
             );
           } finally {
-            await eager.tx.commit();
-            await lazy.tx.commit();
+            await eager.tx.commit().settled;
+            await lazy.tx.commit().settled;
           }
         });
       }
@@ -1422,8 +1422,8 @@ describe("schema-view", () => {
         expect(eager.get()).toBe(undefined);
         expect(lazy.get()).toBe(undefined);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -1454,8 +1454,8 @@ describe("schema-view", () => {
         );
         expect((lazy.get() as { p: { name: string } }).p.name).toBe("Ada");
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
   });
@@ -1497,7 +1497,7 @@ describe("schema-view", () => {
         body(view);
         return unselectedReads() - before;
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     };
 
@@ -1622,7 +1622,7 @@ describe("schema-view", () => {
       const write = runtime.edit();
       runtime.getCell<Record<string, unknown>>(space, cause, undefined, write)
         .setRaw(value as never);
-      await write.commit();
+      await write.commit().settled;
     };
 
     const ITEMS = {
@@ -1665,8 +1665,8 @@ describe("schema-view", () => {
         expect(lazy.id).toBe(eager.id);
         expect(lazy.path).toEqual(eager.path);
       } finally {
-        await eagerTx.commit();
-        await lazyTx.commit();
+        await eagerTx.commit().settled;
+        await lazyTx.commit().settled;
       }
     });
 
@@ -1685,7 +1685,7 @@ describe("schema-view", () => {
         expect(paths.some((path) => path.endsWith("xs/0"))).toBe(true);
         expect(paths.some((path) => path.endsWith("xs/2"))).toBe(false);
       } finally {
-        await tx.commit();
+        await tx.commit().settled;
       }
     });
   });
@@ -1718,8 +1718,8 @@ describe("schema-view", () => {
         expect((lazy.get() as { inner?: { a?: number } }).inner?.a)
           .toBeUndefined();
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -1748,8 +1748,8 @@ describe("schema-view", () => {
         expect((eager.get() as { inner?: { a?: number } }).inner?.a).toBe(1);
         expect((lazy.get() as { inner?: { a?: number } }).inner?.a).toBe(1);
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -1771,8 +1771,8 @@ describe("schema-view", () => {
         expect(eager.get()).toBeUndefined();
         expect(lazy.get()).toBeUndefined();
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
 
@@ -1791,8 +1791,8 @@ describe("schema-view", () => {
         expect(eager.get()).toBeUndefined();
         expect(lazy.get()).toBeUndefined();
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     });
   });
@@ -1819,8 +1819,8 @@ describe("schema-view", () => {
         check(eager.get());
         check(lazy.get());
       } finally {
-        await eager.tx.commit();
-        await lazy.tx.commit();
+        await eager.tx.commit().settled;
+        await lazy.tx.commit().settled;
       }
     };
     const untouched = (value: unknown) => {
@@ -1836,7 +1836,7 @@ describe("schema-view", () => {
       const { taggedHashString } = internSchema(target, true);
       const install = runtime.edit();
       ensureSchemaDocument(install, space, taggedHashString, target);
-      await install.commit();
+      await install.commit().settled;
       return { $ref: `cid:${taggedHashString}` } as JSONSchema;
     };
 
@@ -1877,7 +1877,7 @@ describe("schema-view", () => {
         write,
       );
       arg.setRaw({ p: piece.getAsLink({ includeSchema: true }) });
-      await write.commit();
+      await write.commit().settled;
 
       const schema = {
         type: "object",
@@ -1890,7 +1890,7 @@ describe("schema-view", () => {
         if (lazy) tx.markLazyMaterialize(true);
         const seen = (runtime.getCell(space, "link-schema-arg", schema, tx)
           .get() as { p: { title: string } }).p.title;
-        await tx.commit();
+        await tx.commit().settled;
         return seen;
       };
 
@@ -1925,7 +1925,7 @@ describe("schema-view", () => {
         write,
       );
       arg.setRaw({ n: holder.key("label", "length").getAsLink() });
-      await write.commit();
+      await write.commit().settled;
 
       const schema = {
         type: "object",
@@ -1937,7 +1937,7 @@ describe("schema-view", () => {
         if (lazy) tx.markLazyMaterialize(true);
         const seen = (runtime.getCell(space, "length-arg", schema, tx)
           .get() as { n: number }).n;
-        await tx.commit();
+        await tx.commit().settled;
         return seen;
       };
 
@@ -1963,7 +1963,7 @@ describe("schema-view", () => {
           value.a = 2;
         }).toThrow("it is a read");
       } finally {
-        await lazy.tx.commit();
+        await lazy.tx.commit().settled;
       }
     });
   });

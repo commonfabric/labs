@@ -94,7 +94,7 @@ describe("collection index invalidation", () => {
           selected: producer.key("selected"),
         }, runtime.getCell<number>(signer.did(), "observer", undefined, tx));
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         cancel = output.sink(() => {});
         await runtime.settled(Infinity);
         expect(output.get()).toBe(1);
@@ -107,7 +107,7 @@ describe("collection index invalidation", () => {
         tx = runtime.edit();
         // Moving B to a previously absent C changes both unrelated buckets and occupied-key enumeration.
         other.withTx(tx).key("label").set("C");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.settled(Infinity);
         expect(consumerRuns).toBe(0);
         expect(await producer.key("index").key("keys").pull()).toEqual([
@@ -117,7 +117,7 @@ describe("collection index invalidation", () => {
         expect(output.get()).toBe(1);
         tx = runtime.edit();
         first.withTx(tx).key("label").set("D");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.settled(Infinity);
         expect(consumerRuns).toBeGreaterThan(0);
         expect(output.get()).toBe(0);

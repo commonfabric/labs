@@ -217,7 +217,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         );
         // deno-lint-ignore no-explicit-any
         const running = runtime.run(tx, handBuiltPattern() as any, {}, cell);
-        await tx.commit();
+        await tx.commit().settled;
         await running.pull();
         expect(
           reportedIdentities.some((identity) =>
@@ -243,7 +243,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         );
         const running = runtime.run(tx, factory, {}, cell);
         runtime.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
         const cancel = running.sink(() => {});
         await runtime.idle();
         cancel();
@@ -261,7 +261,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
           tx,
         );
         cell.withTx(tx).set({ captured: factory });
-        await tx.commit();
+        await tx.commit().settled;
       }
       // Same boundary, asserted directly: `toJSON` reaches
       // patternToEncodableForm; a minted (keyless) ref must not surface.
@@ -316,7 +316,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     );
     const running = runtime.run(tx, factory, {}, cell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = running.sink(() => {});
     await runtime.idle();
 
@@ -337,7 +337,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         identity: unloadableIdentity,
         symbol: "default",
       }, rawMetaWriteAuthorization);
-      await repointTx.commit();
+      await repointTx.commit().settled;
     }
     await runtime.idle();
     await runtime.runner.idlePointerMaintenance();
@@ -384,7 +384,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       cell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = running.sink(() => {});
     await runtime.idle();
     expect(getPatternIdentityRef(cell)?.identity).toBe(realRef.identity);
@@ -397,7 +397,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         identity: "keyless:fid1:legacy-orphan-from-a-pre-guard-session",
         symbol: "default",
       }, rawMetaWriteAuthorization);
-      await repointTx.commit();
+      await repointTx.commit().settled;
     }
     await runtime.idle();
     await runtime.runner.idlePointerMaintenance();
@@ -432,7 +432,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       identity: "keyless:fid1:legacy-orphan-from-a-pre-guard-session",
       symbol: "default",
     }, rawMetaWriteAuthorization);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const started = await runtime.runner.start(cell);
@@ -504,7 +504,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       cell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     const cancel = running.sink(() => {});
     await runtime.idle();
     expect(getPatternIdentityRef(cell)).toBeDefined();
@@ -514,7 +514,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     const tx2 = runtime.edit();
     // deno-lint-ignore no-explicit-any
     const rerun = runtime.run(tx2, handBuiltPattern() as any, {}, cell);
-    await tx2.commit();
+    await tx2.commit().settled;
     await rerun.pull();
 
     expect(getPatternIdentityRef(cell)).toBeUndefined();
@@ -574,7 +574,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
           { v: 1, extra: 2 },
           cell,
         );
-        await tx.commit();
+        await tx.commit().settled;
         await running.pull();
         await runtimeA.storageManager.synced();
       } finally {
@@ -605,7 +605,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         { v: 1, extra: 2 },
         cell2,
       );
-      const committed = await tx2.commit();
+      const committed = await tx2.commit().settled;
       expect(committed.error).toBeUndefined();
       const value = await rerun.pull();
       expect((value as { out?: number })?.out).toBe(1);
@@ -638,7 +638,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     );
     // deno-lint-ignore no-explicit-any
     const running = runtime.run(tx, handBuiltPattern() as any, {}, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     const first = runtime.runner.sessionPatternPointerFor(cell);
     expect(first).toBeDefined();
@@ -699,7 +699,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     );
     // deno-lint-ignore no-explicit-any
     const running = runtime.run(setupTx, handBuiltPattern() as any, {}, cell);
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await running.pull();
     const first = runtime.runner.sessionPatternPointerFor(cell);
     expect(first).toBeDefined();
@@ -722,7 +722,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       {},
       cell,
     );
-    await tx3.commit();
+    await tx3.commit().settled;
     await rerun.pull();
     expect(getPatternIdentityRef(cell)).toBeDefined();
     expect(runtime.runner.sessionPatternPointerFor(cell)).toBeUndefined();
@@ -785,7 +785,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       { v: 1, extra: 2 },
       cell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     expect(runtime.runner.sessionPatternPointerFor(cell)).toBeDefined();
     runtime.runner.stop(cell);
@@ -817,7 +817,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         undefined,
         cell,
       );
-      const committed = await tx2.commit();
+      const committed = await tx2.commit().settled;
       if (committed.error !== undefined) loud = true;
       else await rerun.pull();
     } catch {
@@ -872,7 +872,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       { v: 1, extra: 2 },
       cell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     expect(runtime.runner.sessionPatternPointerFor(cell)).toBeDefined();
     runtime.runner.stop(cell);
@@ -901,7 +901,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       { v: 1, extra: 2 },
       cell,
     );
-    const committed = await tx2.commit();
+    const committed = await tx2.commit().settled;
     expect(committed.error).toBeUndefined();
     const value = await rerun.pull();
     expect((value as { out?: number })?.out).toBe(1);
@@ -950,7 +950,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       { v: 1, extra: 2 },
       cell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     runtime.runner.stop(cell);
 
@@ -1003,7 +1003,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       { v: 1, extra: 2 },
       cell,
     );
-    const committed = await tx3.commit();
+    const committed = await tx3.commit().settled;
     expect(committed.error).toBeUndefined();
     const value = await replay.pull();
     expect((value as { out?: number })?.out).toBe(1);
@@ -1074,7 +1074,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
           { v: 1, extra: 2 },
           cell,
         );
-        await tx.commit();
+        await tx.commit().settled;
         await running.pull();
         await runtimeA.storageManager.synced();
       } finally {
@@ -1136,7 +1136,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         { v: 1, extra: 2 },
         cell2,
       );
-      const committed = await tx3.commit();
+      const committed = await tx3.commit().settled;
       expect(committed.error).toBeUndefined();
       const value = await rerun.pull();
       expect((value as { out?: number })?.out).toBe(1);
@@ -1193,7 +1193,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
           identity: orphan,
           symbol: "default",
         }, rawMetaWriteAuthorization);
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         expect(await runtime.runner.start(cell)).toBe(false);
       }
@@ -1223,7 +1223,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
           cell,
         );
         runtime.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
         const cancel = running.sink(() => {});
         await runtime.idle();
         {
@@ -1232,7 +1232,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
             identity: orphan,
             symbol: "default",
           }, rawMetaWriteAuthorization);
-          await repointTx.commit();
+          await repointTx.commit().settled;
         }
         await runtime.idle();
         await runtime.runner.idlePointerMaintenance();
@@ -1256,7 +1256,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         );
         // deno-lint-ignore no-explicit-any
         const running = runtime.run(tx, handBuiltPattern() as any, {}, cell);
-        await tx.commit();
+        await tx.commit().settled;
         await running.pull();
         const unloadableIdentity = await unloadableIdentityPromise;
         {
@@ -1265,7 +1265,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
             identity: unloadableIdentity,
             symbol: "default",
           }, rawMetaWriteAuthorization);
-          await repointTx.commit();
+          await repointTx.commit().settled;
         }
         await runtime.idle();
         await runtime.runner.idlePointerMaintenance();
@@ -1340,7 +1340,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     );
     // deno-lint-ignore no-explicit-any
     const running = runtime.run(tx, first as any, {}, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     const firstPointer = runtime.runner.sessionPatternPointerFor(cell);
     expect(firstPointer).toBeDefined();
@@ -1367,7 +1367,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     const thirdPointer = runtime.runner.sessionPatternPointerFor(cell);
     expect(thirdPointer).toBeDefined();
     runtime.runner.stop(cell);
-    const committed = await tx3.commit();
+    const committed = await tx3.commit().settled;
     expect(committed.error).toBeUndefined();
     await runtime.idle();
     expect(runtime.runner.sessionPatternPointerFor(cell)?.identity).toBe(
@@ -1400,7 +1400,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
     );
     // deno-lint-ignore no-explicit-any
     const running = runtime.run(tx, handBuiltPattern() as any, {}, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     runtime.runner.stop(cell);
 
@@ -1431,7 +1431,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       );
       // deno-lint-ignore no-explicit-any
       const running = runtime.run(tx, handBuiltPattern() as any, {}, cell);
-      await tx.commit();
+      await tx.commit().settled;
       await running.pull();
       expect(runtime.patternManager.keylessMintAnomalies).toBe(0);
     }
@@ -1451,7 +1451,7 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
       );
       // deno-lint-ignore no-explicit-any
       const running = runtime.run(tx, anomalous as any, {}, cell);
-      await tx.commit();
+      await tx.commit().settled;
       await running.pull();
       expect(runtime.patternManager.keylessMintAnomalies).toBe(1);
     }

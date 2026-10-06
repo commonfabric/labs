@@ -134,7 +134,7 @@ const writeAsAlice = async (schema: JSONSchema, cause: string) => {
     const target = cell.getAsNormalizedFullLink();
     recordTrustedEdit(tx, target);
     tx.prepareCfc();
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     const verify = runtime.edit();
     const stored = verify.readOrThrow({
       space: target.space,
@@ -370,7 +370,7 @@ describe("represents-principal writer check", () => {
           recordTrustedEdit(seed, source.getAsNormalizedFullLink());
         }
         seed.prepareCfc();
-        const seeded = await seed.commit();
+        const seeded = await seed.commit().settled;
         expect(seeded.error).toBeUndefined();
 
         const tx = runtime.edit();
@@ -378,7 +378,7 @@ describe("represents-principal writer check", () => {
         const target = runtime.getCell(alice.did(), `${cause}-target`, {}, tx);
         target.set(linkFor(source) as never);
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           error: result.error?.message,
           subjects: storedClaimSubjects(
@@ -523,7 +523,7 @@ describe("represents-principal writer check", () => {
           write();
         }
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         return {
           error: result.error?.message,
           subjects: storedClaimSubjects(

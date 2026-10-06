@@ -293,7 +293,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     const cell = runtime.getCell<string>(space, cause, undefined);
     const tx = runtime.edit();
     cell.withTx(tx).set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await runtime.storageManager.synced();
     return cell.getAsNormalizedFullLink().id as URI;
@@ -327,7 +327,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     await cell.sync();
     const tx = runtime.edit();
     cell.withTx(tx).set(value);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await runtime.storageManager.synced();
   };

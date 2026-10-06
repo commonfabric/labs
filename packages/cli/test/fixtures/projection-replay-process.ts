@@ -103,7 +103,7 @@ try {
       return row.getAsLink();
     });
     runtime.getCell<unknown>(space, "survey", schema, tx).setRaw(rows);
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     if (committed.error) throw committed.error;
     await storageManager.synced();
   }
@@ -113,7 +113,7 @@ try {
     const tx = runtime.edit();
     row.withTx(tx).key("title").set("Updated row");
     row.withTx(tx).key("commentCount").set(99);
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     if (committed.error) throw committed.error;
     await storageManager.synced();
   }

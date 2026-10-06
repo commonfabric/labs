@@ -70,6 +70,27 @@ Rely on that: keep the explicit `.get()` for a content-dependent condition. If
 the condition is uniqueness, prefer `addUnique`, which the server enforces
 without a retry. Otherwise keep a read-modify-write `set`.
 
+A mergeable method that follows a `set()` of the same value in one handler is
+not mergeable either. `list.set([])` and then `list.push(item)` says the list
+holds exactly that one item, so the commit carries the list as the handler
+left it and replaces whatever the server held, where an append would have
+added to it. The same goes for a `set()` of an object and then a `push` into a
+list inside it, and for `count.set(10)` and then `count.increment(1)`. Such a
+write conflicts and retries like any whole-value write. Setting a different
+field, or one element of the list, changes nothing on a document that already
+exists: a `push` beside those is still mergeable. On a document the handler
+is the first to write, a `push` and any other write to that document are
+committed together as its whole value.
+
+That holds for any write to a document the handler saw as absent, a plain
+`set()` of one field included: the commit carries the whole document, and is
+refused, and the handler run again, if another user created the document in
+the meantime. The exception is a mergeable method that is the handler's only
+write to it, which lands on whatever is there.
+
+A `push` or `addUnique` onto a list that does not exist yet, or that was set
+to `undefined`, starts the list with what it adds.
+
 ## Addressing one array element: `elementById`
 
 `array.elementById(idKey)` returns a cell for the array element identified by a

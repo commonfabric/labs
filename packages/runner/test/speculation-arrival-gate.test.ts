@@ -166,7 +166,7 @@ const supersedeHarness = () => {
       actionId: "supersede",
       kind: "derivation",
     });
-    return destination.seal(tx);
+    return destination.seal(tx).settled;
   };
   const setOf = (id: string) => ({
     op: "set",
@@ -223,7 +223,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     });
     const tx = writer.edit();
     wm.withTx(tx).set({ seq });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await writer.storageManager.synced();
   };
 
@@ -256,12 +256,12 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       arg.withTx(tx).set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, arg, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -277,7 +277,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       typedArg.key("draft").withTx(tx).set("A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -384,7 +384,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
           },
         } as never,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await aliceAgain.storageManager.synced();
     const runsBeforeArrival = echoRunCount(alice);
@@ -595,12 +595,12 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       arg.withTx(tx).set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, arg, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -613,7 +613,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       typedArg.key("draft").withTx(tx).set("A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -690,7 +690,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
           },
         } as never,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await aliceAgain.storageManager.synced();
     // The arrival's seq is above W and W does not move.
@@ -786,7 +786,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       },
     } as unknown as IExtendedStorageTransaction;
     stampSpeculationRunContext(tx, { actionId: "arrival", kind: "derivation" });
-    expect((await destination.seal(tx)).ok).toBeDefined();
+    expect((await destination.seal(tx).settled).ok).toBeDefined();
     expect(destination.entryCount(space)).toBe(1);
     // The overlay installed its arrival wake beside the watermark sink.
     expect(replica.speculationArrivalObserver).toBeDefined();
@@ -807,7 +807,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(destination.entryCount(space)).toBe(0);
     confirmedSeq = 0;
-    expect((await destination.seal(tx)).ok).toBeDefined();
+    expect((await destination.seal(tx).settled).ok).toBeDefined();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(destination.entryCount(space)).toBe(1);
     const sweepsBefore = destination.arrivalSweepCount;
@@ -914,20 +914,22 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       kind: "refused",
       reason: "test: terminal before the echo",
     });
-    expect((await destination.seal(echoOf("evt-late"))).ok).toBeDefined();
+    expect((await destination.seal(echoOf("evt-late")).settled).ok)
+      .toBeDefined();
     // Dropped: nothing sealed into the replica, no entry, counted.
     expect(sealed.length).toBe(0);
     expect(destination.entryCount(space)).toBe(0);
     expect(destination.lateEchoDropCount).toBe(1);
     // Intent 2: fired and still pending — its echo registers as before.
     destination.trackIntent(space, sidecarId, "evt-fresh");
-    expect((await destination.seal(echoOf("evt-fresh"))).ok).toBeDefined();
+    expect((await destination.seal(echoOf("evt-fresh")).settled).ok)
+      .toBeDefined();
     expect(sealed.length).toBe(1);
     expect(destination.entryCount(space)).toBe(1);
     expect(destination.lateEchoDropCount).toBe(1);
     // An untracked eventId (a client cascade's minted id) with no
     // terminal parent is never jobless: it registers too.
-    expect((await destination.seal(echoOf("evt-cascade-minted"))).ok)
+    expect((await destination.seal(echoOf("evt-cascade-minted")).settled).ok)
       .toBeDefined();
     expect(sealed.length).toBe(2);
     expect(destination.entryCount(space)).toBe(2);
@@ -946,19 +948,20 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       return tx;
     };
     expect(
-      (await destination.seal(cascadeOf("evt-late-child", "evt-late")))
+      (await destination.seal(cascadeOf("evt-late-child", "evt-late")).settled)
         .ok,
     ).toBeDefined();
     expect(
       (await destination.seal(
         cascadeOf("evt-late-grandchild", "evt-late-child"),
-      )).ok,
+      ).settled).ok,
     ).toBeDefined();
     expect(sealed.length).toBe(2);
     expect(destination.entryCount(space)).toBe(2);
     expect(destination.lateEchoDropCount).toBe(3);
     expect(
-      (await destination.seal(cascadeOf("evt-fresh-child", "evt-fresh")))
+      (await destination.seal(cascadeOf("evt-fresh-child", "evt-fresh"))
+        .settled)
         .ok,
     ).toBeDefined();
     expect(sealed.length).toBe(3);
@@ -968,7 +971,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     // flushing.
     let flushed = 0;
     const dropped = echoOf("evt-late");
-    expect((await destination.seal(dropped)).ok).toBeDefined();
+    expect((await destination.seal(dropped).settled).ok).toBeDefined();
     expect(
       destination.deferSealedEffects(dropped, [{
         id: "nav:late",
@@ -1089,7 +1092,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
         actionId: "witness",
         kind: "derivation",
       });
-      expect((await destination.seal(tx)).ok).toBeDefined();
+      expect((await destination.seal(tx).settled).ok).toBeDefined();
       // The at-seal sweep is a queued microtask; let it run.
       await new Promise((resolve) => setTimeout(resolve, 0));
     };
@@ -1331,7 +1334,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       doc.withTx(tx).set({ value: 7 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.storageManager.synced();
     const view = (alice.storageManager.open(space).replica as unknown as {
@@ -1465,7 +1468,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
         actionId: "pivot",
         kind: "derivation",
       });
-      return destination.seal(tx);
+      return destination.seal(tx).settled;
     };
     expect((await sealBoth()).ok).toBeDefined();
     expect(destination.entryCount(space)).toBe(1);
@@ -1521,7 +1524,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       const tx = installer.edit();
       installedIdentical.withTx(tx).set(identicalStored);
       installedDivergent.withTx(tx).set(divergentStored);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await installer.storageManager.synced();
     }
 
@@ -1535,7 +1538,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       input.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.storageManager.synced();
     const view = (
@@ -1560,7 +1563,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
         actionId: `6304-${id}`,
         kind: "derivation",
       });
-      expect((await destination.seal(tx)).ok).toBeDefined();
+      expect((await destination.seal(tx).settled).ok).toBeDefined();
     };
     await sealCidWrite(identicalId, { v: "stored" });
     await sealCidWrite(divergentId, { v: "divergent" });

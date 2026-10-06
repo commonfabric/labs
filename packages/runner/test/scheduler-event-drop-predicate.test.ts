@@ -196,7 +196,7 @@ describe("scheduler event drop predicate", () => {
     setResultCell(eventsCell, resultCell);
     setResultCell(seenCell, resultCell);
     argumentCell.set({ value: 1 });
-    await tx.commit();
+    await tx.commit().settled;
 
     restoreTransact = rejectNextTransact(runtime, {
       name: "ConflictError",
@@ -208,9 +208,10 @@ describe("scheduler event drop predicate", () => {
     const parked = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     releaseRetry = release.resolve;
-    runtime.awaitCommitRetryReadiness = () => {
+    runtime.awaitCommitRetryReadiness = async () => {
       parked.resolve();
-      return release.promise;
+      await release.promise;
+      return [];
     };
 
     await runtime.runner.start(resultCell);

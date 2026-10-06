@@ -33,6 +33,7 @@ import {
   sourceDescriptor,
 } from "./debug_view_support.ts";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
+import { createTransactionCommitReceipt } from "../../../../runner/src/storage/commit-receipt.ts";
 
 Deno.test("debug deployment replaces a view when its pattern identity changes", async () => {
   const session = createSession({
@@ -369,15 +370,16 @@ Deno.test("debug deployment rolls back an aborted registration", async () => {
               : commitCount === 1);
           if (shouldIntercept) {
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              const result = await originalCommit();
-              if (options.abortAfterCommit) {
-                controller.abort(new Error("debug deployment cancelled"));
-              }
-              return result;
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                const result = await originalCommit().settled;
+                if (options.abortAfterCommit) {
+                  controller.abort(new Error("debug deployment cancelled"));
+                }
+                return result;
+              })());
           }
           return result;
         }, maxRetries);
@@ -534,11 +536,12 @@ Deno.test("debug deployment rejects stale registration across runtimes", async (
           if (interceptRegistrationCommit && !intercepted) {
             intercepted = true;
             const originalCommit = transaction.commit.bind(transaction);
-            transaction.commit = async () => {
-              commitEntered.resolve();
-              await releaseCommit.promise;
-              return await originalCommit();
-            };
+            transaction.commit = () =>
+              createTransactionCommitReceipt((async () => {
+                commitEntered.resolve();
+                await releaseCommit.promise;
+                return await originalCommit().settled;
+              })());
           }
           return result;
         }, maxRetries)) as typeof readerRuntime.editWithRetry;

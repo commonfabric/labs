@@ -74,7 +74,7 @@ describe("fabric import snapshot semantics", () => {
       compiled.entryIdentity,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
     return compiled;
   }
 
@@ -155,7 +155,7 @@ describe("fabric import snapshot semantics", () => {
       { value },
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
     return {
       entryIdentity: compiled.entryIdentity,

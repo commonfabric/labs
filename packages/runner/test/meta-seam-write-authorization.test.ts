@@ -241,11 +241,8 @@ describe("meta-seam-write-authorization", () => {
       // Every meta field a root write could drop sits in the one envelope
       // that write replaces, and the guard reads that envelope.
       //
-      // Naming no meta path is the part that matters beyond the read count.
-      // Canonicalization strips a leading `value`, so a read of the raw
-      // `["slug"]` member and a label on a user field `value.slug` meet at
-      // the same logical path, and a recursive read there consumes that
-      // user field's label and everything under it. A membership read of the
+      // The one read is of the document root, naming no meta path: it covers
+      // every field a root write could drop. A membership read of the
       // document root consumes the root entry alone.
 
       await withRuntime(({ tx, id }) => {
@@ -336,7 +333,7 @@ describe("meta-seam-write-authorization", () => {
             { victim: victimCell },
             attackerCell,
           );
-          await tx.commit();
+          await tx.commit().settled;
           await attacker.pull();
           await runtime.scheduler.idleWithPendingCommits();
 

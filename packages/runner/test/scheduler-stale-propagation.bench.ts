@@ -22,7 +22,7 @@ async function setNumber(
 ) {
   const tx = env.runtime.edit();
   cell.withTx(tx).send(value);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 Deno.bench(
@@ -70,7 +70,7 @@ Deno.bench(
           tx,
         );
         sink.set(0);
-        await tx.commit();
+        await tx.commit().settled;
 
         const actionA: Action = (actionTx) => {
           a.withTx(actionTx).send((source.withTx(actionTx).get() ?? 0) + 1);
@@ -181,7 +181,7 @@ Deno.bench(
           tx,
         );
         sink.set(0);
-        await tx.commit();
+        await tx.commit().settled;
 
         const leftAction: Action = (actionTx) => {
           left.withTx(actionTx).send((source.withTx(actionTx).get() ?? 0) * 2);
@@ -295,7 +295,7 @@ Deno.bench(
           tx,
         );
         sink.set(0);
-        await tx.commit();
+        await tx.commit().settled;
 
         const hubAction: Action = (actionTx) => {
           hub.withTx(actionTx).send((source.withTx(actionTx).get() ?? 0) + 1);
@@ -405,7 +405,7 @@ Deno.bench(
           tx,
         );
         sink.set(0);
-        await tx.commit();
+        await tx.commit().settled;
 
         const action: Action = (actionTx) => {
           const useB = (selector.withTx(actionTx).get() ?? 0) % 2 === 1;
@@ -445,7 +445,7 @@ Deno.bench(
           selector.withTx(updateTx).send(round);
           sourceA.withTx(updateTx).send(round + 2);
           sourceB.withTx(updateTx).send(round + 20);
-          await updateTx.commit();
+          await updateTx.commit().settled;
           await sink.pull();
           consumeNumber(sink.get());
         }
@@ -487,7 +487,7 @@ Deno.bench(
           tx,
         );
         sink.set(0);
-        await tx.commit();
+        await tx.commit().settled;
 
         const stableAction: Action = (actionTx) => {
           source.withTx(actionTx).get();

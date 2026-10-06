@@ -111,19 +111,29 @@ a pattern ran.
 To measure that, a `PatternCoverageCollector` is attached to the runtime. The
 transformer then injects a coverage "hit" call in front of each authored
 statement, and the collector receives the hits; the line numbers it records
-point back at the authored pattern source. There are two ways a runtime gets a
-collector:
+point back at the authored pattern source.
 
-- The `cf test` command builds one when the `CF_PATTERN_COVERAGE_DIR`
-  environment variable is set (or the `--pattern-coverage-dir` flag is passed)
-  and writes one `*.pattern-coverage.lcov` file per test. This is the pattern
-  unit path.
-- A runtime constructed with `RuntimeOptions.patternCoverage` set instruments
-  every compile it performs, including the content-addressed cell-cache path a
-  piece load takes. The instrumented compile is keyed as a distinct cached
-  variant, so a coverage-on runtime never serves the uninstrumented bytes an
-  ordinary compile stored. This is how the browser worker collects coverage in
-  the integration path (see below).
+A runtime constructed with `RuntimeOptions.patternCoverage` set instruments
+every compile it performs, including the content-addressed cell-cache path a
+piece load takes. The instrumented compile is keyed as a distinct cached
+variant, so a coverage-on runtime never serves the uninstrumented bytes an
+ordinary compile stored. Two things construct such a runtime:
+
+- The `cf test` command builds a collector when the `CF_PATTERN_COVERAGE_DIR`
+  environment variable is set (or the `--pattern-coverage-dir` flag is passed),
+  constructs the runtime a test runs in with it, and writes one
+  `*.pattern-coverage.lcov` file per test. A multi-user test gets a collector,
+  a runtime, and a file per participant. This is the pattern unit path.
+- The browser worker is constructed with one in the integration path (see
+  below).
+
+The variant is the runtime's setting, and not a single compile's. A compile can
+be handed a collector of its own, which instruments that compile and writes its
+closure under the instrumented variant. Everything else the runtime does with a
+compiled closure names the variant from the runtime's setting: a piece load
+does, and so does the copy of a closure into the space of a pattern
+instantiated with `inSpace()`. So a compile instrumented on its own, in a
+runtime with coverage off, writes a closure those paths do not find.
 
 These properties of this mechanism are worth keeping in mind:
 
@@ -1051,11 +1061,11 @@ operation.
 
 ## How the integration suites collect authored-pattern coverage
 
-For these suites coverage is a runtime-level capability rather than a `cf test`
-one, so the worker never reads `CF_PATTERN_COVERAGE_DIR`. In an integration test
-the pattern's event handlers run in the browser's runtime Web Worker, and that
-worker is constructed with `RuntimeOptions.patternCoverage` on — a
-`patternCoverage` flag on the worker's `InitializationData`, which the
+For these suites coverage is switched on by the harness rather than by
+`cf test`, so the worker never reads `CF_PATTERN_COVERAGE_DIR`. In an
+integration test the pattern's event handlers run in the browser's runtime Web
+Worker, and that worker is constructed with `RuntimeOptions.patternCoverage` on
+— a `patternCoverage` flag on the worker's `InitializationData`, which the
 integration harness sets when `CF_PATTERN_COVERAGE_DIR` is present. Every compile
 the worker performs is then instrumented, including the piece-load path through
 the content-addressed cell cache, whose instrumented variant is keyed apart from

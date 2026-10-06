@@ -1,4 +1,7 @@
-import type { CfcLabelView } from "@commonfabric/runtime-client";
+import type {
+  CellSubscribeOptions,
+  CfcLabelView,
+} from "@commonfabric/runtime-client";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
 
@@ -20,7 +23,7 @@ type CfcLabelQueryableValue = {
 type CfcLabelSubscribableValue = {
   subscribe(
     callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
-    options?: { includeCfcLabel?: boolean },
+    options: CellSubscribeOptions,
   ): () => void;
 };
 
@@ -326,7 +329,11 @@ export class CFCFCLabel extends BaseElement {
     // here too — no poll, no separate getCfcLabel round-trip.
     this._unsubscribeValue = value.subscribe((_value, cfcLabel) => {
       this.applyLabel(cfcLabel);
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A refused read delivers no label, and none is shown for it.
+      onRefused: () => this.applyLabel(undefined),
+    });
     return true;
   }
 

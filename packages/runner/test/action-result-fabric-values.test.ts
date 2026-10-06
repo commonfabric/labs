@@ -203,7 +203,7 @@ describe("action results use FabricValue legality", () => {
       firstResult,
     );
     writer.prepareTxForCommit(writerTx);
-    await writerTx.commit();
+    await writerTx.commit().settled;
     const cancelFirst = first.sink(() => {});
     await writer.settled();
     await writer.idle();
@@ -243,7 +243,7 @@ describe("action results use FabricValue legality", () => {
       reemittedResult,
     );
     coldReader.prepareTxForCommit(reemitTx);
-    await reemitTx.commit();
+    await reemitTx.commit().settled;
     const cancelReemitted = reemitted.sink(() => {});
     await coldReader.settled();
     await coldReader.idle();

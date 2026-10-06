@@ -45,7 +45,7 @@ describe("effectiveObservationCeiling()", () => {
     tx.writeValueOrThrow(cell.getAsNormalizedFullLink(), {
       ceiling: [atom()],
     } as FabricValue);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const read = (cell.get() as { ceiling: CfcConfClause[] }).ceiling;
 
     // A sink the deployment names no ceiling for, so the pattern's bound is

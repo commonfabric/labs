@@ -69,7 +69,7 @@ export default pattern<{ shortName: string }>(({ shortName }) => ({
     const create = author.edit();
     author.run(create, compiled, { shortName: "2" }, child);
     author.prepareTxForCommit(create);
-    expect((await create.commit()).error).toBeUndefined();
+    expect((await create.commit().settled).error).toBeUndefined();
     await child.pull();
     await author.storageManager.synced();
     const argumentLink = getMetaLink(child, "argument")!;
@@ -128,7 +128,7 @@ export default pattern<{ shortName: string }>(({ shortName }) => ({
         if (context !== undefined) stampSpeculationRunContext(tx, context);
         reader.run(wrap(tx), readerPattern, { shortName: "3" }, reached);
         reader.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         expect(deferred).toBe(true);
       },
       async finish() {
@@ -280,7 +280,7 @@ export default pattern<{ shortName: string }>(({ shortName }) => ({
     });
     fixture.argument.withTx(echo).set({ shortName: "4" });
     fixture.reader.prepareTxForCommit(echo);
-    expect((await echo.commit()).error).toBeUndefined();
+    expect((await echo.commit().settled).error).toBeUndefined();
     expect(fixture.argument.get()).toEqual({ shortName: "4" });
 
     await fixture.start(
@@ -311,7 +311,7 @@ export default pattern<{ shortName: string }>(({ shortName }) => ({
     });
     fixture.argument.withTx(echo).set({ shortName: "4" });
     fixture.reader.prepareTxForCommit(echo);
-    expect((await echo.commit()).error).toBeUndefined();
+    expect((await echo.commit().settled).error).toBeUndefined();
     expect(fixture.argument.get()).toEqual({ shortName: "4" });
 
     await fixture.start();

@@ -68,7 +68,7 @@ describe("Query", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     //store.clear();
   });

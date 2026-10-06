@@ -125,7 +125,7 @@ describe("sqlite-served-instances", () => {
       heldWave = wave;
       try {
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         wave.abandon("fixture withdrawal");
         await wave.settled();
       } finally {
@@ -163,7 +163,7 @@ describe("sqlite-served-instances", () => {
 
   async function commit(tx: IExtendedStorageTransaction) {
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.settled();
   }
 
@@ -530,7 +530,7 @@ describe("sqlite-served-instances", () => {
           undefined,
           seed,
         );
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const builtin = sqliteQuery(
           input,
           (tx, result: Cell<QueryState>) =>
@@ -559,9 +559,9 @@ describe("sqlite-served-instances", () => {
         const first = stage();
         const change = off.edit();
         input.withTx(change).key("db").key("scope").set("user");
-        expect((await change.commit()).error).toBeUndefined();
+        expect((await change.commit().settled).error).toBeUndefined();
         const next = stage();
-        expect((await next.tx.commit()).error).toBeUndefined();
+        expect((await next.tx.commit().settled).error).toBeUndefined();
         expect(parent.get()?.selected).toBe("user");
         first.effects[0].abandon?.(new Error("old OFF request refused"));
         await off.settled();

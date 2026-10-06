@@ -156,7 +156,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         byIdentityHits: 0,
       });
       entryIdentity = rtA.patternManager.getArtifactEntryRef(cold)!.identity;
-      await txA.commit();
+      await txA.commit().settled;
     } finally {
       await rtA.dispose();
     }
@@ -177,7 +177,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         misses: 0,
         byIdentityHits: 0,
       });
-      await txB.commit();
+      await txB.commit().settled;
 
       // The closure was written back into space B, so a by-identity reload from
       // B works (the byte-cache hit did not skip per-space persistence).
@@ -204,7 +204,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         txB,
       );
       const result = rtB.run(txB, warm, { value: 7 }, resultCell);
-      await txB.commit();
+      await txB.commit().settled;
       await result.pull();
       expect(result.getAsQueryResult()).toEqual({ result: 49 });
     } finally {
@@ -232,7 +232,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
           space,
           tx,
         });
-        await tx.commit();
+        await tx.commit().settled;
         return rt.patternManager.getArtifactEntryRef(pattern)!.identity;
       } catch (error) {
         tx.abort?.(error);
@@ -267,7 +267,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         setCfcImplementationIdentity(damageTx, previousIdentity);
       }
       damageTx.prepareCfc();
-      expect((await damageTx.commit()).error).toBeUndefined();
+      expect((await damageTx.commit().settled).error).toBeUndefined();
 
       const repairedIdentity = await compile();
       expect(repairedIdentity).toBe(entryIdentity);
@@ -327,7 +327,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
       const tx = rt.edit();
       try {
         await rt.patternManager.compilePattern(PROGRAM, { space, tx });
-        await tx.commit();
+        await tx.commit().settled;
       } catch (error) {
         tx.abort?.(error);
         throw error;
@@ -364,7 +364,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         tx: txA,
       });
       await rtA.patternManager.flushCompileCacheWrites();
-      await txA.commit();
+      await txA.commit().settled;
     } finally {
       await rtA.dispose();
     }
@@ -382,7 +382,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         misses: 1,
         byIdentityHits: 0,
       });
-      await txB.commit();
+      await txB.commit().settled;
     } finally {
       await rtB.dispose();
     }

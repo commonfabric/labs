@@ -738,10 +738,14 @@ export const agentResultCommitFailure = (
 
 /** Commits `tx`, throwing the writer's failure for `what` when it does not land. */
 const commitOrThrow = async (
-  tx: { commit(): Promise<{ error?: { name?: string; message?: string } }> },
+  tx: {
+    commit(): {
+      settled: Promise<{ error?: { name?: string; message?: string } }>;
+    };
+  },
   what: string,
 ): Promise<void> => {
-  const outcome = await tx.commit();
+  const outcome = await tx.commit().settled;
   if (outcome.error !== undefined) {
     throw agentResultCommitFailure(outcome.error, what);
   }

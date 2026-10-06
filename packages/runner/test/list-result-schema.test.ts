@@ -116,7 +116,7 @@ describe("listResultSchema", () => {
       resultCell,
     );
 
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
 
     return [mappedRef, filteredRef, flattenedRef].map((ref) =>

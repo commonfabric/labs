@@ -42,7 +42,7 @@ describe("builtin-child-pattern-meta", () => {
   afterEach(async () => {
     if (tx.status().status === "ready") {
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
     }
     await runtime?.dispose();
     await storageManager?.close();
@@ -76,7 +76,7 @@ describe("builtin-child-pattern-meta", () => {
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
     await runtime.idle();

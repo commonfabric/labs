@@ -26,6 +26,7 @@ import { writeMountState } from "../lib/fuse.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
 import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 function makeSpec(
   callableKind: "handler" | "tool",
@@ -3801,7 +3802,7 @@ function createExecHarness(options: {
       edit: () => ({
         commit: () => {
           tracker.events.push("commit");
-          return Promise.resolve();
+          return createTransactionCommitReceipt(Promise.resolve());
         },
         // The real transaction reports both, and the write receipt reads
         // them rather than treating a resolved `commit()` as proof of a

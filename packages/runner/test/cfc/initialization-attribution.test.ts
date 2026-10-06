@@ -99,7 +99,7 @@ describe("initialization attribution", () => {
       const result = runtime.getCell(space, `${name}-result`, undefined, tx);
       result.set({ claim: seed });
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const inspect = runtime.edit();
       expect(inspect.readValueOrThrow(seed.getAsNormalizedFullLink())).toBe(
         TEXT,
@@ -413,7 +413,7 @@ describe("initialization attribution", () => {
       await at.sync();
       const tx = runtime.edit();
       (at.withTx(tx) as Cell<unknown>).send(event);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await runtime.storageManager.synced();
       await runtime.idle();

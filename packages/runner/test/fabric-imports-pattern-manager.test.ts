@@ -89,7 +89,7 @@ describe("PatternManager fabric imports", () => {
     }>(space, cause, undefined, tx);
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, pattern as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
     return result.getAsQueryResult();
   }
@@ -113,7 +113,7 @@ describe("PatternManager fabric imports", () => {
       );
       const importerIdentity = pm1.getArtifactEntryRef(importer)!.identity;
       await pm1.flushCompileCacheWrites();
-      await tx1.commit();
+      await tx1.commit().settled;
       await rt1.storageManager.synced();
 
       const loaded = await rt2.patternManager.loadPatternByIdentity(
@@ -166,7 +166,7 @@ describe("PatternManager fabric imports", () => {
         dependency.entryIdentity,
         depTx,
       );
-      await depTx.commit();
+      await depTx.commit().settled;
 
       const importer = await engine.compileToRecordGraph(
         importerProgram(`cf:pattern:${dependency.entryIdentity}`),
@@ -180,7 +180,7 @@ describe("PatternManager fabric imports", () => {
         importer.entryIdentity,
         importerTx,
       );
-      await importerTx.commit();
+      await importerTx.commit().settled;
 
       const loaded = await runtime.patternManager.loadPatternByIdentity(
         importer.entryIdentity,
@@ -239,7 +239,7 @@ describe("PatternManager fabric imports", () => {
         dependency.entryIdentity,
         depTx,
       );
-      await depTx.commit();
+      await depTx.commit().settled;
 
       const importer = await runtime.patternManager.compilePattern(
         importerProgram(

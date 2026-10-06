@@ -386,7 +386,7 @@ describe("prompt-loop cross-agent address handles", () => {
           ifc: { confidentiality: policy.label },
         }, tx);
         secret.set("payload that must never reach the model");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const table = await parentTableOf(runId, [
           createLLMFriendlyLink(
             secret.getAsNormalizedFullLink(),

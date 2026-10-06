@@ -222,7 +222,7 @@ describe("eventKey()", () => {
     const runs: ProbeRun[] = [];
     const tx = runtime.edit();
     const piece = buildProbePiece(runtime, tx, label, runs);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     return { piece, runs };
   };
@@ -385,7 +385,7 @@ describe("eventKey()", () => {
       for (let i = 0; i < 2; i++) {
         const tx = runtime.edit();
         handler!(tx, {});
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
 
       expect(runs.length).toBe(2);
@@ -483,12 +483,12 @@ describe("eventKey()", () => {
       {
         const tx = runtime.edit();
         argument.withTx(tx).set({ seen: "no event yet" });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       {
         const tx = runtime.edit();
         runtime.run(tx, compiled, argument, result);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       const cancel = result.sink(() => {});
       try {

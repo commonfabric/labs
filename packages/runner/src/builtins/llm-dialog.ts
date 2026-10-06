@@ -3514,7 +3514,7 @@ export function llmDialog(
         turn.internal.withTx(tx).key("requestId").set("");
       }
       runtime.prepareTxForCommit(tx);
-      return tx.commit().then((outcome) => {
+      return tx.commit().settled.then((outcome) => {
         if (outcome.error) {
           logger.warn(
             "dialog-claim-cleanup-failed",

@@ -89,7 +89,7 @@ describe("computed-cell id end-to-end (default-on instantiation)", () => {
     );
     const result = runtime.run(tx, doubler, { x: 2 }, resultCell);
     runtime.prepareTxForCommit(tx);
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     expect(committed.error).toBeUndefined();
     await runtime.idle();
     await runtime.storageManager.synced();
@@ -131,7 +131,7 @@ describe("computed-cell id end-to-end (default-on instantiation)", () => {
     // Seed the input and let it reach the server.
     const seedTx = runtime.edit();
     input.withTx(seedTx).set(1);
-    const seedResult = await seedTx.commit();
+    const seedResult = await seedTx.commit().settled;
     expect(seedResult.error).toBeUndefined();
     await runtime.storageManager.synced();
 
@@ -156,7 +156,7 @@ describe("computed-cell id end-to-end (default-on instantiation)", () => {
     // dropped: strict conflict semantics apply until the drop policy's own
     // flag exists and is enabled.
     out.withTx(computeTx).set(seen * 2);
-    const result = await computeTx.commit();
+    const result = await computeTx.commit().settled;
     expect(result.error).toBeDefined();
     expect((result.error as { name?: string }).name).toBe("ConflictError");
   });

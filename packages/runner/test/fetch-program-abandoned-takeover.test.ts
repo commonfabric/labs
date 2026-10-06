@@ -145,7 +145,7 @@ describe("a refused fetchProgram takeover", () => {
     await inputs.sync();
     const result = runtime.run(tx, testPattern, inputs, resultCell);
     runtime.prepareTxForCommit(tx);
-    return { result, committed: tx.commit() };
+    return { result, committed: tx.commit().settled };
   }
 
   it("leaves the running replica's claim alone", async () => {
@@ -165,7 +165,7 @@ describe("a refused fetchProgram takeover", () => {
     );
     seedInputs.set({ url: PROGRAM_URL });
     holder.prepareTxForCommit(seedTx);
-    const seeded = await seedTx.commit();
+    const seeded = await seedTx.commit().settled;
     if (seeded.error) throw seeded.error;
 
     const holderRun = await runOn(holder);
@@ -216,7 +216,7 @@ describe("a refused fetchProgram takeover", () => {
     // deno-lint-ignore no-explicit-any
     takerInputs.withTx(caveatTx).key("url").set(hostileUrl as any);
     taker.prepareTxForCommit(caveatTx);
-    const caveated = await caveatTx.commit();
+    const caveated = await caveatTx.commit().settled;
     if (caveated.error) throw caveated.error;
 
     await takerRun.result.pull();

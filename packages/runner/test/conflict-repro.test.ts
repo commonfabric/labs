@@ -58,7 +58,7 @@ describe("Conflict Reproduction", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -110,7 +110,7 @@ describe("Conflict Reproduction", () => {
     const result = runtime.run(tx, conflictRepro, {
       items: [{ id: "test" }],
     }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
 
     await runtime.idle();
 
@@ -181,7 +181,7 @@ describe("Conflict Reproduction", () => {
     const result = runtime.run(tx, conflictReproNoLift, {
       items: [{ id: "test" }],
     }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
 
     await runtime.idle();
 

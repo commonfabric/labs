@@ -14,12 +14,10 @@
 import {
   action,
   assert,
-  computed,
   equals,
   pattern,
   TESTS,
   UI,
-  wish,
   Writable,
 } from "commonfabric";
 import {
@@ -129,32 +127,33 @@ const COLLIDING_VOTE_COLORS: VoteColor[] = [
   "green",
 ];
 
+/**
+ * The instant every poll here reads as now: noon on a fixed local day, twelve
+ * hours from either boundary. The polls read the day off the local calendar,
+ * so an instant fixed in UTC would sit on a boundary under some `TZ`, and the
+ * wall clock would put the day boundary inside a run that crosses midnight.
+ */
+const NOW = new Date(2026, 0, 1, 12).getTime();
+
+/** The poll's clock override, set to {@link NOW}. */
+const CLOCK = { at: NOW };
+
+/** The day every poll here shows, as `dayKeyOf` writes it. */
+const TODAY = dayKeyOf(NOW);
+
 export default pattern(() => {
   // Identity is a profile cell; the test claims the viewer's through the
   // `overrideViewer` seam the `#profile` wish fills in production.
   const alex = Writable.of<LunchProfile>({ name: "Alex" });
-  const poll = CozyPoll({});
-
-  // The clock the assertions read: the interval `#now/300` wish, the same
-  // shared ticking clock the pattern under test runs on (the pattern body
-  // cannot read the ambient clock, and the bare one-shot `#now` would freeze
-  // at first capture, which is exactly what the poll must not do). It reads
-  // as unresolved (undefined / "") until the wish lands; the dependent
-  // assertions guard that window and the harness re-evaluates them once it
-  // does.
-  const nowCell = wish<number>({ query: "#now/300" });
-  const todayKey = computed(() =>
-    nowCell.result == null ? "" : dayKeyOf(nowCell.result)
-  );
+  const poll = CozyPoll({ clock: CLOCK });
 
   // Seed cells for the two polls whose scenarios start with data in them.
   // Plain cells, filled once by `action_seed_fixtures` below, never a
   // `computed()`: an argument is a link, so a derived one would hold the
   // poll's durable state in the derivation's own output cell, and the next
   // run of that derivation replaces every vote the poll has cast with the
-  // seed again. `#now/300` advances on wall-clock five-minute boundaries, so
-  // a seed derived from it re-runs partway through the run. See
-  // docs/common/workflows/pattern-testing.md, "Seeding Stored State".
+  // seed again. See docs/common/workflows/pattern-testing.md, "Seeding Stored
+  // State".
   const stan = Writable.of<LunchProfile>({ name: "Stan" });
   const staleVotes = Writable.of<Vote[]>([]);
   const collidingUsers = Writable.of<User[]>([]);
@@ -164,6 +163,7 @@ export default pattern(() => {
   // "yesterday" (castVote always stamps "now", so staleness must be seeded).
   // Stan claims his identity through the seam before the join step below.
   const stalePoll = CozyPoll({
+    clock: CLOCK,
     options: [SEEDED_OPTION],
     votes: staleVotes,
   });
@@ -180,6 +180,7 @@ export default pattern(() => {
     voteType: COLLIDING_VOTE_COLORS[index] ?? "green",
   }));
   const initialsPoll = CozyPoll({
+    clock: CLOCK,
     options: [COLLIDING_INITIAL_OPTION],
     users: collidingUsers,
     votes: collidingVotes,
@@ -192,6 +193,7 @@ export default pattern(() => {
   const departedUsers = Writable.of<User[]>([]);
   const departedVotes = Writable.of<Vote[]>([]);
   const departedPoll = CozyPoll({
+    clock: CLOCK,
     options: [SEEDED_OPTION],
     users: departedUsers,
     votes: departedVotes,
@@ -207,6 +209,7 @@ export default pattern(() => {
   const twinUsers = Writable.of<User[]>([]);
   const twinVotes = Writable.of<Vote[]>([]);
   const twinPoll = CozyPoll({
+    clock: CLOCK,
     options: [SEEDED_OPTION],
     users: twinUsers,
     votes: twinVotes,
@@ -218,7 +221,7 @@ export default pattern(() => {
   // an absent cell-typed field reads as a truthy empty handle at `asCell`
   // seams. The join must reject loudly and store NOTHING; the display name
   // resolving is fine (display is not identity).
-  const ghostPoll = CozyPoll({});
+  const ghostPoll = CozyPoll({ clock: CLOCK });
 
   // Profile-first join + the header strip/viewer-chip rendering from stored
   // profile cells are verified at the browser/integration tier (the
@@ -232,14 +235,10 @@ export default pattern(() => {
 
   // === Actions ===
 
-  // Fill every seed cell, once, before anything else runs. A handler reads a
-  // timestamp off the clock and writes it as a fixed number, which is how the
-  // seed gets a date without the polls' state living in a derivation. An
-  // unresolved clock writes nothing, and `assert_stale_vote_hidden` reads the
-  // seeded vote back, so a seed that never landed fails there.
+  // Fill every seed cell, once, before anything else runs, with votes stamped
+  // at the polls' clock.
   const action_seed_fixtures = action(() => {
-    const now = nowCell.result;
-    if (now === undefined) return;
+    const now = NOW;
     staleVotes.set([{
       voter: stan,
       optionId: SEEDED_OPTION.id,
@@ -620,12 +619,10 @@ export default pattern(() => {
   // === Current-day vote filter ===
 
   // The header renders the current date, and `todayDate` exposes the local
-  // day key the votes are filtered to. The `todayKey !== ""` guard holds the
-  // assertion false until this pattern's `#now` wish resolves.
+  // day key the votes are filtered to.
   const assert_today_header_renders = assert(() =>
-    todayKey !== "" &&
     findNodeByProp(poll[UI], "data-poll-today", true) !== undefined &&
-    poll.todayDate === todayKey
+    poll.todayDate === TODAY
   );
 
   const assert_colliding_initials_are_disambiguated = assert(() => {
@@ -686,8 +683,7 @@ export default pattern(() => {
       "data-vote-swatch-name",
       "e\u0301Bob",
     );
-    return todayKey !== "" &&
-      initialsPoll.todayDate === todayKey &&
+    return initialsPoll.todayDate === TODAY &&
       hasExactText(daffodil, "DF") &&
       hasExactText(dragonfly, "DR") &&
       hasExactText(dan, "DAN1") &&
@@ -755,16 +751,13 @@ export default pattern(() => {
   // the count, and the rendered swatches. The seeded `castAt` is read back and
   // dated earlier than today (day keys are "YYYY-MM-DD", so they compare as
   // dates), so the vote is hidden for the reason the filter is meant to hide
-  // it. Guarded on both `#now` reads — this pattern's (`todayKey`) and the
-  // poll's own (via `todayDate`) — so it passes only once the day filter is
-  // live.
+  // it.
   const assert_stale_vote_hidden = assert(() => {
     const seeded = stalePoll.votes[0];
-    return todayKey !== "" &&
-      stalePoll.todayDate === todayKey &&
+    return stalePoll.todayDate === TODAY &&
       stalePoll.votes.length === 1 &&
       typeof seeded?.castAt === "number" &&
-      dayKeyOf(seeded.castAt) < todayKey &&
+      dayKeyOf(seeded.castAt) < TODAY &&
       stalePoll.todaysVotes.length === 0 &&
       stalePoll.todayVoteCount === 0 &&
       findNodeByProp(stalePoll[UI], "data-vote-swatch-name", "Stan") ===
@@ -817,12 +810,11 @@ export default pattern(() => {
   // visible again (list, count, and swatch).
   const assert_stale_recast_visible = assert(() => {
     const v = stalePoll.todaysVotes[0];
-    return todayKey !== "" &&
-      stalePoll.todaysVotes.length === 1 &&
+    return stalePoll.todaysVotes.length === 1 &&
       equals(v?.voter, stan) &&
       v?.voteType === "green" &&
       typeof v?.castAt === "number" &&
-      dayKeyOf(v.castAt) === todayKey &&
+      dayKeyOf(v.castAt) === TODAY &&
       stalePoll.todayVoteCount === 1 &&
       findNodeByProp(stalePoll[UI], "data-vote-swatch-name", "Stan") !==
         undefined;

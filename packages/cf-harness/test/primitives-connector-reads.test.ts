@@ -240,7 +240,7 @@ describe("connector-reading primitives", () => {
         params: write.params,
       });
     }
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     return createLLMFriendlyLink(handle.getAsNormalizedFullLink(), space);
   }

@@ -77,7 +77,7 @@ try {
     imports: [],
   });
   runtime.prepareTxForCommit(seedTx);
-  const seedCommit = await seedTx.commit();
+  const seedCommit = await seedTx.commit().settled;
   if (seedCommit.error !== undefined) throw seedCommit.error;
 
   const expected = getPieceSourceSnapshot(piece);
@@ -110,7 +110,7 @@ try {
     rawMetaWriteAuthorization,
   );
   runtime.prepareTxForCommit(transitionTx);
-  const transitionCommit = await transitionTx.commit();
+  const transitionCommit = await transitionTx.commit().settled;
   if (transitionCommit.error !== undefined) throw transitionCommit.error;
 
   outcome = {

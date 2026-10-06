@@ -346,9 +346,17 @@ export class CFCheckbox extends BaseElement {
         return;
       }
 
-      // Toggle checked state
-      const oldChecked = this.getChecked();
-      this.setChecked(!oldChecked);
+      // Toggle checked state. Outside a form, the cell controller computes
+      // it from what the cell holds, asking the worker first where it has
+      // read nothing; in a form, the toggle is buffered until the form
+      // submits.
+      if (this._formField.inFormContext) {
+        this.setChecked(!this.getChecked());
+      } else {
+        void this._checkedCellController.toggle().then(() =>
+          this._updateAriaAttributes()
+        );
+      }
 
       // Clear indeterminate state when clicked
       if (this.indeterminate) {

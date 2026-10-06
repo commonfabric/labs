@@ -192,7 +192,7 @@ describe("CFC label document delivery", () => {
         value: { secret: "resealed" },
         cfc: referencing(secondHash),
       });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       await writerManager.synced();
       await relabeled;
       // The arrival kicked a pull of the label document; `synced()` waits

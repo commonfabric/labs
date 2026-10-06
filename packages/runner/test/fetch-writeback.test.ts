@@ -40,6 +40,7 @@ import {
   tryWriteResult,
 } from "../src/builtins/fetch-utils.ts";
 import type { Schema } from "../src/builder/types.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test fetch writeback");
 const space = signer.did();
@@ -146,7 +147,9 @@ describe("fetch builtins: a completion writeback the storage layer refuses", () 
           matched++;
           if (matched <= limit) {
             opened.abort(REFUSAL);
-            return Promise.resolve({ error: REFUSAL });
+            return createTransactionCommitReceipt(
+              Promise.resolve({ error: REFUSAL }),
+            );
           }
         }
         return (commit as (...args: unknown[]) => unknown)(...commitArgs);
@@ -185,7 +188,7 @@ describe("fetch builtins: a completion writeback the storage layer refuses", () 
         lastActivity: 1,
         inputHash: "",
       });
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       return { inputsCell, internal, result };
     }

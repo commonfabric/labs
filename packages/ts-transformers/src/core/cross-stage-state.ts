@@ -271,11 +271,13 @@ export class CrossStageState {
   }
 
   /**
-   * Records that `node`, a print of a value's type, stands for the value
-   * `declared` spells. A print spells none of what only a declaration does,
-   * such as a `typeof` binding in a label, so a node built from part of the
-   * print narrows the declared value (`carryNarrowing()` in
-   * `transformers/type-shrinking.ts`). The print itself is read by its type.
+   * Records that `node` stands for the value `declared` spells. A print of the
+   * value's type spells none of what only a declaration does, such as a
+   * `typeof` binding in a label, so where `node` is such a print, or a later
+   * pass rebuilds it into one, a node built from part of the print narrows
+   * the declared value (`carryNarrowing()` in
+   * `transformers/type-shrinking.ts`). Schema generation reads `node`
+   * itself as it would without the record.
    */
   recordDeclaredValue(
     node: ts.TypeNode,

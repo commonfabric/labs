@@ -132,7 +132,7 @@ describe("unread-type-diagnostics", () => {
     it("logs an error when a CFC recursion cannot be read and no callback is supplied", async () => {
       const { type, checker } = await getTypeFromCode(
         `
-        type Confidential<T, L> = T & { readonly __ct_cfc__?: { confidentiality: L } };
+        type Confidential<T, L> = T & { readonly __ct_cfc__?: { readonly meta?: { confidentiality: L }; readonly of?: T } };
         type Nest<T> = Confidential<{ value: T; next?: Nest<T[]> }, readonly ["secret"]>;
         interface Holder { value: Nest<string> }
       `,
@@ -219,7 +219,7 @@ describe("unread-type-diagnostics", () => {
       // and its declared type leaves them unbound. `Projection` written
       // directly is reported the same way.
       const source = `
-          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
           type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
           type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
           type Ref<Root, Path extends readonly unknown[]> = {

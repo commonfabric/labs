@@ -76,7 +76,7 @@ describe("fetch-json mutex mechanism: core mutex behavior", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -270,7 +270,7 @@ describe("fetch-json mutex mechanism: core mutex behavior", () => {
     inputs.set({ url: "/api/mutated", mode: "json" });
     pending.set(false);
     internal.set({ requestId: "", lastActivity: 0, inputHash: "" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const approvedSnapshot = { url: "/api/approved", mode: "json" as const };

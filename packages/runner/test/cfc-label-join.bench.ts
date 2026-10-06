@@ -103,7 +103,7 @@ const seedLabeledSource = async (entries: number): Promise<Fixture> => {
       },
     },
   });
-  const committed = await seed.commit();
+  const committed = await seed.commit().settled;
   if (committed.error) throw committed.error;
   return { runtime, storageManager, sourceName };
 };

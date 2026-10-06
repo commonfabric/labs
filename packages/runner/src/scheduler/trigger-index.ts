@@ -2,7 +2,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { Cancel } from "../cancel.ts";
 import {
   addressesToPathByEntity,
-  determineTriggeredActions,
+  determineActionTriggers,
   nonRecursiveReadMayOverlapWrite,
   type SortedAndCompactPaths,
 } from "../reactive-dependencies.ts";
@@ -10,6 +10,7 @@ import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type {
   IMemoryChange,
   IMemorySpaceAddress,
+  MemoryAddressPathComponent,
 } from "../storage/interface.ts";
 import { EntityTriggers } from "./entity-triggers.ts";
 import { entityKey } from "./keys.ts";
@@ -45,6 +46,9 @@ export interface TriggerIndexState {
     entity: SpaceScopeAndURI;
     hasMatchingTriggerPaths: boolean;
     triggeredActions: Action[];
+
+    /** For each triggered action, a read path of its whose value changed. */
+    triggerPaths: ReadonlyMap<Action, readonly MemoryAddressPathComponent[]>;
   };
 }
 
@@ -178,6 +182,9 @@ export class SchedulerTriggerSubscriptions implements TriggerSubscriptionState {
     entity: SpaceScopeAndURI;
     hasMatchingTriggerPaths: boolean;
     triggeredActions: Action[];
+
+    /** For each triggered action, a read path of its whose value changed. */
+    triggerPaths: ReadonlyMap<Action, readonly MemoryAddressPathComponent[]>;
   } {
     return this.#state.triggerIndex.collectTriggeredActionsForChange(
       space,
@@ -292,6 +299,9 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
     entity: SpaceScopeAndURI;
     hasMatchingTriggerPaths: boolean;
     triggeredActions: Action[];
+
+    /** For each triggered action, a read path of its whose value changed. */
+    triggerPaths: ReadonlyMap<Action, readonly MemoryAddressPathComponent[]>;
   } {
     // The change notification names the scope by NAME (the storage layer's
     // per-session wire shape); this runtime's own identity maps it to the
@@ -309,27 +319,31 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
         entity,
         hasMatchingTriggerPaths: false,
         triggeredActions: [],
+        triggerPaths: new Map(),
       };
     }
 
     // The index hands over the reads this change can reach and no others,
     // which is the same set the overlap test inside would keep.
-    const triggeredActionSet = new Set<Action>();
+    const triggerPaths = new Map<
+      Action,
+      readonly MemoryAddressPathComponent[]
+    >();
     if (triggers) {
       for (
-        const action of determineTriggeredActions(
+        const { action, path } of determineActionTriggers(
           triggers.matching(change.address.path),
           change.before,
           change.after,
           change.address.path,
         )
       ) {
-        triggeredActionSet.add(action);
+        if (!triggerPaths.has(action)) triggerPaths.set(action, path);
       }
     }
     if (nonRecursiveTriggers) {
       for (
-        const action of determineTriggeredActions(
+        const { action, path } of determineActionTriggers(
           nonRecursiveTriggers.matching(change.address.path),
           change.before,
           change.after,
@@ -337,14 +351,15 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
           { nonRecursive: true },
         )
       ) {
-        triggeredActionSet.add(action);
+        if (!triggerPaths.has(action)) triggerPaths.set(action, path);
       }
     }
 
     return {
       entity,
       hasMatchingTriggerPaths: true,
-      triggeredActions: [...triggeredActionSet],
+      triggeredActions: [...triggerPaths.keys()],
+      triggerPaths,
     };
   }
 }

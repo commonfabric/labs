@@ -25,7 +25,7 @@ Deno.test("explicit undefined object properties are preserved", async () => {
     );
 
     cell.set({ a: undefined, b: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const value = cell.get() as Record<string, unknown>;
@@ -33,7 +33,7 @@ Deno.test("explicit undefined object properties are preserved", async () => {
     assertEquals(value.a, undefined);
     assertEquals(value.b, 2);
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }
@@ -57,18 +57,18 @@ Deno.test("removed keys are deleted, not left as undefined", async () => {
     );
 
     cell.set({ a: 1, b: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     cell.withTx(tx).set({ b: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const value = cell.get() as Record<string, unknown>;
     assertEquals(Object.hasOwn(value, "a"), false);
     assertEquals(Object.keys(value), ["b"]);
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }
@@ -92,18 +92,18 @@ Deno.test("overwriting a value with undefined keeps the key present", async () =
     );
 
     cell.set({ a: 1, b: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     cell.withTx(tx).set({ a: undefined, b: 2 });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const value = cell.get() as Record<string, unknown>;
     assertEquals(Object.hasOwn(value, "a"), true);
     assertEquals(value.a, undefined);
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }
@@ -127,11 +127,11 @@ Deno.test("array elements set to undefined stay present-but-undefined", async ()
     );
 
     cell.set({ list: [1, 2, 3] });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     cell.withTx(tx).set({ list: [1, undefined, 3] });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const value = cell.get() as { list: (number | undefined)[] };
@@ -141,7 +141,7 @@ Deno.test("array elements set to undefined stay present-but-undefined", async ()
     assertEquals(value.list[0], 1);
     assertEquals(value.list[2], 3);
   } finally {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   }

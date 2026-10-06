@@ -20,7 +20,7 @@ export interface SingleUIOutput {
 
 /**
  * A piece that exports ONLY [UI] — no [CHIP_UI]/[TILE_UI]. Used to demonstrate
- * the cf-render platform defaults (chip → cf-cell-link by [NAME]; tile → the
+ * the cf-render platform defaults (chip → a chip showing [NAME]; tile → the
  * full [UI] scaled to ~0.5).
  */
 const SingleUIPiece = pattern<SingleUIInput, SingleUIOutput>(({ label }) => ({
@@ -118,13 +118,13 @@ export default pattern<RenderStoryInput, RenderStoryOutput>(() => {
         </div>
         <div style={noteStyle}>
           A piece that exports only [UI] still renders at every variant via the
-          per-variant platform default: chip falls over to a cf-cell-link (by
-          [NAME]); tile falls over to the full [UI] scaled to ~0.5.
+          per-variant platform default: chip falls over to a chip showing
+          [NAME]; tile falls over to the full [UI] scaled to ~0.5.
         </div>
 
         <div style={{ display: "grid", gap: "16px" }}>
           <div>
-            <div style={labelStyle}>variant="chip" → cf-cell-link default</div>
+            <div style={labelStyle}>variant="chip" → chip default</div>
             <div style={cellStyle}>
               <cf-render $cell={single} variant="chip" />
             </div>

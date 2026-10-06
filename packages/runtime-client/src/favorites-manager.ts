@@ -15,7 +15,7 @@ import {
 } from "@commonfabric/home-schemas";
 import { DID } from "@commonfabric/identity";
 
-import { CellHandle } from "./cell-handle.ts";
+import { CellHandle, CellReadRefusedError } from "./cell-handle.ts";
 import type { CellRef } from "./protocol/types.ts";
 import { RuntimeClient } from "./runtime-client.ts";
 import { tagsFromSchema } from "./schema-tags.ts";
@@ -165,17 +165,17 @@ export class FavoritesManager {
           if (isDisposed) return;
           callback(favoritesValue ?? []);
         },
+        {
+          // A refused read is reported as the failure it is, and the list
+          // shown is emptied rather than left holding what is now withheld.
+          onRefused: (refusal) => {
+            if (!isDisposed) fail(new CellReadRefusedError(refusal));
+          },
+        },
       );
     };
 
-    // Start the subscription process
-    setupSubscription().catch((error) => {
-      // A subscriber tearing down or the runtime being disposed while
-      // setup is in flight is an expected race, not a failure.
-      if (isDisposed || this.#rt.signal.aborted) return;
-      const err = error instanceof Error
-        ? error
-        : new Error(describeFailure(error));
+    const fail = (err: Error) => {
       if (onError) {
         onError(err);
       } else {
@@ -185,6 +185,14 @@ export class FavoritesManager {
         );
       }
       callback([]);
+    };
+
+    // Start the subscription process
+    setupSubscription().catch((error) => {
+      // A subscriber tearing down or the runtime being disposed while
+      // setup is in flight is an expected race, not a failure.
+      if (isDisposed || this.#rt.signal.aborted) return;
+      fail(error instanceof Error ? error : new Error(describeFailure(error)));
     });
 
     // Return cleanup function

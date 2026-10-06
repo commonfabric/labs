@@ -112,7 +112,7 @@ const startedPiece = async (
     tx,
   );
   const running = runtime.run(tx, pattern, { supplied: "first" }, cell);
-  await tx.commit();
+  await tx.commit().settled;
   await running.pull();
   await runtime.idle();
 
@@ -159,7 +159,7 @@ describe("piece argument replay", () => {
 
       const tx = runtime.edit();
       runtime.run(tx, pattern, { supplied: "second" }, cell);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
       await cell.pull();
 

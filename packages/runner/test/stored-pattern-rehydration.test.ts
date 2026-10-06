@@ -67,13 +67,13 @@ describe("stored pattern-value rehydration", () => {
       resultCell,
     );
     runtime!.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime!.edit();
     const cancelSink = result.sink(() => {});
     await runtime!.idle();
     const vs = await result.key("vs").pull();
     cancelSink();
-    await tx.commit();
+    await tx.commit().settled;
     return vs;
   };
 
@@ -128,7 +128,7 @@ describe("stored pattern-value rehydration", () => {
         space,
         tx: tx1,
       });
-      await tx1.commit();
+      await tx1.commit().settled;
       await rt1.storageManager.synced();
 
       // Session 2 never evaluates the module; the stored refs-only value's

@@ -242,16 +242,63 @@ visibleProjects.map((project, projectIndex) => {
     return ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
     } as const satisfies __cfHelpers.JSONSchema, {
-        anyOf: [{}, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }, {
                 type: "object",
                 properties: {}
-            }]
-    } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, project.badges.length > 0, <div>
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
+    } as const satisfies __cfHelpers.JSONSchema, {
+        anyOf: [{
+                $ref: "https://commonfabric.org/schemas/vnode.json"
+            }, {
+                $ref: "#/$defs/UIRenderable"
+            }],
+        $defs: {
+            UIRenderable: {
+                type: "object",
+                properties: {
+                    $UI: {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
+                    }
+                },
+                required: ["$UI"]
+            }
+        }
+    } as const satisfies __cfHelpers.JSONSchema, project.badges.length > 0, <div>
           <h3>{project.name}</h3>
           {/* [TRANSFORM] .map() stays plain: project.badges is compute-owned data inside computed */}
           {project.badges.map((badge, badgeIndex) => (<span>

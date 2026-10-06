@@ -24,7 +24,7 @@ describe("worker read accounting", () => {
     try {
       const tx = runtime.edit();
       runtime.getCell(signer.did(), "source", undefined, tx).set({ value: 7 });
-      await tx.commit();
+      await tx.commit().settled;
       const processor = buildProcessor({
         runtime,
         telemetry: runtime.telemetry,

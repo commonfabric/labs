@@ -64,7 +64,7 @@ async function setupDemandGraph(
     effectOutput.set(0);
     effectOutputs.push(effectOutput);
   }
-  await tx.commit();
+  await tx.commit().settled;
 
   const intermediateAction: Action = (actionTx) => {
     intermediate.withTx(actionTx).send(
@@ -124,7 +124,7 @@ async function setupDemandGraph(
 async function setSource(graph: DemandGraph, value: number) {
   const tx = graph.env.runtime.edit();
   graph.source.withTx(tx).send(value);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 Deno.bench(
@@ -175,7 +175,7 @@ Deno.bench(
           setupTx,
         );
         result.set(0);
-        await setupTx.commit();
+        await setupTx.commit().settled;
 
         const handler: EventHandler = (handlerTx, event: number) => {
           result.withTx(handlerTx).send(
@@ -234,7 +234,7 @@ Deno.bench(
           setupTx,
         );
         result.set(0);
-        await setupTx.commit();
+        await setupTx.commit().settled;
 
         const handler: EventHandler = (handlerTx, event: number) => {
           result.withTx(handlerTx).send(
@@ -301,7 +301,7 @@ Deno.bench(
           childOutput.set(0);
           childOutputs.push(childOutput);
         }
-        await tx.commit();
+        await tx.commit().settled;
 
         const childCancels: Array<() => void> = [];
         const parentEffect: Action = (actionTx) => {
@@ -355,7 +355,7 @@ Deno.bench(
         for (let round = 0; round < 8; round++) {
           const updateTx = runtime.edit();
           source.withTx(updateTx).send(round + 2);
-          await updateTx.commit();
+          await updateTx.commit().settled;
           await runtime.scheduler.idle();
           consumeNumbers(childOutputs.map((cell) => cell.get()));
         }

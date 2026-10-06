@@ -59,7 +59,7 @@ const seedTarget = async (
     runtime.getCell(space, sourceName, undefined, tx).set({ title: "plain" });
   }
   tx.prepareCfc();
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
 };
 
 /** Commits one write to `name`, under `schema` when one is given. */
@@ -73,7 +73,7 @@ const commitWrite = async (
   tx.setCfcEnforcementMode("enforce-explicit");
   runtime.getCell(space, name, schema, tx).set(value);
   tx.prepareCfc();
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
 };
 
 /**
@@ -209,7 +209,7 @@ describe("cfc-missing-link-source-metadata", () => {
         rawMetaWriteAuthorization,
       );
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       await runtime.scheduler.idleWithPendingCommits();
 
       expect(state.runs).toBeGreaterThan(1);

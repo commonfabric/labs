@@ -255,14 +255,14 @@ describe("piece-named-before-start", () => {
     // deno-lint-ignore no-explicit-any
     const handleA = a.run(txA, compiledA as any, {}, rcA);
     a.prepareTxForCommit(txA);
-    expect((await txA.commit()).error).toBeUndefined();
+    expect((await txA.commit().settled).error).toBeUndefined();
     await handleA.pull();
     await quiesce(a);
     for (let seed = 1; seed <= CARD_COUNT; seed++) {
       const addA = a.edit();
       const committedA = waitForEventCommit(a);
       handleA.withTx(addA).key("addItem").send({ seed: String(seed) });
-      await addA.commit();
+      await addA.commit().settled;
       await committedA;
     }
     for (let i = 0; i < 8; i++) {
@@ -388,7 +388,7 @@ describe("piece-named-before-start", () => {
       b.runner.run(runTx, cardPattern, { item: itemB }, cardB);
     }
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
   }
 
   /** Names `id` and, to `depth`, every document its value links to. */
@@ -418,7 +418,7 @@ describe("piece-named-before-start", () => {
     const sendTx = b.edit();
     const committedB = waitForEventCommit(b);
     cardB.withTx(sendTx).key(stream).send({});
-    await sendTx.commit();
+    await sendTx.commit().settled;
     await committedB;
     await quiesce(b);
     return cardB.key("count").get();
@@ -652,7 +652,7 @@ describe("piece-named-before-start", () => {
     const upgradeTx = c.edit();
     c.runner.run(upgradeTx, cardV2, { item: itemC }, cardC);
     c.prepareTxForCommit(upgradeTx);
-    expect((await upgradeTx.commit()).error).toBeUndefined();
+    expect((await upgradeTx.commit().settled).error).toBeUndefined();
     await quiesce(c);
     await c.storageManager.synced();
     await c.dispose({ closeStorage: false });
@@ -669,7 +669,7 @@ describe("piece-named-before-start", () => {
     const runTx = b.edit();
     b.runner.run(runTx, cardV2B, { item: itemB }, cardB);
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     await quiesce(b);
     expect(await send(cardB, "poke")).toBe(11);
     expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
@@ -701,7 +701,7 @@ describe("piece-named-before-start", () => {
           identity: v2Ref.identity,
           symbol: v2Ref.symbol,
         }, rawMetaWriteAuthorization);
-        expect((await moveTx.commit()).error).toBeUndefined();
+        expect((await moveTx.commit().settled).error).toBeUndefined();
       }
       return walked;
     };
@@ -715,7 +715,7 @@ describe("piece-named-before-start", () => {
     const runTx = b.edit();
     b.runner.run(runTx, undefined, { item: itemB }, cardB);
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     expect((await settled).outcome).toBe("installed");
     await quiesce(b);
     expect(named).toEqual([v1Ref.identity, v2Ref.identity]);
@@ -743,7 +743,7 @@ describe("piece-named-before-start", () => {
           identity: v1Ref.identity,
           symbol: "unknown",
         }, rawMetaWriteAuthorization);
-        expect((await moveTx.commit()).error).toBeUndefined();
+        expect((await moveTx.commit().settled).error).toBeUndefined();
       }
       return walked;
     };
@@ -759,7 +759,7 @@ describe("piece-named-before-start", () => {
     const runTx = b.edit();
     b.runner.run(runTx, undefined, { item: itemB }, cardB);
     b.prepareTxForCommit(runTx);
-    expect((await runTx.commit()).error).toBeUndefined();
+    expect((await runTx.commit().settled).error).toBeUndefined();
     expect((await settled).outcome).toBe("cancelled");
     await quiesce(b);
     expect(b.runner.cancels.has(key)).toBe(false);

@@ -47,7 +47,7 @@ try {
     imports: [],
   });
   runtime.prepareTxForCommit(sourceTx);
-  const sourceCommit = await sourceTx.commit();
+  const sourceCommit = await sourceTx.commit().settled;
   if (sourceCommit.error !== undefined) throw sourceCommit.error;
 
   const cachedPattern = pattern(() => ({}));

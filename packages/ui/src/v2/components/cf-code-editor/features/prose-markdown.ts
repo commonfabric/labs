@@ -236,12 +236,13 @@ export function buildProseDecorations(
           decorations.push(hiddenReplace.range(node.from, markEnd));
         }
 
-        decorations.push(
-          Decoration.mark({ class: className }).range(
-            isActiveLine ? node.from : markEnd,
-            node.to,
-          ),
-        );
+        const textStart = isActiveLine ? node.from : markEnd;
+        // An unfinished heading can contain only its hidden marker.
+        if (textStart < node.to) {
+          decorations.push(
+            Decoration.mark({ class: className }).range(textStart, node.to),
+          );
+        }
         return;
       }
 

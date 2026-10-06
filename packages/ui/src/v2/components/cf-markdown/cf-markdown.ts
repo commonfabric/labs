@@ -1,3 +1,4 @@
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { consume } from "@lit/context";
 import { css, html } from "lit";
@@ -440,7 +441,11 @@ export class CFMarkdown extends BaseElement {
 
   private _getContentValue(): string {
     if (isCellHandle<string>(this.content)) {
-      return this.content.get() ?? "";
+      // Content the worker will not show reads as the placeholder a render
+      // shows in its place, not as an empty document.
+      const read = this.content.lastRead();
+      if ("refused" in read) return CFC_POLICY_PLACEHOLDER_TEXT;
+      return "value" in read ? read.value ?? "" : "";
     }
     return this.content ?? "";
   }
@@ -461,10 +466,12 @@ export class CFMarkdown extends BaseElement {
       // Subscribe to new Cell if it's a Cell
       if (this.content && isCellHandle(this.content)) {
         const contentCell = this.content;
-        this._unsubscribe = contentCell.subscribe(() => {
-          this.requestUpdate();
+        const update = () => this.requestUpdate();
+        this._unsubscribe = contentCell.subscribe(update, {
+          onRefused: update,
         });
-        if (contentCell.get() === undefined) {
+        const read = contentCell.lastRead();
+        if ("unread" in read || ("value" in read && read.value === undefined)) {
           void contentCell.sync().then(() => {
             if (this.content === contentCell) {
               this.requestUpdate();

@@ -203,6 +203,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
       storageManager: ownerStorage,
     });
     try {
+      // The root records the principal its `addPiece` acts for.
       const root = ok(
         await processInstantiate(deps, alice.did(), {
           space,
@@ -211,11 +212,14 @@ describe("pattern-lifecycle verbs (transport half)", () => {
             files: [{
               name: "/main.tsx",
               contents: `
-import { computed, handler, pattern, Writable } from "commonfabric";
-const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(({piece}, {panels}) => panels.addUnique(piece));
+import { computed, currentPrincipal, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>, adder: Writable<string>}>(
+  ({piece}, {panels, adder}) => { panels.addUnique(piece); adder.set(currentPrincipal() ?? ""); },
+);
 export default pattern(() => {
   const panels = new Writable<Writable<unknown>[]>([]);
-  return {panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels})};
+  const adder = new Writable<string>("");
+  return {panels, adder, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels, adder})};
 });`,
             }],
           },
@@ -246,6 +250,16 @@ export default pattern(() => {
       expect(repeated).toEqual(created);
       expect((await owner.getRegisteredPieces()).map((piece) => piece.id))
         .toEqual([created.pieceId]);
+      // The requesting writer, neither the space's owner nor the process.
+      expect(
+        await ownerRuntime.getCellFromEntityId(
+          space as MemorySpace,
+          entityIdFrom(root.pieceId),
+        ).asSchema({
+          type: "object",
+          properties: { adder: { type: "string" } },
+        }).key("adder").pull(),
+      ).toBe(bob.did());
       expect((await server.readDocument(space, `of:${space}`))?.value).toEqual(
         acl,
       );

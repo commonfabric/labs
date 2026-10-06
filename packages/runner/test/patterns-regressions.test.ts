@@ -9,6 +9,7 @@ import type { Pattern } from "../src/builder/types.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -48,7 +49,7 @@ describe("Pattern Runner - Regressions", () => {
       return { ok: undefined, error: undefined };
     }
     runtime.prepareTxForCommit(tx);
-    return await tx.commit();
+    return await tx.commit().settled;
   }
 
   afterEach(async () => {
@@ -252,12 +253,12 @@ describe("Pattern Runner - Regressions", () => {
 
     const originalCommit = tx.tx.commit.bind(tx.tx);
     (tx.tx as any).commit = () =>
-      Promise.resolve({
+      createTransactionCommitReceipt(Promise.resolve({
         error: {
           name: "ConflictError",
           message: "synthetic conflict",
         },
-      });
+      }));
 
     const result = await commitTx();
     expect(result.error?.name).toBe("ConflictError");

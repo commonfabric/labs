@@ -67,6 +67,7 @@ import {
 } from "../lib/piece.ts";
 import type { ExecutedPieceCallable } from "../lib/piece.ts";
 import { cf, sendThroughStandIn, stripAnsi } from "./utils.ts";
+import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 /**
  * The runner's own stream-send options, derived from `sendEvent()` rather
@@ -1793,7 +1794,8 @@ function createPieceCallableHarness(options: {
         synced: async () => {},
       },
       edit: () => ({
-        commit: async () => {},
+        commit: () =>
+          createTransactionCommitReceipt(Promise.resolve({ ok: {} })),
         // The real transaction reports one, and the write receipt reads it
         // rather than treating a resolved `commit()` as proof of a write.
         status: () => ({ status: "done", journal: { novelty: () => [] } }),
@@ -4202,7 +4204,7 @@ describe("call over a live runtime", () => {
     const tx = runtime.edit();
     const receipt = runtime.getCell(space, "handling-receipt", undefined, tx);
     receipt.set(value);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const handlingReceiptLink = runtime
       .getCell(space, "handling-receipt")
       .getAsNormalizedFullLink();
@@ -4299,7 +4301,7 @@ describe("call over a live runtime", () => {
     const tx = runtime.edit();
     const topic = runtime.getCell(space, "created-topic", undefined, tx);
     topic.set({ title: "Ship it", body: "the initial document" });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const resolved = await settleWith({
       topic: runtime.getCell(space, "created-topic"),
     });

@@ -13,6 +13,10 @@
  * denial's inputs name the confidentiality label of content the viewer was not
  * cleared to see, and a label gives away the thing it protects, so the summary
  * goes to warning level and the inputs only to debug and to a denial listener.
+ * A `render-remote-load` denial names the prop that was not set and the caveat
+ * kinds a remote load admits, and either the label of the prop's own read or
+ * `blockedByView`, when the view it is in carries a caveat a remote load does
+ * not admit; a view-blocked denial names no label.
  * A listener is registered only by a diagnostic tool the user asked for, such
  * as `cf test --cfc-denials`, and is told of every denial, repeats included.
  * Passing `inputs` as a function keeps a gate from building them where nothing
@@ -38,6 +42,7 @@ export const CFC_DENIAL_CODES = [
   "write-unprepared",
   "write-prepared-digest-mismatch",
   "render-confidentiality-ceiling",
+  "render-remote-load",
   "render-text-integrity",
   "render-literal-text-integrity",
 ] as const;

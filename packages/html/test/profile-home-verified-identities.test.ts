@@ -67,7 +67,7 @@ Deno.test("profile-home shows every fresh verified identity with a badge bound t
       runtime.getCell(space, "profile-home verified render", undefined, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const freshVerifiedAt = new Date().toISOString();
     // Loom's verifier writes the assertions as a builtin, the only author the
@@ -122,7 +122,7 @@ Deno.test("profile-home shows every fresh verified identity with a badge bound t
       verifiedAt: "2020-01-01T00:00:00.000Z",
     });
     runtime.prepareTxForCommit(assertionTx);
-    expect((await assertionTx.commit()).error).toBeUndefined();
+    expect((await assertionTx.commit().settled).error).toBeUndefined();
 
     const publishTx = runtime.edit();
     result.withTx(publishTx).key("publishVerifiedIdentities").send({
@@ -134,7 +134,7 @@ Deno.test("profile-home shows every fresh verified identity with a badge bound t
       ],
     });
     runtime.prepareTxForCommit(publishTx);
-    expect((await publishTx.commit()).error).toBeUndefined();
+    expect((await publishTx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     const ops: VDomOp[] = [];

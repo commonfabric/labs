@@ -61,7 +61,7 @@ describe("cf piece CFC labels", () => {
     const tx = runtime.edit();
     root.withTx(tx).set({ body: "hello" });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const piece = {
       input: { getCell: () => Promise.resolve(root) },
@@ -298,7 +298,7 @@ describe("cf piece CFC labels", () => {
     const storedLink = linked.getAsLink();
     root.withTx(seed).key("body").setRawUntyped(storedLink);
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const updated = await setCellCfcLabel(
       pieceConfig,
@@ -329,7 +329,7 @@ describe("cf piece CFC labels", () => {
     });
     root.withTx(seed).key("body").setRawUntyped(storedRedirect);
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     const updated = await setCellCfcLabel(
       pieceConfig,
@@ -374,7 +374,7 @@ describe("cf piece CFC labels", () => {
     const seed = runtime.edit();
     fabricRoot.withTx(seed).set({ body: original });
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     await fabricRoot.pull();
     const before = fabricRoot.key("body").getRawUntyped();
     const piece = {
@@ -530,7 +530,7 @@ describe("cf piece CFC labels", () => {
     const tx = runtime.edit();
     schemaRoot.withTx(tx).set({ body: "hello" });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const schemaDeps = {
       ...deps,
@@ -723,7 +723,7 @@ describe("cf piece CFC labels", () => {
     const t1 = runtime.edit();
     row.withTx(t1).set({ secret: "top secret", shouted: "TOP SECRET" });
     runtime.prepareTxForCommit(t1);
-    expect((await t1.commit()).error).toBeUndefined();
+    expect((await t1.commit().settled).error).toBeUndefined();
 
     const query = runtime.getCell<never>(
       signer.did(),
@@ -733,7 +733,7 @@ describe("cf piece CFC labels", () => {
     const t2 = runtime.edit();
     query.withTx(t2).key("result").key(0).setRawUntyped(row.getAsLink());
     runtime.prepareTxForCommit(t2);
-    expect((await t2.commit()).error).toBeUndefined();
+    expect((await t2.commit().settled).error).toBeUndefined();
 
     const chainRoot = runtime.getCell<never>(
       signer.did(),
@@ -743,7 +743,7 @@ describe("cf piece CFC labels", () => {
     const t3 = runtime.edit();
     chainRoot.withTx(t3).key("q").setRawUntyped(query.getAsLink());
     runtime.prepareTxForCommit(t3);
-    expect((await t3.commit()).error).toBeUndefined();
+    expect((await t3.commit().settled).error).toBeUndefined();
 
     const chainPiece = {
       input: { getCell: () => Promise.resolve(chainRoot) },

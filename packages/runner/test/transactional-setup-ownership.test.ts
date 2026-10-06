@@ -6,6 +6,7 @@ import { getMetaLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
@@ -48,7 +49,7 @@ describe("transactional setup ownership", () => {
     });
     const originalEdit = runtime.edit.bind(runtime);
     type TestTx = ReturnType<typeof originalEdit>;
-    type CommitResult = Awaited<ReturnType<TestTx["commit"]>>;
+    type CommitResult = Awaited<ReturnType<TestTx["commit"]>["settled"]>;
     type HeldCommit = {
       tx: TestTx;
       commit: TestTx["commit"];
@@ -86,7 +87,7 @@ describe("transactional setup ownership", () => {
         } else {
           secondCaptured.resolve();
         }
-        return completion.promise;
+        return createTransactionCommitReceipt(completion.promise);
       }) as typeof tx.commit;
       return tx;
     }) as typeof runtime.edit;
@@ -115,7 +116,7 @@ describe("transactional setup ownership", () => {
         { value: 3 },
         parent,
       );
-      expect((await setupTx.commit()).error).toBeUndefined();
+      expect((await setupTx.commit().settled).error).toBeUndefined();
       const initialPull = result.pull();
 
       await firstCaptured.promise;
@@ -125,13 +126,13 @@ describe("transactional setup ownership", () => {
       await runtime.scheduler.run(sourceAction);
       await secondCaptured.promise;
 
-      const newerCommit = await held[1].commit();
+      const newerCommit = await held[1].commit().settled;
       expect(newerCommit.error).toBeUndefined();
       held[1].result = newerCommit;
       held[1].resolve(newerCommit);
       expect(held[0].tx.abort("the original setup aborted").error)
         .toBeUndefined();
-      const abortedCommit = await held[0].commit();
+      const abortedCommit = await held[0].commit().settled;
       held[0].result = abortedCommit;
       held[0].resolve(abortedCommit);
       await initialPull;
@@ -152,7 +153,7 @@ describe("transactional setup ownership", () => {
         undefined,
         updateTx,
       ).set({ value: 4 });
-      expect((await updateTx.commit()).error).toBeUndefined();
+      expect((await updateTx.commit().settled).error).toBeUndefined();
       await runtime.scheduler.idleWithPendingCommits();
       expect(await child.key("doubled").pull()).toBe(8);
       runtime.runner.stop(parent);
@@ -163,7 +164,7 @@ describe("transactional setup ownership", () => {
         if (heldCommit.tx.status().status === "ready") {
           heldCommit.tx.abort("shared child ownership test finished");
         }
-        const result = await heldCommit.commit();
+        const result = await heldCommit.commit().settled;
         heldCommit.result = result;
         heldCommit.resolve(result);
       }
@@ -194,7 +195,7 @@ describe("transactional setup ownership", () => {
       mapped: number[];
     }>(space, "aborted map child setup", undefined, setupTx);
     const result = runtime.run(setupTx, parentPattern, {}, parent);
-    expect((await setupTx.commit()).error).toBeUndefined();
+    expect((await setupTx.commit().settled).error).toBeUndefined();
     const stopReading = result.key("mapped").sink(() => {});
     await runtime.scheduler.idleWithPendingCommits();
 
@@ -228,7 +229,7 @@ describe("transactional setup ownership", () => {
     try {
       const updateTx = runtime.edit();
       result.key("items").withTx(updateTx).set([1]);
-      expect((await updateTx.commit()).error).toBeUndefined();
+      expect((await updateTx.commit().settled).error).toBeUndefined();
       await runtime.scheduler.idleWithPendingCommits();
 
       expect(firstSetupAborted).toBe(true);

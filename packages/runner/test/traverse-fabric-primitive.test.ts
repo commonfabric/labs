@@ -76,7 +76,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
     );
     // A native Uint8Array interns to FabricBytes on the write path.
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -101,7 +101,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -126,7 +126,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -149,7 +149,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -177,7 +177,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -198,7 +198,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -217,7 +217,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -241,7 +241,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([1, 2, 3]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -263,7 +263,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: { x: 1 } });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -284,7 +284,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([4, 5]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -292,7 +292,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
 
     // The string branch of the same anyOf still accepts a string.
     c.withTx(tx).set({ blob: "hello" });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
     const got2 = c.withTx(tx).get() as Record<string, unknown>;
     expect(got2.blob).toBe("hello");
@@ -319,7 +319,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([6]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -351,7 +351,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([8]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -372,7 +372,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({ blob: new Uint8Array([7]) });
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;
@@ -401,7 +401,7 @@ describe("FabricPrimitive leaf routing in schema traversal", () => {
       tx,
     );
     c.set({});
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const got = c.withTx(tx).get() as Record<string, unknown>;

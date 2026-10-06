@@ -100,6 +100,7 @@ jobs:
             packages/memory/test/v2-refresh-schema-closure.bench.ts \
             packages/data-model/bench/hashing.bench.ts \
             packages/data-model/bench/codec-json.bench.ts \
+            packages/piece/test/piece-cold-runtime.bench.ts \
             packages/dashboard/machine-calibration.bench.ts \
             packages/patterns/integration/topic-board-navigation.bench.ts \
             packages/patterns/integration/topic-board-scale.bench.ts \

@@ -64,7 +64,7 @@ Deno.test("computed throws error", async () => {
   const argumentCell = resultCell.getArgumentCell<{ input: number }>()!;
   const tx1 = runtime.edit();
   argumentCell.withTx(tx1).set({ input: 1 });
-  await tx1.commit();
+  await tx1.commit().settled;
 
   const updated1 = (await resultCell.pull()) as any;
   assertEquals(updated1.poisoned, "got: 1");
@@ -73,7 +73,7 @@ Deno.test("computed throws error", async () => {
   // now throw error (val > 1 triggers throw in the lift)
   const tx2 = runtime.edit();
   argumentCell.withTx(tx2).set({ input: 2 });
-  await tx2.commit();
+  await tx2.commit().settled;
 
   const afterError = (await resultCell.pull()) as any;
 

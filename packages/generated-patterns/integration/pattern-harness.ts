@@ -127,7 +127,7 @@ export async function runPatternScenario(scenario: PatternIntegrationScenario) {
   const argument = scenario.argument ?? {};
   const result = runtime.run(tx, patternFactory, argument, resultCell);
   runtime.prepareTxForCommit(tx);
-  const commitResult = await tx.commit();
+  const commitResult = await tx.commit().settled;
   if (commitResult.error) {
     throw commitResult.error;
   }

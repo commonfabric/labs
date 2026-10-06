@@ -55,7 +55,7 @@ describe("scoped-input-initialization", () => {
         argument.getAsNormalizedFullLink(),
         argumentSchema(scope),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const shaped = raw.asSchema(argumentSchema(scope));
       expect(
         shaped.key("count").resolveAsCell().getAsNormalizedFullLink().scope,
@@ -63,7 +63,7 @@ describe("scoped-input-initialization", () => {
       expect(raw.key("unrelated").get()).toBe(7);
       const write = runtime.edit();
       raw.withTx(write).key("count").set(3);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
       expect(
         runtime.getCell(space, "inputs", undefined, undefined, scope).key(
           "count",
@@ -87,7 +87,7 @@ describe("scoped-input-initialization", () => {
       expect(raw.withTx(tx).key("count").getRaw({ lastNode: "top" })).toBe(
         value,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
   }
 
@@ -122,7 +122,7 @@ describe("scoped-input-initialization", () => {
       expect(user.withTx(tx).key("count").getRaw({ lastNode: "top" })).toEqual(
         before,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
   }
 
@@ -149,7 +149,7 @@ describe("scoped-input-initialization", () => {
         const after = raw.withTx(tx).key("count").getRaw({ lastNode: "top" });
         expect(after).toEqual(before);
         expect(parseLink(after, raw)?.scope).toBe("space");
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       });
     }
   }
@@ -173,7 +173,7 @@ describe("scoped-input-initialization", () => {
       raw.getAsNormalizedFullLink(),
       argumentSchema("session"),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(raw.key("count").resolveAsCell().getAsNormalizedFullLink().scope)
       .toBe("user");
   });
@@ -191,7 +191,7 @@ describe("scoped-input-initialization", () => {
     const seed = runtime.edit();
     target.withTx(seed).set({});
     raw.withTx(seed).set(target);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const authoredLink = raw.getRaw({ lastNode: "top" });
 
     const blocked = runtime.edit();
@@ -202,7 +202,7 @@ describe("scoped-input-initialization", () => {
         .getAsNormalizedFullLink(),
       argumentSchema("session"),
     );
-    expect((await blocked.commit()).error).toBeUndefined();
+    expect((await blocked.commit().settled).error).toBeUndefined();
     expect(raw.getRaw({ lastNode: "top" })).toEqual(authoredLink);
     expect(target.getRaw()).toEqual({});
 
@@ -214,7 +214,7 @@ describe("scoped-input-initialization", () => {
         .getAsNormalizedFullLink(),
       argumentSchema("session"),
     );
-    expect((await allowed.commit()).error).toBeUndefined();
+    expect((await allowed.commit().settled).error).toBeUndefined();
     expect(raw.getRaw({ lastNode: "top" })).toEqual(authoredLink);
     expect(parseLink(target.key("count").getRaw({ lastNode: "top" }), target))
       .toMatchObject({
@@ -229,7 +229,7 @@ describe("scoped-input-initialization", () => {
     await raw.sync();
     const seed = runtime.edit();
     raw.withTx(seed).set({});
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const initialize = runtime.edit();
     initializeScopedArgumentSlots(
       runtime,
@@ -239,8 +239,8 @@ describe("scoped-input-initialization", () => {
     );
     const rebind = runtime.edit();
     raw.withTx(rebind).key("count").set(11);
-    expect((await rebind.commit()).error).toBeUndefined();
-    expect((await initialize.commit()).error?.name).toBe(
+    expect((await rebind.commit().settled).error).toBeUndefined();
+    expect((await initialize.commit().settled).error?.name).toBe(
       "StorageTransactionInconsistent",
     );
     expect(raw.key("count").get()).toBe(11);

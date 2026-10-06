@@ -204,7 +204,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
         : 0;
       const tx = runtime.edit();
       resultCell.withTx(tx).key("value").set(value);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(`authored write failed: ${committed.error.message}`);
       }

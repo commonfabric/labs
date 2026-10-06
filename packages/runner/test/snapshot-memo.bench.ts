@@ -43,7 +43,7 @@ seedStoredEnvelope(seed, { ...address, path: [] }, {
     },
   },
 });
-const committed = await seed.commit();
+const committed = await seed.commit().settled;
 if (committed.error) throw committed.error;
 
 /** Times derivation alone; fresh transactions bound retained journals and memos. */

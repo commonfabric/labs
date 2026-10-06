@@ -119,7 +119,7 @@ const seedLabeledDoc = async (
       labelMap: { version: 1, entries: [{ path: [], label }] },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 // Seed a plain (label-less) doc so a later write in the test tx diffs to the
@@ -139,7 +139,7 @@ const seedPlainDoc = async (
     type: "application/json",
     path: [],
   }, { value });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
@@ -169,7 +169,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       sink.set({ out: "b" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "requiredIntegrity failed",
       );
@@ -209,7 +209,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       sink.key("out").key("deep").set("b");
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "requiredIntegrity failed",
       );
@@ -248,7 +248,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       runtime.getCell(signer.did(), "d4-post-low", undefined, tx).get();
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -282,7 +282,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       sink.set({ out: "granted" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -333,7 +333,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       }]);
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "requiredIntegrity failed",
       );
@@ -361,7 +361,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       );
       sink.set({ out: "fabricated" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed",
       );
@@ -384,7 +384,7 @@ describe("CFC write-prefix provenance (D4, doc §4/§5)", () => {
       );
       sink.set({ out: "minted" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();

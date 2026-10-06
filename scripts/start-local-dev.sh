@@ -53,6 +53,11 @@ CF_HARNESS=false
 # The operator's decision, and no part of starting a fabric implies it, so it
 # is off unless named and passed through to the launcher, which prints it.
 CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG=false
+# Whether a task sent to that console may declare a browser host, a client
+# that shows the agent's web pages to the owner. Also the operator's decision:
+# named here, it is passed through to the console server, which also reads
+# `CF_HARNESS_ALLOW_BROWSER_HOST`.
+CF_HARNESS_ALLOW_BROWSER_HOST_FLAG=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --force)
@@ -69,6 +74,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-skill-scripts)
             CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG=true
+            shift
+            ;;
+        --allow-browser-host)
+            CF_HARNESS_ALLOW_BROWSER_HOST_FLAG=true
             shift
             ;;
         --inspect)
@@ -425,7 +434,7 @@ if [[ "$CF_HARNESS" == "true" ]]; then
     # console then has to read.
     CONSOLE_STORE=${MEMORY_DIR:-"$(cd "$SCRIPT_DIR/../packages/toolshed" && pwd)/cache/memory"}
     export CONSOLE_PORT TOOLSHED_API_URL CONSOLE_STORE \
-        CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG
+        CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG CF_HARNESS_ALLOW_BROWSER_HOST_FLAG
     CONSOLE_ARGS=()
     while IFS= read -r console_arg; do
         CONSOLE_ARGS+=("$console_arg")

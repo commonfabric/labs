@@ -120,7 +120,7 @@ describe("staged-reference-authorship", () => {
           seedStoredEnvelope(seed, plain.getAsNormalizedFullLink(), {
             value: { content: "unattributed content" },
           });
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
           expect(plain.withTx(runtime.readTx()).key("content").get()).toBe(
             "unattributed content",
           );
@@ -146,7 +146,7 @@ describe("staged-reference-authorship", () => {
               ["next"],
             );
             recordTrustedWrite(stored, wrapper.getAsNormalizedFullLink());
-            expect((await stored.commit()).error).toBeUndefined();
+            expect((await stored.commit().settled).error).toBeUndefined();
           }
           const reference = linkRefFrom<CfcCellLinkRefPayload>({
             ...linkRefPayload(plain.getAsLink()),
@@ -171,7 +171,7 @@ describe("staged-reference-authorship", () => {
           if (order === "stored") {
             const stored = runtime.edit();
             stageWrapper(stored);
-            expect((await stored.commit()).error).toBeUndefined();
+            expect((await stored.commit().settled).error).toBeUndefined();
           }
 
           const tx = runtime.edit();
@@ -201,7 +201,7 @@ describe("staged-reference-authorship", () => {
           ) {
             stage();
           }
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           expect(
             node.withTx(runtime.readTx()).key("argument").key("content").get(),
           )
@@ -226,7 +226,7 @@ describe("staged-reference-authorship", () => {
               sink.getAsNormalizedFullLink(),
               ["slot"],
             );
-            const result = await consume.commit();
+            const result = await consume.commit().settled;
             if (path[0] === "own") {
               expect(result.error).toBeUndefined();
               expect(sink.withTx(runtime.readTx()).key("slot").get()).toBe(
@@ -281,7 +281,7 @@ describe("staged-reference-authorship", () => {
           },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       for (const principal of [alice.did(), bob.did()]) {
         const tx = runtime.edit();
         const sink = runtime.getCell(space, `seeded-sink-${principal}`, {
@@ -297,7 +297,7 @@ describe("staged-reference-authorship", () => {
         recordReferencedArgumentFields(tx, sink.getAsNormalizedFullLink(), [
           "copied",
         ]);
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         if (principal === alice.did()) {
           expect(result.error?.message).toContain("write floor failed");
         } else {
@@ -324,7 +324,7 @@ describe("staged-reference-authorship", () => {
       );
       leaf.set({ content: text });
       recordTrustedWrite(seed, leaf.getAsNormalizedFullLink());
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const stored = runtime.edit();
       actAs(stored, alice.did());
@@ -341,7 +341,7 @@ describe("staged-reference-authorship", () => {
         ["value"],
       );
       recordTrustedWrite(stored, wrapper.getAsNormalizedFullLink());
-      expect((await stored.commit()).error).toBeUndefined();
+      expect((await stored.commit().settled).error).toBeUndefined();
 
       for (const principal of [alice.did(), bob.did()]) {
         const copy = runtime.edit();
@@ -359,7 +359,7 @@ describe("staged-reference-authorship", () => {
         recordReferencedArgumentFields(copy, sink.getAsNormalizedFullLink(), [
           "copied",
         ]);
-        const result = await copy.commit();
+        const result = await copy.commit().settled;
         if (principal === alice.did()) {
           expect(result.error?.message).toContain("write floor failed");
         } else {
@@ -397,7 +397,7 @@ describe("staged-reference-authorship", () => {
             oldLeaf.set({ content: "Bob's previous content" });
             recordTrustedWrite(seed, oldLeaf.getAsNormalizedFullLink());
           }
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
 
           const tx = runtime.edit();
           actAs(tx, alice.did());
@@ -435,7 +435,7 @@ describe("staged-reference-authorship", () => {
           if (order === "stored" || order.startsWith("replaced-")) {
             const stored = runtime.edit();
             stageWrapper(stored, order === "stored" ? leaf : oldLeaf);
-            expect((await stored.commit()).error).toBeUndefined();
+            expect((await stored.commit().settled).error).toBeUndefined();
           }
           const node = runtime.getCell(space, "node", {
             type: "object",
@@ -487,7 +487,7 @@ describe("staged-reference-authorship", () => {
           ) {
             stage();
           }
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           const entries = readStoredCfcMetadata(
             runtime.readTx(),
             holder.getAsNormalizedFullLink(),
@@ -537,7 +537,7 @@ describe("staged-reference-authorship", () => {
                 "copied",
               ],
             );
-            const result = await copy.commit();
+            const result = await copy.commit().settled;
             if (principal === alice.did()) {
               expect(result.error?.message).toContain("write floor failed");
             } else {

@@ -47,6 +47,7 @@ import {
 } from "../v2/execution-outbox.ts";
 import {
   type ClientCommit,
+  commitPreconditionValueHash,
   decodeMemoryBoundary,
   resetServerExecutionConfig,
   setServerExecutionConfig,
@@ -790,6 +791,54 @@ Deno.test("wave commit: precondition failures are named BY INDEX, and nothing is
             preconditions: [
               { kind: "entity-absent", id: "of:free" },
               { kind: "entity-absent", id: "of:taken" },
+            ],
+          },
+          commitClass: "derived",
+          holder,
+          waveBasis: { basisSeq: 1, rebasedHeads: [] },
+        }),
+      WavePreconditionError,
+    );
+    assertEquals(error.failedPreconditions, [1]);
+    assertEquals(selectDocHead(engine, { id: "of:out", scopeKey: "space" }), 0);
+  } finally {
+    resetServerExecutionConfig();
+    close(engine);
+  }
+});
+
+Deno.test("wave commit: a failed value pin is named BY INDEX, and nothing is applied", async () => {
+  const { engine } = await createEngine();
+  setServerExecutionConfig(true);
+  try {
+    const holder = withLiveLease(engine);
+    // of:moved changed after its pin was taken; of:still did not.
+    applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: setCommit(1, [{ id: "of:still", n: 1 }, {
+        id: "of:moved",
+        n: 2,
+      }]),
+    });
+    const error = assertThrows(
+      () =>
+        applyWaveCommit(engine, {
+          sessionId: holder,
+          space: SPACE,
+          commit: {
+            ...setCommit(1, [{ id: "of:out" }]),
+            preconditions: [
+              {
+                kind: "entity-value-hash",
+                id: "of:still",
+                valueHash: commitPreconditionValueHash({ n: 1 }),
+              },
+              {
+                kind: "entity-value-hash",
+                id: "of:moved",
+                valueHash: commitPreconditionValueHash({ n: 1 }),
+              },
             ],
           },
           commitClass: "derived",

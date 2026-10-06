@@ -29,7 +29,7 @@ for (const enabled of [false, true]) {
           items: { type: "object", properties: { n: { type: "number" } } },
         }, write);
         rows.set(Array.from({ length: 1000 }, (_, n) => ({ n })));
-        await write.commit();
+        await write.commit().settled;
         await storageManager.synced();
 
         b.start();

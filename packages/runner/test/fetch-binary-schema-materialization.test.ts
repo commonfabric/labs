@@ -93,7 +93,7 @@ describe("fetchBinary consumer materialization", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -108,7 +108,7 @@ describe("fetchBinary consumer materialization", () => {
     );
     const result = runtime.run(tx, compiled, {}, resultCell);
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
     tx = runtime.edit();
 
     const cancelSink = result.sink(() => {});

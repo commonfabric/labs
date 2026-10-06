@@ -200,7 +200,7 @@ const declaredWrite = async (
   const envelopeWritten = details.some((detail) =>
     detail.address.id === id && detail.address.path[0] === "cfc"
   );
-  expect((await tx.commit()).ok).toBeDefined();
+  expect((await tx.commit().settled).ok).toBeDefined();
   return {
     id,
     cidWrites,
@@ -760,7 +760,7 @@ describe("CFC content-addressed labels", () => {
         }, tx);
         cell.set({ secret: "updated" });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain("cannot be resolved");
       });
     });

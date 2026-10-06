@@ -50,7 +50,7 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -65,7 +65,7 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
   ): Promise<void> => {
     const seedTx = runtime.edit();
     seedTx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    const res = await seedTx.commit();
+    const res = await seedTx.commit().settled;
     if (res.error) throw res.error;
   };
 
@@ -91,7 +91,7 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
       "INSERT INTO people (author_cf_link) VALUES (?)",
       [encoded],
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     // The rowSchema the transformer would inject for
     // db.query<{ author_cf_link: Cell<{ name: string }> }>(...).
@@ -122,7 +122,7 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
       tx2,
     );
     const result = runtime.run(tx2, p, {}, resultCell);
-    await tx2.commit();
+    await tx2.commit().settled;
 
     const v = await waitForCellValue<QueryState>(
       runtime,

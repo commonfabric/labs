@@ -65,7 +65,7 @@ const seedLabeledDoc = async (
       labelMap: { version: 1, entries: [{ path: [], label }] },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 // The sink names the admin endorsement twice on `out`: it is required there,
@@ -110,7 +110,7 @@ describe("CFC requiredIntegrity provenance scoping (S7)", () => {
       sink.set({ out: "granted" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -146,7 +146,7 @@ describe("CFC requiredIntegrity provenance scoping (S7)", () => {
       sink.set({ out: "granted" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
@@ -180,7 +180,7 @@ describe("CFC requiredIntegrity provenance scoping (S7)", () => {
       sink.set({ out: "derived" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "requiredIntegrity failed",
       );
@@ -216,7 +216,7 @@ describe("CFC requiredIntegrity provenance scoping (S7)", () => {
       sink.set({ out: "derived" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "requiredIntegrity failed",
       );
@@ -262,7 +262,7 @@ describe("CFC requiredIntegrity provenance scoping (S7)", () => {
       );
       src.set("attacker-controlled");
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Non-vacuity anchor: assert the S4 strip actually ran — the persisted
       // labelMap kept the confidentiality but NOT the forged LinkReference.
@@ -315,7 +315,7 @@ describe("CFC requiredIntegrity provenance scoping (S7)", () => {
       sink.set({ out: "derived" });
 
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "requiredIntegrity failed",
       );

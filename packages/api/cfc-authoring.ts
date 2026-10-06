@@ -39,6 +39,7 @@ export type {
   CfcPromptSlotRunManifest,
   CfcResourceAtom,
   CfcSpaceAtom,
+  CfcStamp,
   CfcThisPolicyModuleIdentityPattern,
   CfcThisPolicyPattern,
   CfcThisPolicySubjectPattern,

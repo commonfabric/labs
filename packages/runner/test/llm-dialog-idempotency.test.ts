@@ -33,7 +33,7 @@ describe("llmDialog demand and idempotency", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.settled();
     // `dispose()` closes the storage manager the runtime was given.
     await runtime?.dispose();
@@ -78,7 +78,7 @@ describe("llmDialog demand and idempotency", () => {
       tx,
     );
     runtime.run(tx, testPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const report = await runtime.scheduler.runIdempotencyCheck();
@@ -114,7 +114,7 @@ describe("llmDialog demand and idempotency", () => {
       undefined,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     const built = rawLlmDialog(
       inputsCell as never,

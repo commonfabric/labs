@@ -304,6 +304,7 @@ export const RESEARCH_KIT_SCHEMA: JSONSchema = {
         maxItems: 3,
         items: { type: "string", maxLength: 500 },
       },
+      refinedTask: { type: "string", maxLength: 2_000 },
     },
     required: [
       ...Object.keys(findings),

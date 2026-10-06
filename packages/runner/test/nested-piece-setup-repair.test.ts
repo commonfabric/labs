@@ -101,7 +101,7 @@ describe("nested-piece-setup-repair", () => {
       tx,
     );
     const running = rt.run(tx, v1, { limit: "ten" }, cell);
-    await tx.commit();
+    await tx.commit().settled;
     await running.pull();
     rt.runner.stop(cell);
     const tx2 = rt.edit();
@@ -118,7 +118,7 @@ describe("nested-piece-setup-repair", () => {
         rawMetaWriteAuthorization,
       );
     }
-    await tx2.commit();
+    await tx2.commit().settled;
     return { cell, v3Ref };
   };
 
@@ -260,7 +260,7 @@ describe("nested-piece-setup-repair", () => {
         tx,
       );
       const running = rt.run(tx, keyless as never, {}, cell);
-      await tx.commit();
+      await tx.commit().settled;
       await running.pull();
       rt.runner.stop(cell);
       // The stored state drifted: the manifest no longer names the pattern's
@@ -271,7 +271,7 @@ describe("nested-piece-setup-repair", () => {
         undefined,
         rawMetaWriteAuthorization,
       );
-      await tx2.commit();
+      await tx2.commit().settled;
 
       expect(await rt.start(cell)).toBe(true);
       await cell.pull();

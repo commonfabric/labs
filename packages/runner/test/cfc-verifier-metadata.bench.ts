@@ -61,7 +61,7 @@ seedStoredEnvelope(seed, { ...sourceAddress, path: [] }, {
     },
   },
 });
-const seeded = await seed.commit();
+const seeded = await seed.commit().settled;
 if (seeded.error) throw seeded.error;
 
 for (const targets of [10, 30, 100]) {

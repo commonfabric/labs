@@ -35,7 +35,7 @@ describe("query-result proxy: FabricPrimitive leaves are not proxy-wrapped", () 
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -76,7 +76,7 @@ describe("internCellLinkSchema preserves FabricValue schema defaults read throug
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

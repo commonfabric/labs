@@ -8,7 +8,8 @@ import { CHIP_UI, Default, NAME, pattern, TILE_UI, UI } from "commonfabric";
  *
  * Render any variant with `<cf-render variant="chip|tile|full" .cell=... />`.
  * A piece that omits [CHIP_UI]/[TILE_UI] still renders at those variants via
- * the platform defaults (cf-cell-link for chip, the full [UI] scaled for tile).
+ * the platform defaults (a chip showing [NAME] for chip, the full [UI] scaled
+ * for tile).
  */
 export default pattern<{ title: string | Default<"UI Variants Demo"> }>(
   ({ title }) => ({

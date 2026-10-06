@@ -54,36 +54,74 @@ export function principalOf(
   target: unknown,
   kind: unknown,
 ): DID | undefined {
+  const principals = attestedPrincipals(
+    "principalOf(target, kind)",
+    target,
+    kind,
+  );
+  return principals?.length === 1 ? principals[0] : undefined;
+}
+
+/**
+ * Like `principalOf()`, except that it returns every principal the claims of
+ * `kind` name rather than only a single one, so that a caller can tell a
+ * label that attests no principal from one that attests several.
+ *
+ * Returns `[]` when the label attests none, and the DIDs it attests, in the
+ * order they first appear, when it attests one or more. Returns `undefined`
+ * when a claim there is in any form but the one a runtime mints, since no
+ * principal can then be read from it, and for a `target` passed as
+ * `undefined`. The claims are read where, and as, `principalOf()` reads them.
+ *
+ * @throws In every case `principalOf()` throws.
+ */
+export function principalsOf(
+  // Typed `unknown` here, though the declared API types both, so that the
+  // runtime checks below have cases to catch from untyped callers.
+  target: unknown,
+  kind: unknown,
+): DID[] | undefined {
+  return attestedPrincipals("principalsOf(target, kind)", target, kind);
+}
+
+/**
+ * Helper for `principalOf()` and `principalsOf()`, which checks the calling
+ * frame and `kind`, then reads the claims of `kind` on `target`'s label as
+ * `exactPrincipalAttestations()` reads them. `name` is the caller, as its
+ * errors name it.
+ */
+function attestedPrincipals(
+  name: string,
+  target: unknown,
+  kind: unknown,
+): DID[] | undefined {
   const frame = topFrame();
   if (frame?.frameKind !== "lift" && frame?.frameKind !== "handler") {
     throw new Error(
-      "`principalOf(target, kind)` can only be called from a handler or a " +
-        "reactive computation.",
+      `\`${name}\` can only be called from a handler or a reactive computation.`,
     );
   }
   const { tx } = frame;
   if (tx === undefined) {
-    throw new Error(
-      "`principalOf(target, kind)` requires an executing runtime.",
-    );
+    throw new Error(`\`${name}\` requires an executing runtime.`);
   }
   if (typeof kind !== "string" || !PRINCIPAL_CLAIM_KINDS.has(kind)) {
     throw new Error(
-      debugStr`\`principalOf(target, kind)\` takes a \`kind\` of \`authored-by\` or \`represents-principal\`, not $quote${kind}`,
+      debugStr`\`${name}\` takes a \`kind\` of \`authored-by\` or \`represents-principal\`, not $quote${kind}`,
     );
   }
   const claimKind = kind as PrincipalClaimKind;
   if (labelMetadataFieldIsProtected({ kind: claimKind }, "subject")) {
     throw new Error(
-      debugStr`\`principalOf(target, kind)\` cannot carry a label for the subject of a $quote${claimKind} claim, which is not classified public.`,
+      debugStr`\`${name}\` cannot carry a label for the subject of a $quote${claimKind} claim, which is not classified public.`,
     );
   }
   if (target === undefined) return undefined;
 
   // Resolution follows the link chain, which reads pointers and not the
   // value they lead to.
-  const link = cellOfTarget(target, "principalOf(target, kind)").withTx(tx)
-    .resolveAsCell().getAsNormalizedFullLink();
+  const link = cellOfTarget(target, name).withTx(tx).resolveAsCell()
+    .getAsNormalizedFullLink();
   // The default read policy journals the read as a dependency, so a label
   // change runs the calling computation again.
   const metadata = readStoredCfcMetadata(tx, {
@@ -91,9 +129,8 @@ export function principalOf(
     id: link.id,
     scope: link.scope,
   });
-  const principals = exactPrincipalAttestations(
+  return exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
     claimKind,
   );
-  return principals?.length === 1 ? principals[0] as DID : undefined;
 }

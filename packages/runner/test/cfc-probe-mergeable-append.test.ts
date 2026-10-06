@@ -115,7 +115,7 @@ describe("CFC metadata probes under mergeable appends", () => {
       // Seed the list with one element and get it durable on the server.
       const tx0 = rt1.edit();
       rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["seed"]);
-      await tx0.commit({ resolveAt: "verdict" });
+      await tx0.commit({ holdSyncedUntilCovered: false }).verdict;
       await rt1.storageManager.synced();
 
       // Both sessions load the seeded list, so both replicas hold ["seed"] at
@@ -128,7 +128,7 @@ describe("CFC metadata probes under mergeable appends", () => {
       // Session 1 appends "A".
       const txA = rt1.edit();
       rt1.getCell<string[]>(space, CAUSE, stringListSchema, txA).push("A");
-      await txA.commit({ resolveAt: "verdict" });
+      await txA.commit({ holdSyncedUntilCovered: false }).verdict;
       await rt1.storageManager.synced();
 
       // Session 2 appends "B" WITHOUT having observed session 1's "A": its
@@ -137,7 +137,8 @@ describe("CFC metadata probes under mergeable appends", () => {
       // this commit.
       const txB = rt2.edit();
       rt2.getCell<string[]>(space, CAUSE, stringListSchema, txB).push("B");
-      const result = await txB.commit({ resolveAt: "verdict" });
+      const result = await txB.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       await rt2.storageManager.synced();
 
       expect(result.error).toBeUndefined();
@@ -165,7 +166,8 @@ describe("CFC metadata probes under mergeable appends", () => {
       rt1.getCell<string[]>(space, LABELED_CAUSE, labeledListSchema, tx0)
         .set(["seed"]);
       tx0.prepareCfc();
-      const result0 = await tx0.commit({ resolveAt: "verdict" });
+      const result0 = await tx0.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       await rt1.storageManager.synced();
       expect(result0.error).toBeUndefined();
 
@@ -196,7 +198,8 @@ describe("CFC metadata probes under mergeable appends", () => {
       rt1.getCell<string[]>(space, LABELED_CAUSE, labeledListSchema, txA)
         .push("A");
       txA.prepareCfc();
-      const resultA = await txA.commit({ resolveAt: "verdict" });
+      const resultA = await txA.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       await rt1.storageManager.synced();
       expect(resultA.error).toBeUndefined();
 
@@ -206,7 +209,8 @@ describe("CFC metadata probes under mergeable appends", () => {
       rt2.getCell<string[]>(space, LABELED_CAUSE, labeledListSchema, txB)
         .push("B");
       txB.prepareCfc();
-      const resultB = await txB.commit({ resolveAt: "verdict" });
+      const resultB = await txB.commit({ holdSyncedUntilCovered: false })
+        .verdict;
       await rt2.storageManager.synced();
 
       expect(resultB.error).toBeUndefined();
@@ -246,7 +250,9 @@ describe("CFC metadata probes under mergeable appends", () => {
       rt1.getCell<string[]>(space, LINK_SOURCE_CAUSE, labeledListSchema, tx0)
         .set(["seed"]);
       tx0.prepareCfc();
-      expect((await tx0.commit({ resolveAt: "verdict" })).error)
+      expect(
+        (await tx0.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      )
         .toBeUndefined();
       await rt1.storageManager.synced();
 
@@ -266,7 +272,9 @@ describe("CFC metadata probes under mergeable appends", () => {
       rt2.getCell<string[]>(space, LINK_SOURCE_CAUSE, labeledListSchema, txA)
         .push("A");
       txA.prepareCfc();
-      expect((await txA.commit({ resolveAt: "verdict" })).error)
+      expect(
+        (await txA.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      )
         .toBeUndefined();
       await rt2.storageManager.synced();
 
@@ -291,7 +299,8 @@ describe("CFC metadata probes under mergeable appends", () => {
         source: { space, scope: "space", id: sourceId, path: [] },
       });
       txB.prepareCfc();
-      const result = await txB.commit({ resolveAt: "verdict" });
+      const result = await txB.commit({ holdSyncedUntilCovered: false })
+        .verdict;
 
       expect(result.error).toBeUndefined();
     } finally {
@@ -309,7 +318,7 @@ describe("CFC metadata probes under mergeable appends", () => {
     try {
       const tx0 = rt1.edit();
       rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["seed"]);
-      await tx0.commit({ resolveAt: "verdict" });
+      await tx0.commit({ holdSyncedUntilCovered: false }).verdict;
       await rt1.storageManager.synced();
 
       const cell2 = rt2.getCell<string[]>(space, CAUSE, stringListSchema);
@@ -318,7 +327,7 @@ describe("CFC metadata probes under mergeable appends", () => {
 
       const txA = rt1.edit();
       rt1.getCell<string[]>(space, CAUSE, stringListSchema, txA).push("A");
-      await txA.commit({ resolveAt: "verdict" });
+      await txA.commit({ holdSyncedUntilCovered: false }).verdict;
       await rt1.storageManager.synced();
 
       // Session 2, still at the pre-"A" basis, reads the list explicitly and
@@ -328,7 +337,8 @@ describe("CFC metadata probes under mergeable appends", () => {
       const cellB = rt2.getCell<string[]>(space, CAUSE, stringListSchema, txB);
       cellB.get();
       cellB.push("B");
-      const result = await txB.commit({ resolveAt: "verdict" });
+      const result = await txB.commit({ holdSyncedUntilCovered: false })
+        .verdict;
 
       expect(isStaleReadConflict(result.error)).toBe(true);
       const durable = await readDurable(server, CAUSE, stringListSchema);

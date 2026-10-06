@@ -59,7 +59,7 @@ describe("event dispatch whose handler body did not run", () => {
       "not-run-events",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
     const committedChanges = countCommittedChanges();
 
@@ -108,7 +108,7 @@ describe("event dispatch whose handler body did not run", () => {
       "not-run-park-events",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     // The cold document's load is in flight for as long as the test holds
@@ -191,7 +191,7 @@ describe("event dispatch whose handler body did not run", () => {
   }> {
     const { runtime, tx } = env;
     const eventCell = runtime.getCell<number>(space, cellName, undefined);
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
     const committedChanges = countCommittedChanges();
 
@@ -264,7 +264,7 @@ describe("event dispatch whose handler body did not run", () => {
       "not-run-one-shot-events",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
     const committedChanges = countCommittedChanges();
 
@@ -311,7 +311,7 @@ describe("event dispatch whose handler body did not run", () => {
       "not-run-echo-events",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     let runs = 0;

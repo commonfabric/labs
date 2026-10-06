@@ -1,9 +1,9 @@
 # FabriChat
 
-Status: proposed design. Nothing here is implemented yet. Today's FabriChat is
-the single pattern in `packages/patterns/fabrichat/`, one conversation per
-piece. This directory describes what it splits into, and what that split
-requires of the runtime and of the programs that use it.
+This directory describes the four patterns FabriChat is made of, and what they
+require of the runtime and of the programs that use them. [Implementation
+status](#implementation-status) says where they are built, and where the build
+departs from this design.
 
 ## Quick links
 
@@ -244,8 +244,10 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** Nothing in this repository lets a pattern deliver a
-  message to a principal who shares no space with the sender (see
+- **Delivering a notice.** A room is to be offered to its recipient through
+  their profile share inbox, but no offer names a room yet and the manager
+  reads none, so nothing delivers a notice to a principal who shares no space
+  with the sender end to end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -256,6 +258,96 @@ names the ones it needs, and they are gathered here:
   "sanctioned headless issuance path" in the [host embedding policy
   record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
   (see [`clients.md`](clients.md)).
+
+## Implementation status
+
+The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
+`manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
+in `schemas.tsx`. The room's stored records and the handlers that write them are
+in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
+home pattern holds a manager, and `#chatManager` resolves to it (see
+[`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)), but
+home renders it nowhere of its own: a page shows it at its path in home's
+result, with the user's rooms, the room chosen among them, the controls that
+start a direct or a group chat, and, when the session's latest start was
+refused, the reason. A refusal of text that isn't a principal
+also shows the text. Where the runtime lacks a prerequisite, the patterns depart
+from this design, as below.
+
+### Access and principals
+
+- **Membership is set at creation, then the space's.** The manager creates a
+  space for a conversation with `FabriChatRoom.inSpace()`, naming grants: the
+  creator OWNER, each other member WRITE, and everyone WRITE for a group made
+  joinable by its link. After that, who is in it changes only
+  through the space's own tools. The room's participants come from the space's
+  default pattern, which a host creates the first time someone opens the
+  space, so until then they are only the room's authors.
+- **Principals.** A handler learns the principal it acts for
+  (`currentPrincipal()`), so a room keys its request memory by the sender's
+  principal, and the manager refuses a direct room with the user themself and
+  leaves them out of a group's other members. A reaction's address still
+  derives from its reactor's profile, as the design says. The manager takes
+  principals as typed. A room offers a direct chat with each participant
+  whose profile attests a principal (`principalOf()`), except the viewer, by
+  sending that principal to the `openDirect` of the viewer's manager, found
+  with `#chatManager`. `accept` takes a direct room's counterpart from the
+  label on its `about.record`, and refuses one the event names otherwise (see
+  [writers and labels](#writers-and-labels)).
+- **Creation takes one transaction.** The space comes with its grants, so
+  writing the room, the manager's notices, and its index entry happens in one
+  commit, rather than in the design's resumable steps, and a request's outcome
+  is `done` or `refused` from the start. A request already decided changes
+  nothing when it arrives again.
+- **No container creates placements.** A client does. A placement reads its
+  viewer's access to the room's space, so `"none"` shows as `"not-member"`,
+  and a level not known yet as `"unavailable"`.
+
+### Writers and labels
+
+- **Every record names its writers.** Beyond what the design requires of
+  messages and reactions, each of the room's records (its request memory, used
+  times, activity and its numbering, and each session's windows) has a write
+  policy listing the handlers that write it (`WritePolicyAnyOf`), so no other
+  code can write it, even code a member runs in the room's space.
+- **Starts are not gesture-checked.** `openDirect` and `createGroup` are sent
+  from controls marked `ChatStartSurface`, but no write policy requires the
+  gesture, since the manager's records are also written by acts with none.
+  One handler, `commitManager`, writes the manager's records, and each of its
+  streams is a binding of it.
+- **Labels without a gesture.** Messages and reactions are labeled
+  `authored-by` under a reviewed gesture, as the design says. A
+  `recentActivity` entry and `about.record` are labeled too, by writers that
+  name no gesture (each handler appending an entry, and the manager's
+  `commitManager`), so their label says whose run wrote them, not that the
+  person made a gesture. `about` is the room's own view, with its `policy`, a
+  document the room writes when it starts, and `about.record` links the stored
+  record.
+
+### Records
+
+- **Keyed records.** Each message, each reaction, and each `recentActivity`
+  entry is a document of its own, addressed by a key (`elementById`), so
+  writing one never rewrites another, and a record keeps the label its own
+  writer gave it.
+- **Reactions are a list the message links.** Each message links a list of its
+  own reactions, a document the send creates empty and only the reaction
+  handlers write after that, until a deletion or an obliteration clears it and
+  drops the link.
+- **Windows.** A window holds links to its messages, which stay live;
+  `hasOlder` and `hasNewer` are as of when the window was set. `commitWindow`
+  writes the windows of the session that sent the event, wherever it runs; an
+  event the server itself emitted has no session, and can't open one.
+- **Notices.** A manager's notice id is `[recipient, requestId]` as JSON.
+  Nothing delivers a notice yet (see
+  [first contact](FabriChatManager.md#first-contact)), so the manager's
+  rendering shows each queued notice with a link to its room, for the room's
+  creator to send on. And a room shows a viewer whose manager
+  doesn't list it a control that asks the manager to `accept` it, so
+  whoever opens the room's link can add it to their chats.
+- **Request ids.** A rendered control sends no `requestId`, and the room and
+  the manager use the event's own key (`eventKey()`), which is the same on
+  every run of that event.
 
 ## Identity and presentation
 

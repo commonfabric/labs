@@ -49,7 +49,7 @@ describe("sqliteQuery()", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
@@ -76,7 +76,7 @@ describe("sqliteQuery()", () => {
       tx,
     );
     const result = runtime.run(tx, queryPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     return await waitForCellValue<QueryState>(
       runtime,
       result,
@@ -124,7 +124,7 @@ describe("sqliteQuery()", () => {
         sql: "INSERT INTO notes (body) VALUES (?)",
         params: ["recovered"],
       });
-      expect((await seedTx.commit()).error).toBeUndefined();
+      expect((await seedTx.commit().settled).error).toBeUndefined();
 
       // `{}` is what an object read that resolved to nothing produces, and is
       // the state the handle arrives late from.
@@ -150,7 +150,7 @@ describe("sqliteQuery()", () => {
         tx,
       );
       const result = runtime.run(tx, queryPattern, inputs, resultCell);
-      await tx.commit();
+      await tx.commit().settled;
 
       const failed = await waitForCellValue<QueryState>(
         runtime,

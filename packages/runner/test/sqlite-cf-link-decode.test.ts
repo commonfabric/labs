@@ -44,7 +44,7 @@ describe("sqlite query result _cf_link behavior", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -58,7 +58,7 @@ describe("sqlite query result _cf_link behavior", () => {
   ): Promise<void> => {
     const seedTx = runtime.edit();
     seedTx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    const res = await seedTx.commit();
+    const res = await seedTx.commit().settled;
     if (res.error) throw res.error;
   };
 

@@ -254,7 +254,7 @@ describe("refused derived write", () => {
     };
     const tx = readerRuntime.edit();
     derived.withTx(tx).key("doubled").set(6);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
 
     expect(result.error?.name).toBe("ConflictError");
     const stored = ownerRuntime.getCell<unknown>(space, "derived");

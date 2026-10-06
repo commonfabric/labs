@@ -86,7 +86,7 @@ describe("agent builtin", () => {
   };
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime.dispose();
     await storageManager.close();
@@ -137,7 +137,7 @@ describe("agent builtin", () => {
     runtime.runner.stop(result);
     tx = runtime.edit();
     const restarted = runAgentPattern(id);
-    await tx.commit();
+    await tx.commit().settled;
     const cancelDemand = restarted.sink(() => {});
     await runtime.settled();
     cancelDemand();
@@ -147,7 +147,7 @@ describe("agent builtin", () => {
   it("settles with an error naming the flag when `agentBuiltin` is off", async () => {
     setUp({ experimental: { agentBuiltin: false } });
     const result = runAgentPattern("agent-flag-off");
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -164,7 +164,7 @@ describe("agent builtin", () => {
   it("creates a queued record holding the task as a value and each input as a link", async () => {
     setUp();
     const result = runAgentPattern("agent-record-shape");
-    await tx.commit();
+    await tx.commit().settled;
 
     const record = await waitForRecord(result);
     const raw = record.getRaw() as Record<string, unknown>;
@@ -198,7 +198,7 @@ describe("agent builtin", () => {
       const result = runAgentPattern(`agent-invalid-input-${name}`, {
         inputs: { [name]: ["Dune"] },
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<AgentResult>(
         runtime,
@@ -232,7 +232,7 @@ describe("agent builtin", () => {
     const logger = getLogger("normalizeAndDiff");
     const warningsBefore = logger.countsByKey.diff?.warn ?? 0;
     const result = runAgentPattern("agent-stored-queue-scope");
-    await tx.commit();
+    await tx.commit().settled;
 
     const record = await waitForRecord(result);
     const index = agentQueueIndexCell(runtime, space);
@@ -250,7 +250,7 @@ describe("agent builtin", () => {
   it("appends one `{run, host}` entry to the requester's home index", async () => {
     setUp();
     const result = runAgentPattern("agent-home-index");
-    await tx.commit();
+    await tx.commit().settled;
 
     const record = await waitForRecord(result);
     const index = agentQueueIndexCell(runtime, space);
@@ -276,7 +276,7 @@ describe("agent builtin", () => {
   it("writes the entry into the queue the home default pattern holds", async () => {
     setUp();
     const result = runAgentPattern("agent-index-home-piece");
-    await tx.commit();
+    await tx.commit().settled;
 
     await waitForRecord(result);
     const queue = runtime.getHomeSpaceCell().key("defaultPattern")
@@ -297,7 +297,7 @@ describe("agent builtin", () => {
   it("ends the record as `refused` when the home space holds no queue", async () => {
     setUp({}, { seedQueue: false });
     const result = runAgentPattern("agent-no-queue");
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -324,7 +324,7 @@ describe("agent builtin", () => {
       }
       return syncCell(cell, options);
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -344,7 +344,7 @@ describe("agent builtin", () => {
     // land as an element of its own, not as one element written twice.
     const first = runAgentPattern("agent-index-pair-a", { task: "first" });
     const second = runAgentPattern("agent-index-pair-b", { task: "second" });
-    await tx.commit();
+    await tx.commit().settled;
 
     await waitForRecord(first);
     await waitForRecord(second);
@@ -371,7 +371,7 @@ describe("agent builtin", () => {
       if (event.kind === "hit") hits.push(event.id);
     };
     const result = runAgentPattern("agent-memo-hit");
-    await tx.commit();
+    await tx.commit().settled;
 
     const record = await waitForRecord(result);
     const submittedAt = record.get()?.submittedAt;
@@ -400,7 +400,7 @@ describe("agent builtin", () => {
   it("derives `pending: false` and `result` from a completed record", async () => {
     setUp();
     const result = runAgentPattern("agent-completed");
-    await tx.commit();
+    await tx.commit().settled;
 
     const record = await waitForRecord(result);
     const answer = runtime.getCell<{ answer: string }>(
@@ -431,7 +431,7 @@ describe("agent builtin", () => {
   it("derives `error` from a failed record's `errorCode`", async () => {
     setUp();
     const result = runAgentPattern("agent-failed");
-    await tx.commit();
+    await tx.commit().settled;
 
     const record = await waitForRecord(result);
     await runtime.editWithRetry((tx) => {
@@ -477,7 +477,7 @@ describe("agent builtin", () => {
       AgentResult
     >;
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -518,7 +518,7 @@ describe("agent builtin", () => {
       AgentResult
     >;
     runtime.prepareTxForCommit(tx);
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -536,7 +536,7 @@ describe("agent builtin", () => {
   it("settles idle, with no error, while the task is empty", async () => {
     setUp();
     const result = runAgentPattern("agent-no-request", { task: "" });
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -556,7 +556,7 @@ describe("agent builtin", () => {
     // no home space; the stub stands in for that posture.
     runtime.homeSpacePrincipalFor = () => undefined;
     const result = runAgentPattern("agent-no-identity");
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -599,7 +599,7 @@ describe("agent builtin", () => {
       setUp();
       const result = runAgentPattern("agent-record-rejected");
       rejectEffectWrite([1]);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<AgentResult>(
         runtime,
@@ -617,7 +617,7 @@ describe("agent builtin", () => {
       setUp();
       const result = runAgentPattern("agent-record-and-refusal-rejected");
       rejectEffectWrite([1, 2]);
-      await tx.commit();
+      await tx.commit().settled;
       await waitForCellValue<AgentResult>(
         runtime,
         result,
@@ -635,7 +635,7 @@ describe("agent builtin", () => {
       setUp();
       const result = runAgentPattern("agent-index-and-refusal-rejected");
       rejectEffectWrite([2, 3]);
-      await tx.commit();
+      await tx.commit().settled;
 
       const record = await waitForRecord(result);
 
@@ -648,7 +648,7 @@ describe("agent builtin", () => {
       const id = "agent-unindexed-restart";
       const first = runAgentPattern(id);
       rejectEffectWrite([2, 3]);
-      await tx.commit();
+      await tx.commit().settled;
       const record = await waitForRecord(first);
       const queue = agentQueueIndexCell(runtime, space);
       expect(queue.key("entries").get()).toEqual([]);
@@ -676,7 +676,7 @@ describe("agent builtin", () => {
       setUp();
       const first = runAgentPattern(id);
       rejectEffectWrite([2, 3]);
-      await tx.commit();
+      await tx.commit().settled;
       const record = await waitForRecord(first);
       rejectEffectWrite([1], () => race(record));
       return { record, second: await restart(id, first) };
@@ -691,7 +691,7 @@ describe("agent builtin", () => {
             run: record,
             host: "https://fabric.example",
           });
-          await list.commit();
+          await list.commit().settled;
         },
       );
 
@@ -708,7 +708,7 @@ describe("agent builtin", () => {
         async (record) => {
           const claim = runtime.edit();
           record.withTx(claim).key("state").set("claimed");
-          await claim.commit();
+          await claim.commit().settled;
         },
       );
 
@@ -721,7 +721,7 @@ describe("agent builtin", () => {
       const id = "agent-listing-release-refused";
       const first = runAgentPattern(id);
       rejectEffectWrite([2, 3]);
-      await tx.commit();
+      await tx.commit().settled;
       const record = await waitForRecord(first);
       const queue = agentQueueIndexCell(runtime, space);
 
@@ -760,7 +760,7 @@ describe("agent builtin", () => {
       const cancelDemand = second.sink(() => {});
       const touch = runtime.edit();
       record.withTx(touch).key("stateSince").set("2026-09-25T00:00:01.000Z");
-      await touch.commit();
+      await touch.commit().settled;
       await runtime.settled();
       cancelDemand();
 
@@ -804,9 +804,9 @@ describe("agent builtin", () => {
       rejectEffectWrite([1], async () => {
         const replace = runtime.edit();
         taskCell.withTx(replace).set("the second task");
-        await replace.commit();
+        await replace.commit().settled;
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const record = await waitForRecord(result);
 
@@ -819,7 +819,7 @@ describe("agent builtin", () => {
       setUp();
       const result = runAgentPattern("agent-index-rejected");
       rejectEffectWrite([2]);
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<AgentResult>(
         runtime,
@@ -853,7 +853,7 @@ describe("agent builtin", () => {
       }
       return await editWithRetry(fn, ...rest);
     }) as typeof runtime.editWithRetry;
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -897,7 +897,7 @@ describe("agent builtin", () => {
       return editTx;
     }) as typeof runtime.edit;
     const result = runAgentPattern("agent-release-refused");
-    await tx.commit();
+    await tx.commit().settled;
 
     const settled = await waitForCellValue<AgentResult>(
       runtime,
@@ -930,9 +930,9 @@ describe("agent builtin", () => {
         const claim = runtime.edit();
         const record = result.key("run").resolveAsCell();
         record.withTx(claim).key("state").set("claimed");
-        await claim.commit();
+        await claim.commit().settled;
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const record = await waitForRecord(result);
 
@@ -950,9 +950,9 @@ describe("agent builtin", () => {
           run: result.key("run").resolveAsCell(),
           host: "https://fabric.example",
         });
-        await list.commit();
+        await list.commit().settled;
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       await waitForRecord(result);
       const entries = agentQueueIndexCell(runtime, space).key("entries").get();
@@ -965,7 +965,7 @@ describe("agent builtin", () => {
     setUp();
     const id = "agent-listed-restart";
     const first = runAgentPattern(id);
-    await tx.commit();
+    await tx.commit().settled;
     const record = await waitForRecord(first);
     const before = record.getRaw();
 
@@ -990,7 +990,7 @@ describe("agent builtin", () => {
       const result = runAgentPattern("agent-tool-refused", {
         tools: ["loom_profile"],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const settled = await waitForCellValue<AgentResult>(
         runtime,
@@ -1010,7 +1010,7 @@ describe("agent builtin", () => {
       const result = runAgentPattern("agent-tool-no-runner", {
         tools: ["loom_profile"],
       });
-      await tx.commit();
+      await tx.commit().settled;
 
       const record = await waitForRecord(result);
 

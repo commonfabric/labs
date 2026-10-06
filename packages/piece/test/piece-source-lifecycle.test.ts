@@ -671,7 +671,7 @@ describe("piece source lifecycle", () => {
           undefined,
           rawMetaWriteAuthorization,
         );
-        await tx.commit();
+        await tx.commit().settled;
       }
       return pattern;
     };
@@ -706,7 +706,7 @@ describe("piece source lifecycle", () => {
           undefined,
           rawMetaWriteAuthorization,
         );
-        await tx.commit();
+        await tx.commit().settled;
       }
       return pattern;
     };
@@ -777,7 +777,7 @@ describe("piece source lifecycle", () => {
         "invalid",
         rawMetaWriteAuthorization,
       );
-      await tx.commit();
+      await tx.commit().settled;
       return {
         ok: false,
         error: new Error("source commit rejected"),
@@ -1188,7 +1188,7 @@ describe("piece source lifecycle", () => {
       undefined,
       rawMetaWriteAuthorization,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await expect(
       pieces.setupPersistent(pattern, {}, cause),
     ).rejects.toThrow(
@@ -1901,7 +1901,7 @@ describe("piece source lifecycle", () => {
         undefined,
         rawMetaWriteAuthorization,
       );
-      await tx.commit();
+      await tx.commit().settled;
       return await runPatternUpdate(...args);
     };
     try {

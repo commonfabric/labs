@@ -373,7 +373,7 @@ async function createNumberCells(
     cells.push(cell);
   }
 
-  await tx.commit();
+  await tx.commit().settled;
   return cells;
 }
 
@@ -397,14 +397,14 @@ async function createNumberObjectCells(
     cells.push(cell);
   }
 
-  await tx.commit();
+  await tx.commit().settled;
   return cells;
 }
 
 async function setNumber(runtime: Runtime, cell: Cell<number>, value: number) {
   const tx = runtime.edit();
   cell.withTx(tx).set(value);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 async function setNestedNumber(
@@ -414,7 +414,7 @@ async function setNestedNumber(
 ) {
   const tx = runtime.edit();
   cell.withTx(tx).key("value").set(value);
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 function consumeArray(value: readonly number[] | undefined) {
@@ -471,7 +471,7 @@ async function setupMapScenario(
     tx,
   );
   const result = env.runtime.run(tx, mapPattern, { values }, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     outputCell: result.key("mapped") as Cell<number[]>,
@@ -519,7 +519,7 @@ async function setupFilterScenario(
     tx,
   );
   const result = env.runtime.run(tx, filterPattern, { values }, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     outputCell: result.key("filtered") as Cell<number[]>,
@@ -567,7 +567,7 @@ async function setupFlatMapScenario(
     tx,
   );
   const result = env.runtime.run(tx, flatMapPattern, { values }, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     outputCell: result.key("flat") as Cell<number[]>,
@@ -611,7 +611,7 @@ async function setupObjectMapScenario(
     tx,
   );
   const result = env.runtime.run(tx, mapPattern, { values }, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     outputCell: result.key("mapped") as Cell<number[]>,
@@ -660,7 +660,7 @@ async function setupObjectFilterScenario(
     tx,
   );
   const result = env.runtime.run(tx, filterPattern, { values }, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     outputCell: result.key("filtered") as Cell<number[]>,
@@ -709,7 +709,7 @@ async function setupObjectFlatMapScenario(
     tx,
   );
   const result = env.runtime.run(tx, flatMapPattern, { values }, resultCell);
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     outputCell: result.key("flat") as Cell<number[]>,
@@ -757,7 +757,7 @@ async function setupFanoutScenario(
     outputCells.push(result.key("result") as Cell<number>);
   }
 
-  await tx.commit();
+  await tx.commit().settled;
 
   return {
     targetCell: inputCell.key("value") as Cell<number>,

@@ -178,7 +178,7 @@ async function phase1SavePatternAndData(
   const initialData: InputData = { values: [1, 2, 3, 4, 5], label: "Numbers" };
   const tx = ctx.runtime.edit();
   dataCell.withTx(tx).set(initialData);
-  await tx.commit();
+  await tx.commit().settled;
   await ctx.runtime.storageManager.synced();
   console.log("Data saved:", initialData);
 
@@ -223,7 +223,7 @@ async function phase2LoadAndVerify(
     { data: dataCell },
     resultCell,
   );
-  await tx.commit();
+  await tx.commit().settled;
   const pulled = await runResult.pull();
 
   const output = runResult.getAsQueryResult();
@@ -285,7 +285,7 @@ async function phase3ReactivityAndIsolation(
     resultCell3,
   );
 
-  const phase3Commit = await tx.commit();
+  const phase3Commit = await tx.commit().settled;
   assert(
     phase3Commit.ok,
     `Phase 3 setup commit failed: ${JSON.stringify(phase3Commit)}`,
@@ -318,7 +318,7 @@ async function phase3ReactivityAndIsolation(
 
   tx = ctx.runtime.edit();
   dataCell3.withTx(tx).set(updatedData);
-  await tx.commit();
+  await tx.commit().settled;
 
   // Wait for reactivity to propagate
   await runResult3.pull();
@@ -402,7 +402,7 @@ async function phase4CrossSessionReactivity(
 
   const tx = ctx.runtime.edit();
   dataCell.withTx(tx).set(newData);
-  await tx.commit();
+  await tx.commit().settled;
 
   // Wait for reactivity to propagate
   await resultCell.pull();

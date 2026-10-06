@@ -10,6 +10,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 
 import type { IFCLabel } from "@commonfabric/runner/cfc";
 
+import type { HarnessCommandResultProvenance } from "./client-command.ts";
 import type { HarnessSkillAcquisition } from "./skill.ts";
 
 /** Discriminator value of a {@link HarnessHandleTable}. */
@@ -98,10 +99,20 @@ export type HarnessHandleReferent =
     kind: "document";
 
     /**
-     * Where the label came from: the row's own `ifc`, or the label of the
-     * query, assigned because the row carried none.
+     * Where the label came from: the row's own `ifc`; the label of the query,
+     * assigned because the row carried none; or the label a command's result
+     * was held under, whether a Weaver or the host answered it. A `command`
+     * label is metadata the result carries with it: what a model may do with
+     * the result under that label is decided by the read policy, not by the
+     * label source.
      */
-    labelSource: "row" | "query";
+    labelSource: "row" | "query" | "command";
+
+    /**
+     * Which command produced the result, as whom, and against which loom
+     * and version. Present exactly when `labelSource` is `command`.
+     */
+    provenance?: HarnessCommandResultProvenance;
   })
   | (HarnessHandleReferentBase & {
     /** An admitted research kit. */
@@ -219,9 +230,15 @@ export interface HarnessHandleEntry {
 }
 
 /**
- * The session-local handle table. `salt` is the owning run's id, fixed at
- * creation, so token derivation is deterministic within a run and disjoint
- * across runs. The version stays `1` across the optional
+ * The session-local handle table. `salt` is the id of the run that created
+ * the table, fixed for the table's life: every token minted into it derives
+ * from that salt, so derivation is deterministic within the table and
+ * disjoint across tables. A table outlives the run that created it where a
+ * session carries it on — an interactive session's next turn is a fresh run
+ * that starts from the table the session kept, still under its first salt —
+ * so the salt names the table's origin, not the run that holds it now. Two
+ * tables merge only when their salts agree, which is what says both grew
+ * from one table. The version stays `1` across the optional
  * {@link HarnessHandleEntry.schema}: an entry without one is well-formed, so
  * a table persisted before schemas were captured loads unchanged. The same
  * holds for {@link HarnessHandleTable.referents}.

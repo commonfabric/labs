@@ -11,6 +11,7 @@ import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import {
   CellHandle,
+  CellReadRefusedError,
   PieceHandle,
   RuntimeErrorCode,
   VNode,
@@ -367,20 +368,32 @@ function loadErrorMessage(error: unknown): string {
 
 globalThis.customElements.define("x-body-view", XBodyView);
 
+/**
+ * The handle a sidebar is rendered from, when the piece `cell` holds shows
+ * one: its `sidebarUI`, read as a render tree. The piece is read for that
+ * field alone, so the read is decided on what it reads, not on what else
+ * the piece holds. `undefined` when it shows none, or when the display
+ * ceiling keeps the sidebar from the shell.
+ */
 async function getSidebarCell(
   cell: CellHandle<SubPages> | undefined,
 ): Promise<CellHandle<VNode> | undefined> {
   if (!cell) return undefined;
   const typedCell = cell.asSchema<SubPages>(SubPagesSchema);
-  let value = typedCell.get();
-  if (!value) {
-    await typedCell.sync();
-    value = typedCell.get();
+  try {
+    let value = typedCell.get();
     if (!value) {
-      return;
+      await typedCell.sync();
+      value = typedCell.get();
+      if (!value) {
+        return;
+      }
     }
-  }
-  if (value.sidebarUI) {
-    return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    if (value.sidebarUI) {
+      return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    }
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
   }
 }

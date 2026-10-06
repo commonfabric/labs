@@ -184,9 +184,15 @@ export async function runAt(
 }
 
 /**
- * Every record in one extracted `test-records-*` artifact. The gather
- * step always writes the file, so one that is not there is a truncated
- * artifact and contributes nothing.
+ * Every record in one extracted `test-records-*` artifact.
+ *
+ * The gather step writes `records.ndjson` last, so an artifact without it
+ * is one whose gathering stopped part way, and it contributes no records.
+ * That is safe where an artifact that could not be downloaded is not. An
+ * artifact cannot change once uploaded, so every report on the run reads
+ * this one the same way, and a run's records are read across all of its
+ * attempts together. The records it lacks can therefore leave a note
+ * unwritten, but cannot withdraw one an earlier report made.
  */
 export async function recordsInDirectory(
   directory: string,

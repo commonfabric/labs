@@ -63,7 +63,7 @@ describe("profile-home bio (owner-protected free-text field)", () => {
         resultCell,
       );
       rt.prepareTxForCommit(tx);
-      const commit = await tx.commit();
+      const commit = await tx.commit().settled;
       expect(commit.error).toBeUndefined();
       await result.pull();
 
@@ -80,7 +80,7 @@ describe("profile-home bio (owner-protected free-text field)", () => {
       // an enforcing rung refuses a relevant transaction that arrives
       // unprepared.
       rt.prepareTxForCommit(tx2);
-      const commit2 = await tx2.commit();
+      const commit2 = await tx2.commit().settled;
       expect(commit2.error).toBeUndefined();
       await result.pull();
       await rt.idle();
@@ -93,7 +93,7 @@ describe("profile-home bio (owner-protected free-text field)", () => {
         bio: "  Countess of Lovelace.  ",
       });
       rt.prepareTxForCommit(tx3);
-      const commit3 = await tx3.commit();
+      const commit3 = await tx3.commit().settled;
       expect(commit3.error).toBeUndefined();
       await result.pull();
       await rt.idle();

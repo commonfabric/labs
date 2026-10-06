@@ -1,0 +1,16 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-2",
+  "settlement": {
+    "status": "failed_to_deliver",
+    "reason": "the connection closed before the service answered",
+    "landed": "unknown",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    }
+  }
+}

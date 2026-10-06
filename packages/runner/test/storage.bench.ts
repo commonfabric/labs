@@ -45,7 +45,7 @@ async function cleanup(
   storageManager: ReturnType<typeof StorageManager.emulate>,
   tx: IExtendedStorageTransaction,
 ) {
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.dispose();
   await storageManager.close();
 }
@@ -525,7 +525,7 @@ Deno.bench(
   { group: "commit" },
   async () => {
     const { runtime, storageManager, tx } = setup();
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   },
@@ -550,7 +550,7 @@ Deno.bench(
       );
     }
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.dispose();
     await storageManager.close();
   },
@@ -911,7 +911,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx.commit();
+    await tx.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -938,7 +938,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx.commit();
+    await tx.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -964,7 +964,7 @@ Deno.bench(
       writeDocument(tx, `test:realistic-eq-${i}`, medianComplexityA);
     }
     // Commit first batch
-    await tx.commit();
+    await tx.commit().settled;
 
     // Start new transaction and write identical values
     const tx2 = runtime.edit();
@@ -973,7 +973,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx2.commit();
+    await tx2.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -991,7 +991,7 @@ Deno.bench(
     for (let i = 0; i < 100; i++) {
       writeDocument(tx, `test:realistic-late-${i}`, medianComplexityA);
     }
-    await tx.commit();
+    await tx.commit().settled;
 
     // Update with values that differ at end of structure
     const tx2 = runtime.edit();
@@ -1000,7 +1000,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx2.commit();
+    await tx2.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -1018,7 +1018,7 @@ Deno.bench(
     for (let i = 0; i < 100; i++) {
       writeDocument(tx, `test:realistic-early-${i}`, medianComplexityA);
     }
-    await tx.commit();
+    await tx.commit().settled;
 
     // Update with values that differ at start of structure
     const tx2 = runtime.edit();
@@ -1027,7 +1027,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx2.commit();
+    await tx2.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -1053,7 +1053,7 @@ Deno.bench(
     for (let i = 0; i < 50; i++) {
       writeDocument(tx, `test:large-eq-${i}`, largeStringA);
     }
-    await tx.commit();
+    await tx.commit().settled;
 
     // "Update" with identical values
     const tx2 = runtime.edit();
@@ -1062,7 +1062,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx2.commit();
+    await tx2.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -1080,7 +1080,7 @@ Deno.bench(
     for (let i = 0; i < 50; i++) {
       writeDocument(tx, `test:large-diff-${i}`, largeStringA);
     }
-    await tx.commit();
+    await tx.commit().settled;
 
     // Update with values where 100k string differs only at last char
     const tx2 = runtime.edit();
@@ -1089,7 +1089,7 @@ Deno.bench(
     }
 
     b.start();
-    await tx2.commit();
+    await tx2.commit().settled;
     b.end();
 
     await runtime.dispose();
@@ -1115,7 +1115,7 @@ Deno.bench(
     for (let i = 0; i < 50; i++) {
       writeDocument(tx, `test:read-val-${i}`, largeStringA);
     }
-    await tx.commit();
+    await tx.commit().settled;
 
     // New transaction: read all entities (creates read invariants)
     const tx2 = runtime.edit();
@@ -1125,7 +1125,7 @@ Deno.bench(
 
     // Commit validates each read invariant via attestation.claim()
     b.start();
-    await tx2.commit();
+    await tx2.commit().settled;
     b.end();
 
     await runtime.dispose();

@@ -1929,7 +1929,7 @@ describe("opening a space root", () => {
     const edit = runtime.edit();
     root.withTx(edit).key("items").set(["saved"]);
     runtime.prepareTxForCommit(edit);
-    expect((await edit.commit()).error).toBeUndefined();
+    expect((await edit.commit().settled).error).toBeUndefined();
     await controller.stopPiece(root);
 
     stub.setSource(SOURCE_HOME_GUARDED_DEFAULT);
@@ -1956,7 +1956,7 @@ describe("opening a space root", () => {
     const append = runtime.edit();
     after.withTx(append).key("addGuardedRow").send({ label: "owner edit" });
     runtime.prepareTxForCommit(append);
-    expect((await append.commit()).error).toBeUndefined();
+    expect((await append.commit().settled).error).toBeUndefined();
     await after.pull();
     await runtime.idle();
     const updated = (await controller.getDefaultPattern(false))!;
@@ -1971,7 +1971,7 @@ describe("opening a space root", () => {
     )
       .key("guarded").set([]);
     runtime.prepareTxForCommit(attack);
-    expect((await attack.commit()).error?.message).toContain(
+    expect((await attack.commit().settled).error?.message).toContain(
       "writeAuthorizedBy",
     );
   });

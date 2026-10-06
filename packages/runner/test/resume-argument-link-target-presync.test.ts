@@ -131,7 +131,7 @@ describe("resume pre-sync covers what a body reads through an argument link", ()
       // deno-lint-ignore no-explicit-any
       const r1 = rt1.run(tx1, parent as any, { def: profileCell }, resultCell1);
       rt1.prepareTxForCommit(tx1);
-      const commit1 = await tx1.commit();
+      const commit1 = await tx1.commit().settled;
       expect(commit1.error).toBeUndefined();
       await r1.pull();
       await rt1.idle();

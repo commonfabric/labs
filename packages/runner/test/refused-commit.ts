@@ -61,7 +61,7 @@ export const prepareAndCommit = async (
   tx: IExtendedStorageTransaction,
 ): Promise<{
   reasons: readonly string[];
-  result: Awaited<ReturnType<IExtendedStorageTransaction["commit"]>>;
+  result: Awaited<ReturnType<IExtendedStorageTransaction["commit"]>["settled"]>;
 }> => {
   tx.prepareCfc();
   const prepare = tx.getCfcState().prepare;
@@ -69,6 +69,6 @@ export const prepareAndCommit = async (
     reasons: prepare.status === "invalidated"
       ? prepare.reasons.map(plainReason)
       : [],
-    result: await tx.commit(),
+    result: await tx.commit().settled,
   };
 };

@@ -130,7 +130,7 @@ describe("rehydrate internal default", () => {
 
       const tx = rt1.edit();
       internal1.withTx(tx).set("profile");
-      await tx.commit();
+      await tx.commit().settled;
       await sm1.synced();
       expect(internal1.get()).toEqual("profile");
 
@@ -178,7 +178,7 @@ describe("rehydrate internal default", () => {
       const internal1 = internalCellOf(rt1, rc1, "activeTab")!;
       const tx = rt1.edit();
       internal1.withTx(tx).set("profile");
-      await tx.commit();
+      await tx.commit().settled;
       await sm1.synced();
 
       const internalLink = internalLinkOf(rc1, "activeTab");

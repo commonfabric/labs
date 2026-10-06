@@ -18,8 +18,10 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
+  canonicalizeConsumedRead,
   canonicalizeLogicalPath,
   canonicalizePreparedDigestInput,
+  canonicalizeRecordAddress,
 } from "../src/cfc/canonical.ts";
 import { preparedDigestFor, type PreparedDigestInput } from "../src/cfc/mod.ts";
 import type { WritePolicyInput } from "../src/cfc/types.ts";
@@ -56,9 +58,15 @@ const warm = (input: PreparedDigestInput): PreparedDigestInput => {
   const warmAddr = <T extends { path: readonly string[] }>(a: T): T =>
     deepFreeze({ ...a, path: canonicalizeLogicalPath(a.path) });
   return deepFreeze({
-    consumedReads: input.consumedReads.map(warmAddr),
-    attemptedWrites: input.attemptedWrites.map(warmAddr),
-    writes: input.writes.map(warmAddr),
+    consumedReads: input.consumedReads.map((read) =>
+      deepFreeze(canonicalizeConsumedRead(read))
+    ),
+    attemptedWrites: input.attemptedWrites.map((write) =>
+      deepFreeze(canonicalizeRecordAddress(write))
+    ),
+    writes: input.writes.map((write) =>
+      deepFreeze(canonicalizeRecordAddress(write))
+    ),
     // Attempt-log paths stay RAW by contract (no canonicalization), so
     // warming is just the chokepoint freeze.
     writeAttemptLog: input.writeAttemptLog.map((a) => deepFreeze({ ...a })),

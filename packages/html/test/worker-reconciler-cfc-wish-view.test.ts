@@ -104,7 +104,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
     const tx = runtime.edit();
     const resultCell = runtime.getCell<R>(patternSpace, cause, undefined, tx);
     const piece = runtime.run(tx, piecePattern, argument, resultCell);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await piece.pull();
     await t.settle();
     return piece.withTx(undefined);
@@ -146,7 +146,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
         },
       },
     });
-    expect((await seedTx.commit()).error).toBeUndefined();
+    expect((await seedTx.commit().settled).error).toBeUndefined();
 
     // A piece whose `[UI]` slot links to a view document holding the sealed
     // cell inside a render boundary.
@@ -167,7 +167,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
       pieceTx,
     );
     linkedPiece.set({ title: "Linked", [UI]: linkedView });
-    expect((await pieceTx.commit()).error).toBeUndefined();
+    expect((await pieceTx.commit().settled).error).toBeUndefined();
 
     // A piece whose view a computation builds from the sealed cell.
     const viewOf = lift((sheet: string) => vnode("div", [sheet]));
@@ -202,7 +202,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
         },
       ],
     });
-    expect((await profileTx.commit()).error).toBeUndefined();
+    expect((await profileTx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(
       owner.did(),
@@ -214,7 +214,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
     runtime.getHomeSpaceCell(homeTx).key("defaultPattern").set(
       homeDefault,
     );
-    expect((await homeTx.commit()).error).toBeUndefined();
+    expect((await homeTx.commit().settled).error).toBeUndefined();
 
     const finder = await runInPatternSpace<Record<string, unknown>>(
       pattern(() => ({

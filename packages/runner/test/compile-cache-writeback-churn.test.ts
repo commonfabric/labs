@@ -128,7 +128,7 @@ describe("compile-cache write-back of a closure the store already holds", () => 
       );
       const ref = first.runtime.patternManager.getArtifactEntryRef(compiled)!;
       await first.runtime.patternManager.flushCompileCacheWrites();
-      await tx.commit();
+      await tx.commit().settled;
       await first.sm.synced();
 
       const entrySourceId = first.runtime.getCell(
@@ -224,7 +224,7 @@ describe("compile-cache write-back of a closure the store already holds", () => 
         tx,
       );
       tx.prepareCfc();
-      const { error } = await tx.commit();
+      const { error } = await tx.commit().settled;
       await sm.synced();
       return error;
     };

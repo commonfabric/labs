@@ -1,0 +1,897 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "A group room's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ChatDeletedBody": {
+        "properties": {
+          "deleted": {
+            "description": "Always `true`: the marker of a deleted message.",
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first: the\nlatest edit or deletion. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "description": "Everyone's reactions to this message, in no particular order.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply",
+            "description": "What this message replies to, and where it is shown; absent for none."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "description": "The version's text.",
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the room recorded this version; in a send or an edit, the time the\nsender proposes.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "description": "A single emoji.",
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the reactor reacted under."
+          },
+          "sentAt": {
+            "description": "When the room recorded the reaction. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ChatReplyShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatReplyShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created; absent for a space's own chat.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "`\"direct\"` if created as a direct room; `\"group\"` otherwise."
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The room's policy, stated correctly, in a document of its own."
+          },
+          "record": {
+            "$ref": "#/$defs/AboutRecord",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The record the room's creator wrote, whose label names them; absent for a\nspace's own chat, which no one created as a room."
+          },
+          "title": {
+            "description": "A group room's title. A direct room, and a space's own chat, have none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "description": "When the room recorded it. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "description": "The `requestId` of the event it records.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The entry's place in the room's activity: 1, 2, 3, … with no gaps.",
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message the event changed or added."
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "direct",
+          "group"
+        ]
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "description": "Whether a sender's deletion of their own message obliterates it.",
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "description": "Whether an edit or a plain deletion keeps the version it replaces.",
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "description": "The most message windows a session can have open.",
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "description": "The most messages a message window holds.",
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "description": "Whether an OWNER may obliterate messages.",
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "description": "How far before the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "description": "How far after the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "description": "How long an entry stays in `recentActivity`, in ns.",
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "PlacedMessage": {
+        "properties": {
+          "reactions": {
+            "description": "Everyone's reactions to the message.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PlacedMessageList": {
+        "properties": {
+          "count": {
+            "description": "How many messages the room holds.",
+            "type": "number"
+          },
+          "latest": {
+            "description": "The newest messages of the main conversation.",
+            "properties": {
+              "hasOlder": {
+                "type": "boolean"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/PlacedMessage",
+                  "asCell": [
+                    "cell"
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "windows": {
+            "additionalProperties": {
+              "properties": {
+                "messages": {
+                  "items": {
+                    "$ref": "#/$defs/PlacedMessage",
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "description": "The reading session's windows.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "PlacedRoom": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself."
+          },
+          "canSend": {
+            "description": "Whether the reader can send.",
+            "type": "boolean"
+          },
+          "messages": {
+            "$ref": "#/$defs/PlacedMessageList",
+            "description": "The room's messages."
+          },
+          "participants": {
+            "description": "The room's participants.",
+            "items": {
+              "$ref": "#/$defs/ChatProfile",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "description": "What the room recorded recently.",
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "What a placement holds.",
+    "properties": {
+      "room": {
+        "$ref": "#/$defs/PlacedRoom",
+        "asCell": [
+          "cell"
+        ],
+        "description": "The room, set when the placement is created."
+      }
+    },
+    "required": [
+      "room"
+    ],
+    "type": "object"
+  },
+  "pattern": "fabrichat/placement.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "A group room's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ChatDeletedBody": {
+        "properties": {
+          "deleted": {
+            "description": "Always `true`: the marker of a deleted message.",
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first: the\nlatest edit or deletion. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "description": "Everyone's reactions to this message, in no particular order.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply",
+            "description": "What this message replies to, and where it is shown; absent for none."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "description": "The version's text.",
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the room recorded this version; in a send or an edit, the time the\nsender proposes.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "description": "A single emoji.",
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "description": "The profile the reactor reacted under."
+          },
+          "sentAt": {
+            "description": "When the room recorded the reaction. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReactionTally": {
+        "properties": {
+          "count": {
+            "description": "How many people reacted with it.",
+            "type": "number"
+          },
+          "emoji": {
+            "description": "The emoji.",
+            "type": "string"
+          },
+          "mine": {
+            "description": "Whether the viewer is one of them.",
+            "type": "boolean"
+          },
+          "reactors": {
+            "description": "Their profiles, in the order they reacted.",
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "emoji",
+          "count",
+          "mine",
+          "reactors"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ChatReplyShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatReplyShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created; absent for a space's own chat.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "`\"direct\"` if created as a direct room; `\"group\"` otherwise."
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "description": "The room's policy, stated correctly, in a document of its own."
+          },
+          "record": {
+            "$ref": "#/$defs/AboutRecord",
+            "description": "The record the room's creator wrote, whose label names them; absent for a\nspace's own chat, which no one created as a room."
+          },
+          "title": {
+            "description": "A group room's title. A direct room, and a space's own chat, have none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "description": "When the room recorded it. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "description": "The `requestId` of the event it records.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The entry's place in the room's activity: 1, 2, 3, … with no gaps.",
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage",
+            "description": "The message the event changed or added."
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "direct",
+          "group"
+        ]
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "description": "Whether a sender's deletion of their own message obliterates it.",
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "description": "Whether an edit or a plain deletion keeps the version it replaces.",
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "description": "The most message windows a session can have open.",
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "description": "The most messages a message window holds.",
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "description": "Whether an OWNER may obliterate messages.",
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "description": "How far before the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "description": "How far after the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "description": "How long an entry stays in `recentActivity`, in ns.",
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "FabriChatPlacementView": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself; absent unless `state` is `\"member\"`."
+          },
+          "canSend": {
+            "description": "Whether the viewer can send.",
+            "type": "boolean"
+          },
+          "messages": {
+            "$ref": "#/$defs/PlacedMessageList",
+            "description": "The room's messages; absent unless `state` is `\"member\"`."
+          },
+          "participants": {
+            "description": "The room's participants.",
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "reactionTallies": {
+            "description": "Reactions on the newest messages and on the session's windows.",
+            "items": {
+              "$ref": "#/$defs/PlacedTallies"
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "description": "What the room recorded recently.",
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/$defs/PlacementState",
+            "description": "Whether the viewer can read the room."
+          }
+        },
+        "required": [
+          "state",
+          "canSend",
+          "recentActivity",
+          "participants",
+          "reactionTallies"
+        ],
+        "type": "object"
+      },
+      "PlacedMessage": {
+        "properties": {
+          "reactions": {
+            "description": "Everyone's reactions to the message.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PlacedMessageList": {
+        "properties": {
+          "count": {
+            "description": "How many messages the room holds.",
+            "type": "number"
+          },
+          "latest": {
+            "description": "The newest messages of the main conversation.",
+            "properties": {
+              "hasOlder": {
+                "type": "boolean"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/PlacedMessage"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "windows": {
+            "additionalProperties": {
+              "properties": {
+                "messages": {
+                  "items": {
+                    "$ref": "#/$defs/PlacedMessage"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "description": "The reading session's windows.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "PlacedRoom": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself."
+          },
+          "canSend": {
+            "description": "Whether the reader can send.",
+            "type": "boolean"
+          },
+          "messages": {
+            "$ref": "#/$defs/PlacedMessageList",
+            "description": "The room's messages."
+          },
+          "participants": {
+            "description": "The room's participants.",
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "description": "What the room recorded recently.",
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PlacedTallies": {
+        "properties": {
+          "message": {
+            "description": "The message.",
+            "type": "unknown"
+          },
+          "tallies": {
+            "description": "Its reactions, by emoji, in the order each was first used.",
+            "items": {
+              "$ref": "#/$defs/ChatReactionTally"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "message",
+          "tallies"
+        ],
+        "type": "object"
+      },
+      "PlacementState": {
+        "enum": [
+          "member",
+          "not-member",
+          "unavailable"
+        ]
+      }
+    },
+    "description": "What a placement offers.",
+    "properties": {
+      "$NAME": {
+        "description": "The placed room's title, for lists of pieces: `\"Chat\"` for a room with no\ntitle, and `\"Chat (unavailable)\"` for a room the viewer can't read.",
+        "type": "string"
+      },
+      "$VIEWS": {
+        "description": "The placement's data face.",
+        "properties": {
+          "chat": {
+            "$ref": "#/$defs/FabriChatPlacementView"
+          }
+        },
+        "required": [
+          "chat"
+        ],
+        "type": "object"
+      },
+      "room": {
+        "$ref": "#/$defs/PlacedRoom",
+        "description": "The room, so a client can reach its own streams."
+      }
+    },
+    "required": [
+      "room",
+      "$NAME",
+      "$VIEWS"
+    ],
+    "type": "object"
+  }
+}

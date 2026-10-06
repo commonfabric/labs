@@ -78,7 +78,7 @@ describe("fresh-replica read asymmetry", () => {
       myName: "gideon-c",
       topics: [entry0, entry1, entry2],
     });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
   });
@@ -210,7 +210,7 @@ describe("fresh-replica read asymmetry", () => {
       tx,
     );
     chainContainer.set({ entry: chainEntry });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 
@@ -246,7 +246,7 @@ describe("fresh-replica read asymmetry", () => {
       tx,
     );
     holder.set({ present: "here", ghost });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error).toBeUndefined();
     await writerStorage.synced();
 

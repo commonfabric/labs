@@ -48,7 +48,7 @@ describe("modern-cell-rep wedge", () => {
       );
       return fn(cell.entityId);
     } finally {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.dispose();
       await storageManager.close();
     }

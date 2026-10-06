@@ -99,7 +99,7 @@ describe("a runtime policy application", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return runtime;
   };
 
@@ -148,7 +148,7 @@ describe("a runtime policy application", () => {
     applyCfcPolicyToExistingValue(
       runtime.getCell(space, "applies", OWNER_LABEL, tx),
     );
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const stored = storedIfcAt(runtime, "applies", "queue");
     expect(stored.root).toMatchObject({ confidentiality: ["owner-clause"] });
@@ -195,7 +195,9 @@ describe("a runtime policy application", () => {
       trust(tx, APPLIER);
       runtime.getCell(space, "cell-method", OWNER_LABEL, tx)
         .applyCfcSchemaToExistingValue();
-      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      expect(refusalOf(await tx.commit().settled)).toContain(
+        "writeAuthorizedBy",
+      );
     });
 
     it("refuses an application recorded without the runtime's authorization", async () => {
@@ -219,7 +221,9 @@ describe("a runtime policy application", () => {
           path: [],
         },
       });
-      expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+      expect(refusalOf(await tx.commit().settled)).toContain(
+        "writeAuthorizedBy",
+      );
     });
 
     const inHandler = async (
@@ -341,7 +345,7 @@ describe("a runtime policy application", () => {
     applyCfcPolicyToExistingValue(
       runtime.getCell(space, "verified-applier", OWNER_LABEL, tx),
     );
-    expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+    expect(refusalOf(await tx.commit().settled)).toContain("writeAuthorizedBy");
   });
 
   it("refuses an application with no identity", async () => {
@@ -351,7 +355,7 @@ describe("a runtime policy application", () => {
     applyCfcPolicyToExistingValue(
       runtime.getCell(space, "unattributed-applier", OWNER_LABEL, tx),
     );
-    expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+    expect(refusalOf(await tx.commit().settled)).toContain("writeAuthorizedBy");
   });
 
   describe("a write to the document in the same transaction", () => {
@@ -376,7 +380,9 @@ describe("a runtime policy application", () => {
           runtime.getCell(space, id, OWNER_LABEL, tx),
         );
         runtime.getCell(space, id, undefined, tx).key(key).set(value as never);
-        expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+        expect(refusalOf(await tx.commit().settled)).toContain(
+          "writeAuthorizedBy",
+        );
         expect(runtime.getCell(space, id, STORED).get()).toEqual(SEED);
       });
     }
@@ -398,7 +404,7 @@ describe("a runtime policy application", () => {
         other: { type: "string", ifc: { writeAuthorizedBy: ["mallory"] } },
       },
     }, tx).setRaw(SEED as never);
-    expect(refusalOf(await tx.commit())).toContain("writeAuthorizedBy");
+    expect(refusalOf(await tx.commit().settled)).toContain("writeAuthorizedBy");
     expect(storedIfcAt(runtime, "beside-schema", "other").at).toBeUndefined();
   });
 
@@ -434,7 +440,7 @@ describe("a runtime policy application", () => {
         },
       }, tx),
     );
-    expect(refusalOf(await tx.commit())).toContain(
+    expect(refusalOf(await tx.commit().settled)).toContain(
       "drops the stored writeAuthorizedBy at /queue",
     );
   });
@@ -462,7 +468,7 @@ describe("a runtime policy application", () => {
         type: "string",
         ifc: { confidentiality: ["source-clause"] },
       }, tx).set("s");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const tx = runtime.edit();
     trust(tx, APPLIER);
@@ -473,7 +479,7 @@ describe("a runtime policy application", () => {
     applyCfcPolicyToExistingValue(
       runtime.getCell(space, "floor", OWNER_LABEL, tx),
     );
-    expect(refusalOf(await tx.commit())).toContain(
+    expect(refusalOf(await tx.commit().settled)).toContain(
       "requiredIntegrity failed at /verified",
     );
   });

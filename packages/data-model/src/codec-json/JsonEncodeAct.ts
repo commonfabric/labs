@@ -110,7 +110,9 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     // never sees the order this loop chose. Section 10 of the formal spec
     // requires the UTF-8 order, so serializing the members directly -- rather
     // than by way of an object whose enumeration reorders them -- is what
-    // would actually deliver it.
+    // would actually deliver it. The case
+    // `record keys that read as integers` in
+    // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
     const result: Record<string, JsonCodecValue> = {};
     let anySlashKey = false;
     try {

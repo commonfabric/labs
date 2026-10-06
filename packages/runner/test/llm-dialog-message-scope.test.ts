@@ -96,7 +96,7 @@ describe("llmDialog message document scope", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const addMessage = await result.key("addMessage").pull();
@@ -143,6 +143,6 @@ describe("llmDialog message document scope", () => {
       expect(payload!.scope).toBe(undefined);
     }
 
-    await rtx.commit();
+    await rtx.commit().settled;
   });
 });

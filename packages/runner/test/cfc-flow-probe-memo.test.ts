@@ -91,7 +91,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
           },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
       try {
         for (let index = 0; index < 40; index++) {
@@ -129,7 +129,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
       const afterPrepare = probeCounts(runtime);
       expect(afterPrepare.computed - before.computed).toBe(1);
       expect(afterPrepare.memo - before.memo).toBe(0);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const afterCommit = probeCounts(runtime);
       // ONE evaluation for the whole commit; the chokepoint hit the memo.
       expect(afterCommit.computed - before.computed).toBe(1);
@@ -169,7 +169,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
       runtime.prepareTxForCommit(tx);
       // Activity after the first ask: a further read.
       c.getRaw();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const after = probeCounts(runtime);
       expect(after.computed - before.computed).toBe(2);
       expect(after.memo - before.memo).toBe(0);
@@ -190,7 +190,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
       const before = probeCounts(runtime);
       runtime.prepareTxForCommit(tx);
       b.set({ v: 2 });
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const after = probeCounts(runtime);
       expect(after.computed - before.computed).toBe(2);
       expect(after.memo - before.memo).toBe(0);
@@ -232,7 +232,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const source = runtime.getCell(
@@ -253,7 +253,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
       const before = probeCounts(runtime);
       runtime.prepareTxForCommit(tx);
       expect(tx.getCfcState().relevant).toBe(true);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const after = probeCounts(runtime);
       // One evaluation (positive), zero memo hits: a relevant tx is not
       // probed again by anyone.
@@ -298,7 +298,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
           },
         },
       });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       tx.writeOrThrow({
@@ -312,7 +312,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
       // relevant, and the same step prepares it.
       const before = probeCounts(runtime);
       expect(tx.getCfcState().relevant).toBe(false);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(tx.getCfcState().relevant).toBe(true);
       expect(tx.getCfcState().prepare.status).toBe("prepared");
       const after = probeCounts(runtime);
@@ -344,7 +344,7 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
         b.set({ v: 1 });
         const before = probeCounts(runtime);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         const after = probeCounts(runtime);
         // The OFF arm commits exactly this one transaction; a flag-ON
         // client's commit also rides a couple of runtime-internal

@@ -14,6 +14,7 @@ import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
 import { deepFreeze } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { writeDetailValueForTarget } from "../src/cfc/prepare.ts";
@@ -38,7 +39,7 @@ const detail = (
   path: readonly string[],
   value: unknown,
 ): TransactionWriteDetail => ({
-  address: { space: SPACE, id: ID, scope: SCOPE, path },
+  address: { space: SPACE, id: ID, scope: SCOPE, path: toDocumentPath(path) },
   // deno-lint-ignore no-explicit-any
   value: value as any,
 });
@@ -174,7 +175,12 @@ Deno.test("writeDetailValueForTarget: previousValue uses the coarse ancestor sna
   // pre-write subtree, so per-field previous-values are not composed.
   const tx = txWith([
     {
-      address: { space: SPACE, id: ID, scope: SCOPE, path: ["value"] },
+      address: {
+        space: SPACE,
+        id: ID,
+        scope: SCOPE,
+        path: toDocumentPath(["value"]),
+      },
       // deno-lint-ignore no-explicit-any
       value: {} as any,
       // deno-lint-ignore no-explicit-any
@@ -185,7 +191,7 @@ Deno.test("writeDetailValueForTarget: previousValue uses the coarse ancestor sna
         space: SPACE,
         id: ID,
         scope: SCOPE,
-        path: ["value", "origin"],
+        path: toDocumentPath(["value", "origin"]),
       },
       // deno-lint-ignore no-explicit-any
       value: "new" as any,

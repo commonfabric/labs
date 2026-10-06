@@ -172,7 +172,7 @@ describe("fetch-served-instances", () => {
     });
     {
       runtime.prepareTxForCommit(edits[0]);
-      expect((await edits[0].commit()).error).toBeUndefined();
+      expect((await edits[0].commit().settled).error).toBeUndefined();
       await runtime.settled();
       expect(issued).toBe(1);
       using opened = spy(runtime, "edit");
@@ -256,7 +256,7 @@ describe("fetch-served-instances", () => {
           action(tx);
           keys.push(tx.getCfcState().outbox[0].idempotencyKey!);
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await issued[index].promise;
           expect(
             completions.filter((entry) => entry.key === keys[index]).map((
@@ -372,7 +372,7 @@ describe("fetch-served-instances", () => {
     };
     const commit = async (tx: IExtendedStorageTransaction) => {
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.settled();
     };
     return {
@@ -422,11 +422,11 @@ describe("fetch-served-instances", () => {
     try {
       const initial = original.stage(true);
       runtime.prepareTxForCommit(initial);
-      expect((await initial.commit()).error).toBeUndefined();
+      expect((await initial.commit().settled).error).toBeUndefined();
       await issued.promise;
       const attached = attachment.stage(true, undefined, undefined, true, true);
       runtime.prepareTxForCommit(attached);
-      expect((await attached.commit()).error).toBeUndefined();
+      expect((await attached.commit().settled).error).toBeUndefined();
       expect(attachment.publicationCallbacks).toHaveLength(1);
       response.resolve(new Response("shared memo"));
       await runtime.settled();
@@ -622,7 +622,7 @@ describe("fetch-served-instances", () => {
       try {
         const next = fixture.stage(false, undefined, second);
         runtime.prepareTxForCommit(next);
-        expect((await next.commit()).error).toBeUndefined();
+        expect((await next.commit().settled).error).toBeUndefined();
         await issued.promise;
         if (completed) {
           response.resolve(new Response("shared answer"));
@@ -817,7 +817,7 @@ describe("fetch-served-instances", () => {
         });
         const current = fixture.stage(true, mode === "empty" ? "" : undefined);
         runtime.prepareTxForCommit(current);
-        expect((await current.commit()).error).toBeUndefined();
+        expect((await current.commit().settled).error).toBeUndefined();
         runtime.clearSealDestination();
         const settlement = waveSettlementOf(current);
         expect(settlement).toBeDefined();

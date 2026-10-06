@@ -3105,7 +3105,7 @@ describe("cli piece parsing", () => {
             submit: { type: "object", asCell: ["stream"] },
           },
         } as const satisfies JSONSchema;
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         const value = cell.asSchema(schema).get();
         const submit = value.submit;
@@ -3733,7 +3733,7 @@ describe("cli piece parsing", () => {
         foreignResult.set({ text: "foreign-only-needle" });
         foreignInput.set({});
         setResultCell(foreignInput, foreignResult);
-        expect((await foreignTx.commit()).error).toBeUndefined();
+        expect((await foreignTx.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         const localResult = runtime.getCell(
           SPACE_DID,
@@ -3754,7 +3754,7 @@ describe("cli piece parsing", () => {
         localResult.set({});
         localInput.set({ linked: foreignResult.withTx() });
         setResultCell(localInput, localResult);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(pieceId(localResult)).toBe(pieceId(foreignResult));
         const linked = (await localInput.pull()).linked;
@@ -4308,7 +4308,7 @@ describe("cli piece parsing", () => {
         tx,
       );
       result.set({ $NAME: "needle only in the piece name" });
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const inputValue = await input.pull();
@@ -4480,7 +4480,7 @@ describe("cli piece parsing", () => {
       input.set({ linked: owner });
       setResultCell(input, referrer);
       setResultCell(ownerInput, owner);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(owner.getAsNormalizedFullLink()).toEqual(
         registeredOwner.getAsNormalizedFullLink(),
       );
@@ -4695,7 +4695,7 @@ describe("cli piece parsing", () => {
       setResultCell(ownerResult, referrerResult);
       setResultCell(referrerInput, referrerResult);
       setResultCell(aliasInput, aliasResult);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const referrerInputValue = await referrerInput.pull();
@@ -4873,7 +4873,7 @@ describe("cli piece parsing", () => {
         tx,
       );
       brokenSource.set("unreachable source value");
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const sourceError = new Error("source ownership unavailable");
@@ -5033,7 +5033,7 @@ describe("cli piece parsing", () => {
       second.set({ text: "other cycle value" });
       setResultCell(first, second);
       setResultCell(second, first);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const cell = (value: unknown) => ({
@@ -5124,7 +5124,7 @@ describe("cli piece parsing", () => {
     leaf.set({ text: "cold-cache-needle" });
     middle.set({ leaf });
     root.set({ middle });
-    await writeTx.commit();
+    await writeTx.commit().settled;
     await writerStorage.synced();
 
     const readerStorage = EmulatedStorageManager.connectTo(server, {
@@ -5263,7 +5263,7 @@ describe("cli piece parsing", () => {
       objectToArraySource.set({ oldObjectValue: true });
       const objectToArrayProxy = objectToArraySource.getAsQueryResult();
       objectToArraySource.set(["array-shape-value"]);
-      await tx.commit();
+      await tx.commit().settled;
       await runtime.idle();
 
       const cell = (value: unknown) => ({

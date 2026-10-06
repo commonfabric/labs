@@ -258,7 +258,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     await poke.sync();
     const tx = poker.edit();
     poke.withTx(tx).set({ n: pokes });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await poker.storageManager.synced();
     tenure.enqueueCommit({
       space,
@@ -607,7 +607,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       const tx = writer.edit();
       writerLiveness.withTx(tx).set({ n: 2 });
       expect(
-        (await withStuckNet(tx.commit(), "the writer's liveness commit")).error,
+        (await withStuckNet(
+          tx.commit().settled,
+          "the writer's liveness commit",
+        )).error,
       ).toBeUndefined();
       await withStuckNet(
         writer.storageManager.synced(),
@@ -645,7 +648,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     {
       const tx = reader.edit();
       witness.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await reader.storageManager.synced();
     }
     expect((witness.get() as { n?: number } | undefined)?.n).toBe(1);

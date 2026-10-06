@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 
 import { collectConsumedLabel } from "../../src/cfc/prepare.ts";
 import { describeRefusalInputs } from "../../src/cfc/refusal-detail.ts";
@@ -171,7 +172,7 @@ describe("collectConsumedLabel()", () => {
     const read: IReadActivity = {
       ...address,
       id: "of:source",
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     };
     const result = collectConsumedLabel(transaction(
@@ -196,6 +197,71 @@ describe("collectConsumedLabel()", () => {
     expect(result.confidentiality).toEqual(["private"]);
     expect(result.integrity).toEqual(["guard"]);
     expect(result.modulePolicySpaces.size).toBe(0);
+  });
+
+  it("consumes no payload label for a read of one of the document's own members", () => {
+    // The member `slug` and the payload field `slug` are different places
+    // (spec §4.6.5). The read of the payload field is the control.
+
+    const entries = [{
+      path: ["slug"],
+      label: { confidentiality: ["private"] },
+    }];
+    const read = (path: string[]): IReadActivity => ({
+      ...address,
+      path: toDocumentPath(path),
+      meta: {},
+    });
+
+    expect(
+      collectConsumedLabel(transaction([], [read(["slug"])], entries))
+        .confidentiality,
+    ).toEqual([]);
+    expect(
+      collectConsumedLabel(transaction([], [read(["value", "slug"])], entries))
+        .confidentiality,
+    ).toEqual(["private"]);
+  });
+
+  it("consumes no label-metadata template for a payload read, even of a field named `cfc`", () => {
+    // A label-metadata template is keyed under `cfc/labels/...` relative to
+    // the stored document, and a payload field named `cfc` is keyed under
+    // `cfc` relative to `value`, so their paths coincide. The payload entry
+    // under the field is the control: a read of the field consumes it.
+
+    const entries = [{
+      path: [
+        "cfc",
+        "labels",
+        "value",
+        "body",
+        "confidentiality",
+        "clauses",
+        "*",
+        "alternatives",
+        "*",
+      ],
+      label: { confidentiality: ["metadata-secret"] },
+      origin: "label-metadata",
+      observes: "labelMetadata",
+    }, {
+      path: ["cfc", "labels"],
+      label: { confidentiality: ["payload-secret"] },
+    }];
+    const read = (path: string[]): IReadActivity => ({
+      ...address,
+      path: toDocumentPath(path),
+      meta: {},
+    });
+
+    expect(
+      collectConsumedLabel(transaction([], [read(["value", "cfc"])], entries))
+        .confidentiality,
+    ).toEqual(["payload-secret"]);
+    expect(
+      collectConsumedLabel(transaction([], [read(["value"])], entries))
+        .confidentiality,
+    ).toEqual(["payload-secret"]);
   });
 
   it("starts a fresh source set for each collection", () => {
@@ -228,7 +294,7 @@ describe("collectConsumedLabel()", () => {
     ];
     const read: IReadActivity = {
       ...address,
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     };
     const collect = (nonRecursive: boolean) =>
@@ -251,15 +317,30 @@ describe("collectConsumedLabel()", () => {
 
   it("refreshes metadata between collections and separates document scopes and media types", () => {
     const reads: IReadActivity[] = [
-      { ...address, path: ["value", "field"], meta: {} },
-      { ...address, path: ["value", "other"], meta: {} },
-      { ...address, scope: "user", path: ["value", "field"], meta: {} },
-      { ...address, type: "text/plain", path: ["value", "field"], meta: {} },
-      { ...address, id: "of:other", path: ["value", "field"], meta: {} },
+      { ...address, path: toDocumentPath(["value", "field"]), meta: {} },
+      { ...address, path: toDocumentPath(["value", "other"]), meta: {} },
+      {
+        ...address,
+        scope: "user",
+        path: toDocumentPath(["value", "field"]),
+        meta: {},
+      },
+      {
+        ...address,
+        type: "text/plain",
+        path: toDocumentPath(["value", "field"]),
+        meta: {},
+      },
+      {
+        ...address,
+        id: "of:other",
+        path: toDocumentPath(["value", "field"]),
+        meta: {},
+      },
       {
         ...address,
         space: "did:key:other",
-        path: ["value", "field"],
+        path: toDocumentPath(["value", "field"]),
         meta: {},
       },
     ];
@@ -307,7 +388,7 @@ describe("collectConsumedLabel()", () => {
   it("rejects malformed metadata even when its entry is outside the consumed path", () => {
     const read: IReadActivity = {
       ...address,
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     };
     const tx = transaction([], [read], [

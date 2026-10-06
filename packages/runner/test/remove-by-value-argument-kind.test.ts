@@ -51,7 +51,7 @@ function withRuntime(
       // from a key: the shape a collection holds before a keyed migration.
       seed.push({ name: "alice" });
       seed.push({ name: "bob" });
-      await tx.commit();
+      await tx.commit().settled;
       await run(rt);
     } finally {
       await rt.dispose();
@@ -70,7 +70,7 @@ describe("removeByValue argument kind, for object elements", () => {
       expect(() => cell.removeByValue(row!)).toThrow(
         "`Cell.removeByValue()` takes an element's cell or a plain value",
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<Row[]>(space, "value-form", rowListSchema).get();
       expect(after.map((r) => r.name)).toEqual(["alice", "bob"]);
@@ -84,7 +84,7 @@ describe("removeByValue argument kind, for object elements", () => {
       const cell = rt.getCell<Row[]>(space, "cell-form", rowListSchema, tx);
       const index = cell.get().findIndex((r) => r.name === "alice");
       cell.removeByValue(cell.key(index));
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<Row[]>(space, "cell-form", rowListSchema).get();
       expect(after.map((r) => r.name)).toEqual(["bob"]);
@@ -100,7 +100,7 @@ describe("removeByValue argument kind, for object elements", () => {
       expect(() => cell.addUnique(row!)).toThrow(
         "`Cell.addUnique()` takes an element's cell or a plain value",
       );
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<Row[]>(space, "add-unique", rowListSchema).get();
       expect(after.map((r) => r.name)).toEqual(["alice", "bob"]);
@@ -118,7 +118,7 @@ describe("removeByValue argument kind, for object elements", () => {
         tx,
       );
       cell.addUnique(cell.key(0));
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<Row[]>(space, "add-unique-cell", rowListSchema)
         .get();
@@ -150,7 +150,7 @@ describe("removeByValue argument kind, for object elements", () => {
           "bob",
           "carol",
         ]);
-        await tx.commit();
+        await tx.commit().settled;
       }
 
       const after = rt.getCell<Row[]>(
@@ -175,7 +175,7 @@ describe("removeByValue argument kind, for object elements", () => {
       const carol = list.elementById("carol");
       carol.set({ name: "carol" });
       list.addUnique(carol);
-      await addTx.commit();
+      await addTx.commit().settled;
       const before = rt.getCell<Row[]>(space, "remove-reactive", rowListSchema)
         .get();
       expect(before.map((r) => r.name)).toEqual(["alice", "bob", "carol"]);
@@ -188,7 +188,7 @@ describe("removeByValue argument kind, for object elements", () => {
         tx,
       );
       cell.removeByValue(cell.elementById("carol").getAsReactiveProxy());
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<Row[]>(space, "remove-reactive", rowListSchema)
         .get();

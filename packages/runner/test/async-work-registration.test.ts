@@ -97,7 +97,7 @@ describe("async builtin work registration", () => {
 
   afterEach(async () => {
     setMockResponseGate(undefined);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();

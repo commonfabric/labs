@@ -47,7 +47,7 @@ describe("CFC exactCopyOf array wildcard", () => {
 
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("exactCopyOf");
     } finally {
       await runtime.dispose();

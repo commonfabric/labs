@@ -8,7 +8,7 @@ import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
 
 const ALIASES = `
-  type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+  type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
   type Confidential<T, L extends readonly unknown[]> =
     Cfc<T, { confidentiality: L }>;
   type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
@@ -47,7 +47,14 @@ function* recursiveValues(
 
   for (;;) {
     yield resolve(node.properties!.value!);
-    const next = asObjectSchema(node.properties!.next!);
+    const optionalNext = asObjectSchema(node.properties!.next!);
+    const next = optionalNext.anyOf
+      ? asObjectSchema(
+        optionalNext.anyOf.find((arm) =>
+          typeof arm === "object" && typeof arm.$ref === "string"
+        )!,
+      )
+      : optionalNext;
     if (typeof next.$ref === "string") {
       if (visited.has(next.$ref)) break;
       visited.add(next.$ref);
@@ -58,6 +65,22 @@ function* recursiveValues(
 }
 
 describe("recursive binding identity", () => {
+  it("keeps a writer named by a nongeneric tuple's declared element", async () => {
+    const { schema, diagnostics } = await generate(`
+      interface Holder { pair: [WriteAuthorizedBy<string, typeof f>] }
+    `);
+    const pair = asObjectSchema(schema.properties!.pair!);
+    expect(pair.items).toEqual({
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "test.ts", path: ["f"] },
+        },
+      },
+    });
+    expect(diagnostics).toEqual([]);
+  });
+
   it("keeps inherited, forwarded, and defaulted writers distinct through plain generics", async () => {
     const { schema, diagnostics } = await generate(`
       interface Base<A, B> {

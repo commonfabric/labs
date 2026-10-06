@@ -54,7 +54,7 @@ describe("collection index key entries", () => {
           remoteTx,
         );
         remote.set("equal");
-        expect((await remoteTx.commit()).error).toBeUndefined();
+        expect((await remoteTx.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         const local = runtime.getCell<string>(
           signer.did(),
@@ -89,7 +89,7 @@ describe("collection index key entries", () => {
           ),
         );
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         cancel = result.sink(() => {});
         await runtime.idle();
         const checks = await result.key("checks").pull();
@@ -101,17 +101,17 @@ describe("collection index key entries", () => {
         ]));
         const changeContents = runtime.edit();
         local.withTx(changeContents).set("different contents");
-        expect((await changeContents.commit()).error).toBeUndefined();
+        expect((await changeContents.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(await result.key("checks").pull()).toEqual(checks);
         const remove = runtime.edit();
         rows.withTx(remove).set([]);
-        expect((await remove.commit()).error).toBeUndefined();
+        expect((await remove.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(await result.key("checks").pull()).toEqual([]);
         const reinsert = runtime.edit();
         rows.withTx(reinsert).set(originalRows);
-        expect((await reinsert.commit()).error).toBeUndefined();
+        expect((await reinsert.commit().settled).error).toBeUndefined();
         await runtime.idle();
         expect(await result.key("checks").pull()).toEqual(checks);
         await storage.synced();

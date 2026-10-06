@@ -56,7 +56,8 @@ export async function rideReadRepairBackstop(): Promise<void> {
     const shared = runtimeA.getCell(space, "backstop-doc", valueSchema, txA);
     shared.set({ value: 1 });
     const address = toMemorySpaceAddress(shared.getAsNormalizedFullLink());
-    const accepted = await txA.commit({ resolveAt: "verdict" });
+    const accepted = await txA.commit({ holdSyncedUntilCovered: false })
+      .verdict;
     expect(accepted.error).toBeUndefined();
 
     // B, cold, reads the document by address — an absence claim the server
@@ -67,7 +68,7 @@ export async function rideReadRepairBackstop(): Promise<void> {
     runtimeB.getCell(space, "backstop-own-doc", valueSchema, txB).set({
       value: 2,
     });
-    const refused = await txB.commit();
+    const refused = await txB.commit().settled;
     expect(refused.error?.name).toBe("ConflictError");
   } finally {
     await runtimeB?.dispose({ closeStorage: false });

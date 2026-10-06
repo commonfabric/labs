@@ -40,6 +40,29 @@ function arms(defaultEnabled: boolean): { on: string; off: string } {
 }
 
 describe("the pattern and package suites", () => {
+  it("requires the Home catalog integration for changes to its authored sources", async () => {
+    const catalog =
+      "packages/patterns/integration/home-shared-space-catalog.test.ts";
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (
+          const source of [
+            "packages/patterns/system/home.tsx",
+            "packages/patterns/system/shared-space-catalog.ts",
+            catalog,
+          ]
+        ) {
+          expect(suite.unitsForChange?.(new Set([source]))).toContain(catalog);
+        }
+        const other = suite.units.find((unit) => unit !== catalog)!;
+        expect(suite.unitsForChange?.(new Set([other]))).toEqual([other]);
+        expect(suite.unitsForChange?.(new Set(["README.md"]))).toEqual([]);
+      }
+    }
+  });
+
   it("runs the chosen files where the package lives", async () => {
     const suite = byId("pattern-integration");
     const [invocation] = await suite.command(

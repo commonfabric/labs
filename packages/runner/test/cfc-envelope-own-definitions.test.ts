@@ -59,7 +59,7 @@ describe("an inline envelope that carries its own definitions and a reference", 
       const cell = runtime.getCell(space, "own-definitions", ENVELOPE, first);
       cell.set({ secret: "one", stance: { rating: "ok" } });
       first.prepareCfc();
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
       await storageManager.synced();
 
       const read = runtime.edit();
@@ -86,7 +86,7 @@ describe("an inline envelope that carries its own definitions and a reference", 
       runtime.getCell(space, "own-definitions", ENVELOPE, second)
         .set({ secret: "two", stance: { rating: "great" } });
       second.prepareCfc();
-      expect((await second.commit()).error).toBeUndefined();
+      expect((await second.commit().settled).error).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();

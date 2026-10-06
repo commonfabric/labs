@@ -37,7 +37,7 @@ describe("Pattern Runner - findIndex", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });

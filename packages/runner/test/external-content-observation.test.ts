@@ -598,7 +598,7 @@ describe("external content observation", () => {
         seedTx,
       );
       linked.set({ title: "linked private row" });
-      expect((await seedTx.commit()).ok).toBeDefined();
+      expect((await seedTx.commit().settled).ok).toBeDefined();
 
       const targetTx = runtime.edit();
       identifyProducer(targetTx);
@@ -648,7 +648,7 @@ describe("external content observation", () => {
         seedTx,
       );
       linked.set({ title: "unverified linked row" });
-      expect((await seedTx.commit()).ok).toBeDefined();
+      expect((await seedTx.commit().settled).ok).toBeDefined();
 
       const targetTx = runtime.edit();
       identifyProducer(targetTx);
@@ -711,7 +711,7 @@ describe("external content observation", () => {
 
       runtime.prepareTxForCommit(targetTx);
       expect(targetTx.getCfcState().prepare.status).toBe("prepared");
-      expect((await targetTx.commit()).error).toBeUndefined();
+      expect((await targetTx.commit().settled).error).toBeUndefined();
     }, { cfcWriteFloor: "off" });
   });
 
@@ -746,7 +746,7 @@ describe("external content observation", () => {
           },
         },
       });
-      expect((await seedTx.commit()).ok).toBeDefined();
+      expect((await seedTx.commit().settled).ok).toBeDefined();
 
       const targetTx = runtime.edit();
       identifyProducer(targetTx);
@@ -908,7 +908,7 @@ describe("external content observation", () => {
       });
 
       runtime.prepareTxForCommit(targetTx);
-      const result = await targetTx.commit();
+      const result = await targetTx.commit().settled;
       expect(released).toBe(false);
       expect(result.error?.message).toContain("exceeds ceiling for fetchJson");
     });

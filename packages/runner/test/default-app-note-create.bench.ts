@@ -163,7 +163,7 @@ async function setupNoteCreateGraph(
     tx,
   );
 
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
 
   // Live subscription, like the home UI rendering the list.

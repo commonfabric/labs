@@ -43,7 +43,7 @@ function withSeeded<T>(
     try {
       const tx = rt.edit();
       rt.getCell<T[]>(space, cause, schema, tx).set(seed);
-      await tx.commit();
+      await tx.commit().settled;
       await run(rt);
     } finally {
       await rt.dispose();
@@ -61,7 +61,7 @@ describe("collection writes compare plain values by content", () => {
       const tx = rt.edit();
       rt.getCell<FabricBytes[]>(space, "bytes-distinct", bytesListSchema, tx)
         .addUnique(new FabricBytes(new Uint8Array([9, 9, 9])));
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<FabricBytes[]>(
         space,
@@ -81,7 +81,7 @@ describe("collection writes compare plain values by content", () => {
       const tx = rt.edit();
       rt.getCell<FabricBytes[]>(space, "bytes-same", bytesListSchema, tx)
         .addUnique(new FabricBytes(new Uint8Array([1, 2, 3])));
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<FabricBytes[]>(
         space,
@@ -101,7 +101,7 @@ describe("collection writes compare plain values by content", () => {
       const tx = rt.edit();
       rt.getCell<FabricBytes[]>(space, "bytes-remove", bytesListSchema, tx)
         .removeByValue(new FabricBytes(new Uint8Array([1, 2, 3])));
-      await tx.commit();
+      await tx.commit().settled;
 
       const after = rt.getCell<FabricBytes[]>(
         space,
@@ -117,7 +117,7 @@ describe("collection writes compare plain values by content", () => {
     withSeeded("nan", numberListSchema, [NaN], async (rt) => {
       const tx = rt.edit();
       rt.getCell<number[]>(space, "nan", numberListSchema, tx).addUnique(NaN);
-      await tx.commit();
+      await tx.commit().settled;
 
       const added = rt.getCell<number[]>(space, "nan", numberListSchema).get();
       expect(added.length).toBe(1);
@@ -125,7 +125,7 @@ describe("collection writes compare plain values by content", () => {
       const tx2 = rt.edit();
       rt.getCell<number[]>(space, "nan", numberListSchema, tx2)
         .removeByValue(NaN);
-      await tx2.commit();
+      await tx2.commit().settled;
 
       const after = rt.getCell<number[]>(space, "nan", numberListSchema).get();
       expect(after).toEqual([]);
@@ -138,7 +138,7 @@ describe("collection writes compare plain values by content", () => {
       const tx = rt.edit();
       rt.getCell<number[]>(space, "signed-zero", numberListSchema, tx)
         .addUnique(+0);
-      await tx.commit();
+      await tx.commit().settled;
 
       const added = rt.getCell<number[]>(space, "signed-zero", numberListSchema)
         .get();
@@ -149,7 +149,7 @@ describe("collection writes compare plain values by content", () => {
       const tx2 = rt.edit();
       rt.getCell<number[]>(space, "signed-zero", numberListSchema, tx2)
         .removeByValue(+0);
-      await tx2.commit();
+      await tx2.commit().settled;
 
       const after = rt.getCell<number[]>(space, "signed-zero", numberListSchema)
         .get();

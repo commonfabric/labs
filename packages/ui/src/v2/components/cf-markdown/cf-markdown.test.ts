@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import {
   createMockCellHandle,
+  pushRefusal,
   pushUpdate,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFMarkdown } from "./index.ts";
@@ -96,6 +97,25 @@ describe("cf-markdown", () => {
       expect(oldCleaned).toBe(true);
       // No new subscription for string content
       expect((element as any)._unsubscribe).toBeNull();
+    });
+
+    it("shows the placeholder for content the worker refuses, and renders again", () => {
+      const element = new CFMarkdown();
+      const cell = createMockCellHandle<string>("shown before the seal");
+      let requestUpdates = 0;
+      element.requestUpdate = (() => {
+        requestUpdates++;
+      }) as typeof element.requestUpdate;
+      element.content = cell;
+      (element as any).willUpdate(new Map([["content", "old content"]]));
+      const before = requestUpdates;
+
+      pushRefusal(cell);
+
+      expect(requestUpdates).toBe(before + 1);
+      expect((element as any)._getContentValue()).toBe(
+        "Content hidden by policy",
+      );
     });
 
     it("syncs uncached cell content on first bind", async () => {

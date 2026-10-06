@@ -46,6 +46,7 @@
     "navigateTo",
     "pattern",
     "principalOf",
+    "principalsOf",
     "revokeSpaceAccess",
     "schema",
     "spaceAccess",

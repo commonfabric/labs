@@ -75,7 +75,7 @@ describe("Engine fabric imports", () => {
       compiled.entryIdentity,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
     return compiled;
   }
 
@@ -132,7 +132,7 @@ describe("Engine fabric imports", () => {
     );
     // deno-lint-ignore no-explicit-any
     const result = runtime.run(tx, pattern as any, { value }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await result.pull();
     return result.getAsQueryResult();
   }

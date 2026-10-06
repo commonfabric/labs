@@ -76,8 +76,13 @@ export class ModuleRegistry {
     const target = Object.isExtensible(module)
       ? module
       : cloneModuleRecord(module);
-    defineDebugName(target, ref);
+    recordRegisteredModule(target, ref);
     this.#moduleMap.set(ref, target);
+  }
+
+  /** Whether a module is registered under `ref`. */
+  has(ref: string): boolean {
+    return this.#moduleMap.has(ref);
   }
 
   /**
@@ -88,11 +93,11 @@ export class ModuleRegistry {
    * that declared it (`.asScope("user")`, or the `PerUser<>` annotation the
    * transformer lowers to it).
    *
-   * The copy restates `debugName` through {@link defineDebugName}, which is
-   * what proves the module's `{ kind: "builtin", builtinId }` policy identity
-   * to `resolvePolicyFacingImplementationIdentity`. Being non-enumerable, the
-   * name is not among the members a spread carries, and a scoped module with
-   * no name on it writes unattributed.
+   * The copy is named and recorded through {@link recordRegisteredModule} like
+   * the module it copies, so it keeps the `{ kind: "builtin", builtinId }`
+   * policy identity `resolvePolicyFacingImplementationIdentity` reads from
+   * {@link registeredBuiltinRef}. A copy made any other way is not on record,
+   * and writes unattributed.
    */
   getModule(ref: string, defaultScope?: CellScope): Module {
     if (typeof ref !== "string") throw new Error(`Unknown module ref: ${ref}`);
@@ -100,7 +105,7 @@ export class ModuleRegistry {
     if (!module) throw new Error(`Unknown module ref: ${ref}`);
     if (defaultScope === undefined) return module;
     const scoped: Module = { ...module, defaultScope };
-    defineDebugName(scoped, ref);
+    recordRegisteredModule(scoped, ref);
     return scoped;
   }
 
@@ -110,27 +115,49 @@ export class ModuleRegistry {
 }
 
 /**
- * Name a module with the ref it is registered under.
+ * The modules a registry handed out, each with the ref it is registered under.
  *
- * The name is the module's policy identity: it is what
- * `resolvePolicyFacingImplementationIdentity` reads to resolve
- * `{ kind: "builtin", builtinId }`, so the writes a builtin's node makes are
- * attributable to it.
- *
- * It is defined rather than assigned, and every attribute is stated rather
- * than left to default, because `Object.defineProperty` carries forward the
- * attributes an existing property already had. A module carrying an ordinary
- * `debugName` of its own would otherwise keep it enumerable, which puts the
- * name in `moduleToEncodableForm`'s key set and so into every content-derived
- * id built from that module.
+ * Membership is the only way a MODULE resolves to a
+ * `{ kind: "builtin", builtinId }` policy identity. (Host operations that are
+ * not modules name themselves on their own transaction through
+ * `setCfcImplementationIdentity`.) What that identity is trusted for is listed
+ * on `resolvePolicyFacingImplementationIdentity`. The record is keyed by the
+ * module object and written only here, so, like verified provenance, the
+ * lookup itself is the anti-spoof check: a module that arrives as data (a
+ * stored graph is data, and a module in it can carry any member, `debugName`
+ * included) was never handed out by a registry and is not on record.
  */
-function defineDebugName(module: Module, ref: string): void {
+const registeredModules = new WeakMap<Module, string>();
+
+/**
+ * The ref `module` was registered under, when a {@link ModuleRegistry} handed
+ * this very object out; otherwise undefined, whatever members it carries.
+ */
+export function registeredBuiltinRef(module: Module): string | undefined {
+  return registeredModules.get(module);
+}
+
+/**
+ * Record a module the registry hands out under `ref`, and name it with the ref.
+ *
+ * The record is what gives the module its policy identity (see
+ * {@link registeredModules}). The name is for diagnostics only.
+ *
+ * The name is defined rather than assigned, and every attribute is stated
+ * rather than left to default, because `Object.defineProperty` carries forward
+ * the attributes an existing property already had. A module carrying an
+ * ordinary `debugName` of its own would otherwise keep it enumerable, which
+ * puts the name in `moduleToEncodableForm`'s key set and so into every
+ * content-derived id built from that module.
+ */
+function recordRegisteredModule(module: Module, ref: string): void {
   Object.defineProperty(module, "debugName", {
     value: ref,
     writable: false,
     enumerable: false,
     configurable: true,
   });
+  registeredModules.set(module, ref);
 }
 
 function cloneModuleRecord(module: Module): Module {

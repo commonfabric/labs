@@ -234,7 +234,7 @@ async function withProgram<T>(
     const rootCell = runtime.getCell(space, "undeclared-field", undefined, tx);
     const root = runtime.run(tx, compiled, {}, rootCell);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await root.pull();
 
     const piece = {
@@ -1133,7 +1133,7 @@ describe("verb-undeclared-field", () => {
           tx,
         );
         cell.set({ title: "held" });
-        await tx.commit();
+        await tx.commit().settled;
         expect(verbInputSchemaError({ on: cell }, narrowed)).toBeUndefined();
       } finally {
         await runtime.dispose();

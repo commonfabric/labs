@@ -150,7 +150,7 @@ describe("render-audience", () => {
         type: "application/json",
         path: [],
       }, { value: { [identity.did()]: "OWNER" } });
-      expect((await acl.commit()).error).toBeUndefined();
+      expect((await acl.commit().settled).error).toBeUndefined();
       await runtime.storageManager.synced();
       const membership = renderMembershipProviderFor(
         runtime,
@@ -221,7 +221,7 @@ describe("render-audience", () => {
           });
           return cell;
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         /** Writes the ACL without reading labeled notes into the transaction. */
         async function setDelegateRead(granted: boolean): Promise<void> {
@@ -237,7 +237,7 @@ describe("render-audience", () => {
               ...(granted ? { [delegate.did()]: "READ" } : {}),
             },
           });
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await runtime.storageManager.synced();
           await runtime.idle();
         }
@@ -373,7 +373,7 @@ describe("render-audience", () => {
           },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const ceiling = options.renderConfidentialityCeiling;
       const membership = renderMembershipProviderFor(
@@ -428,7 +428,7 @@ describe("render-audience", () => {
             type: "application/json",
             path: ["value"],
           }, directReleaseManifest as never);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         },
         /** Grants or withdraws `acting`'s READ on the session space. */
         async setRead(granted: boolean): Promise<void> {
@@ -444,7 +444,7 @@ describe("render-audience", () => {
               ...(granted ? { [viewer.did()]: "READ" } : {}),
             },
           });
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         },
         async [Symbol.asyncDispose]() {
           cancel();
@@ -527,7 +527,7 @@ describe("render-audience", () => {
           },
         },
       });
-      expect((await seedNote.commit()).error).toBeUndefined();
+      expect((await seedNote.commit().settled).error).toBeUndefined();
       const acl = runtime.edit();
       acl.writeOrThrow({
         space: other,
@@ -535,7 +535,7 @@ describe("render-audience", () => {
         type: "application/json",
         path: [],
       }, { value: { [other]: "OWNER", [identity.did()]: "READ" } });
-      expect((await acl.commit()).error).toBeUndefined();
+      expect((await acl.commit().settled).error).toBeUndefined();
       const seedHolder = runtime.edit();
       const holder = runtime.getCell<{ note: unknown }>(
         session.space,
@@ -559,7 +559,7 @@ describe("render-audience", () => {
           labelMap: { version: 1, entries: [] },
         },
       } as never);
-      expect((await seedHolder.commit()).error).toBeUndefined();
+      expect((await seedHolder.commit().settled).error).toBeUndefined();
       const installIn = async (space: string) => {
         const tx = runtime.storageManager.edit();
         tx.write({
@@ -568,7 +568,7 @@ describe("render-audience", () => {
           type: "application/json",
           path: ["value"],
         }, directReleaseManifest as never);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       };
 
       const ceiling = options.renderConfidentialityCeiling;
@@ -679,7 +679,7 @@ describe("render-audience", () => {
           labelMap: { version: 1, entries: [] },
         },
       } as never);
-      expect((await seedValue.commit()).error).toBeUndefined();
+      expect((await seedValue.commit().settled).error).toBeUndefined();
       const seedHolder = runtime.edit();
       writeSeedEnvelopeDoc(seedHolder, session.space);
       const holder = runtime.getCell<{ note: unknown }>(
@@ -714,7 +714,7 @@ describe("render-audience", () => {
           },
         },
       } as never);
-      expect((await seedHolder.commit()).error).toBeUndefined();
+      expect((await seedHolder.commit().settled).error).toBeUndefined();
       const install = runtime.storageManager.edit();
       install.write({
         space: (manifestSpace === "holder"
@@ -724,7 +724,7 @@ describe("render-audience", () => {
         type: "application/json",
         path: ["value"],
       }, directReleaseManifest as never);
-      expect((await install.commit()).error).toBeUndefined();
+      expect((await install.commit().settled).error).toBeUndefined();
       await runtime.storageManager.synced();
 
       const note = holder.key("note").resolveAsCell();

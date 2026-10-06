@@ -4,7 +4,57 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { CellHandle } from "@commonfabric/runtime-client";
+import {
+  createMockCellHandle,
+  holdReads,
+  writesSent,
+} from "../../test-utils/mock-cell-handle.ts";
 import { CFCheckbox } from "./index.ts";
+
+/**
+ * The element's own members the click tests drive: a Lit element mounts only
+ * in a browser, so without one they bind `checked` and click through these.
+ */
+type CheckboxInternals = {
+  checked: CellHandle<boolean>;
+  willUpdate(changedProperties: Map<string, unknown>): void;
+  _handleClick(event: Event): void;
+};
+
+/** A checkbox bound to `checked`, as a change of `checked` binds it. */
+function boundTo(checked: CellHandle<boolean>): CheckboxInternals {
+  const element = new CFCheckbox() as unknown as CheckboxInternals;
+  element.checked = checked;
+  element.willUpdate(new Map([["checked", undefined]]));
+  return element;
+}
+
+describe("CFCheckbox click", () => {
+  // A click toggles what the cell holds. A cell that has not answered holds
+  // nothing, which is not unchecked: toggled, it would write `true` over a
+  // value nobody was shown.
+  it("writes nothing while the cell's read has not been answered", () => {
+    const checked = createMockCellHandle<boolean>();
+    holdReads(checked);
+    const element = boundTo(checked);
+
+    element._handleClick(new Event("click"));
+
+    expect(writesSent(checked)).toEqual([]);
+  });
+
+  it("writes what the worker's answer toggles to", () => {
+    const checked = createMockCellHandle<boolean>(true);
+    const element = boundTo(checked);
+
+    element._handleClick(new Event("click"));
+
+    expect(writesSent(checked)).toEqual([
+      expect.objectContaining({ type: "cell:set", value: false }),
+    ]);
+  });
+});
 
 describe("CFCheckbox", () => {
   it("should be defined", () => {

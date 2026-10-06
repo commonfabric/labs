@@ -63,6 +63,7 @@ import {
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
 import { sessionDemandOf } from "./support/session-demand.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space-server test space");
 const space = spaceSigner.did() as MemorySpace;
@@ -177,7 +178,7 @@ describe("stage G SpaceServer recovery seams", () => {
     });
     probe.withTx(tx).set({ n: 1 });
     // Resolves at SEAL; the loop's cycle commits the wave.
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await awaitEach(cycles, () => Engine.serverSeq(engine) > seqBefore);
   };
 
@@ -379,7 +380,7 @@ describe("stage G SpaceServer recovery seams", () => {
         eventId: "evt-c2",
         streamEntry: { sidecarId, index: 0, seq: 1 },
       });
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       expect(committed.error).toBeDefined();
 
       // Flush a wave: the unmarked consequence must NEVER land (under
@@ -415,7 +416,7 @@ describe("stage G SpaceServer recovery seams", () => {
       kind: "derivation",
     });
     probe.withTx(probeTx).set({ n: 1 });
-    expect((await probeTx.commit()).error).toBeUndefined();
+    expect((await probeTx.commit().settled).error).toBeUndefined();
     await awaitEach(cycles, () => Engine.serverSeq(engine) > seqBefore);
 
     // The straggler: a late deferSealedEffects for the CLOSED wave's tx
@@ -566,16 +567,18 @@ describe("stage G SpaceServer recovery seams", () => {
         const attempt = watermarkCommits.entries.length;
         if (attempt === 1) {
           const reason = new Error("injected watermark commit failure");
-          return Promise.resolve({
+          return createTransactionCommitReceipt(Promise.resolve({
             error: {
               name: "StorageTransactionAborted" as const,
               message: reason.message,
               reason,
             },
-          });
+          }));
         }
         if (attempt === 2) {
-          return retryCommitGate.promise.then(() => commit());
+          return createTransactionCommitReceipt(
+            retryCommitGate.promise.then(() => commit().settled),
+          );
         }
         return commit();
       };
@@ -653,7 +656,7 @@ describe("stage G SpaceServer recovery seams", () => {
           abandoned = reason;
         },
       });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(acceptedBatches).toBe(1);
       expect(parked).toBeDefined();
       await parked;
@@ -695,7 +698,7 @@ describe("stage G SpaceServer recovery seams", () => {
         flushArrivals.record();
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // The effect must FIRE with no further input: the loop counts the
     // deferred batch as work, closes the (vacuous, zero-contribution)
@@ -753,7 +756,7 @@ describe("stage G SpaceServer recovery seams", () => {
         flushed += 1;
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     // The wave closes (counted) but commits nothing and — the pin —
     // its effects are DISCARDED, not admitted: the sealed claim writes
@@ -1209,7 +1212,7 @@ describe("stage G SpaceServer recovery seams", () => {
         const argTx = creator.edit();
         argument.withTx(argTx).set({ n: 1 });
         creator.run(argTx, compiled, argument, creatorRoot);
-        expect((await argTx.commit()).error).toBeUndefined();
+        expect((await argTx.commit().settled).error).toBeUndefined();
         await creator.idle();
         await creator.storageManager.synced();
       } finally {
@@ -1318,7 +1321,7 @@ describe("stage G SpaceServer recovery seams", () => {
         const tx = creator.edit();
         argument.withTx(tx).set({ n: 1 });
         creator.run(tx, compiled, argument, creatorRoot);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await creator.idle();
         await creator.storageManager.synced();
       } finally {
@@ -1424,7 +1427,7 @@ describe("stage G SpaceServer recovery seams", () => {
       const tx = creator.edit();
       input.withTx(tx).set({ n: 1 });
       creator.run(tx, compiled, input, root);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const typedInput = creator.getCell<{ mine: number }>(
         space,
         "p2f-argdemand-input",
@@ -1432,7 +1435,7 @@ describe("stage G SpaceServer recovery seams", () => {
       );
       const mineTx = creator.edit();
       typedInput.key("mine").withTx(mineTx).set(1);
-      expect((await mineTx.commit()).error).toBeUndefined();
+      expect((await mineTx.commit().settled).error).toBeUndefined();
       await creator.idle();
       await creator.storageManager.synced();
       pieceRootId = root.getAsNormalizedFullLink().id;
@@ -1486,7 +1489,7 @@ describe("stage G SpaceServer recovery seams", () => {
       // A key write: a whole-doc set would clobber the `mine` slot's
       // redirect the creator narrowed.
       input.key("n").withTx(pokeTx).set(2);
-      expect((await pokeTx.commit()).error).toBeUndefined();
+      expect((await pokeTx.commit().settled).error).toBeUndefined();
       await poker.storageManager.synced();
     } finally {
       await poker.dispose();
@@ -1622,7 +1625,7 @@ describe("stage G SpaceServer recovery seams", () => {
         await probe.sync();
         const tx = creator.edit();
         probe.withTx(tx).set({});
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
       }
       await creator.storageManager.synced();
     } finally {
@@ -1865,7 +1868,7 @@ describe("stage G SpaceServer recovery seams", () => {
             }],
           },
         });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         cancels.push(runtime.scheduler.register(
           action("fast", (tx) => {
             fast.withTx(tx).set(input.withTx(tx).get() * 2);
@@ -1925,7 +1928,7 @@ describe("stage G SpaceServer recovery seams", () => {
             kind: "bookkeeping",
           });
           input.withTx(tx).set(2);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         },
       });
       expect(lastStats.wavesBudgetExhausted).toBeGreaterThan(exhaustedBefore);

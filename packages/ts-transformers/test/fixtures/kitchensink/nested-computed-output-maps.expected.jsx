@@ -580,16 +580,63 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
                 : /* [TRANSFORM] ifElse: schema-injected authored ifElse(thread.muted, ..., ...) */ ifElse({
                     type: "boolean"
                 } as const satisfies __cfHelpers.JSONSchema, {
-                    anyOf: [{}, {
+                    anyOf: [{
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }, {
+                            $ref: "#/$defs/UIRenderable"
+                        }, {
                             type: "object",
                             properties: {}
-                        }]
+                        }],
+                    $defs: {
+                        UIRenderable: {
+                            type: "object",
+                            properties: {
+                                $UI: {
+                                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                                }
+                            },
+                            required: ["$UI"]
+                        }
+                    }
                 } as const satisfies __cfHelpers.JSONSchema, {
-                    anyOf: [{}, {
+                    anyOf: [{
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }, {
+                            $ref: "#/$defs/UIRenderable"
+                        }, {
                             type: "object",
                             properties: {}
-                        }]
-                } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, thread.muted, <em>{comment.text}</em>, <span>{comment.text}</span>)}
+                        }],
+                    $defs: {
+                        UIRenderable: {
+                            type: "object",
+                            properties: {
+                                $UI: {
+                                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                                }
+                            },
+                            required: ["$UI"]
+                        }
+                    }
+                } as const satisfies __cfHelpers.JSONSchema, {
+                    anyOf: [{
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }, {
+                            $ref: "#/$defs/UIRenderable"
+                        }],
+                    $defs: {
+                        UIRenderable: {
+                            type: "object",
+                            properties: {
+                                $UI: {
+                                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                                }
+                            },
+                            required: ["$UI"]
+                        }
+                    }
+                } as const satisfies __cfHelpers.JSONSchema, thread.muted, <em>{comment.text}</em>, <span>{comment.text}</span>)}
               </button>
               {/* [TRANSFORM] .map() stays plain: comment.reactions is compute-owned nested array data */}
               {comment.reactions.map((reaction, reactionIndex) => (<span>

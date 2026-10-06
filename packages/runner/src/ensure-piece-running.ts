@@ -210,7 +210,7 @@ export async function ensurePieceRunningVerdict(
 
       // Commit the read transaction before starting the piece
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       signal?.throwIfAborted();
 
       // Load the pattern by its content identity.
@@ -265,7 +265,7 @@ export async function ensurePieceRunningVerdict(
       // Make sure to commit/rollback the transaction on error
       try {
         runtime.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
       } catch {
         // Ignore commit errors on cleanup
       }

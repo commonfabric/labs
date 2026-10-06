@@ -68,7 +68,7 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -261,7 +261,7 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
     expect(typeof fe.stack).toBe("string");
     expect(data.pending).toBe(false);
 
-    await localTx.commit();
+    await localTx.commit().settled;
     await rt.dispose();
     await sm.close();
   });

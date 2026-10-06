@@ -69,7 +69,7 @@ describe("resume a result cell by {identity, symbol}", () => {
         tx1,
       );
       const r1 = rt1.run(tx1, compiled, { value: 3 }, resultCell1);
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
       expect(r1.getAsQueryResult()).toEqual({ result: 6 });
 
@@ -87,7 +87,7 @@ describe("resume a result cell by {identity, symbol}", () => {
         undefined,
         tx2,
       );
-      await tx2.commit();
+      await tx2.commit().settled;
 
       const started = await rt2.start(resultCell2);
       expect(started).toBe(true);

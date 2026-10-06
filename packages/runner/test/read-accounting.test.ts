@@ -58,7 +58,7 @@ describe("read-accounting", () => {
       value: 7,
       items: [1, 2, 3],
     });
-    await tx.commit();
+    await tx.commit().settled;
   });
 
   afterEach(async () => {
@@ -95,7 +95,7 @@ describe("read-accounting", () => {
       expect(body?.proxyAccesses).toBe(1);
       expect(completed).toEqual([]);
       expect(data.value).toBe(7);
-      if (settle === "commit") await tx.commit();
+      if (settle === "commit") await tx.commit().settled;
       else tx.abort();
       expect(completed).toHaveLength(1);
       expect(completed[0].proxyAccesses).toBe(2);

@@ -10,6 +10,7 @@ export {
   type AgentRunErrorCode,
   CANCELLED,
   INVALID_INPUT,
+  INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
   REFUSED,

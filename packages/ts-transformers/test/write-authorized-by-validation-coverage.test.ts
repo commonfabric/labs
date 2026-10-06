@@ -594,3 +594,101 @@ Deno.test(
     assertEquals(await cfcDiagnostics(source), []);
   },
 );
+
+Deno.test(
+  "an author's alias named CfcStamp is walked like any other alias",
+  async () => {
+    const source = `/// <cts-enable />
+      import { toSchema, WriteAuthorizedBy } from "commonfabric";
+
+      const arbitrary = 123;
+      type CfcStamp<T, M> = T;
+
+      const schema = toSchema<
+        CfcStamp<WriteAuthorizedBy<{ title: string }, typeof arbitrary>, {}>
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+    assert(
+      diagnostics[0]!.message.includes(
+        "handler(), module(), requireEventIntegrity()",
+      ),
+    );
+  },
+);
+
+Deno.test(
+  "a carrier whose payload only its record holds has the payload's writer validated",
+  async () => {
+    // A `Cfc` that does not also intersect its payload with its record holds
+    // that payload in the record alone, so the record is walked whole.
+    const source = `/// <cts-enable />
+      import { toSchema, type WriteAuthorizedBy } from "commonfabric";
+
+      type CfcStamp<T, M> = { readonly meta?: M; readonly of?: T };
+      type Cfc<T, M> = { readonly __ct_cfc__?: CfcStamp<T, M> };
+
+      const arbitrary = 123;
+
+      const schema = toSchema<
+        Cfc<WriteAuthorizedBy<string, typeof arbitrary>, {}>
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+    assert(
+      diagnostics[0]!.message.includes(
+        "handler(), module(), requireEventIntegrity()",
+      ),
+    );
+  },
+);
+
+Deno.test(
+  "a carrier whose payload only its record holds accepts a supported writer",
+  async () => {
+    const source = `/// <cts-enable />
+      import { handler, toSchema, type WriteAuthorizedBy } from "commonfabric";
+
+      type CfcStamp<T, M> = { readonly meta?: M; readonly of?: T };
+      type Cfc<T, M> = { readonly __ct_cfc__?: CfcStamp<T, M> };
+
+      const saver = handler<void, {}>((_e, _s) => {});
+
+      const schema = toSchema<
+        Cfc<WriteAuthorizedBy<string, typeof saver>, {}>
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 0);
+  },
+);
+
+Deno.test(
+  "a policy inside a CFC carrier's payload is reported once",
+  async () => {
+    const source = `/// <cts-enable />
+      import { Confidential, toSchema, WriteAuthorizedBy } from "commonfabric";
+
+      const arbitrary = 123;
+
+      const schema = toSchema<
+        Confidential<
+          WriteAuthorizedBy<{ title: string }, typeof arbitrary>,
+          ["secret"]
+        >
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+  },
+);

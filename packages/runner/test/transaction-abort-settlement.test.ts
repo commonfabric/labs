@@ -74,7 +74,7 @@ describe("an aborted transaction", () => {
     });
 
     tx.abort("aborted by test");
-    const commit = await tx.commit();
+    const commit = await tx.commit().settled;
 
     expect(commit.error).toBeDefined();
     expect(settlements).toBe(1);
@@ -101,7 +101,7 @@ describe("an aborted transaction", () => {
       setupTx,
     );
     delivered.withTx(setupTx).set([]);
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     let errors = 0;
     runtime.scheduler.onError(() => {
@@ -166,7 +166,7 @@ describe("an aborted transaction", () => {
       setupTx,
     );
     const root = runtime.run(setupTx, rootPattern, {}, rootCell);
-    await setupTx.commit();
+    await setupTx.commit().settled;
     await runtime.idle();
     const stopReading = root.key("child").sink(() => {});
 
@@ -182,7 +182,7 @@ describe("an aborted transaction", () => {
       try {
         const bumpTx = runtime.edit();
         root.key("source").withTx(bumpTx).set(5);
-        expect((await bumpTx.commit()).error).toBeUndefined();
+        expect((await bumpTx.commit().settled).error).toBeUndefined();
         await runtime.scheduler.idleWithPendingCommits();
       } finally {
         runtime.scheduler.disableIdempotencyCheck();

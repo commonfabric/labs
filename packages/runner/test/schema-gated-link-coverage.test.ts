@@ -103,7 +103,7 @@ describe("schema-gated link expansion at coverage", () => {
       doc2A.withTx(tx).set({});
       doc2A.withTx(tx).key("content").setRawUntyped(doc1A.getAsLink());
       rtA.prepareTxForCommit(tx);
-      const res = await tx.commit({ resolveAt: "verdict" });
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
       expect(res.error, `seed: ${JSON.stringify(res.error)}`).toBeUndefined();
     }
 
@@ -132,7 +132,7 @@ describe("schema-gated link expansion at coverage", () => {
       verdictContent = doc2B.get()?.content?.text;
     });
     let promiseSettled = false;
-    const commitP = txB.commit().then((result) => {
+    const commitP = txB.commit().settled.then((result) => {
       promiseSettled = true;
       return result;
     });

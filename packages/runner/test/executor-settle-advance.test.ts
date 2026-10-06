@@ -80,6 +80,7 @@ import {
 } from "./support/serving-waits.ts";
 import { waitOnDelivery } from "./support/wait-on-delivery.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const spaceSigner = await Identity.fromPassphrase("settle advance space");
 const space = spaceSigner.did() as MemorySpace;
@@ -192,7 +193,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -274,7 +275,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 6 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
 
     // The served derivation lands and is pushed (the client observes
@@ -362,7 +363,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     await clientArg.sync();
     const tx = clientRuntime.edit();
     clientArg.withTx(tx).set({ n: 6 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
 
     // The served value arrives (confirmed at the derived commit's seq,
@@ -398,7 +399,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     const seen = clientResult.withTx(specTx).key("total").get();
     expect(seen).toBe(42);
     clientResult.withTx(specTx).key("total").set(999);
-    expect((await specTx.commit()).error).toBeUndefined();
+    expect((await specTx.commit().settled).error).toBeUndefined();
     // The diverged layer masks the confirmed value (the stall's render).
     expect(overlay!.entryCount(space)).toBeGreaterThanOrEqual(1);
     expect(clientResult.key("total").get()).toBe(999);
@@ -458,7 +459,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     for (let i = 1; i <= EDITS; i++) {
       const editTx = clientRuntime.edit();
       clientArg.withTx(editTx).set({ n: i });
-      expect((await editTx.commit()).error).toBeUndefined();
+      expect((await editTx.commit().settled).error).toBeUndefined();
     }
     const lastAuthored = Engine.serverSeq(engine);
     await waitForSettled(clientRuntime, space, lastAuthored);
@@ -532,13 +533,13 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, clientArg, clientResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = clientResult.sink(() => {});
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 6 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
@@ -604,36 +605,37 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
           return origWrite(link, value);
         };
         const origCommit = tx.commit.bind(tx);
-        (tx as { commit: typeof origCommit }).commit = async () => {
-          if (
-            armed && !injectionDone &&
-            watermarkSeqValue !== undefined &&
-            watermarkSeqValue > maxAuthoredSeq(engine)
-          ) {
-            injectionDone = true;
-            foldInjections.record();
-            const foldTx = originalEdit();
-            stampWaveRunContext(foldTx, {
-              actionId: "s1-pin6-mid-seal-fold",
-              kind: "derivation",
-            });
-            foldTx.writeValueOrThrow(
-              {
-                ...watermarkDocLink(space),
-                id: FOLD_DOC_ID as ReturnType<
-                  typeof watermarkDocLink
-                >["id"],
-                path: [],
-              },
-              { folded: true },
-            );
-            const folded = await foldTx.commit();
-            if (folded.error !== undefined) {
-              foldError = folded.error.message;
+        (tx as { commit: typeof origCommit }).commit = () =>
+          createTransactionCommitReceipt((async () => {
+            if (
+              armed && !injectionDone &&
+              watermarkSeqValue !== undefined &&
+              watermarkSeqValue > maxAuthoredSeq(engine)
+            ) {
+              injectionDone = true;
+              foldInjections.record();
+              const foldTx = originalEdit();
+              stampWaveRunContext(foldTx, {
+                actionId: "s1-pin6-mid-seal-fold",
+                kind: "derivation",
+              });
+              foldTx.writeValueOrThrow(
+                {
+                  ...watermarkDocLink(space),
+                  id: FOLD_DOC_ID as ReturnType<
+                    typeof watermarkDocLink
+                  >["id"],
+                  path: [],
+                },
+                { folded: true },
+              );
+              const folded = await foldTx.commit().settled;
+              if (folded.error !== undefined) {
+                foldError = folded.error.message;
+              }
             }
-          }
-          return origCommit();
-        };
+            return origCommit().settled;
+          })());
         return tx;
       };
     };
@@ -659,7 +661,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 6 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await waitForCellValue(
       clientRuntime,
@@ -680,7 +682,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 7 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await waitForCellValue(
       clientRuntime,
@@ -812,7 +814,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
               if (writeback) {
                 result.withTx(completion).set({ value: 7, pending: false });
               }
-              expect((await completion.commit()).error).toBeUndefined();
+              expect((await completion.commit().settled).error).toBeUndefined();
               completedFirst.resolve();
             } catch (error) {
               completedFirst.reject(error);
@@ -829,7 +831,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
             otherCompleted = true;
           },
         });
-        expect((await original.commit()).error).toBeUndefined();
+        expect((await original.commit().settled).error).toBeUndefined();
         await Promise.all([issuedFirst.promise, issuedOther.promise]);
         const id = result.getAsNormalizedFullLink().id;
         const originalRecord = Engine.selectCommitsSince(engine, {
@@ -888,7 +890,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
             });
             expect(clientResult.withTx(speculative).key("value").get()).toBe(7);
             clientResult.withTx(speculative).key("pending").set(true);
-            expect((await speculative.commit()).error).toBeUndefined();
+            expect((await speculative.commit().settled).error).toBeUndefined();
             expect(overlay.entryCount(space)).toBeGreaterThanOrEqual(1);
             expect(clientResult.key("pending").get()).toBe(true);
             expect(Engine.readState(engine, { id })?.document).toMatchObject({
@@ -960,30 +962,32 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
           return write(link, value);
         };
         const commit = tx.commit.bind(tx);
-        tx.commit = async () => {
-          if (
-            armed && !injectionStarted && watermark !== undefined &&
-            watermark > maxAuthoredSeq(engine)
-          ) {
-            injectionStarted = true;
-            selectedAdvance = watermark;
-            try {
-              const completion = edit();
-              markEffectCompletion(completion, "s1-mid-advance-effect");
-              completion.writeValueOrThrow({
-                ...watermarkDocLink(space),
-                id: completionId as ReturnType<typeof watermarkDocLink>["id"],
-                path: [],
-              }, { value: 7 });
-              expect((await completion.commit()).error).toBeUndefined();
-              injected.resolve();
-            } catch (error) {
-              injected.reject(error);
-              throw error;
+        tx.commit = () =>
+          createTransactionCommitReceipt((async () => {
+            if (
+              armed && !injectionStarted && watermark !== undefined &&
+              watermark > maxAuthoredSeq(engine)
+            ) {
+              injectionStarted = true;
+              selectedAdvance = watermark;
+              try {
+                const completion = edit();
+                markEffectCompletion(completion, "s1-mid-advance-effect");
+                completion.writeValueOrThrow({
+                  ...watermarkDocLink(space),
+                  id: completionId as ReturnType<typeof watermarkDocLink>["id"],
+                  path: [],
+                }, { value: 7 });
+                expect((await completion.commit().settled).error)
+                  .toBeUndefined();
+                injected.resolve();
+              } catch (error) {
+                injected.reject(error);
+                throw error;
+              }
             }
-          }
-          return commit();
-        };
+            return commit().settled;
+          })());
         return tx;
       };
       ready.resolve(runtime);
@@ -1009,7 +1013,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       serving.getCell<unknown>(space, "s1-completion-seed").withTx(seed).set({
         ready: true,
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       await injected.promise;
       const completion = Engine.selectCommitsSince(engine, { fromSeq: 0 }).find(
         (record) => record.writes.some((write) => write.id === completionId),

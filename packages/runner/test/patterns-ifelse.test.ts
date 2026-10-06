@@ -44,7 +44,7 @@ describe("Pattern Runner - ifElse", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
   });
@@ -392,7 +392,7 @@ describe("Pattern Runner - ifElse", () => {
     );
 
     runtime.run(tx, ifElsePattern, { condition: true }, resultCell);
-    await tx.commit();
+    await tx.commit().settled;
 
     expect(subscribedActions).toEqual(
       expect.arrayContaining([

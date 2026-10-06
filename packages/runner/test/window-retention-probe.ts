@@ -250,14 +250,14 @@ try {
     argument.set({ items, start: 0, size: WINDOW_SIZE });
   }
   runtime.run(tx, compiled, argument, result);
-  await tx.commit();
+  await tx.commit().settled;
   const stopReading = result.key("rows").sink(() => {});
   await runtime.idle();
 
   const moveWindow = async (start: number) => {
     const moveTx = runtime.edit();
     argument.withTx(moveTx).key("start").set(start);
-    await moveTx.commit();
+    await moveTx.commit().settled;
     await runtime.idle();
   };
   await moveWindow(WINDOW_SIZE);

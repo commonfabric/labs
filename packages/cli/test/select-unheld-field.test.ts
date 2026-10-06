@@ -103,7 +103,7 @@ describe("select-unheld-field", () => {
       runtime.getCell(space, id, undefined, tx),
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await root.pull();
     return getResultCellWithSourceSchema(root);
   };
@@ -118,7 +118,7 @@ describe("select-unheld-field", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, id, schema, tx);
     cell.set(value as never);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return cell;
   };
 

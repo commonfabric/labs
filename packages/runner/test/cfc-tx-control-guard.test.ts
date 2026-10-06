@@ -145,7 +145,7 @@ describe("CFC transaction control guard", () => {
       // Attacker tries to disable enforcement, then commit the violation.
       expect(() => tx.setCfcEnforcementMode("disabled")).toThrow();
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
     } finally {
       await runtime.dispose();

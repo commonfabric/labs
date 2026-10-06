@@ -10,16 +10,20 @@ import {
   FabricBytes,
   FabricKeyPair,
 } from "@commonfabric/data-model/fabric-primitives";
+import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { CellHandle } from "@/cell-handle.ts";
 import { RuntimeConnection } from "@/client/connection.ts";
 import { EventEmitter } from "@/client/emitter.ts";
 import {
+  type CellRef,
   type InitializationData,
   type IPCClientMessage,
   type IPCClientNotification,
+  isCellUpdateNotification,
   NotificationType,
   type OperationUpdateNotification,
   RequestType,
@@ -30,6 +34,7 @@ import type {
   RuntimeTransport,
   RuntimeTransportEvents,
 } from "@/client/transport.ts";
+import { $conn, type RuntimeClient } from "@/runtime-client.ts";
 
 /**
  * Transport that records everything sent and auto-acknowledges every request
@@ -247,6 +252,95 @@ describe("connection", () => {
 
     expect(messages).toEqual([notification]);
     await connection.dispose();
+  });
+
+  describe("cell updates the worker refuses", () => {
+    // Each case sends a refused update the way the worker does, through the
+    // realm encoding, so that what arrives is what a real transport hands
+    // over.
+
+    const ref: CellRef = {
+      id: "of:connection-refused-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+    };
+    const refusal = { refusedBy: "display-ceiling" } as const;
+    /** The runtime a handle reaches `connection` through. */
+    const runtimeOf = (connection: RuntimeConnection) =>
+      ({ [$conn]: () => connection }) as unknown as RuntimeClient;
+    const posted = (message: Record<string, FabricValue>) => {
+      const arrived = fabricFromRealmValue(
+        structuredClone(realmFromFabricValue({
+          type: NotificationType.CellUpdate,
+          cell: ref,
+          ...message,
+        })),
+      );
+      if (!isCellUpdateNotification(arrived)) {
+        throw new Error("The encoding did not carry a cell update.");
+      }
+      return arrived;
+    };
+
+    it("hands each subscriber the refusal, and drops what it held", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const first = new CellHandle<string>(runtime, ref);
+      const second = new CellHandle<string>(runtime, ref);
+      const heard: unknown[] = [];
+      first.subscribe(() => {}, { onRefused: (r) => heard.push(r) });
+      second.subscribe(() => {}, { onRefused: () => {} });
+      transport.emit("message", posted({ value: "shown before the seal" }));
+
+      transport.emit("message", posted({ refused: refusal }));
+
+      expect(heard).toEqual([refusal]);
+      for (const handle of [first, second]) {
+        expect(handle.lastRead()).toEqual({ refused: refusal });
+      }
+      await connection.dispose();
+    });
+
+    it("hands a later subscriber the refusal, once, rather than nothing", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const first = new CellHandle<string>(runtime, ref);
+      first.subscribe(() => {}, { onRefused: () => {} });
+      transport.emit("message", posted({ refused: refusal }));
+
+      const later = new CellHandle<string>(runtime, ref);
+      const heard: unknown[] = [];
+      const values: unknown[] = [];
+      later.subscribe((value) => {
+        values.push(value);
+      }, { onRefused: (r) => heard.push(r) });
+
+      expect(later.refusal).toEqual(refusal);
+      // One refusal stands, so the subscriber hears it once.
+      expect(heard).toEqual([refusal]);
+      expect(values).toEqual([]);
+      await connection.dispose();
+    });
+
+    it("ends no refusal a later subscriber holds with a value another holds", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const first = new CellHandle<string>(runtime, ref);
+      first.subscribe(() => {}, { onRefused: () => {} });
+      transport.emit("message", posted({ value: "held by another" }));
+
+      // What the other holds may be a write it made, or a copy it was made
+      // with; only a read of the later one ends its refusal.
+      const later = new CellHandle<string>(runtime, ref, { refused: refusal });
+      later.subscribe(() => {}, { onRefused: () => {} });
+
+      expect(later.lastRead()).toEqual({ refused: refusal });
+      await connection.dispose();
+    });
   });
 
   describe("RuntimeConnection disposal", () => {

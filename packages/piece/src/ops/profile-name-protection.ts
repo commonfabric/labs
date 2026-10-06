@@ -268,7 +268,7 @@ export async function repairProfileNameProtection(
       stageOwnerPolicyAdoption(tx, plan.source, target, value);
     }
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) throw new Error(result.error.message);
     await runtime.storageManager.synced();
     return await inspectProfileNameProtection(runtime, profile.withTx());

@@ -191,6 +191,24 @@ If you are developing runtime code, start with:
 - `docs/development/DEPENDENCIES.md` - Adding and rolling dependencies, required
   version pins, and dependency troubleshooting
 
+Contextual Flow Control (CFC) is specified outside this repository, in
+`commonfabric/specs` under `cfc/`, as prose with pseudocode, a Lean development,
+and a paper that are kept equivalent, and the runtime here is held to that
+specification. A change that alters what CFC decides goes through the
+specification first, proof included; code may land ahead of a ruling only under
+a budgeted `SPEC-PENDING` marker. `docs/development/cfc-spec-correspondence.md`
+is the procedure: how to classify a change as host arrangement, conforming
+implementation, or semantic gap, how a gap is filed as a specs pull request, and
+what to do without access to the private specs repository. It governs
+`packages/runner/src/cfc/` and `packages/runner/src/cfc.ts`, the CFC tests under
+`packages/runner/test/`, the render boundaries in
+`packages/html/src/worker/reconciler.ts` and
+`packages/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
+`packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+`sandbox/runsc-cfc-result.ts`), and every `docs/specs/cfc-*.md`; the harness
+audit's clause derivation is
+`docs/specs/agent-harness/04-cfc-spec-correspondence.md`.
+
 Everything else is indexed rather than listed here. `docs/README.md` maps the
 whole documentation tree. `docs/development/README.md` indexes the rest of the
 development documentation: configuration, benchmarks, deploying, the

@@ -228,6 +228,17 @@ export interface GenerationContext {
   labelsOnly?: boolean;
 
   /**
+   * The type at this position whose CFC metadata carriers the reading holding
+   * it has read, reading the rest of it in place: a payload of several
+   * members, or none, which no type apart from the carriers holds, or a
+   * default-library alias mapping a labeled type's members, whose labels are
+   * those of the members its operand may be, the carrier it folds into the
+   * object it builds among them. Like the node, it is not passed on to a
+   * child.
+   */
+  carriersRead?: ts.Type;
+
+  /**
    * Type parameters read as their arguments, for a node read from the
    * declaration that is written in them (`BoundTypeParameters`).
    */

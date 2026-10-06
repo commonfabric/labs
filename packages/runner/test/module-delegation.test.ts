@@ -87,7 +87,7 @@ const seedLabeledSource = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 /** The persisted label-map entries on `id`, for pinning that a join landed. */
@@ -688,7 +688,7 @@ describe("module identity delegation", () => {
     const sourceTx = runtime.edit();
     writeSourceDocs(runtime, space, [successor], successor.identity, sourceTx);
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     // A later ordinary write can mutate the Merkle-excluded metadata but must
     // not inherit the compiler-only attestation from the original cache write.
@@ -709,7 +709,7 @@ describe("module identity delegation", () => {
       delegatedModuleIdentities: [oldIdentity],
     });
     runtime.prepareTxForCommit(forgeTx);
-    expect((await forgeTx.commit()).error).toBeUndefined();
+    expect((await forgeTx.commit().settled).error).toBeUndefined();
 
     const protectedCell = runtime.getCell<{ value: string }>(
       space,
@@ -766,7 +766,7 @@ describe("module identity delegation", () => {
       new Map([[successor.identity, new Set([oldIdentity])]]),
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const protectedCell = runtime.getCell<{ value: string }>(
       space,
@@ -868,7 +868,7 @@ describe("module identity delegation", () => {
       new Map([[successor.identity, new Set([oldIdentity])]]),
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const id = "module-delegation-labeled-successor";
     const seed = await runtime.editWithRetry((tx) => {
@@ -966,7 +966,7 @@ describe("module identity delegation", () => {
       new Map([[successor.identity, new Set([oldIdentity])]]),
     );
     runtime.prepareTxForCommit(sourceTx);
-    expect((await sourceTx.commit()).error).toBeUndefined();
+    expect((await sourceTx.commit().settled).error).toBeUndefined();
 
     const loadTx = runtime.edit();
     const closure = await loadVerifiedSourceClosure(
@@ -1059,7 +1059,7 @@ describe("module identity delegation", () => {
         new Map([[successor.identity, new Set([oldIdentity])]]),
       );
       runtime.prepareTxForCommit(sourceTx);
-      expect((await sourceTx.commit()).error).toBeUndefined();
+      expect((await sourceTx.commit().settled).error).toBeUndefined();
     };
 
     it("returns `undefined` for a keyless identity, only itself as predecessor, or every predecessor already granted", () => {
@@ -1274,7 +1274,7 @@ describe("module identity delegation", () => {
         revisionId: "broken",
         timestamp: 42,
       }], rawMetaWriteAuthorization);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       expect(await observer.start(observed)).toBe(true);
 
@@ -1391,7 +1391,7 @@ describe("module identity delegation", () => {
             version,
           );
           tx.prepareCfc();
-          const result = await tx.commit();
+          const result = await tx.commit().settled;
           expect(result.error?.message).toBeUndefined();
           // The commit is the assertion, and on its own it passes whether or
           // not the transaction ever carried a clause — so pin both halves.

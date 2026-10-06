@@ -53,7 +53,7 @@ export async function prepareLadderFixture(entries: number) {
   seed.writeOrThrow({ ...destination.getAsNormalizedFullLink(), path: [] }, {
     value: {},
   });
-  const committed = await seed.commit();
+  const committed = await seed.commit().settled;
   if (committed.error) throw committed.error;
   return {
     runtime,

@@ -192,10 +192,10 @@ export default pattern<{ messages: ${messagesType} }, { dialog: any; messages: a
         await result.sync();
         const seed = client.edit();
         argument.withTx(seed).key("messages").set([]);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const setup = client.edit();
         client.run(setup, pattern, argument, result);
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         try {
           await waitForCellValue(
@@ -320,10 +320,10 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
         await result.sync();
         const seed = client.edit();
         argument.withTx(seed).key("messages").set([]);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const setup = client.edit();
         client.run(setup, pattern, argument, result);
-        expect((await setup.commit()).error).toBeUndefined();
+        expect((await setup.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         const peerManager = EmulatedStorageManager.connectTo(server, {
           as: scope === "user" ? otherSigner : userSigner,
@@ -365,7 +365,7 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
           await peerResult.sync();
           const seedPeer = peer.edit();
           peerArgument.withTx(seedPeer).key("messages").set([]);
-          expect((await seedPeer.commit()).error).toBeUndefined();
+          expect((await seedPeer.commit().settled).error).toBeUndefined();
           cancelPeer = peerResult.sink(() => {});
           const engine = await server.engineForSpace(space);
           const seq = maxOf(

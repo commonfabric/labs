@@ -118,7 +118,7 @@ const SCRATCH_CAUSE = "link-scan-scratch";
     .setRaw(rows.map((row) => row.getAsLink()));
   runtime.getCell<{ epoch: number }>(space, SCRATCH_CAUSE, undefined, tx)
     .set({ epoch: 0 });
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 /**

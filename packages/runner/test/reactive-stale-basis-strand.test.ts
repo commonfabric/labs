@@ -104,7 +104,7 @@ describe("reactive recompute survives a same-replica-race burst", () => {
       // deno-lint-ignore no-explicit-any
       const h1 = rt1.run(tx1, parent1 as any, {}, resultCell1);
       rt1.prepareTxForCommit(tx1);
-      expect((await tx1.commit()).error).toBeUndefined();
+      expect((await tx1.commit().settled).error).toBeUndefined();
       h1.key("output").sink(() => {});
       await h1.pull();
       await rt1.idle();
@@ -127,7 +127,7 @@ describe("reactive recompute survives a same-replica-race burst", () => {
       // rt2 opens an already-created piece, so its setup write may conflict with
       // rt1's committed setup; it re-derives from confirmed state, so a conflict
       // here is expected and benign.
-      await tx2.commit();
+      await tx2.commit().settled;
       h2.key("output").sink(() => {});
       await h2.pull();
       await rt2.idle();
@@ -168,7 +168,7 @@ describe("reactive recompute survives a same-replica-race burst", () => {
       gate = true;
       const bumpTx = rt1.edit();
       h1.withTx(bumpTx).key("bump").send({ v: 7 });
-      expect((await bumpTx.commit()).error).toBeUndefined();
+      expect((await bumpTx.commit().settled).error).toBeUndefined();
       await rt1.idle();
       await s1.synced();
 

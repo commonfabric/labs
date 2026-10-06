@@ -454,7 +454,7 @@ describe("fabric special objects through the runner's walks", () => {
     });
 
     afterEach(async () => {
-      await tx.commit();
+      await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
     });
@@ -575,7 +575,7 @@ describe("fabric special objects through the runner's walks", () => {
       before.set(
         { r: FabricError.fromNativeError(new Error("boom")) } as never,
       );
-      return first.commit().then(() => {
+      return first.commit().settled.then(() => {
         const second = runtime.edit();
         const after = runtime.getCell<Record<string, unknown>>(
           space,
@@ -584,7 +584,7 @@ describe("fabric special objects through the runner's walks", () => {
           second,
         );
         after.set({ r: { a: 1 } } as never);
-        return second.commit().then((result) => {
+        return second.commit().settled.then((result) => {
           expect(result?.error).toBeUndefined();
           expect(after.get()).toEqual({ r: { a: 1 } });
         });

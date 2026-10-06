@@ -55,7 +55,7 @@ describe("prepare maxConfidentiality empty ceiling", () => {
       const src = runtime.getCell(signer.did(), "ceiling-src", srcSchema, seed);
       src.set("classified");
       seed.prepareCfc();
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // In an enforcing tx, consume the confidential read and write to a path
       // declaring an empty (public-only) maxConfidentiality ceiling.
@@ -83,7 +83,7 @@ describe("prepare maxConfidentiality empty ceiling", () => {
 
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("maxConfidentiality failed");
     } finally {
       await runtime.dispose();

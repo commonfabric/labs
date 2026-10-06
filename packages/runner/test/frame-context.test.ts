@@ -121,7 +121,7 @@ async function sendToHeldHandler(
     tx,
   );
   const result = runtime.run(tx, root, {}, rootCell);
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.idle();
   const streamLink = resolveLink(
     runtime,

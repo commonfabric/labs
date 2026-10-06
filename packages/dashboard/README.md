@@ -13,8 +13,9 @@ deno task dashboard      # = deno run … packages/dashboard/server.ts
 ```
 
 Tiles that read GitHub need `GH_TOKEN` (or `GITHUB_TOKEN`) set in the
-environment. The other token-gated tiles gray out cleanly until their env vars
-are set (see below).
+environment. The GitHub spend tile can use a separate `GH_BILLING_TOKEN` when
+billing needs broader account access. The other token-gated tiles gray out
+cleanly until their env vars are set (see below).
 
 The root `deno task dashboard` command starts the server once. Watch mode and
 dashboard-specific tests are package tasks:
@@ -443,7 +444,7 @@ to the next; a view supplies everything under it.
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
 | cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
-| github spend | the organization's whole metered GitHub bill, projected to month-end in USD: every product its billing report carries, added into one figure. The 45-day chart labels the line with MTD spend, and the header shows the same total. The report carries rows for days GitHub is still billing, today included, so the chart and the rate behind the projection stop two days back, once GitHub has had time to finish those days; a partial day at the end of the chart would read as spend falling away. A report that stopped being written more than four days ago is unavailable rather than a run of $0 days. A month whose report cannot be read breaks the line across those days rather than charting them as $0. "What the GitHub figure covers" below says which spend reaches the API | `GH_TOKEN` (with org billing read); optional `GH_BILLING_ORG` |
+| github spend | the selected organization's or enterprise's whole metered GitHub bill, projected to month-end in USD: every product its billing report carries, added into one figure. Enterprise collection includes usage without a cost center and usage assigned to every cost center. The 45-day chart labels the line with MTD spend, and the header shows the same total. The report carries rows for days GitHub is still billing, today included, so the chart and the rate behind the projection stop two days back, once GitHub has had time to finish those days; a partial day at the end of the chart would read as spend falling away. A report that stopped being written more than four days ago is unavailable rather than a run of $0 days. A month whose report cannot be read breaks the line across those days rather than charting them as $0. "What the GitHub figure covers" below says which spend reaches the API | `GH_BILLING_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; optional `GH_BILLING_ENTERPRISE`, `GH_BILLING_ORG` |
 | all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history | `GH_TOKEN` |
 | key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey` and `topic board scale/100`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
 | performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
@@ -655,11 +656,22 @@ published manifests; unchanged objects reuse the cached inventory or counts.
 
 ### What the GitHub figure covers
 
-The **github spend** tile reads the organization's billing usage report, which
-carries one row per product, SKU, repository and day. The tile adds up every
-row, so the figure is the organization's whole metered GitHub bill rather than
-any one product's share of it. GitHub meters these products, and a product the
-organization does not use simply has no row:
+The **github spend** tile reads the billing usage report for one account. It
+uses the organization named by `GH_BILLING_ORG` by default. Setting
+`GH_BILLING_ENTERPRISE` selects that enterprise account instead. Enterprise
+collection uses GitHub's summary report across all cost centers, so its total
+does not silently omit usage allocated to one.
+
+The organization report carries rows by product, SKU, repository, and day;
+enterprise collection reads daily summary usage items across all cost centers.
+The tile adds every returned usage item, so the figure is the account's whole
+metered GitHub bill rather than any one product's share of it. If a
+current-month enterprise day cannot be read, the projection omits that day from
+its rate, the chart breaks across it, and the tile turns gray and labels its
+month-to-date total as partial. An unavailable historical day likewise leaves a
+chart gap and stays out of the rate, without making the current total partial.
+GitHub meters these products, and a product the account does not use simply has
+no row:
 
 | product | what it bills for |
 |---|---|
@@ -687,6 +699,12 @@ while leaving month-to-date correct. No such charge has been observed here, and
 seat licenses are the products to watch for one: compare the headline with the
 month-to-date total beside it the first month a seat-licensed product appears.
 
+The budget comparison uses only product budgets at the same scope as the usage
+report. Organization usage is compared with organization-scoped budgets.
+Enterprise usage is compared with enterprise-scoped budgets. Organization,
+repository, user, and cost-center budgets returned by the enterprise endpoint
+are narrower ceilings and are not added to the enterprise budget.
+
 What the API does not expose, and the figure therefore excludes:
 
 - **A subscription billed outside the usage report.** An organization's plan
@@ -697,22 +715,18 @@ What the API does not expose, and the figure therefore excludes:
   seat cost is absent from the figure. `orgs/{org}` reports the seat counts
   (`plan.name`, `plan.seats`, `plan.filled_seats`) but never a price, so there
   is nothing to add up from.
-- **Anything billed at the enterprise account rather than the organization.**
-  The usage report is scoped to one organization. An enterprise account's own
-  report is a separate endpoint under `enterprises/{enterprise}`, needs
-  enterprise-level administration, and is not read here.
-
-Both gaps are silent: the figure is a true total of what GitHub reports, not a
+This gap is silent: the figure is a true total of what GitHub reports, not a
 total of what GitHub charges. Check it against the billing page the tile links
 to before treating it as the whole bill.
 
 ## Credentials
 
 Every tile that reads a private source is gated on its own env var(s) and grays
-out until they are set. The GitHub tiles need `GH_TOKEN`; every other
-private-source tile is independently optional — set only the ones you want, and
-the rest stay gray without breaking the board. Each key below lists what it
-powers, the rights it needs, and how to mint it. (`commonfabric.com` and
+out until they are set. The GitHub tiles use `GH_TOKEN`, except that
+**github spend** can use `GH_BILLING_TOKEN` instead; every other
+private-source tile is independently optional — set only the ones you want,
+and the rest stay gray without breaking the board. Each key below lists what
+it powers, the rights it needs, and how to mint it. (`commonfabric.com` and
 `production` need no key.)
 
 Almost every credential is shown only once at creation — copy it immediately;
@@ -721,14 +735,17 @@ if you lose it you have to regenerate.
 ### `GH_TOKEN` (or `GITHUB_TOKEN`)
 
 Powers **ci**, **labs ci trust**, **labs ci duration**, the **loom** and
-**weaver** counterparts, **recent main runs**, **github spend**, and
-**github users**. It also powers the optional publisher-activity indicators on
-**flaky tests** and **test selection**; their public measurements need no token.
-Needs
+**weaver** counterparts, **recent main runs**, **github users**, and
+**github spend** when `GH_BILLING_TOKEN` is unset. It also powers the optional
+publisher-activity indicators on **flaky tests** and **test selection**; their
+public measurements need no token. Needs
 repo **Actions: read** on `commonfabric/labs`, `commonfabric/loom`, and
-`commonfabric/commonfabric-weaver`;
+`commonfabric/commonfabric-weaver`. When `GH_BILLING_ENTERPRISE` is unset,
 the github-ci-spend tile additionally needs org **Administration: read** on
-`commonfabric`. The **github users** tile needs org **Members: read**. The
+`commonfabric`. When it is set, a fallback `GH_TOKEN` instead needs one of
+the enterprise credentials described under `GH_BILLING_TOKEN`; a separate
+`GH_BILLING_TOKEN` is simpler. The **github users** tile needs org
+**Members: read**. The
 **ci** tile covers every repository the token can see, so a token selecting only
 some repositories leaves the rest out of that tile without saying so: give it
 **All repositories** for the tile to cover the organization. One fine-grained
@@ -759,6 +776,30 @@ select only `commonfabric/labs`, and grant Actions/Contents read without any
 organization permissions. Classic PATs also work (use `read:org` for GitHub
 users and `admin:org` for github spend). If the org requires approval for
 fine-grained tokens, yours stays pending until an owner approves it.
+
+### `GH_BILLING_TOKEN`
+
+Optionally powers **github spend** instead of `GH_TOKEN`. Use a separate token
+when billing access belongs at a broader scope than the repository and
+organization permissions used by the other GitHub tiles.
+
+For organization collection, use a fine-grained personal access token with
+that organization selected as its resource owner and organization
+**Administration: read**. For enterprise collection, set
+`GH_BILLING_ENTERPRISE` and use one of:
+
+- A classic personal access token with `manage_billing:enterprise`, owned by an
+  enterprise owner or billing manager. GitHub does not offer a read-only
+  classic scope for enterprise billing.
+- A GitHub App user or installation access token with enterprise
+  **Enterprise billing: read**. This is the least-privilege enterprise option.
+  Installation access tokens expire after one hour, so a long-running
+  deployment must arrange renewal and restart the dashboard with the renewed
+  value.
+
+Enterprise billing endpoints do not accept fine-grained personal access
+tokens. The tile reads the enterprise-wide usage summary and budgets, so the
+credential needs access to both.
 
 ### `SIGNOZ_URL` + `SIGNOZ_API_KEY`
 
@@ -1000,7 +1041,8 @@ it.
 
 | env var | tile | purpose |
 |---|---|---|
-| `GH_BILLING_ORG` | github spend | org login for billing (default: the org from `DASHBOARD_REPO` — `commonfabric`). |
+| `GH_BILLING_ENTERPRISE` | github spend | enterprise slug for enterprise-scoped usage and budgets. When set, it takes precedence over `GH_BILLING_ORG`. |
+| `GH_BILLING_ORG` | github spend | organization login for billing when `GH_BILLING_ENTERPRISE` is unset (default: the org from `DASHBOARD_REPO` — `commonfabric`). |
 | `MODEL_MONTHLY_BUDGET` | model spend | combined monthly USD budget across providers. |
 | `GCP_SA_KEY` | cloud spend | a service-account key JSON (the whole file, as the value) for local development; in GKE, Workload Identity supplies the token and this is unset. |
 | `GCP_DAILY_BUDGET` | cloud spend | daily USD budget. The projected month is compared with this daily rate multiplied by the number of days in the month. |
@@ -1044,27 +1086,28 @@ off. It needs no second change to light up once that deployment starts exporting
 
 Notes:
 
-- **One GitHub token:** every GitHub tile uses `GH_TOKEN`. The github-ci-spend
-  tile also needs org billing read. The **github users** tile needs org Members
-  read. A second token would not reduce exposure because the process would hold
-  both, so there is just one. With Actions read alone, those two tiles gray out
-  and the other GitHub tiles still work.
+- **GitHub billing token:** every GitHub tile uses `GH_TOKEN` except that
+  **github spend** prefers `GH_BILLING_TOKEN` when it is set. An organization
+  deployment can keep one token with organization billing read. Enterprise
+  billing needs different credentials, so the separate variable keeps the
+  ordinary GitHub token free of enterprise billing access. The **github users**
+  tile still needs organization Members read on `GH_TOKEN`.
 - **`github spend`** shows the **projected** full-month GitHub total. Its recent
   daily rate uses at least two weeks and reaches into last month early in a
   month. Spend is net of discounts and included usage. The projection is
-  compared with the organization's product budgets added together, which is
-  what it has authorized itself to spend. Only the budgeted products' share of
-  the projection goes into that comparison: a product with no budget of its own
-  is taken to be spending within one, so it counts toward the headline without
-  moving the color. The light therefore turns on the products someone actually
-  set a limit for, and taking up a product nobody has budgeted cannot redden
-  the tile on its own. The budget printed beside the headline covers the same
-  products the headline does — the budgets that exist, plus each unbudgeted
-  product's own projection standing in for the budget it lacks — so the
-  headline sits at or under it exactly when the tile is green. Printing the
-  configured total alone would show a headline above its budget on a green
-  tile. An organization with no product budget at all leaves the projection
-  uncompared. A
+  compared with the selected account scope's product budgets added together,
+  which is what it has authorized itself to spend. Only the budgeted products'
+  share of the projection goes into that comparison: a product with no budget
+  of its own is taken to be spending within one, so it counts toward the
+  headline without moving the color. The light therefore turns on the products
+  someone actually set a limit for, and taking up a product nobody has budgeted
+  cannot redden the tile on its own. The budget printed beside the headline
+  covers the same products the headline does — the budgets that exist, plus
+  each unbudgeted product's own projection standing in for the budget it lacks
+  — so the headline sits at or under it exactly when the tile is green.
+  Printing the configured total alone would show a headline above its budget
+  on a green tile. An account with no product budget at all leaves the
+  projection uncompared. A
   source that has stopped reporting turns the tile gray. The billing report is
   one pipeline across every product the organization uses, so any product's row
   dates it. Four days without a row is a stopped feed rather than a slow one. A

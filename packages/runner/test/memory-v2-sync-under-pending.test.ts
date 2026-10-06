@@ -290,7 +290,7 @@ Deno.test("memory v2 SpaceReplica rebases a pending blind write over a server sy
       path: ["value"],
     });
     unmarkUiInputBlindWriteTx(tx);
-    const commitPromise = tx.commit();
+    const commitPromise = tx.commit().settled;
     await transport.transactSent;
     assertEquals(getObjectValue(provider, docA), {
       color: "green",

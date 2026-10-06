@@ -1,0 +1,12 @@
+{
+  "text": "what is on this loom?",
+  "loomId": "loom-0123456789abcdef",
+  "clientActions": true,
+  "protocol": {
+    "protocolVersion": 1,
+    "requires": [
+      "client_actions",
+      "typed_commands"
+    ]
+  }
+}

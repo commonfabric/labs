@@ -88,7 +88,7 @@ describe("collection-index-join", () => {
       const sourceTx = runtime.edit();
       rightA.withTx(sourceTx).set({ key: "A", title: "Right A" });
       rightB.withTx(sourceTx).set({ key: "other", title: "Right B" });
-      expect((await sourceTx.commit()).error).toBeUndefined();
+      expect((await sourceTx.commit().settled).error).toBeUndefined();
       const left = runtime.getCell<Row[]>(
         identity.did(),
         "left",
@@ -115,7 +115,7 @@ describe("collection-index-join", () => {
         ),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       let runsA = 0;
       let runsB = 0;
       const { pattern, lift } = createTrustedBuilder(runtime).commonfabric;
@@ -151,7 +151,7 @@ describe("collection-index-join", () => {
         row: result.key("joined").key(1),
       }, runtime.getCell<string>(identity.did(), "observer-b", undefined, tx));
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       cleanup.defer(outputA.sink(() => {}));
       cleanup.defer(outputB.sink(() => {}));
       await runtime.idle();
@@ -162,7 +162,7 @@ describe("collection-index-join", () => {
       runsB = 0;
       tx = runtime.edit();
       rightB.withTx(tx).key("key").set("B");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(outputA.get()).toBe("Right A");
       expect(outputB.get()).toBe("Right B");
@@ -172,7 +172,7 @@ describe("collection-index-join", () => {
       runsB = 0;
       tx = runtime.edit();
       rightA.withTx(tx).key("title").set("Updated A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(outputA.get()).toBe("Updated A");
       expect(outputB.get()).toBe("Right B");
@@ -182,7 +182,7 @@ describe("collection-index-join", () => {
       runsB = 0;
       tx = runtime.edit();
       leftA.withTx(tx).key("key").set("B");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(outputA.get()).toBe("Right B");
       expect(outputB.get()).toBe("Right B");
@@ -190,7 +190,7 @@ describe("collection-index-join", () => {
       expect(runsB).toBe(0);
       tx = runtime.edit();
       right.withTx(tx).set([rightA]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       expect(outputA.get()).toBe("unmatched");
       expect(outputB.get()).toBe("unmatched");
@@ -249,7 +249,7 @@ describe("collection-index-join", () => {
       ),
     );
     first.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancelFirst = result.key("joined").sink(() => {});
     cleanup.defer(cancelFirst);
     await first.idle();
@@ -272,7 +272,7 @@ describe("collection-index-join", () => {
       .toEqual(["Right A", undefined]);
     const edit = second.edit();
     restored.withTx(edit).key("right").set([{ key: "B", title: "Right B" }]);
-    expect((await edit.commit()).error).toBeUndefined();
+    expect((await edit.commit().settled).error).toBeUndefined();
     await second.idle();
     expect(
       restored.key("joined").get().map((row) => ({

@@ -81,7 +81,7 @@ const listCause = (size: number) => `eager-link-read-list-${size}`;
     runtime.getCell<unknown>(space, listCause(size), undefined, tx)
       .setRaw(rows);
   }
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 for (const size of SIZES) {

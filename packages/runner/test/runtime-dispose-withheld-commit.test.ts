@@ -80,7 +80,7 @@ Deno.test("runtime.dispose() resolves while a commit is withheld in flight", asy
   // tolerate the cancellation.
   const writeTx = runtime.edit();
   cell.withTx(writeTx).set({ value: 1 });
-  writeTx.commit().catch(() => {});
+  writeTx.commit().settled.catch(() => {});
   await clock.settle();
   // Guard the precondition: if the commit is not actually in flight, dispose
   // would not exercise the deadlock and the test would pass vacuously.

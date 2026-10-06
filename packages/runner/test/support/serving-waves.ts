@@ -210,7 +210,7 @@ export class ServingWaves {
     await peerCell.sync();
     const tx = this.#peer.edit();
     write(peerCell.withTx(tx));
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (error !== undefined) throw error;
     await cell.sync();
     await this.#runtime.scheduler.idleWithPendingCommits();

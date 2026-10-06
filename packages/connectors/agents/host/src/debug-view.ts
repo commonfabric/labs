@@ -69,7 +69,7 @@ async function protectOwnerDebugCells(
     tx.abort(error);
     throw error;
   }
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error) {
     throw new Error(
       `could not protect the owner debug result: ${committed.error.message}`,
@@ -433,7 +433,7 @@ async function debugRegistration(
     tx.abort(error);
     throw error;
   }
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error) {
     throw new Error(
       `could not claim the owner debug registration: ${committed.error.message}`,

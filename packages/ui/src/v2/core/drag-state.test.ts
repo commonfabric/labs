@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { $conn, type CellHandle } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  type CellHandle,
+  type CellRef,
+} from "@commonfabric/runtime-client";
 import { createMockCellHandle } from "../test-utils/mock-cell-handle.ts";
 import {
   installMockDocument,
@@ -237,45 +241,53 @@ describe("drag-state — createDragPreview", () => {
     cleanup();
   });
 
-  it("falls back to a static pill when the cell has no cached value", () => {
-    const { cell } = createRenderableCellHandle(undefined);
-
+  /**
+   * Builds the preview for a cell caching `value`, settles the mount it
+   * starts, and returns what it built and mounted.
+   */
+  const fallbackPreview = async (value: unknown) => {
+    const { cell, log } = createRenderableCellHandle(value, {
+      id: "of:fid1:dragged-abcdef" as CellRef["id"],
+    });
     const { preview, cleanup: teardown } = createDragPreview(
       cell as CellHandle,
     );
+    await Promise.resolve();
+    await Promise.resolve();
+    const [chip] = asMock(preview).children;
+    return {
+      teardown,
+      tags: asMock(preview).children.map((child) => child.tagName),
+      texts: chip?.children.map((child) => child.textContent),
+      mounted: log.mounted.map((reference) => reference.path),
+    };
+  };
 
-    expect(teardown).toBeUndefined();
-    expect(asMock(preview).children.length).toBe(1);
-    const pill = asMock(preview).children[0]!;
-    expect(pill.tagName).toBe("cf-cell-link");
-    expect(pill.cell).toBe(cell);
-    expect(pill.isStatic).toBe(true);
+  it("falls back to a chip whose name is a render of its own when the cell has no cached value", async () => {
+    const preview = await fallbackPreview(undefined);
+
+    expect(preview.teardown).toBeDefined();
+    expect(preview.tags).toEqual(["cf-chip"]);
+    expect(preview.texts).toEqual(["", " #abcdef"]);
+    expect(preview.mounted).toEqual([["$NAME"]]);
   });
 
-  it("falls back to a static pill when the cached value carries no `[UI]`", () => {
-    const { cell } = createRenderableCellHandle({ title: "no ui here" });
+  it("falls back to a name chip, and shows no name it reads itself, when the cached value carries no `[UI]`", async () => {
+    // The cached value holds a name the viewer may not see; only the render
+    // of `[NAME]`, which the render policy decides, may show it.
 
-    const { preview, cleanup: teardown } = createDragPreview(
-      cell as CellHandle,
-    );
+    const preview = await fallbackPreview({ $NAME: "name-behind-the-seal" });
 
-    expect(teardown).toBeUndefined();
-    expect(asMock(preview).children.map((child) => child.tagName)).toEqual([
-      "cf-cell-link",
-    ]);
+    expect(preview.tags).toEqual(["cf-chip"]);
+    expect(preview.texts).toEqual(["", " #abcdef"]);
+    expect(preview.mounted).toEqual([["$NAME"]]);
   });
 
-  it("falls back to a static pill for a primitive cached value", () => {
-    const { cell } = createRenderableCellHandle("just a string");
+  it("falls back to a name chip for a primitive cached value", async () => {
+    const preview = await fallbackPreview("just a string");
 
-    const { preview, cleanup: teardown } = createDragPreview(
-      cell as CellHandle,
-    );
-
-    expect(teardown).toBeUndefined();
-    expect(asMock(preview).children.map((child) => child.tagName)).toEqual([
-      "cf-cell-link",
-    ]);
+    expect(preview.tags).toEqual(["cf-chip"]);
+    expect(preview.mounted).toEqual([["$NAME"]]);
   });
 
   it("gives the preview element its fixed, click-through styling", () => {
@@ -335,7 +347,7 @@ describe("drag-state — createDragPreview", () => {
     expect(log.unmounted.length).toBeGreaterThan(0);
   });
 
-  it("falls back to a static pill when the render throws", () => {
+  it("shows the short id when neither the view nor the name can be rendered", () => {
     const { cell } = createRenderableCellHandle({
       $UI: { type: "vnode", name: "div", props: {}, children: [] },
     });
@@ -358,9 +370,8 @@ describe("drag-state — createDragPreview", () => {
       console.warn = originalWarn;
     }
 
-    expect(asMock(preview).children.map((child) => child.tagName)).toEqual([
-      "cf-cell-link",
-    ]);
-    expect(warnings.length).toBe(1);
+    expect(asMock(preview).children).toEqual([]);
+    expect(preview.textContent).toBe(`#${cell.id().slice(-6)}`);
+    expect(warnings.length).toBe(2);
   });
 });

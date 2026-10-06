@@ -35,7 +35,8 @@ reportCfcDenial(
 `code` names the kind of decision, and is one of `CFC_DENIAL_CODES`:
 `write-policy-gate`, `write-prepare-crashed`, `write-unprepared`,
 `write-prepared-digest-mismatch`, `render-confidentiality-ceiling`,
-`render-text-integrity`, and `render-literal-text-integrity`.
+`render-remote-load`, `render-text-integrity`, and
+`render-literal-text-integrity`.
 
 Only a decision that stopped something reports. Under `observe` the write gate
 records its reasons and lets the commit through, so nothing was turned away and

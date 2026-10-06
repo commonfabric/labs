@@ -45,7 +45,7 @@ describe("staged-reference-derivation", () => {
         order,
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const stats = runtime.getCfcStats();
       expect(stats.stagedReferenceCacheHits).toBeGreaterThan(0);
       expect(stats.stagedReferenceDerivations).toBeLessThan(
@@ -158,7 +158,7 @@ describe("staged-reference-derivation", () => {
         for (
           const stage of order === "bottom-up" ? stages : stages.toReversed()
         ) stage();
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const entries = readStoredCfcMetadata(
           runtime.readTx(),
           holder.getAsNormalizedFullLink(),
@@ -182,7 +182,7 @@ describe("staged-reference-derivation", () => {
     it(`keeps ordinary chains outside the shared-result cache in ${order} order`, async () => {
       const { tx, holder } = stageReferenceGraph(runtime, space, 7, 1, order);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(runtime.getCfcStats().stagedReferenceCacheHits).toBe(0);
       const inspect = runtime.edit();
       const entries =
@@ -207,7 +207,7 @@ describe("staged-reference-derivation", () => {
       "self",
     ]);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     expect(runtime.getCfcStats().stagedReferenceCacheHits).toBe(0);
     expect(runtime.getCell(space, "cycle").key("self").key("value").get()).toBe(
       7,
@@ -249,7 +249,7 @@ describe("staged-reference-derivation", () => {
       "argument",
     ]);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain(
+    expect((await tx.commit().settled).error?.message).toContain(
       "Link CurrentPrincipal confidentiality requires a concrete stored reader",
     );
     expect(runtime.getCfcStats().stagedReferenceCacheHits).toBeGreaterThan(0);
@@ -298,7 +298,7 @@ describe("staged-reference-derivation", () => {
         key,
       ]);
 
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const label = readStoredCfcMetadata(
         runtime.readTx(),
         holder.getAsNormalizedFullLink(),
@@ -349,7 +349,7 @@ describe("staged-reference-derivation", () => {
 
       // Preparing the holder derives the middle's link before the source has
       // its flow label. Preparing the middle sees the source's persisted label.
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       const entries = readStoredCfcMetadata(
         flowRuntime.readTx(),
         middle.getAsNormalizedFullLink(),
@@ -367,7 +367,7 @@ describe("staged-reference-derivation", () => {
   it("recomputes a shared graph after its source label changes", async () => {
     const initial = stageReferenceGraph(runtime, space, 4, 2, "bottom-up");
     runtime.prepareTxForCommit(initial.tx);
-    expect((await initial.tx.commit()).error).toBeUndefined();
+    expect((await initial.tx.commit().settled).error).toBeUndefined();
 
     const update = runtime.edit();
     runtime.getCell(space, "reference-graph-leaf", {
@@ -375,7 +375,7 @@ describe("staged-reference-derivation", () => {
       ifc: { confidentiality: ["secret", "second-secret"] },
     }, update).set({ value: "updated" });
     runtime.prepareTxForCommit(update);
-    expect((await update.commit()).error).toBeUndefined();
+    expect((await update.commit().settled).error).toBeUndefined();
 
     const { tx, holder } = stageReferenceGraph(
       runtime,
@@ -386,7 +386,7 @@ describe("staged-reference-derivation", () => {
       "updated-graph",
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const inspect = runtime.edit();
     const entries =
       readStoredCfcMetadata(inspect, holder.getAsNormalizedFullLink())!

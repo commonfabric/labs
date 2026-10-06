@@ -132,7 +132,7 @@ describe("linkSqliteDiskSource handle seeding", () => {
     };
     const seed = runtime.edit();
     handleCell().withTx(seed).set(declared);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     await link();
 
@@ -163,7 +163,7 @@ describe("linkSqliteDiskSource handle seeding", () => {
     handleCell().withTx(seed).set(
       { id: "of:fid1:another-source", tables: declared, rev: 7 } as never,
     );
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     await link();
 
@@ -189,7 +189,7 @@ describe("linkSqliteDiskSource handle seeding", () => {
     // string, so a doc in this state must be seeded rather than preserved.
     const seed = runtime.edit();
     handleCell().withTx(seed).set({ tables: {} } as never);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
 
     await link();
 

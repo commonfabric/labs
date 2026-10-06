@@ -75,7 +75,7 @@ interface Revisioned {
         (_, index) => `${BODY} ${index}`,
       ),
     });
-  await tx.commit();
+  await tx.commit().settled;
 }
 
 /**
@@ -89,7 +89,7 @@ const commitScalar = async (cause: string): Promise<void> => {
   const tx = runtime.edit();
   runtime.getCell<Revisioned>(space, cause, undefined, tx)
     .key("revision").set(nextRevision++);
-  await tx.commit();
+  await tx.commit().settled;
 };
 
 const DOCUMENTS: [label: string, cause: string, baseline: boolean][] = [

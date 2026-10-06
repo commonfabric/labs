@@ -38,6 +38,7 @@ import type {
   HarnessModelTurnRequest,
   HarnessModelTurnResult,
 } from "./client.ts";
+import { assertOpenAIReasoningEffortSupported } from "./openai-reasoning.ts";
 import { normalizeOpenAIUsage } from "./usage.ts";
 
 export const OPENAI_CODEX_RESPONSES_URL =
@@ -513,6 +514,10 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         "openai-codex does not support server-side compaction in this release",
       );
     }
+    assertOpenAIReasoningEffortSupported(
+      request.model,
+      request.reasoningEffort,
+    );
     if (request.signal?.aborted) throw abortReason(request.signal);
     const converted = await toResponsesInput(
       request.transcript,

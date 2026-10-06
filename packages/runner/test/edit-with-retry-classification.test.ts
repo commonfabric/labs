@@ -35,6 +35,7 @@ import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { DEFAULT_MAX_RETRIES, Runtime } from "../src/runtime.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import type { FabricValue } from "../src/builder/types.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("edit-with-retry classification");
 
@@ -63,9 +64,11 @@ const commitsFor = async (
         options.succeedOnAttempt !== undefined &&
         commits >= options.succeedOnAttempt
       ) {
-        return Promise.resolve({});
+        return createTransactionCommitReceipt(Promise.resolve({}));
       }
-      return Promise.resolve({ error: rejection });
+      return createTransactionCommitReceipt(
+        Promise.resolve({ error: rejection }),
+      );
     },
   });
   // deno-lint-ignore no-explicit-any

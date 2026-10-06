@@ -44,6 +44,10 @@ export function parseWireText(
   }
   let parsed: JsonCodecValue;
   try {
+    // TODO(danfuzz): Refuse a record naming one key twice, of which
+    // `JSON.parse()` silently keeps the last. The case
+    // `record naming a key twice` in
+    // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
     parsed = JSON.parse(jsonText) as JsonCodecValue;
   } catch (e) {
     throw malformedJsonError(jsonText, e);
