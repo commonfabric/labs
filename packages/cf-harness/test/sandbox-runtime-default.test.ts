@@ -1022,6 +1022,156 @@ describe("sandbox-runtime-default", () => {
         });
       });
 
+      describe("a piece this process cannot use", () => {
+        it({
+          name: "throws for a `config.json` it cannot read, saying so",
+          // Root reads a file whatever its mode, so the case is skipped where
+          // the file can be read anyway.
+          ignore: readsDespiteMode(),
+          fn: async () => {
+            const store = defaultStore(home);
+            await installStore(store);
+            await Deno.chmod(join(store, CONFIG), 0o000);
+
+            const message = messageOf(
+              await rejection(
+                resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                  platform: "darwin",
+                  flags: true,
+                }),
+              ),
+            );
+
+            expect(message).toContain(
+              "`config.json`, the VM's configuration, could not be read " +
+                "(PermissionDenied",
+            );
+            expect(message).not.toContain("is missing");
+          },
+        });
+
+        it({
+          name: "throws for an image it cannot read, saying so",
+          ignore: readsDespiteMode(),
+          fn: async () => {
+            const store = defaultStore(home);
+            await installStore(store);
+            await Deno.chmod(join(store, IMAGE), 0o000);
+
+            expect(
+              messageOf(
+                await rejection(
+                  resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                    platform: "darwin",
+                    flags: true,
+                  }),
+                ),
+              ),
+            ).toContain(
+              "`ext4/kitchensink.ext4`, the image that rootfs runs from, " +
+                "could not be read (PermissionDenied",
+            );
+          },
+        });
+
+        it({
+          name:
+            "throws for a shim whose execute bits are another class's than this process's, saying it is not executable",
+          // Executable by group and others, and not by its owner, which this
+          // process is: some execute bit is set, and none this process can
+          // use. Root executes it anyway, so the case is skipped where root
+          // reads what it should not.
+          ignore: readsDespiteMode(),
+          fn: async () => {
+            const store = defaultStore(home);
+            await installStore(store);
+            await Deno.chmod(join(store, SHIM), 0o011);
+
+            expect(
+              messageOf(
+                await rejection(
+                  resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                    platform: "darwin",
+                    flags: true,
+                  }),
+                ),
+              ),
+            ).toBe(
+              notSetUp(
+                store,
+                "`bin/runsc`, the `runsc` shim, is not executable by this " +
+                  "process",
+                DOCKER_BY_FLAG_OR_VARIABLE,
+              ),
+            );
+          },
+        });
+
+        it("throws for a daemon the access check says this process cannot execute", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+
+          expect(
+            messageOf(
+              await rejection(
+                resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                  platform: "darwin",
+                  flags: true,
+                  canExecute: (path) =>
+                    Promise.resolve(path !== join(store, DAEMON)),
+                }),
+              ),
+            ),
+          ).toBe(
+            notSetUp(
+              store,
+              "`bin/cfc-vm`, the VM daemon the shim starts, is not " +
+                "executable by this process",
+              DOCKER_BY_FLAG_OR_VARIABLE,
+            ),
+          );
+        });
+
+        it("throws for a binary the access check could not be run on, with the reason", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+
+          expect(
+            messageOf(
+              await rejection(
+                resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                  platform: "darwin",
+                  flags: true,
+                  canExecute: (path) =>
+                    path === join(store, SHIM)
+                      ? Promise.reject(new Error("no access check here"))
+                      : Promise.resolve(true),
+                }),
+              ),
+            ),
+          ).toBe(
+            notSetUp(
+              store,
+              "`bin/runsc`, the `runsc` shim, could not be examined " +
+                "(Error: no access check here)",
+              DOCKER_BY_FLAG_OR_VARIABLE,
+            ),
+          );
+        });
+
+        it("returns the native runtime from a store whose pieces it can read and execute, as the access check finds", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+
+          expect(
+            await resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+              platform: "darwin",
+              flags: true,
+            }),
+          ).toEqual(fromStore(store, join(store, POLICY)));
+        });
+      });
+
       it("throws for a piece of the store that cannot be examined, with the reason", async () => {
         const store = defaultStore(home);
         await installStore(store);

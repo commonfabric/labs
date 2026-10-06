@@ -242,7 +242,28 @@ export type SandboxRuntimeSelectionOptions = UnnamedSandboxRuntime & {
    * `Deno.lstat` when absent.
    */
   lstat?: (path: string) => Promise<Deno.FileInfo>;
+
+  /**
+   * Whether this process can execute the file at `path`, as `access(2)` with
+   * `X_OK` answers; `/bin/test -x` when absent. It throws where it could not
+   * be asked.
+   */
+  canExecute?: (path: string) => Promise<boolean>;
 };
+
+/**
+ * Helper for `resolveSandboxRuntimeSelection()`, which asks `/bin/test -x`
+ * whether this process can execute `path`. The answer is the system's own
+ * access check, which no file mode read here could stand in for: which of a
+ * file's execute bits apply depends on who this process is.
+ */
+const canExecuteFile = async (path: string): Promise<boolean> =>
+  (await new Deno.Command("/bin/test", {
+    args: ["-x", path],
+    stdin: "null",
+    stdout: "null",
+    stderr: "null",
+  }).output()).success;
 
 /** The default CFC policy, which the docker path's installer puts under `home`. */
 const homeCfcPolicy = (home: string): string =>
@@ -331,6 +352,7 @@ const readNativeStorePiece = async (
   store: string,
   piece: NativeStorePiece,
   lstat: (path: string) => Promise<Deno.FileInfo>,
+  canExecute: (path: string) => Promise<boolean>,
 ): Promise<NativeStorePieceReading> => {
   const named = `\`${piece.path}\`, ${piece.what},`;
   /** Looks at `path` without following it, and reads it where it is a link. */
@@ -385,12 +407,39 @@ const readNativeStorePiece = async (
   }
   const there = piece.kind === "directory" ? info.isDirectory : info.isFile &&
     (piece.kind === "file" || ((info.mode ?? 0) & 0o111) !== 0);
-  return there ? { there: true } : {
-    there: false,
-    problem: `${named} is not ${
-      piece.kind === "executable file" ? "an" : "a"
-    } ${piece.kind}`,
-  };
+  if (!there) {
+    return {
+      there: false,
+      problem: `${named} is not ${
+        piece.kind === "executable file" ? "an" : "a"
+      } ${piece.kind}`,
+    };
+  }
+  // Of the right kind, and then of use to this process: a file it reads, a
+  // binary it executes. Either failing here is refused by name, rather than
+  // failing later inside the shim or the VM.
+  const path = join(store, piece.path);
+  if (piece.kind === "file") {
+    try {
+      (await Deno.open(path, { read: true })).close();
+    } catch (error) {
+      return { there: false, problem: `${named} could not be read (${error})` };
+    }
+  } else if (piece.kind === "executable file") {
+    let executable: boolean;
+    try {
+      executable = await canExecute(path);
+    } catch (error) {
+      return unexamined(error);
+    }
+    if (!executable) {
+      return {
+        there: false,
+        problem: `${named} is not executable by this process`,
+      };
+    }
+  }
+  return { there: true };
 };
 
 /**
@@ -638,6 +687,7 @@ export const resolveSandboxRuntimeSelection = async (
 
   if (nativeStore !== undefined) {
     const lstat = options.lstat ?? Deno.lstat;
+    const canExecute = options.canExecute ?? canExecuteFile;
     const pieces = nativeStorePieces(
       namedBinary !== undefined,
       namedRootfs !== undefined,
@@ -645,7 +695,12 @@ export const resolveSandboxRuntimeSelection = async (
     const problems: string[] = [];
     let linked = false;
     for (const piece of pieces) {
-      const reading = await readNativeStorePiece(nativeStore, piece, lstat);
+      const reading = await readNativeStorePiece(
+        nativeStore,
+        piece,
+        lstat,
+        canExecute,
+      );
       if (reading.there) continue;
       problems.push(reading.problem);
       if ("linked" in reading) linked = true;
