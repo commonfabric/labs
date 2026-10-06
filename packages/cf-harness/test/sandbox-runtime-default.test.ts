@@ -44,6 +44,7 @@ import {
   type HarnessPromptLoopResult,
 } from "../src/prompt-loop.ts";
 import type { ProcessRunner } from "../src/sandbox/process-runner.ts";
+import { resolveRunscSandboxConfig } from "../src/sandbox/runsc.ts";
 import {
   describeSandboxRuntimeChoice,
   resolveSandboxRuntimeSelection,
@@ -2464,6 +2465,184 @@ describe("sandbox-runtime-default", () => {
           expect(launchIo.dockerReads).toBe(reads);
         });
       }
+    });
+  });
+
+  describe("a native store that a writable mount of the run holds", () => {
+    /** The record of a native runtime macOS defaulted to, from `store`. */
+    const defaulted = (store: string): SandboxRuntimeChoice => ({
+      runtime: "runsc",
+      source: "default",
+      platform: "darwin",
+      nativeStore: store,
+    });
+
+    /** What the direct driver says of one of its files a mount holds. */
+    const within = (file: string, mount: string): string =>
+      `${file} lies inside the writable mount ${mount}: the sandbox could ` +
+      "rewrite it";
+
+    /** What it adds for a runtime nobody named. */
+    const unnamed = (store: string): string =>
+      ". No sandbox runtime is named, so this is the native `runsc` runtime " +
+      `that macOS defaults to, from the store at \`${store}\`: run with a ` +
+      "workspace and mounts that hold none of it, or select Docker with " +
+      "`CF_HARNESS_SANDBOX_RUNTIME=docker`.";
+
+    /**
+     * Each file the driver keeps out of a writable mount: how it names the
+     * file, and a directory of the store that holds that file and neither of
+     * the other two.
+     */
+    const FILES = [
+      { label: "runsc binary", file: SHIM, holder: "bin" },
+      { label: "sandbox rootfs", file: ROOTFS, holder: "images" },
+      { label: "CFC policy", file: join("policy", POLICY), holder: "policy" },
+    ];
+
+    /**
+     * Resolves the direct driver's configuration from the store at `store`
+     * for a run whose workspace is `workspace`, as an engine does. The
+     * policy is in a directory of its own, so a workspace can hold it alone.
+     */
+    const resolved = (
+      store: string,
+      workspace: string,
+      selection?: SandboxRuntimeChoice,
+    ) =>
+      resolveRunscSandboxConfig({
+        workspaceHostPath: workspace,
+        runscBinary: join(store, SHIM),
+        rootfs: join(store, ROOTFS),
+        cfcPolicyPath: join(store, "policy", POLICY),
+        platform: "linux",
+        ...(selection !== undefined ? { selection } : {}),
+      });
+
+    /** Makes a store under the case's root with its policy where `resolved` names it. */
+    const installed = async (): Promise<string> => {
+      const store = join(root, "vm");
+      await installStore(store);
+      await Deno.mkdir(join(store, "policy"));
+      await Deno.writeTextFile(join(store, "policy", POLICY), "{}\n");
+      return store;
+    };
+
+    for (const { label, file, holder } of FILES) {
+      it(`says of a ${label} in the workspace that the runtime was the default, and how Docker is selected`, async () => {
+        const store = await installed();
+        const workspace = join(store, holder);
+
+        expect(() => resolved(store, workspace, defaulted(store))).toThrow(
+          new Error(
+            within(`${label} ${join(store, file)}`, workspace) +
+              unnamed(store),
+          ),
+        );
+      });
+
+      it(`says of a ${label} in the workspace no more than where it lies, for a runtime that was named`, async () => {
+        const store = await installed();
+        const workspace = join(store, holder);
+
+        for (
+          const selection of [
+            undefined,
+            { runtime: "runsc", source: "flag" } as const,
+            { runtime: "runsc", source: "environment" } as const,
+          ]
+        ) {
+          expect(() => resolved(store, workspace, selection)).toThrow(
+            new Error(within(`${label} ${join(store, file)}`, workspace)),
+          );
+        }
+      });
+    }
+
+    it("resolves for the default where no mount holds the store", async () => {
+      const store = await installed();
+      const workspace = join(root, "workspace");
+      await Deno.mkdir(workspace);
+
+      expect(resolved(store, workspace, defaulted(store))).toMatchObject({
+        runscBinary: join(store, SHIM),
+        rootfs: join(store, ROOTFS),
+        cfcPolicyPath: join(store, "policy", POLICY),
+      });
+    });
+
+    it("refuses a batch run on macOS whose workspace is the home, saying the runtime was the default", async () => {
+      const store = defaultStore(home);
+      await installStore(store);
+      const { io, stdout, stderr } = ioBuffers();
+
+      const exitCode = await runCfHarnessCli(
+        [
+          "--model-provider",
+          "openai-compatible-gateway",
+          "--gateway-auth-mode",
+          "none",
+          "--workspace",
+          home,
+          "--prompt",
+          "hello",
+        ],
+        {
+          io,
+          env: { HOME: home },
+          platform: "darwin",
+          cwd: root,
+          registerSignalHandler: () => () => {},
+          createPromptLoop: () => {
+            throw new Error("no loop is built for a refused run");
+          },
+        },
+      );
+
+      expect([exitCode, stdout]).toEqual([1, []]);
+      expect(stderr.join("")).toContain(
+        within(`runsc binary ${join(store, SHIM)}`, home) + unnamed(store),
+      );
+    });
+
+    it("fails the runtime row of a console on macOS whose workspace is the home, saying the runtime was the default", async () => {
+      const store = defaultStore(home);
+      await installStore(store);
+      const env = { HOME: home };
+      const health = createConsoleHealth(
+        await resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "key.pkcs8",
+            "--fabric-space",
+            "console-test",
+            "--session-db",
+            "none",
+            "--workspace",
+            home,
+          ],
+          env,
+          root,
+          { platform: "darwin" },
+        ),
+        undefined,
+        undefined,
+        env,
+        undefined,
+        () => Promise.reject(new Error("Docker is not asked")),
+        { platform: "darwin" },
+      );
+
+      await health.refresh();
+
+      expect(
+        health.snapshot().rows.find((row) => row.id === "sandbox.runtime"),
+      ).toMatchObject({
+        state: "failed",
+        value: "configuration refused",
+        reason: within(`runsc binary ${join(store, SHIM)}`, home) +
+          unnamed(store),
+      });
     });
   });
 

@@ -1061,6 +1061,7 @@ export class CfHarnessEngine {
         additionalMounts: options.additionalMounts,
         runId,
         homeDir: Deno.env.get("HOME"),
+        selection: options.sandboxRuntimeChoice,
       })
       : undefined;
     this.#ownedNativeConfig = runscConfig;

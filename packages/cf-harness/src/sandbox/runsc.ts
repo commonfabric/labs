@@ -34,10 +34,13 @@ import {
 import {
   type DockerRunscAdditionalMount,
   type DockerRunscAdditionalMountConfig,
+  SANDBOX_RUNTIME_ENV,
   SANDBOX_SESSION_NAME_PATTERN,
   type SandboxCommandRequest,
   type SandboxCommandResult,
+  type SandboxPlatform,
   type SandboxRuntime,
+  type SandboxRuntimeChoice,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
   sandboxSessionsAllowedUnder,
@@ -211,8 +214,14 @@ export interface ResolveRunscSandboxConfigOptions {
   runId?: string;
   containerUser?: string;
   homeDir?: string;
-  platform?: "darwin" | "linux" | string;
+  platform?: SandboxPlatform;
   sessionStartTimeoutMs?: number;
+
+  /**
+   * How the entrypoint selected this runtime, where it derived a selection.
+   * A refusal of a runtime nobody named says so, and how Docker is selected.
+   */
+  selection?: SandboxRuntimeChoice;
 }
 
 const normalizeSandboxRoot = (path: string): string => {
@@ -656,6 +665,18 @@ export const resolveRunscSandboxConfig = (
   // sandbox's reach as well: a policy inside a writable mount was rewritten
   // from inside one container and the next read a labelled file as public
   // (review, verified live). The rootfs and the runsc binary likewise.
+  // Whoever ran into this on the native runtime macOS defaulted to named no
+  // runtime and may know of no store, so that refusal says where the file
+  // came from and how the other driver is selected. It names the variable,
+  // which every entrypoint reads.
+  const selection = options.selection;
+  const unnamed = selection?.source === "default" &&
+      selection.runtime === "runsc"
+    ? ". No sandbox runtime is named, so this is the native `runsc` runtime " +
+      `that macOS defaults to, from the store at \`${selection.nativeStore}\`: ` +
+      "run with a workspace and mounts that hold none of it, or select " +
+      `Docker with \`${SANDBOX_RUNTIME_ENV}=docker\`.`
+    : "";
   const trusted = (
     label: string,
     given: string,
@@ -666,7 +687,7 @@ export const resolveRunscSandboxConfig = (
         throw new Error(
           `${label} ${given}${
             canonical === given ? "" : ` (which is ${canonical})`
-          } lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it`,
+          } lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it${unnamed}`,
         );
       }
     }

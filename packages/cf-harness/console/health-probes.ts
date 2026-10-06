@@ -18,6 +18,7 @@ import {
   darwinCfcVmStore,
   type RunscSandboxConfig,
 } from "../src/sandbox/runsc.ts";
+import type { SandboxPlatform } from "../src/sandbox/types.ts";
 import {
   type ConsoleHealthFact,
   type ConsoleHealthProbe,
@@ -537,7 +538,10 @@ const CFC_VM_IDLE_CHECK_SEC = 15;
 export const consoleVmStore = (
   rootfs: string,
   env: Record<string, string | undefined>,
-  options: { platform?: string; realPath?: (path: string) => string } = {},
+  options: {
+    platform?: SandboxPlatform;
+    realPath?: (path: string) => string;
+  } = {},
 ): ConsoleVmStore | undefined => {
   if ((options.platform ?? Deno.build.os) !== "darwin") return undefined;
   const directory = darwinCfcVmStore(env.CFC_VM_HOME, env.HOME);

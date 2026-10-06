@@ -1364,6 +1364,7 @@ const resolveConsoleRunscConfig = (
     networkMode: options.sandboxRunscNetworkMode,
     additionalMounts: options.additionalMounts,
     homeDir: Deno.env.get("HOME"),
+    selection: config.sandboxRuntimeChoice,
   });
 };
 
@@ -1401,7 +1402,7 @@ export const runscWithoutPolicyRefusesTurns = (
 export const consoleVmHealthProbes = (
   config: ConsoleConfig,
   env: Record<string, string | undefined>,
-  options: { platform?: string } = {},
+  options: { platform?: SandboxPlatform } = {},
 ): ConsoleHealthProbe[] => {
   if (config.sandboxRuntimeKind !== "runsc") return [];
   let rootfs: string;

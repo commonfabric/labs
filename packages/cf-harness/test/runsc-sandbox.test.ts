@@ -1267,7 +1267,7 @@ Deno.test("what decides the sandbox's labels and contents is refused inside a wr
       runscBinary: RUNSC,
       rootfs: "/images/kitchensink",
       scratchDir: scratch(),
-      platform: "linux",
+      platform: "linux" as const,
       additionalMounts: [
         {
           kind: "host-bind" as const,
