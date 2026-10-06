@@ -112,9 +112,15 @@ printout's `sandbox` row says which and why:
   not choose a driver; the variable is loom's choice. A launch given
   `--instance` with the variable unset takes no default and does not start,
   saying that Loom must name `docker` or `runsc`: a default could be another
-  driver than the one the instance's runs are on. The fabric still comes up, and
-  the refusal is in the console's log. A loom that does not set the variable for
-  the console it starts needs updating to one that does.
+  driver than the one the instance's runs are on. Where the refusal shows
+  depends on what launched it. A console that `start-local-dev.sh` launches,
+  which is how loom starts its instance's console, does not start while the
+  fabric still comes up, and the refusal is written to
+  `packages/cf-harness/local-dev-console.log`, the console's log; the script's
+  own stderr says the console did not start, names that log, and prints its last
+  lines, the refusal among them. `console:launch --instance` run directly exits
+  with the refusal on its own stderr, and writes no log. A loom that does not
+  set the variable for the console it starts needs updating to one that does.
 - A console launched for no instance, by the start script on a labs dev fabric
   or by hand, with the variable unset, takes its platform's default. A Mac runs
   the native runtime, the direct driver over the cfc-vm store at `CFC_VM_HOME`
