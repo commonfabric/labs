@@ -2,7 +2,11 @@ import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { describe, it } from "@std/testing/bdd";
 
-import { createLocalJobApi } from "../../src/local-jobs/api.ts";
+import {
+  createLocalJobApi,
+  LOCAL_BROWSER_RESULT_MAX_BYTES,
+} from "../../src/local-jobs/api.ts";
+import { LocalJobBrowserHost } from "../../src/local-jobs/browser-host.ts";
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
 import { LocalJobStore } from "../../src/local-jobs/store.ts";
 
@@ -31,7 +35,11 @@ const BODY = {
 
 /** Helper for tests, which builds the API over an in-memory store. */
 const apiWith = (
-  options: { fabricLane?: () => boolean; heartbeatMs?: number } = {},
+  options: {
+    fabricLane?: () => boolean;
+    heartbeatMs?: number;
+    browserHost?: (id: string) => LocalJobBrowserHost | undefined;
+  } = {},
 ) => {
   const store = LocalJobStore.open(":memory:");
   const kicked: string[] = [];
@@ -454,6 +462,171 @@ describe("local-jobs/api", () => {
       store.claimNext();
 
       expect(store.get(job.id)?.state).toBe("running");
+    });
+  });
+
+  describe("the browser host routes", () => {
+    /** Helper for tests, which builds the API with one host per job. */
+    const browsing = (heartbeatMs?: number) => {
+      const hosts = new Map<string, LocalJobBrowserHost>();
+      const api = apiWith({
+        browserHost: (id) => hosts.get(id),
+        ...(heartbeatMs !== undefined ? { heartbeatMs } : {}),
+      });
+      const declare = async () => {
+        const { job } = await (await api.post("/jobs", BODY)).json();
+        const host = new LocalJobBrowserHost();
+        hosts.set(job.id, host);
+        return { id: job.id as string, host };
+      };
+      return { ...api, declare };
+    };
+
+    it("refuses a browser host field that is not an object", async () => {
+      const { post } = apiWith();
+      const response = await post("/jobs", { ...BODY, browserHost: true });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toBe(
+        "`browserHost` must be an object.",
+      );
+    });
+
+    it("refuses a browser host the profile does not admit", async () => {
+      const { post } = apiWith();
+      const response = await post("/jobs", { ...BODY, browserHost: {} });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        code: "beyond_profile",
+        error: "The profile does not admit a browser host.",
+      });
+    });
+
+    it("answers 409 for a job that declared no host", async () => {
+      const { post, call } = browsing();
+      const { job } = await (await post("/jobs", BODY)).json();
+      for (
+        const response of [
+          await call(`/jobs/${job.id}/browser/stream`),
+          await post(`/jobs/${job.id}/browser/result`, { id: "1" }),
+        ]
+      ) {
+        expect(response.status).toBe(409);
+        expect((await response.json()).code).toBe("no_browser_host");
+      }
+    });
+
+    it("streams operations, takes their answers, and shows the host on the job", async () => {
+      const { call, post, declare } = browsing();
+      const { id, host } = await declare();
+      const opened = host.perform({ action: "open", url: "https://a.test" });
+      const read = frames(await call(`/jobs/${id}/browser/stream`), 1);
+      expect(await read).toEqual([
+        'event: request\ndata: {"id":"1","operation":{"action":"open","url":"https://a.test"}}',
+      ]);
+      expect((await (await call(`/jobs/${id}`)).json()).job.browser)
+        .toMatchObject({
+          state: "open",
+          outstanding: 1,
+          withdrawn: 0,
+        });
+
+      const result = {
+        status: "ok",
+        page: { url: "https://a.test/", title: "A" },
+      };
+      const answered = await post(`/jobs/${id}/browser/result`, {
+        id: "1",
+        result,
+      });
+      expect(answered.status).toBe(200);
+      expect(await answered.json()).toEqual({ ok: true });
+      expect(await opened).toEqual(result);
+      const again = await post(`/jobs/${id}/browser/result`, {
+        id: "1",
+        result,
+      });
+      expect(await again.json()).toEqual({ ok: true, duplicate: true });
+    });
+
+    it("refuses an unknown operation, a non-result, a body that is not an object, and an oversized result", async () => {
+      const { call, post, declare } = browsing();
+      const { id, host } = await declare();
+      const snapshot = host.perform({ action: "snapshot", interactive: true });
+      await frames(await call(`/jobs/${id}/browser/stream`), 1);
+
+      const unknown = await post(`/jobs/${id}/browser/result`, {
+        id: "7",
+        result: {},
+      });
+      expect(unknown.status).toBe(404);
+      expect((await unknown.json()).code).toBe("unknown_operation");
+      for (const body of ["[]", "not json"]) {
+        const response = await post(`/jobs/${id}/browser/result`, body);
+        expect(response.status).toBe(400);
+        expect((await response.json()).code).toBe("invalid_request");
+      }
+      const declared = await call(`/jobs/${id}/browser/result`, {
+        method: "POST",
+        headers: {
+          "content-length": String(LOCAL_BROWSER_RESULT_MAX_BYTES + 1),
+        },
+        body: "{}",
+      });
+      expect(declared.status).toBe(413);
+      const oversized = await post(
+        `/jobs/${id}/browser/result`,
+        "x".repeat(LOCAL_BROWSER_RESULT_MAX_BYTES + 1),
+      );
+      expect(oversized.status).toBe(413);
+
+      const invalid = await post(`/jobs/${id}/browser/result`, {
+        id: "1",
+        result: { status: "fine" },
+      });
+      expect(invalid.status).toBe(400);
+      expect((await invalid.json()).code).toBe("invalid_result");
+      expect((await snapshot).status).toBe("failed");
+    });
+
+    it("answers 404 for another method or route under browser", async () => {
+      const { call, declare } = browsing();
+      const { id } = await declare();
+      expect(
+        (await call(`/jobs/${id}/browser/stream`, { method: "POST" }))
+          .status,
+      ).toBe(404);
+      expect((await call(`/jobs/${id}/browser/elsewhere`)).status).toBe(404);
+    });
+
+    it("says it is alive on a quiet stream, and ends it, leaving the host open, when the service stops", async () => {
+      const { call, declare, stopping } = browsing(5);
+      const { id, host } = await declare();
+      const response = await call(`/jobs/${id}/browser/stream`);
+      const reader = response.body!.pipeThrough(new TextDecoderStream())
+        .getReader();
+      expect((await reader.read()).value).toContain(": heartbeat");
+      stopping.abort();
+      for (;;) {
+        if ((await reader.read()).done) break;
+      }
+      expect(host.view().state).toBe("open");
+    });
+
+    it("ends a stream whose request is already aborted", async () => {
+      const { call, declare, stopping } = browsing();
+      const { id } = await declare();
+      stopping.abort();
+      expect(await frames(await call(`/jobs/${id}/browser/stream`))).toEqual(
+        [],
+      );
+    });
+
+    it("says close on a closed host's stream and ends it", async () => {
+      const { call, declare } = browsing();
+      const { id, host } = await declare();
+      const read = frames(await call(`/jobs/${id}/browser/stream`));
+      host.close();
+      expect(await read).toEqual(["event: close\ndata: {}"]);
     });
   });
 });

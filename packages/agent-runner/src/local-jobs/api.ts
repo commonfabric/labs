@@ -7,7 +7,8 @@
  *
  * - `GET /health` — the lane is serving.
  * - `POST /jobs` — enqueue `{caller, profile, idempotencyKey, task,
- *   instructions?, context?, resultSchema, tools?, maxModelTurns?}`;
+ *   instructions?, context?, resultSchema, tools?, maxModelTurns?,
+ *   browserHost?}`;
  *   answers `201` with the new job, or `200` with the one the key already
  *   names for the same request.
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
@@ -16,12 +17,19 @@
  * - `GET /jobs/<id>/events?after=<seq>` — the job's events after `seq` as
  *   server-sent events, then each new one as it is appended, ending after
  *   the job's terminal state. `Last-Event-ID` resumes the same way.
+ * - `GET /jobs/<id>/browser/stream` — for a job that declared a browser
+ *   host, its operations as server-sent events (`request`, `withdraw`,
+ *   `close`); a later attach replaces an earlier one and is sent what is
+ *   still owed first (`./browser-host.ts`).
+ * - `POST /jobs/<id>/browser/result` — `{id, result}`, the host's answer to
+ *   one operation.
  *
  * A refusal is `{ok: false, code, error}` with a 4xx status.
  */
 
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
+import type { LocalJobBrowserHost } from "./browser-host.ts";
 import { narrowLocalJobProfile } from "./profiles.ts";
 import type { LocalJobProfiles } from "./profiles.ts";
 import {
@@ -37,6 +45,12 @@ const MAX_NAME_LENGTH = 200;
 /** How often an open event stream says it is alive when nothing happens. */
 export const LOCAL_JOB_HEARTBEAT_MS = 15_000;
 
+/**
+ * The largest browser result body a host may post: a screenshot rides in it
+ * as base64. The console's own cap.
+ */
+export const LOCAL_BROWSER_RESULT_MAX_BYTES = 32 * 1024 * 1024;
+
 /** What the API answers requests with. */
 export interface LocalJobApiOptions {
   store: LocalJobStore;
@@ -50,6 +64,9 @@ export interface LocalJobApiOptions {
 
   /** Asks a job to stop. */
   cancel: (id: string) => unknown;
+
+  /** The browser host of a job that declared one; none answers 409. */
+  browserHost?: (id: string) => LocalJobBrowserHost | undefined;
 
   /** Whether the runner's Fabric lane is running, for `/health`. */
   fabricLane?: () => boolean;
@@ -94,6 +111,7 @@ const enqueueRequestOf = (
     resultSchema,
     tools,
     maxModelTurns,
+    browserHost,
   } = value as Record<string, unknown>;
   const name = (field: unknown) =>
     typeof field === "string" && field.length > 0 &&
@@ -126,6 +144,9 @@ const enqueueRequestOf = (
   ) {
     return { error: "`maxModelTurns` must be a whole number of 1 or more." };
   }
+  if (browserHost !== undefined && !isObjectNotArray(browserHost)) {
+    return { error: "`browserHost` must be an object." };
+  }
   return {
     caller: caller as string,
     profile: profile as string,
@@ -137,6 +158,9 @@ const enqueueRequestOf = (
       resultSchema,
       ...(tools !== undefined ? { tools: tools as string[] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
+      ...(browserHost !== undefined
+        ? { browserHost: browserHost as Record<string, unknown> }
+        : {}),
     },
   };
 };
@@ -228,6 +252,122 @@ const eventStream = (
   });
 };
 
+/**
+ * Helper for `GET /jobs/<id>/browser/stream`, which passes the host's stream
+ * through with a heartbeat, and ends it when the request or the service
+ * does. Ending it here leaves the host open for the next attach.
+ */
+const browserStream = (
+  options: LocalJobApiOptions,
+  host: LocalJobBrowserHost,
+  signal: AbortSignal,
+): Response => {
+  const encoder = new TextEncoder();
+  const source = host.attach().getReader();
+  let end = () => {};
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let ended = false;
+      // As on the event stream: a timer only so a reader can tell a quiet
+      // host stream from a dead socket.
+      const heartbeat = setInterval(() => {
+        if (!ended) controller.enqueue(encoder.encode(": heartbeat\n\n"));
+      }, options.heartbeatMs ?? LOCAL_JOB_HEARTBEAT_MS);
+      end = () => {
+        if (ended) return;
+        ended = true;
+        clearInterval(heartbeat);
+        signal.removeEventListener("abort", end);
+        options.stopping?.removeEventListener("abort", end);
+        source.cancel().catch(() => {});
+        try {
+          controller.close();
+        } catch {
+          // The reader already went away.
+        }
+      };
+      if (signal.aborted || options.stopping?.aborted) {
+        end();
+        return;
+      }
+      signal.addEventListener("abort", end, { once: true });
+      options.stopping?.addEventListener("abort", end, { once: true });
+      (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await source.read();
+            if (done || ended) break;
+            controller.enqueue(value);
+          }
+        } catch {
+          // The host replaced or closed this stream.
+        }
+        end();
+      })();
+    },
+    cancel() {
+      end();
+    },
+  });
+  return new Response(body, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store",
+    },
+  });
+};
+
+/**
+ * Helper for `POST /jobs/<id>/browser/result`, which hands the host one
+ * answer.
+ */
+const browserResult = async (
+  host: LocalJobBrowserHost,
+  request: Request,
+): Promise<Response> => {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > LOCAL_BROWSER_RESULT_MAX_BYTES) {
+    return refuse(413, "too_large", "The result is too large.");
+  }
+  let text: string;
+  try {
+    text = await request.text();
+  } catch {
+    return refuse(400, "invalid_request", "The body could not be read.");
+  }
+  if (text.length > LOCAL_BROWSER_RESULT_MAX_BYTES) {
+    return refuse(413, "too_large", "The result is too large.");
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return refuse(400, "invalid_request", "The body must be JSON.");
+  }
+  if (!isObjectNotArray(body)) {
+    return refuse(400, "invalid_request", "The body must be an object.");
+  }
+  const { id, result } = body as Record<string, unknown>;
+  switch (host.acceptResult(id, result)) {
+    case "accepted":
+      return json(200, { ok: true });
+    case "duplicate":
+      return json(200, { ok: true, duplicate: true });
+    case "invalid":
+      return refuse(
+        400,
+        "invalid_result",
+        "That is not a browser result; the operation ends failed.",
+      );
+    case "unknown":
+      return refuse(
+        404,
+        "unknown_operation",
+        "The host holds no such operation.",
+      );
+  }
+};
+
 /** Builds the API's request handler. */
 export const createLocalJobApi = (
   options: LocalJobApiOptions,
@@ -304,7 +444,30 @@ async (request: Request): Promise<Response> => {
     return refuse(404, "not_found", `No job \`${id}\`.`);
   }
   if (parts.length === 2 && request.method === "GET") {
-    return json(200, { job: store.get(id) });
+    const browser = options.browserHost?.(id);
+    return json(200, {
+      job: {
+        ...store.get(id),
+        ...(browser !== undefined ? { browser: browser.view() } : {}),
+      },
+    });
+  }
+  if (parts.length === 4 && parts[2] === "browser") {
+    const host = options.browserHost?.(id);
+    if (host === undefined) {
+      return refuse(
+        409,
+        "no_browser_host",
+        `Job \`${id}\` declared no browser host.`,
+      );
+    }
+    if (parts[3] === "stream" && request.method === "GET") {
+      return browserStream(options, host, request.signal);
+    }
+    if (parts[3] === "result" && request.method === "POST") {
+      return await browserResult(host, request);
+    }
+    return refuse(404, "not_found", "No such route.");
   }
   if (
     parts.length === 3 && parts[2] === "cancel" && request.method === "POST"

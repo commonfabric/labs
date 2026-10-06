@@ -161,6 +161,23 @@ describe("local-jobs/lane", () => {
       });
     });
 
+    it("adds the delegate tool and the browser subagent profile for a profile narrowed to a browser host", () => {
+      const browsing = { ...ASK, browserHost: true };
+      expect(localJobSpecOf({ request: REQUEST } as LocalJob, browsing, {}))
+        .toMatchObject({
+          tools: [...ASK.tools, "delegate_task"],
+          subagentProfiles: ["browser"],
+        });
+      expect(
+        localJobSpecOf({ request: REQUEST } as LocalJob, {
+          ...browsing,
+          tools: ["delegate_task"],
+        }, {}).tools,
+      ).toEqual(["delegate_task"]);
+      expect(localJobSpecOf({ request: REQUEST } as LocalJob, ASK, {}))
+        .not.toHaveProperty("subagentProfiles");
+    });
+
     it("sends no system prompt for a request with neither instructions nor context", () => {
       expect(localJobSpecOf({ request: REQUEST } as LocalJob, ASK, {}))
         .not.toHaveProperty("instructions");
@@ -458,6 +475,87 @@ describe("local-jobs/lane", () => {
         errorCode: PROFILE_UNAVAILABLE,
       });
       expect(runs).toHaveLength(0);
+    });
+
+    describe("browser host", () => {
+      const BROWSING = new Map([["ask", { ...ASK, browserHost: true }]]);
+      const DECLARED = { ...REQUEST, browserHost: {} };
+
+      it("runs a job that declared one with its host, and closes the host when the job ends", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({
+          profiles: BROWSING,
+        });
+        lane.start();
+        const id = enqueue("a", DECLARED);
+        const run = await nextRun(0);
+
+        const host = lane.browserHost(id)!;
+        expect(run.options.browserHost).toBe(host);
+        expect(run.spec).toMatchObject({
+          tools: [...ASK.tools, "delegate_task"],
+          subagentProfiles: ["browser"],
+        });
+        const open = host.perform({ action: "open", url: "https://a.test" });
+        run.settle({ outcome: "cancelled" });
+        await reached(store, id, "cancelled");
+        expect(await open).toEqual({
+          status: "session-ended",
+          message: "the job has ended",
+        });
+        expect(host.view().state).toBe("closed");
+        expect(lane.browserHost(id)?.view().state).toBe("closed");
+      });
+
+      it("holds the host a caller attached before the job started for its run", async () => {
+        const { lane, nextRun, enqueue } = laneWith({ profiles: BROWSING });
+        const id = enqueue("a", DECLARED);
+        const early = lane.browserHost(id);
+        expect(early?.view().state).toBe("open");
+        lane.start();
+        expect((await nextRun(0)).options.browserHost).toBe(early);
+      });
+
+      it("gives a job that declared none no host, and no browser to delegate to", async () => {
+        const { lane, nextRun, enqueue } = laneWith({ profiles: BROWSING });
+        lane.start();
+        const id = enqueue("a");
+        const run = await nextRun(0);
+        expect(run.options.browserHost).toBeUndefined();
+        expect(run.spec.tools).toEqual(ASK.tools);
+        expect(run.spec.subagentProfiles).toBeUndefined();
+        expect(lane.browserHost(id)).toBeUndefined();
+        expect(lane.browserHost("job-unknown")).toBeUndefined();
+      });
+
+      it("closes the host of a queued job that is cancelled", () => {
+        const { lane, enqueue } = laneWith({
+          profiles: BROWSING,
+          maxConcurrent: 0,
+        });
+        const id = enqueue("a", DECLARED);
+        const host = lane.browserHost(id)!;
+        lane.cancel(id);
+        expect(host.view().state).toBe("closed");
+      });
+
+      it("closes the host of a job whose profile no longer admits it", async () => {
+        const { store, lane, enqueue } = laneWith({ maxConcurrent: 0 });
+        const id = enqueue("a", DECLARED);
+        const host = lane.browserHost(id)!;
+        const gone = new LocalJobLane({
+          store,
+          profiles: new Map([["ask", ASK]]),
+          maxConcurrent: 1,
+          workRoot: "/work/local",
+          runJob: () => Promise.reject(new Error("never runs")),
+        });
+        expect(gone.browserHost(id)).not.toBe(host);
+        gone.start();
+        expect(await reached(store, id, "failed")).toMatchObject({
+          errorCode: PROFILE_UNAVAILABLE,
+        });
+        expect(gone.browserHost(id)?.view().state).toBe("closed");
+      });
     });
 
     it("binds each concurrent run to its own job identity", async () => {
