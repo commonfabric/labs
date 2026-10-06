@@ -61,7 +61,9 @@ shell and toolshed keep running. The sandbox runtime is the one
 `CF_HARNESS_SANDBOX_RUNTIME` names, `docker` or `runsc`. With none named, a Mac
 serves on its native runtime, the cfc-vm store gVisor's macOS installer writes,
 and does not start where that store is not set up; every other platform serves
-on Docker. `packages/cf-harness/console/README.md` covers the console itself,
+on Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
+is set the console is launched for that loom instance, and with no runtime named
+it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
 and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
 the operator procedure it belongs to.
 

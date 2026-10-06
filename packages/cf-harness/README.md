@@ -116,8 +116,9 @@ What works today:
   with the Docker-registered `runsc-cfc` runtime, or a `runsc` binary the
   harness invokes directly. `--sandbox-runtime` names one. Where nothing does,
   macOS runs the direct driver from its native cfc-vm store, and every other
-  platform runs Docker, except through the Loom local host, which refuses a run
-  that names none; see [Sandbox runtimes](#sandbox-runtimes)
+  platform runs Docker, except that the Loom local host, and a console launched
+  for a Loom instance, refuse where none is named; see
+  [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions on the direct driver: a long-lived container that later
   calls execute in, offered to the model only where the run's sandbox has
   sessions and its CFC enforcement mode allows them
@@ -754,14 +755,17 @@ credential-store and resolver APIs. It never reads or imports the ordinary Codex
 CLI login.
 
 ```bash
-CF_HARNESS_HOME=/canonical/private/home \
+CF_HARNESS_HOME=/canonical/private/home CF_HARNESS_SANDBOX_RUNTIME=docker \
   deno run --no-lock -A src/loom-local-host-main.ts batch -- \
   --workspace ../.. --prompt "Summarize this workspace."
 
-CF_HARNESS_HOME=/canonical/private/home \
+CF_HARNESS_HOME=/canonical/private/home CF_HARNESS_SANDBOX_RUNTIME=docker \
   deno run --no-lock -A src/loom-local-host-main.ts interactive -- \
   --chat-session-db /private/runtime/chat.sqlite
 ```
+
+Both name a sandbox runtime, `docker` here: this host takes no default, and
+refuses a run that names none ([Sandbox runtimes](#sandbox-runtimes)).
 
 The entrypoint serves both execution shapes. It rejects missing or invalid
 provider configuration, and reads only the persisted preference from that
@@ -1003,8 +1007,8 @@ flags, `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy`, and
 reads their variables alone.
 
 Where neither the flag nor the variable names a runtime, the entrypoint's
-platform decides, except on the Loom local host, and the choice is never a
-fallback from one driver to the other:
+platform decides, except for the two entrypoints Loom starts, and the choice is
+never a fallback from one driver to the other:
 
 - **On macOS** the run uses the direct driver with the native runtime: the
   `runsc` shim, the rootfs image and the VM of the cfc-vm store that gVisor's
@@ -1018,6 +1022,10 @@ fallback from one driver to the other:
 - **The Loom local host** takes no default on any platform. Loom names the
   runtime of every run it starts, so a `batch` or `interactive` run that names
   none is refused, saying that Loom must name `docker` or `runsc`.
+- **A console launched for a Loom instance**, which is `console:launch` given
+  `--instance`, takes none either, and is refused the same way: Loom chooses
+  each instance's runtime, and a default could be another. The same launch with
+  no `--instance` takes the platform's default.
 
 A store is set up for the default when it holds all of the following, and the
 default is refused when any is missing:
@@ -1054,9 +1062,10 @@ Three more things refuse the default, each before anything executes:
   naming the setting and never its value, until Docker is named or the setting
   is removed. A named `runsc` is not refused for them and reads none of them.
 - **A policy that cannot be examined.** A default policy the harness could not
-  look at, for any reason but its not being there, is not known to be absent, so
-  the next default does not stand in for it. The refusal names the file and the
-  reason. A named `runsc` is refused the same way.
+  look at is not known to be absent, so the next default does not stand in for
+  it. The refusal names the file and the reason. A named `runsc` is refused the
+  same way. A policy that is not there is absent, and so is one whose path runs
+  through a file, such as a home that is not a directory.
 - **A store given by another path than the one it is at.** The driver hands the
   macOS `runsc` the rootfs by the path the file system has for it, and that
   `runsc` recognizes one of its store's images by comparing the path as written
@@ -1082,12 +1091,16 @@ description carries the same fact as `selection`.
 A run stays on the runtime it started on, and so does an interactive session.
 The two runtimes need not keep the CFC labels of a run's files where the other
 reads them, and on macOS they do not, so a file one labelled can read as
-unlabelled under the other. A `--resume` that selects the other runtime, by name
-or by default, is refused with `provider-mismatch`, naming the runtime the run
-started on and how to name it. A turn of a stored session on a host running the
-other runtime is refused the same way, saying to restart the host on the
-session's runtime or start a new session. A run started on Docker before macOS
-had a default therefore resumes only with `docker` named.
+unlabelled under the other. A run's state records its runtime as
+`sandboxRuntime` from the moment its engine is built, and a `--resume-run` that
+selects the other runtime, by name or by default, is refused with
+`provider-mismatch`, naming the runtime the run started on and how to name it. A
+turn of a stored session on a host running the other runtime is refused the same
+way, saying to restart the host on the session's runtime or start a new session.
+A run started on Docker before macOS had a default therefore resumes only with
+`docker` named. A run or session recorded before its runtime was is bound from
+its next resume or turn, as the
+[current-state reference](docs/CURRENT_STATE.md#selection) sets out.
 
 A run on the native default is a run on the direct driver, with everything the
 rest of this section says of that driver. Two of its differences stop or change

@@ -100,9 +100,15 @@ printout's `sandbox` row says which and why:
 
 - `CF_HARNESS_SANDBOX_RUNTIME` names it, `docker` or `runsc`. A console that
   came up with a loom instance inherits the variable from loom where loom sets
-  it for that instance, and is then on the driver the instance chose; where loom
-  sets none, the next line applies.
-- With the variable unset, a Mac runs the native runtime, the direct driver over
+  it for that instance, and is then on the driver the instance chose.
+- A console launched for a loom instance with the variable unset does not start.
+  The launch is given `--instance`, takes no default, and says that Loom must
+  name `docker` or `runsc`: a default could be another driver than the one the
+  instance's runs are on. The fabric still comes up, and the refusal is in the
+  console's log. A loom that names no driver for the console it starts needs
+  updating to one that does.
+- A console launched by hand, with no `--instance`, and the variable unset takes
+  its platform's default. A Mac runs the native runtime, the direct driver over
   the cfc-vm store at `CFC_VM_HOME` or `~/Library/Application Support/cfc-vm`,
   and the launch is refused where that store is not set up, naming the store and
   what it lacks. Every other platform runs Docker. Nothing falls back from one

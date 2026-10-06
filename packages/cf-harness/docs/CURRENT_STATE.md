@@ -28,17 +28,17 @@ The runtime has four main boundaries:
    drives Docker with a configurable Docker-registered runtime, normally
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
    A run names one. Where it names none, macOS takes the direct driver and every
-   other platform takes Docker, except through the Loom local host, which
-   refuses the run. [Sandbox runtimes](#sandbox-runtimes) describes both. The
-   browser child is a constrained host-adjacent profile whose typed `browser`
-   tool the harness sends to a browser host attached to the run, such as the
-   Weaver, or else binds to a leased local CDP endpoint itself. The optional
-   `run_pattern` tool is a distinct trusted-host path whose Fabric identity
-   stays outside the sandbox. It runs pieces in the configured space and admits
-   input references from that space or foreign DIDs the operator lists with
-   their hosts. The agent result writer is a second such path, invoked by a host
-   caller rather than by the model, writing a run's structured result into the
-   configured space.
+   other platform takes Docker, except that the Loom local host, and a console
+   launched for a Loom instance, refuse. [Sandbox runtimes](#sandbox-runtimes)
+   describes both. The browser child is a constrained host-adjacent profile
+   whose typed `browser` tool the harness sends to a browser host attached to
+   the run, such as the Weaver, or else binds to a leased local CDP endpoint
+   itself. The optional `run_pattern` tool is a distinct trusted-host path whose
+   Fabric identity stays outside the sandbox. It runs pieces in the configured
+   space and admits input references from that space or foreign DIDs the
+   operator lists with their hosts. The agent result writer is a second such
+   path, invoked by a host caller rather than by the model, writing a run's
+   structured result into the configured space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -95,6 +95,13 @@ from one driver to the other:
 - The Loom local host takes no default, on any platform. Loom names the driver
   of every run it starts, so a `batch` or `interactive` run that names none is
   refused, saying that Loom must name `docker` or `runsc`.
+- A console launched for a Loom instance takes none either. `console:launch`
+  given `--instance` is that launch: `scripts/start-local-dev.sh` passes the
+  flag exactly where `LOOM_INSTANCE_ID` is set. Loom chooses the driver of each
+  instance, and a console put on a default could be on another than the
+  instance's runs, so the launch is refused the same way, and it tells the
+  console it serves to refuse an unnamed driver too. A launch with no
+  `--instance` is a person at a shell, and takes the platform's default.
 - Every other entrypoint takes its platform's default. On macOS that is the
   direct driver with the **native runtime**: the `runsc` shim, rootfs image and
   VM of the cfc-vm store that gVisor's macOS installer writes. The store is the
@@ -144,11 +151,13 @@ pieces above:
   runs one that does not match from the directory itself, which is empty. That
   is read from its source and has not been run. A path that cannot be resolved,
   a link to nothing or a loop of links among them, is refused with the reason.
-- **A default CFC policy that could not be examined.** Only a policy that is not
-  there reads as absent. Any other failure to look refuses the default, naming
-  the file and the failure, so that the store's own policy never stands in for
-  one under the home that might be there. A named `runsc` is refused the same
-  way, without the way to Docker, since nothing about it is a default.
+- **A default CFC policy that could not be examined.** A policy that is not
+  there reads as absent, and so does one whose path runs through a file, such as
+  a home that is not a directory, since nothing can be at such a path. Any other
+  failure to look refuses the default, naming the file and the failure, so that
+  the store's own policy never stands in for one under the home that might be
+  there. A named `runsc` is refused the same way, without the way to Docker,
+  since nothing about it is a default.
 
 Each refusal is a `HarnessControlError` with the code `invalid-request`. The
 message of a refused default says that no runtime is named and the default on
@@ -211,13 +220,14 @@ labelled reads as unlabelled under the other. The harness does not know which
 hosts agree, so on every platform:
 
 - **A resumed run** that selects the other driver, by name or by default, is
-  refused before anything runs. The driver the run started on is the `kind` of
-  the runtime description in its state. The batch CLI refuses first, and an
-  engine built to resume refuses whatever built it. The message names the
-  recorded driver and how to name it: `--sandbox-runtime <driver>` or
-  `CF_HARNESS_SANDBOX_RUNTIME=<driver>` from the batch CLI, and the variable
-  alone from the engine, and from the batch CLI where its embedder's operator
-  can pass no flag.
+  refused before anything runs. The driver the run started on is
+  `sandboxRuntime` in its state, `docker` or `runsc`, which the engine writes as
+  it is built, before it probes the sandbox, so a run whose first probe failed
+  records it too. The batch CLI refuses first, and an engine built to resume
+  refuses whatever built it. The message names the recorded driver and how to
+  name it: `--sandbox-runtime <driver>` or `CF_HARNESS_SANDBOX_RUNTIME=<driver>`
+  from the batch CLI, and the variable alone from the engine, and from the batch
+  CLI where its embedder's operator can pass no flag.
 - **An interactive session** records the driver of the host that started it, as
   `sandboxRuntime` in its status, `docker` or `runsc`. A turn of that session on
   a host running the other is refused, saying to restart the host with
@@ -225,9 +235,23 @@ hosts agree, so on every platform:
   session. This covers the interactive stdio entrypoint, the interactive lane of
   the Loom local host, and the console.
 
-Both refusals carry the code `provider-mismatch`. A run whose state holds no
-runtime description, and a session stored before sessions recorded a driver,
-have nothing to compare and are not refused.
+Both refusals carry the code `provider-mismatch`. A record written before its
+driver was recorded is read by what it holds, and bound from its next use:
+
+- A run state with no `sandboxRuntime` is held to the `kind` of the runtime
+  description in its capability snapshot, where it has one. Either way the
+  engine that resumes it writes `sandboxRuntime`. A state with neither is
+  resumed on whichever driver the resume selects, and is bound to that one from
+  then on.
+- A session with no `sandboxRuntime` is bound to the driver of the host that
+  starts its next turn, in the same write that records the turn. Until then it
+  is not refused, so such a session is bound to whichever driver first runs a
+  turn of it, which need not be the one it started on.
+
+A record that names a driver this build does not know, or describes a kind of
+one it does not know, is refused as such with `provider-mismatch`: the resume,
+or the turn, cannot be told to be on the same driver. Nothing reads an unknown
+name as Docker.
 
 The settings below describe the direct driver and are read only when it is
 selected, by name or by the macOS default. A setting that is named means the
@@ -1154,9 +1178,10 @@ mode.
   the console's shared workspace to the driver whose runs labelled its files, so
   a new run, or a new interactive session, on the other driver reads those files
   as that driver's `runsc` finds them, which under Docker Desktop on macOS and
-  the native runtime is without the other's labels. An interactive session
-  stored before sessions recorded a driver, and a run whose state holds no
-  runtime description, are not held to one either.
+  the native runtime is without the other's labels. A run state, or an
+  interactive session, written before its driver was recorded and holding no
+  runtime description is held to none until its next resume or turn binds it, to
+  whichever driver that runs on.
 - A signal that interrupts a batch CLI run closes the root run's sandbox runtime
   and not the runtimes of its children. A child's sessions still end, because
   they end with the harness process; nothing takes down a container of a child's

@@ -232,14 +232,22 @@ one environment execute on the same driver. The package's
 [CURRENT_STATE](../docs/CURRENT_STATE.md#sandbox-runtimes) describes both
 drivers.
 
-| Environment                      | Selects                                                                                                                                                     |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, and every other platform takes `docker` |
-| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset under the macOS default, the store's `images/kitchensink`                                                   |
-| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`, or under the macOS default it is the store's `bin/runsc`                         |
-| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, and under the macOS default the store's `policy.json` next   |
-| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                  |
-| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                 |
+| Environment                      | Selects                                                                                                                                                                                         |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, and every other platform takes `docker`; a launch with `--instance` refuses |
+| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset under the macOS default, the store's `images/kitchensink`                                                                                       |
+| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`, or under the macOS default it is the store's `bin/runsc`                                                             |
+| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, and under the macOS default the store's `policy.json` next                                       |
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                                                      |
+| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                                                     |
+
+A console launched for a Loom instance takes no default at all. `console:launch`
+given `--instance`, which is how `scripts/start-local-dev.sh` launches it where
+`LOOM_INSTANCE_ID` is set, refuses to start on any platform where the
+environment names no runtime, saying that Loom must name `docker` or `runsc`:
+Loom chooses each instance's runtime, and a console on a default could be on
+another than the instance's runs. It tells the console it serves to hold to the
+same. What follows is the default of a launch with no `--instance`.
 
 With no runtime named on macOS, the console and `console:launch` refuse to start
 unless the store holds an executable `bin/runsc` and `bin/cfc-vm`, a
