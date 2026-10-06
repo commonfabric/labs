@@ -337,6 +337,34 @@ describe("ensurePrivateInboxOf()", () => {
       );
     });
 
+    it("refuses an inbox in a space this identity is refused access to", async () => {
+      // Emulated storage enforces no access list, so the refusal is the one a
+      // memory server reports: the read fails, and the storage manager holds
+      // the space's access error.
+      const inbox = await usableInbox();
+      const before = refusalsLogged();
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (space) =>
+          space === inbox.space ? new Error("access refused") : undefined,
+      );
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.reject(new Error("read refused")),
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-access-refused",
+      );
+      expect(await adopted()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+      expect(refusalsLogged()).toBe(before + 1);
+    });
+
     it("refuses an inbox whose stored access list is malformed", async () => {
       const inbox = await usableInbox();
       using _stored = stub(
