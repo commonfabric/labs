@@ -210,6 +210,28 @@ const notSetUp = (store: string, problem: string, docker: string): string =>
   `the native \`runsc\` runtime, and it is not set up at \`${store}\`: ` +
   `${problem}. Set it up there, or ${docker}`;
 
+/**
+ * Whether this process reads a file whose mode forbids it, as root does,
+ * found by trying. A case that needs a file it cannot read is skipped where
+ * it can.
+ */
+const readsDespiteMode = (): boolean => {
+  const dir = Deno.makeTempDirSync({ prefix: "sandbox-runtime-mode-" });
+  try {
+    const file = join(dir, "locked");
+    Deno.writeTextFileSync(file, "");
+    Deno.chmodSync(file, 0o000);
+    try {
+      Deno.readTextFileSync(file);
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+};
+
 /** What `promise` rejects with, or `undefined` where it resolves. */
 const rejection = (promise: Promise<unknown>): Promise<unknown> =>
   promise.then(() => undefined, (error: unknown) => error);
@@ -914,6 +936,75 @@ describe("sandbox-runtime-default", () => {
           );
         });
 
+        for (
+          const [directory, pieces] of [
+            ["bin", [
+              [SHIM, "the `runsc` shim"],
+              [DAEMON, "the VM daemon the shim starts"],
+            ]],
+            ["images", [[ROOTFS, "the rootfs a container names"]]],
+            ["ext4", [[IMAGE, "the image that rootfs runs from"]]],
+          ] as const
+        ) {
+          it(`throws for \`${directory}\` that is a link to a directory outside the store, naming it as what each piece in it is reached through`, async () => {
+            const store = defaultStore(home);
+            await installStore(store);
+            // The real directory, moved out of the store and linked back in:
+            // every piece in it is then a file or directory of the right
+            // kind, at its own name, behind the link.
+            const target = join(root, `outside-${directory}`);
+            await Deno.rename(join(store, directory), target);
+            await Deno.symlink(target, join(store, directory));
+
+            const refusal = await rejection(
+              resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                platform: "darwin",
+                flags: true,
+              }),
+            );
+
+            expect(refusal).toBeInstanceOf(HarnessControlError);
+            expect(messageOf(refusal)).toBe(
+              notSetUp(
+                store,
+                [
+                  ...pieces.map(([piece, what]) =>
+                    `\`${piece}\`, ${what}, is reached through ` +
+                    `\`${directory}\`, a symbolic link to \`${target}\``
+                  ),
+                  MUST_BE_ITSELF,
+                ].join("; "),
+                DOCKER_BY_FLAG_OR_VARIABLE,
+              ),
+            );
+          });
+        }
+
+        it("says a piece behind a directory that cannot be examined could not be examined, not that it is missing", async () => {
+          const store = defaultStore(home);
+          await installStore(store);
+
+          const refusal = await rejection(
+            resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+              platform: "darwin",
+              flags: true,
+              lstat: (path) =>
+                path === join(store, "images")
+                  ? Promise.reject(new Deno.errors.PermissionDenied("locked"))
+                  : Deno.lstat(path),
+            }),
+          );
+
+          expect(messageOf(refusal)).toBe(
+            notSetUp(
+              store,
+              "`images/kitchensink`, the rootfs a container names, could " +
+                "not be examined (PermissionDenied: locked)",
+              DOCKER_BY_FLAG_OR_VARIABLE,
+            ),
+          );
+        });
+
         it("returns the native runtime where a link is in a piece a named setting replaces", async () => {
           const store = defaultStore(home);
           await installStore(store);
@@ -1237,9 +1328,9 @@ describe("sandbox-runtime-default", () => {
             message:
               "No sandbox runtime is named, so the default applies, which on " +
               "macOS is the native `runsc` runtime, and the CFC policy at " +
-              `\`${homePolicy(home)}\` could not be examined ` +
-              "(PermissionDenied: locked), so whether it is there is not " +
-              "known. Make it readable or name a policy with " +
+              `\`${homePolicy(home)}\` could not be read ` +
+              "(PermissionDenied: locked), so whether it is a policy a run " +
+              "could use is not known. Make it readable or name a policy with " +
               "`--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`, or " +
               DOCKER_BY_FLAG_OR_VARIABLE,
           });
@@ -1258,9 +1349,9 @@ describe("sandbox-runtime-default", () => {
             message:
               "No sandbox runtime is named, so the default applies, which on " +
               "macOS is the native `runsc` runtime, and the CFC policy at " +
-              `\`${join(store, POLICY)}\` could not be examined ` +
-              "(PermissionDenied: locked), so whether it is there is not " +
-              "known. Make it readable or name a policy with " +
+              `\`${join(store, POLICY)}\` could not be read ` +
+              "(PermissionDenied: locked), so whether it is a policy a run " +
+              "could use is not known. Make it readable or name a policy with " +
               "`CF_HARNESS_RUNSC_CFC_POLICY`, or " + DOCKER_BY_VARIABLE,
           });
         });
@@ -1282,8 +1373,8 @@ describe("sandbox-runtime-default", () => {
           expect(refusal).toMatchObject({
             code: "invalid-request",
             message: `The CFC policy at \`${homePolicy(home)}\` could not be ` +
-              "examined (PermissionDenied: locked), so whether it is there " +
-              "is not known. Make it readable or name a policy with " +
+              "read (PermissionDenied: locked), so whether it is a policy a " +
+              "run could use is not known. Make it readable or name a policy with " +
               "`--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`.",
           });
         });
@@ -1307,6 +1398,55 @@ describe("sandbox-runtime-default", () => {
           }
         });
 
+        it({
+          name:
+            "throws, read off the file system, for a policy under the home that is there and cannot be read",
+          // Root reads a file whatever its mode, so the case can only be made
+          // as another user, and is skipped where the file can be read anyway.
+          ignore: readsDespiteMode(),
+          fn: async () => {
+            await Deno.mkdir(join(homePolicy(home), ".."), { recursive: true });
+            await Deno.writeTextFile(homePolicy(home), "{}\n");
+            await Deno.chmod(homePolicy(home), 0o000);
+
+            const refusal = await rejection(
+              resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                platform: "darwin",
+                flags: true,
+              }),
+            );
+
+            expect(refusal).toBeInstanceOf(HarnessControlError);
+            expect(messageOf(refusal)).toContain(
+              `the CFC policy at \`${homePolicy(home)}\` could not be read ` +
+                "(PermissionDenied",
+            );
+          },
+        });
+
+        it({
+          name:
+            "throws, read off the file system, for the store's own policy where it is there and cannot be read",
+          // As above: skipped where the file can be read anyway, as by root.
+          ignore: readsDespiteMode(),
+          fn: async () => {
+            await Deno.chmod(join(store, POLICY), 0o000);
+
+            const refusal = await rejection(
+              resolveSandboxRuntimeSelection({ HOME: home }, {}, {
+                platform: "darwin",
+                flags: true,
+              }),
+            );
+
+            expect(refusal).toBeInstanceOf(HarnessControlError);
+            expect(messageOf(refusal)).toContain(
+              `the CFC policy at \`${join(store, POLICY)}\` could not be ` +
+                "read (PermissionDenied",
+            );
+          },
+        });
+
         it("throws, read off the file system, for a policy path that leads nowhere it can follow", async () => {
           // A link to itself: examining it fails, and not for its absence.
           await Deno.mkdir(join(homePolicy(home), ".."), { recursive: true });
@@ -1321,7 +1461,7 @@ describe("sandbox-runtime-default", () => {
 
           expect(refusal).toBeInstanceOf(HarnessControlError);
           expect(messageOf(refusal)).toContain(
-            `the CFC policy at \`${homePolicy(home)}\` could not be examined (`,
+            `the CFC policy at \`${homePolicy(home)}\` could not be read (`,
           );
         });
       });

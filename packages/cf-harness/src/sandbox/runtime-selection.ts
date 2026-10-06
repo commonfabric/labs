@@ -170,15 +170,17 @@ const nonEmpty = (input: string | undefined): string | undefined => {
 };
 
 /**
- * Returns whether a regular file is at `path`. A path that is not there reads
- * as absent, and so does one that runs through a file, where nothing can be.
+ * Returns whether a regular file this process can read is at `path`. A path
+ * that is not there reads as absent, and so does one that runs through a
+ * file, where nothing can be.
  *
  * @throws The error of any other failure to look, which says nothing of
- * whether a file is there.
+ * whether a file is there, and of a failure to open a file that is.
  */
 const regularFileExists = async (path: string): Promise<boolean> => {
+  let info: Deno.FileInfo;
   try {
-    return (await Deno.stat(path)).isFile;
+    info = await Deno.stat(path);
   } catch (error) {
     if (
       error instanceof Deno.errors.NotFound ||
@@ -188,6 +190,11 @@ const regularFileExists = async (path: string): Promise<boolean> => {
     }
     throw error;
   }
+  if (!info.isFile) return false;
+  // Opened, so that a file this process cannot read is refused here, by
+  // name, rather than handed to `runsc` to fail inside the sandbox.
+  (await Deno.open(path, { read: true })).close();
+  return true;
 };
 
 /** What an entrypoint does where nothing names a runtime. */
@@ -224,8 +231,9 @@ export type SandboxRuntimeSelectionOptions = UnnamedSandboxRuntime & {
   cwd?: string;
 
   /**
-   * Whether a regular file exists at `path`; `Deno.stat` when absent. It
-   * throws where it could not look, which the selection refuses on.
+   * Whether a regular file this process can read is at `path`, looked at
+   * with `Deno.stat` and opened when absent. It throws where it could not
+   * look or could not open, which the selection refuses on.
    */
   pathExists?: (path: string) => Promise<boolean>;
 
@@ -312,8 +320,9 @@ type NativeStorePieceReading =
 /**
  * Helper for `resolveSandboxRuntimeSelection()`, which reads what `piece` of
  * `store` is. A piece that cannot be looked at is not there, and the reason
- * is returned. A piece that is a symbolic link is not there either, whatever
- * it leads to: the driver hands the macOS `runsc` the rootfs and the binary by
+ * is returned. A piece that is a symbolic link, or is reached through a
+ * directory of the store that is one, is not there either, whatever it leads
+ * to: the driver hands the macOS `runsc` the rootfs and the binary by
  * the paths the file system resolves them to, while that `runsc` knows the
  * store's pieces by their paths in the store, and none of gVisor's installer
  * scripts makes one a link.
@@ -324,19 +333,48 @@ const readNativeStorePiece = async (
   lstat: (path: string) => Promise<Deno.FileInfo>,
 ): Promise<NativeStorePieceReading> => {
   const named = `\`${piece.path}\`, ${piece.what},`;
-  const path = join(store, piece.path);
+  /** Looks at `path` without following it, and reads it where it is a link. */
+  const look = async (path: string) => {
+    const info = await lstat(path);
+    return {
+      info,
+      target: info.isSymlink ? await Deno.readLink(path) : undefined,
+    };
+  };
+  /** The reading of a name on the way that could not be looked at. */
+  const unexamined = (error: unknown): NativeStorePieceReading => ({
+    there: false,
+    problem: error instanceof Deno.errors.NotFound
+      ? `${named} is missing`
+      : `${named} could not be examined (${error})`,
+  });
+  // Each directory on the way from the store to the piece: a link at any of
+  // them puts the piece somewhere other than its path in the store, as
+  // surely as a link at the piece itself.
+  const names = piece.path.split("/");
+  for (let depth = 1; depth < names.length; depth += 1) {
+    const reached = names.slice(0, depth).join("/");
+    let target: string | undefined;
+    try {
+      ({ target } = await look(join(store, reached)));
+    } catch (error) {
+      return unexamined(error);
+    }
+    if (target !== undefined) {
+      return {
+        there: false,
+        problem: `${named} is reached through \`${reached}\`, a symbolic ` +
+          `link to \`${target}\``,
+        linked: true,
+      };
+    }
+  }
   let info: Deno.FileInfo;
   let target: string | undefined;
   try {
-    info = await lstat(path);
-    if (info.isSymlink) target = await Deno.readLink(path);
+    ({ info, target } = await look(join(store, piece.path)));
   } catch (error) {
-    return {
-      there: false,
-      problem: error instanceof Deno.errors.NotFound
-        ? `${named} is missing`
-        : `${named} could not be examined (${error})`,
-    };
+    return unexamined(error);
   }
   if (target !== undefined) {
     return {
@@ -579,7 +617,8 @@ export const resolveSandboxRuntimeSelection = async (
         // Not known to be absent, so the next default does not stand in for
         // it, and the selection does not go on as though there were none.
         const unexamined = `CFC policy at \`${candidate}\` could not be ` +
-          `examined (${error}), so whether it is there is not known`;
+          `read (${error}), so whether it is a policy a run could use is not ` +
+          "known";
         const remedy = `Make it readable or name a policy with ${
           policyNaming(options.flags)
         }`;
