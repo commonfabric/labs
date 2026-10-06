@@ -1892,6 +1892,11 @@ flow as a diagnosis projection under a declared ceiling but are REFUSED as an
 ssn projection (the per-column pii label exceeds the ceiling) — fail-closed
 composition of both label sources.
 
+The diagnosis list propagates the query's native unavailable state during
+refresh or failure; an empty list means a successful query returned no rows. Its
+production presentation is tested through pending, syncing, failure, empty
+success, and recovery, alongside the demo's diagnosis/SSN privacy ceiling.
+
 **Keywords:** cfc, sqlite, per-row, per-column, ifc, pii, label, composition,
 ceiling, maxConfidentiality, fail-closed, records
 

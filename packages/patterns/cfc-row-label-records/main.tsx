@@ -14,26 +14,33 @@
 // Spec: docs/specs/sqlite-builtin/06-cfc.md ("Read — re-derive per row,
 // attach, ceiling")
 import {
+  type AsyncResult,
   cfSqlite,
   computed,
   handler,
   hasError,
-  isPending,
-  isSyncing,
   NAME,
   pattern,
   resultOf,
   sqliteDatabase,
   type SqliteDb,
+  type SqliteQueryResult,
   Stream,
   UI,
   type VNode,
 } from "commonfabric";
 
-interface DiagnosisRow {
+/** The diagnosis projection, without the separately protected SSN column. */
+export interface DiagnosisRow {
   id: number;
   patient_email: string;
   diagnosis: string;
+}
+
+/** The rendered diagnosis list and its current query rows. */
+export interface DiagnosisListOutput {
+  [UI]: VNode;
+  rows: DiagnosisRow[];
 }
 
 export interface RecordsOutput {
@@ -51,6 +58,25 @@ const seedRecords = handler<void, { db: SqliteDb }>((_, { db }) => {
     "INSERT INTO records (patient_email, ssn, diagnosis) VALUES (?, ?, ?)",
     ["grace@g.example", "444-55-6666", "common cold"],
   );
+});
+
+/** Presents the diagnosis projection using the query's native availability. */
+export const DiagnosisList = pattern<
+  { request: AsyncResult<SqliteQueryResult<DiagnosisRow>> },
+  DiagnosisListOutput
+>(({ request }) => {
+  const result = resultOf(request);
+  const rows = computed(() => result.rows);
+  return {
+    rows,
+    [UI]: (
+      <cf-vstack gap="1" id="diagnosis-list">
+        {rows.map((row) => (
+          <cf-label>#{row.id} {row.patient_email}: {row.diagnosis}</cf-label>
+        ))}
+      </cf-vstack>
+    ),
+  };
 });
 
 export default pattern<Record<string, never>, RecordsOutput>(() => {
@@ -96,12 +122,7 @@ export default pattern<Record<string, never>, RecordsOutput>(() => {
     { reactOn: db, maxConfidentiality: ceiling, onExceed: "fail" },
   );
 
-  const diagnosisRows = computed<DiagnosisRow[]>(() => {
-    if (
-      hasError(diagnoses) || isPending(diagnoses) || isSyncing(diagnoses)
-    ) return [];
-    return resultOf(diagnoses).rows;
-  });
+  const diagnosisList = DiagnosisList({ request: diagnoses });
   const diagnosisError = computed<string>(() =>
     hasError(diagnoses) ? diagnoses.errorMessage : ""
   );
@@ -129,13 +150,7 @@ export default pattern<Record<string, never>, RecordsOutput>(() => {
               <cf-button id="seed-button" onClick={seed}>
                 Seed sample records
               </cf-button>
-              <cf-vstack gap="1" id="diagnosis-list">
-                {diagnosisRows.map((row) => (
-                  <cf-label>
-                    #{row.id} {row.patient_email}: {row.diagnosis}
-                  </cf-label>
-                ))}
-              </cf-vstack>
+              {diagnosisList[UI]}
               <div id="diagnosis-error">{diagnosisError}</div>
             </cf-vstack>
           </cf-card>
