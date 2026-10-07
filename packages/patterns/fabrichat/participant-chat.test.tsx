@@ -21,6 +21,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import {
   findElement,
   findNodeById,
@@ -206,14 +207,16 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const unclaimed = Writable.of<UnclaimedProfile>({ name: "Nobody" });
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
   const bobDid = Writable.of<string>("");
   const action_note_principal = action(() =>
     bobDid.set(currentPrincipal() ?? "")
   );
   const manager = FabriChatManagerCore({
     myProfile: profile,
-    rooms,
+    sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -283,8 +286,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       {
         assertion: assert(() =>
-          rooms.get().length === 1 && rooms.get()[0]?.kind === "direct" &&
-          rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
+          manager.rooms.length === 1 && manager.rooms[0]?.kind === "direct" &&
+          manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           setup.aliceDid.get() !== ""
         ),
       },

@@ -21,6 +21,8 @@ import {
   Writable,
 } from "commonfabric";
 import PrivateInbox, { type Offer } from "../system/private-inbox.tsx";
+import type { ShareInboxPiece } from "../system/profile-home.tsx";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
   type ActivityCounters,
@@ -37,7 +39,6 @@ import {
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
-  type ChatInboxPiece,
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerProfile,
@@ -81,7 +82,7 @@ interface ProfileWriteState {
   name: string;
 
   /** The inbox the profile points at, if any. */
-  inbox?: Cell<ChatInboxPiece>;
+  inbox?: Cell<ShareInboxPiece>;
 }
 
 /** Writes the acting person's own profile, under `name`. */
@@ -97,7 +98,7 @@ const writeOwnProfile = handler<unknown, ProfileWriteState>((
 });
 
 /** An inbox's result, as the link a profile holds. */
-function inboxLinkOf(inbox: unknown): Cell<ChatInboxPiece>;
+function inboxLinkOf(inbox: unknown): Cell<ShareInboxPiece>;
 function inboxLinkOf(inbox: unknown): unknown {
   return inbox;
 }
@@ -214,12 +215,14 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const action_note_principal = action(() =>
     setup.bobDid.set(currentPrincipal() ?? "")
   );
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
     myProfile: profile,
-    rooms,
+    sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
+      entries: {},
+      offers: {},
+    }),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,
@@ -249,7 +252,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           const outcome = requests.get()["not-hers"];
           return outcome?.status === "refused" &&
             outcome.reason === "The profile is not the counterpart's." &&
-            rooms.get().length === 0;
+            manager.rooms.length === 0;
         }),
       },
       {
@@ -264,8 +267,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       // The room is created, and a notice is queued for Alice as well.
       {
         assertion: assert(() =>
-          setup.aliceDid.get() !== "" && rooms.get().length === 1 &&
-          rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
+          setup.aliceDid.get() !== "" && manager.rooms.length === 1 &&
+          manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           notices.get().length === 1 &&
           notices.get()[0]?.recipient === setup.aliceDid.get()
         ),

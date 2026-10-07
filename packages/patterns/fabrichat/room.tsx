@@ -4,10 +4,14 @@
  * handlers that write it, are in `room-records.tsx`; one message's rendering
  * is in `message-row.tsx`.
  *
- * The room keeps no membership of its own. Who takes part is its space's
- * business: the space's access list decides who may read and write, and its
- * default pattern lists the participants' profiles (`wish("#default")`), which
- * the room shows alongside every author.
+ * Who may read and write is the business of the room's space: its access
+ * list decides. A room a manager creates is its space's root, and keeps the
+ * space's participants itself: the profiles of those who joined, each added
+ * through `addParticipant` (`../loom/participants.tsx`), as a loom's root
+ * keeps them. A room in some other social space, which isn't its space's root,
+ * lists that space's participants as the root lists them
+ * (`wish("#default")`), and those who joined the room itself. The room shows
+ * every author alongside them.
  *
  * `FabriChatRoomCore` takes the viewer's profile as an input, so a test can
  * supply a stand-in. The default export, `FabriChatRoom`, resolves the real
@@ -34,6 +38,11 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import {
+  addParticipant,
+  participantEntries,
+  type ParticipantRosterCell,
+} from "../loom/participants.tsx";
 import { isInMain, type ShownIn } from "./logic.ts";
 import {
   type ActivityCell,
@@ -88,24 +97,47 @@ import {
 } from "./schemas.tsx";
 
 /**
- * The room's participants: those its space lists, plus every author it
- * doesn't, in the order each first appears. Two are the same person when
+ * The room's participants: those listed, then every author not among them,
+ * each once, in the order each first appears. Two are the same person when
  * their profiles are the same cell.
  */
 export const participantsOf = (
   listed: readonly ProfileCell[],
   entries: readonly MessageEntry[],
 ): ProfileCell[] =>
-  [...entries].sort(compareEntries).reduce<ProfileCell[]>(
-    (found, entry) => {
-      const author = entry.record.authorProfile;
-      return author === undefined ||
-          found.some((known) => equals(known, author))
+  [
+    ...listed,
+    ...[...entries].sort(compareEntries).map((entry) =>
+      entry.record.authorProfile
+    ),
+  ].reduce<ProfileCell[]>(
+    (found, profile) =>
+      profile === undefined || found.some((known) => equals(known, profile))
         ? found
-        : [...found, author];
-    },
-    [...listed],
+        : [...found, profile],
+    [],
   );
+
+/** What joining a room asks: the profile to add to its participants. */
+export interface JoinRoomEvent {
+  /** The profile, as the live cell in its own space. */
+  profile: ProfileCell;
+}
+
+/**
+ * Adds the viewer's profile to the room's participants, through `join`, the
+ * one writer the participants' write contract admits. Does nothing until the
+ * profile reads as present: an unresolved profile arrives as an empty cell,
+ * and adding it would record no profile at all.
+ */
+const joinAsViewer = handler<unknown, {
+  join: Stream<JoinRoomEvent>;
+  profile: ProfileCell | undefined;
+}>((_event, { join, profile }) => {
+  const target = profile?.resolveAsCell();
+  if (target === undefined || target.get() === undefined) return;
+  join.send({ profile: target });
+});
 
 /**
  * What a participant's chip sends its viewer's manager's `openDirect`: the
@@ -444,10 +476,19 @@ export interface ChatRoomView {
   recentActivityExpiredThrough: number;
 
   /**
-   * The participants of the room's space, as its default pattern lists them
-   * (`wish("#default")`), plus any author it doesn't list.
+   * The room's participants: for a room that is its space's root, those who
+   * joined it; for any other, its space's participants as the space's root
+   * lists them, then those who joined the room itself; and then any author
+   * neither lists.
    */
   participants: ProfileCell[];
+
+  /**
+   * Adds a profile to those who joined the room, once. Any participant may add
+   * any profile, so an entry is a claim: it does not say that the profile's
+   * principal holds access to the room's space.
+   */
+  addParticipant: Stream<JoinRoomEvent>;
 
   /** The room's messages. */
   messages: ChatMessageList;
@@ -523,6 +564,9 @@ export interface FabriChatRoomCoreInput {
   /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
 
+  /** Those who joined the room; absent for a room nobody can join. */
+  roster?: ParticipantRosterCell;
+
   /**
    * Whether the viewer has a manager to start a direct chat with; absent for
    * none.
@@ -563,6 +607,7 @@ export const FabriChatRoomCore = pattern<
     usedTimes,
     activity,
     counters,
+    roster,
     startsDirect,
     startDirect,
   } = input;
@@ -597,23 +642,31 @@ export const FabriChatRoomCore = pattern<
   const newestAt = computed(() =>
     sortedEntries[sortedEntries.length - 1]?.record.sentAt
   );
-  // The space's participants, as its default pattern lists them; a space
-  // whose default pattern isn't there yet lists none.
+  // A room the manager created has `about`, and is its space's root; a
+  // space's own chat, sharing its space, has none.
+  const ownSpace = computed(() => about?.get() !== undefined);
+  // The space's participants as its root lists them, for a room that isn't
+  // that root. A root room's `#default` is the room itself, so it reads only
+  // its own; a space whose root isn't there yet lists none.
   const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
-  const spaceParticipants = computed(
-    () => [...(space.result?.participants ?? [])],
+  const joined = computed(() =>
+    roster === undefined ? [] : participantEntries(roster)
   );
-  const participants = computed(() =>
-    participantsOf(spaceParticipants, entries)
+  const listed = computed((): ProfileCell[] =>
+    ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
+  );
+  const participants = computed(() => participantsOf(listed, entries));
+  const join = addParticipant({ roster });
+  // Joining a space's own chat is its space's business, as adding a member
+  // is.
+  const joinDisplay = computed((): ChatDisplay =>
+    ownSpace && myProfile?.get() !== undefined &&
+      !participants.some((known) => equals(known, myProfile))
+      ? "flex"
+      : "none"
   );
   const canSend = computed(() => canActIn(messages, myProfile));
-  // A room the manager created has `about`; a space's own chat, sharing its
-  // space, has none.
-  const addMember = AddMember({
-    room: messages,
-    myProfile,
-    ownSpace: computed(() => about?.get() !== undefined),
-  });
+  const addMember = AddMember({ room: messages, myProfile, ownSpace });
   const cannotSend = computed(() => !canSend);
   // The policy is a document of its own, which `about` links.
   const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);
@@ -699,6 +752,7 @@ export const FabriChatRoomCore = pattern<
     recentActivity: activity,
     recentActivityExpiredThrough: expiredThrough,
     participants,
+    addParticipant: join,
     messages: messageList,
     canSend,
     ...streams,
@@ -736,6 +790,20 @@ export const FabriChatRoomCore = pattern<
             />
           ))}
         </div>
+        <cf-hstack
+          id="fabrichat-join"
+          gap="2"
+          align="center"
+          hidden
+          style={{ display: joinDisplay }}
+        >
+          <cf-button
+            size="sm"
+            onClick={joinAsViewer({ join, profile: myProfile })}
+          >
+            Join this chat
+          </cf-button>
+        </cf-hstack>
         {addMember[UI]}
 
         <cf-vstack
@@ -874,6 +942,12 @@ export interface FabriChatRoomInput {
 
   /** Where the activity's numbering stands. */
   counters?: ActivityCountersCell;
+
+  /**
+   * Those who joined the room. It changes only through `addParticipant`, the
+   * one writer its write contract admits.
+   */
+  participants?: ParticipantRosterCell;
 }
 
 /**
@@ -890,6 +964,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     usedTimes,
     activity,
     counters,
+    participants,
     // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
@@ -917,6 +992,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         usedTimes,
         activity,
         counters,
+        roster: participants,
         startsDirect,
         startDirect: managerWish.result?.openDirect,
       },
@@ -929,6 +1005,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       recentActivity: room.recentActivity,
       recentActivityExpiredThrough: room.recentActivityExpiredThrough,
       participants: room.participants,
+      addParticipant: room.addParticipant,
       messages: room.messages,
       canSend: room.canSend,
       sendMessage: room.sendMessage,

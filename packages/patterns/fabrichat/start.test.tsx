@@ -7,6 +7,7 @@
  * console warnings are allowed.
  */
 import { assert, pattern, TESTS, Writable } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
   CHAT_SEND_ACTION,
@@ -33,12 +34,15 @@ const statusOf = (
 ): string => requests.get()?.[id]?.status ?? "none";
 
 export default pattern(() => {
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
+  const catalog = Writable.of<SharedSpaceCatalogStorage>({
+    entries: {},
+    offers: {},
+  });
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<ChatProfile>({ name: "Tester" }),
-    rooms,
+    sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,
@@ -63,7 +67,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          rooms.get().length === 0 && notices.get().length === 0 &&
+          manager.rooms.length === 0 && notices.get().length === 0 &&
           statusOf(requests, "d-1") === "none" &&
           statusOf(requests, "g-1") === "none" &&
           statusOf(requests, "g-2") === "none"
@@ -82,7 +86,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          rooms.get().length === 2 && notices.get().length === 2 &&
+          manager.rooms.length === 2 && notices.get().length === 2 &&
           statusOf(requests, "d-2") === "done" &&
           statusOf(requests, "g-3") === "done"
         ),

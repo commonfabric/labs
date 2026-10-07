@@ -20,6 +20,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import {
   clickButton,
   findNodeById,
@@ -86,6 +87,10 @@ const addDisplay = (root: unknown): unknown =>
     })?.display,
   );
 
+/** An empty shared-space catalog, as a manager lists its rooms from. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
+
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
   requests: Writable<Record<string, ChatRequestOutcome>>,
@@ -99,16 +104,18 @@ const reasonOf = (
 
 // Creates a direct room with Bob, and hands it to him through the setup.
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
+  const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<ChatProfile>({ name: "Alice" }),
-    rooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
   const action_hand_over = action(() =>
-    setup.held.key("room").set(rooms.key(0).key("room").resolveAsCell())
+    setup.held.key("room").set(
+      requests.key("d-1").key("entry").key("room").resolveAsCell(),
+    )
   );
 
   return {
@@ -121,7 +128,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: startGesture,
       },
       { action: action_hand_over },
-      { assertion: assert(() => rooms.get()[0]?.counterpart !== undefined) },
+      {
+        assertion: assert(() => manager.rooms[0]?.counterpart !== undefined),
+      },
       { label: "alice-created" },
       { await: "bob-done" },
     ],
@@ -130,11 +139,10 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
 // Accepts the room, with a counterpart that isn't its creator and with none.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: Writable.of<ChatProfile>({ name: "Bob" }),
-    rooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
@@ -175,15 +183,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         assertion: assert(() =>
           reasonOf(requests, "a-1") ===
             "The counterpart is not the room's creator." &&
-          rooms.get().length === 0 &&
+          manager.rooms.length === 0 &&
           addDisplay(adder[UI]) === "flex"
         ),
       },
       { action: action_add },
       {
         assertion: assert(() =>
-          rooms.get().length === 1 &&
-          rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
+          manager.rooms.length === 1 &&
+          manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           addDisplay(adder[UI]) === "none"
         ),
       },

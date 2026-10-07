@@ -18,9 +18,8 @@ import {
   FabricDurationNsec,
   FabricEpochNsec,
   isWellFormedDID,
-  type NAME,
-  type Stream,
 } from "commonfabric";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -143,34 +142,19 @@ export interface ChatProfile {
 export type ProfileCell = Cell<ChatProfile>;
 
 /**
- * What a manager knows of a person's share inbox piece, as a profile's
- * pointer names it: its name, at most.
- */
-export type ChatInboxPiece = {
-  [NAME]?: string;
-};
-
-/**
- * Where a person's offers are delivered, as their profile's `inbox` holds it:
- * a link to their share inbox piece, absent while they have none.
- */
-export interface ChatInboxPointer {
-  /** The person's share inbox piece. */
-  // The link names nothing of the inbox but its name: an inbox labels its
-  // offers confidential to its owner, and a run reading the pointer as a link
-  // to more of the inbox, or untyped, takes that label on, which then refuses
-  // its sends.
-  piece?: Cell<ChatInboxPiece>;
-}
-
-/**
  * The part of a person's profile a manager reads: what a room reads, and
  * where to offer the person a room. Only a manager reads the inbox pointer,
  * so the inbox's shape is part of no room's contract.
  */
 export interface ChatManagerProfile extends ChatProfile {
-  /** Where the person's offers are delivered. */
-  inbox?: ChatInboxPointer;
+  /**
+   * Where the person's offers are delivered, as the profile types its pointer:
+   * a link naming nothing of the inbox but its name. An inbox labels its
+   * offers confidential to its owner, and a run reading the pointer as a link
+   * to more of the inbox, or untyped, takes that label on, which then refuses
+   * its sends.
+   */
+  inbox?: ProfileInbox;
 }
 
 /** A live link to a person's profile, as a manager reads it. */
@@ -481,47 +465,11 @@ export type ChatRequestOutcome =
     reason: string;
   };
 
-/** The `kind` of the offer a manager sends a member of a new room. */
-export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
-
-/** The longest `title` an offer carries; a longer one is cut to this length. */
-export const CHAT_ROOM_OFFER_TITLE_MAX_LENGTH = 200;
-
 /**
- * An offer of a room, as a manager sends it to a member's share inbox: the
- * envelope a loom share inbox takes.
+ * The `kind` of a room, as its offer to a member's share inbox names it and
+ * as a user's shared-space catalog records it.
  */
-export interface ChatRoomOffer {
-  /** What is offered: `fabrichat-room`. */
-  kind: string;
-
-  /** The id of the request that created the room. */
-  id: string;
-
-  /** The DID of the room's space. */
-  space: string;
-
-  /** The origin of the host serving the room's space. */
-  host: string;
-
-  /** The origin of the sender's own host. */
-  ownerOrigin: string;
-
-  /** A group room's title, or empty for a direct room. */
-  title: string;
-
-  /** The DID of the sender, the principal sending the offer. */
-  from: string;
-
-  /** When the sender sent the offer, in milliseconds since the epoch. */
-  sharedAt: number;
-}
-
-/** The part of a share inbox a manager offers a room through. */
-export interface ChatInbox {
-  /** Takes an offer from the principal sending it. */
-  receive: Stream<ChatRoomOffer>;
-}
+export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
 
 /** A notice a manager's request produced, for a client to deliver. */
 export interface ChatManagerNotice {

@@ -84,6 +84,7 @@ export {
   type PrivateInboxEnsure,
 } from "./private-inbox.ts";
 export {
+  ADMITTED_OFFER_KINDS,
   LOOM_OFFER_KIND,
   type OfferDecision,
   type OfferRefusal,

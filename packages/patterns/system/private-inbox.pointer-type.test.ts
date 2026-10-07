@@ -8,8 +8,9 @@
  * the inbox a profile advertises, Home's ensure step, the profiles' pointers,
  * the inbox the host names for it to adopt, the inbox Home holds and the ones
  * it retains, Home's pointing step, the seed step that points a profile once
- * it is created, a sender reading through `profile-home.tsx`'s own types, and
- * FabriChat's manager offering a room, therefore reads it as a typed link.
+ * it is created, and a sender reading through `profile-home.tsx`'s own types,
+ * as FabriChat's manager does offering a room, therefore reads it as a typed
+ * link.
  *
  * The check is made by the type checker. A pointee that is `unknown` or `any`
  * fails to compile here under `deno task check`, and so does one naming a

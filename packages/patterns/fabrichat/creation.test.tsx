@@ -16,6 +16,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import type { SharedSpaceCatalogStorage } from "../system/shared-space-catalog.ts";
 import {
   countElements,
   findNode,
@@ -94,12 +95,22 @@ const reasonOf = (
     : outcome?.status ?? "none";
 };
 
-/** What the first room in `rooms` says of its messages through its link. */
-const linkedCount = (rooms: Writable<ChatIndexEntry[]>): string => {
-  const messages = rooms.key(0).key("room").get()?.get()?.messages;
+/** What a room says of its messages through the link a manager lists. */
+const linkedCount = (room: ChatIndexEntry["room"] | undefined): string => {
+  const messages = room?.get()?.messages;
   return `count:${messages?.count ?? "none"} ` +
     `newestAt:${messages?.newestAt ?? "none"}`;
 };
+
+/** An empty shared-space catalog, as a manager lists its rooms from. */
+const emptyCatalog = () =>
+  Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
+
+/** The room a request's outcome names, as a cell. */
+const roomOf = (
+  requests: Writable<Record<string, ChatRequestOutcome>>,
+  id: string,
+) => requests.key(id).key("entry").key("room").resolveAsCell();
 
 const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
   (notices.get() ?? []).map((notice) => notice.recipient).join(",");
@@ -108,18 +119,18 @@ export default pattern(() => {
   const profile = Writable.of<ChatProfile>({ name: "Tester" });
 
   // A direct room: one per counterpart, found again after it is forgotten.
-  const directRooms = Writable.of<ChatIndexEntry[]>([]);
   const directNotices = Writable.of<ChatManagerNotice[]>([]);
+  const directRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const direct = FabriChatManagerCore({
     myProfile: profile,
-    rooms: directRooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    requests: directRequests,
     outgoingNotices: directNotices,
   } as ManagerArg);
   const directHeld = Writable.of<HeldRoom>({});
   const action_hold_direct = action(() =>
-    directHeld.key("room").set(directRooms.key(0).key("room").resolveAsCell())
+    directHeld.key("room").set(roomOf(directRequests, "d-1"))
   );
   const action_forget_direct = action(() =>
     direct.forget.send({
@@ -130,12 +141,11 @@ export default pattern(() => {
 
   // A group room, which states its title, and leaves this user out of its
   // other members.
-  const groupRooms = Writable.of<ChatIndexEntry[]>([]);
   const groupNotices = Writable.of<ChatManagerNotice[]>([]);
   const groupRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const group = FabriChatManagerCore({
     myProfile: profile,
-    rooms: groupRooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: groupRequests,
     outgoingNotices: groupNotices,
@@ -160,18 +170,20 @@ export default pattern(() => {
   );
 
   // Accepting a group room, and a direct room only with its counterpart.
-  const acceptRooms = Writable.of<ChatIndexEntry[]>([]);
   const acceptRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const accepting = FabriChatManagerCore({
     myProfile: profile,
-    rooms: acceptRooms,
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
   const acceptHeld = Writable.of<HeldRoom>({});
-  const action_hold_accepted = action(() =>
-    acceptHeld.key("room").set(acceptRooms.key(0).key("room").resolveAsCell())
+  const action_hold_accepted_group = action(() =>
+    acceptHeld.key("room").set(roomOf(acceptRequests, "g-1"))
+  );
+  const action_hold_accepted_direct = action(() =>
+    acceptHeld.key("room").set(roomOf(acceptRequests, "d-1"))
   );
   const action_forget_accepted_group = action(() =>
     accepting.forget.send({
@@ -215,7 +227,7 @@ export default pattern(() => {
   const deliveredNotices = Writable.of<ChatManagerNotice[]>([]);
   const delivering = FabriChatManagerCore({
     myProfile: profile,
-    rooms: Writable.of<ChatIndexEntry[]>([]),
+    sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: deliveredNotices,
@@ -238,8 +250,8 @@ export default pattern(() => {
       { action: action_hold_direct },
       {
         assertion: assert(() =>
-          directRooms.get().length === 1 &&
-          directRooms.get()[0]?.counterpart === BOB &&
+          direct.rooms.length === 1 &&
+          direct.rooms[0]?.counterpart === BOB &&
           recipientsOf(directNotices) === BOB
         ),
       },
@@ -249,13 +261,10 @@ export default pattern(() => {
       // room itself.
       {
         assertion: assert(() =>
-          equals(
-            cellLinked(direct[UI], undefined),
-            directRooms.key(0).key("room"),
-          ) &&
+          equals(cellLinked(direct[UI], undefined), directHeld.key("room")) &&
           equals(
             cellLinked(direct[UI], `With ${BOB}`),
-            directRooms.key(0).key("room"),
+            directHeld.key("room"),
           ) &&
           countElements(direct[UI], "cf-render") === 0
         ),
@@ -266,10 +275,10 @@ export default pattern(() => {
         event: { requestId: "d-2", counterpart: BOB },
         trustedUi: startGesture,
       },
-      { assertion: assert(() => directRooms.get().length === 1) },
+      { assertion: assert(() => direct.rooms.length === 1) },
       // Forgetting it keeps it in `direct`; finding it again puts it back.
       { action: action_forget_direct },
-      { assertion: assert(() => directRooms.get().length === 0) },
+      { assertion: assert(() => direct.rooms.length === 0) },
       {
         action: direct.openDirect,
         event: { requestId: "d-3", counterpart: BOB },
@@ -277,8 +286,8 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          directRooms.get().length === 1 &&
-          equals(directRooms.key(0).key("room"), directHeld.key("room"))
+          direct.rooms.length === 1 &&
+          equals(direct.rooms[0]?.room, directHeld.key("room"))
         ),
       },
 
@@ -295,18 +304,19 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          groupRooms.get().length === 1 &&
+          group.rooms.length === 1 &&
           recipientsOf(groupNotices) === CAROL &&
-          groupRooms.key(0).key("room").key("about").get()?.kind === "group" &&
-          groupRooms.key(0).key("room").key("about").get()?.title === "Team" &&
-          !equals(groupRooms.key(0).key("room"), directHeld.key("room"))
+          group.rooms[0]?.kind === "group" &&
+          group.rooms[0]?.room.key("about").get()?.kind === "group" &&
+          group.rooms[0]?.room.key("about").get()?.title === "Team" &&
+          !equals(group.rooms[0]?.room, directHeld.key("room"))
         ),
       },
       // The link carries where the conversation stands, which a new room has
       // no messages of.
       {
         assertion: assert(() =>
-          linkedCount(groupRooms) === "count:0 newestAt:none"
+          linkedCount(group.rooms[0]?.room) === "count:0 newestAt:none"
         ),
       },
       // A request already decided changes nothing when it arrives again.
@@ -315,7 +325,7 @@ export default pattern(() => {
         event: { requestId: "g-1", title: "Team", members: [] },
         trustedUi: startGesture,
       },
-      { assertion: assert(() => groupRooms.get().length === 1) },
+      { assertion: assert(() => group.rooms.length === 1) },
       // The start controls are enabled, and a start the manager can't act on
       // is refused with its reason: a direct room with this user themself,
       // with someone who isn't a principal, or a group room with no title.
@@ -352,7 +362,7 @@ export default pattern(() => {
             "The counterpart is not a principal." &&
           reasonOf(groupRequests, "g-blank") ===
             "A group room needs a title." &&
-          groupRooms.get().length === 1 &&
+          group.rooms.length === 1 &&
           recipientsOf(groupNotices) === CAROL
         ),
       },
@@ -400,7 +410,7 @@ export default pattern(() => {
             "A group's members must be principals." &&
           shownRefusal(group[UI]) ===
             'block:A group\'s members must be principals. Received: ["junk"]' &&
-          groupRooms.get().length === 1
+          group.rooms.length === 1
         ),
       },
       // A request missing what its stream needs is refused, with why, rather
@@ -421,7 +431,7 @@ export default pattern(() => {
             "The request names no notice." &&
           reasonOf(groupRequests, "g-none") ===
             "A group's members must be listed." &&
-          groupRooms.get().length === 1
+          group.rooms.length === 1
         ),
       },
       // A profile that attests no principal offers no chat address.
@@ -444,15 +454,15 @@ export default pattern(() => {
         event: { requestId: "g-1", title: "Team", members: [] },
         trustedUi: startGesture,
       },
-      { action: action_hold_accepted },
+      { action: action_hold_accepted_group },
       { action: action_forget_accepted_group },
-      { assertion: assert(() => acceptRooms.get().length === 0) },
+      { assertion: assert(() => accepting.rooms.length === 0) },
       { action: action_accept_group },
       {
         assertion: assert(() =>
-          acceptRooms.get().length === 1 &&
-          acceptRooms.get()[0]?.kind === "group" &&
-          equals(acceptRooms.key(0).key("room"), acceptHeld.key("room")) &&
+          accepting.rooms.length === 1 &&
+          accepting.rooms[0]?.kind === "group" &&
+          equals(accepting.rooms[0]?.room, acceptHeld.key("room")) &&
           statusOf(acceptRequests, "a-1") === "done"
         ),
       },
@@ -466,7 +476,7 @@ export default pattern(() => {
         event: { requestId: "d-1", counterpart: BOB },
         trustedUi: startGesture,
       },
-      { action: action_hold_accepted },
+      { action: action_hold_accepted_direct },
       { action: action_forget_accepted_direct },
       { action: action_accept_direct_alone },
       { action: action_accept_direct_with_bob },
@@ -476,7 +486,7 @@ export default pattern(() => {
             "The room was created by this user." &&
           reasonOf(acceptRequests, "a-3") ===
             "The room was created by this user." &&
-          acceptRooms.get().length === 0
+          accepting.rooms.length === 0
         ),
       },
 
