@@ -1,3 +1,10 @@
+---
+status: historical
+created: 2026-10-06
+archived: 2026-10-06
+reason: "Executed integration plan; availability changes delivered in PR #4677."
+---
+
 # Unavailable runtime integration
 
 ## Contract
@@ -30,7 +37,7 @@ usable content and disables it while pending.
 - [x] Update live documentation and behavioral regressions.
 - [x] Run affected package tests, pattern checks, repository gates, and a
       changeset-scoped self-review.
-- [ ] Update the existing PR, complete CI, and audit review surfaces.
+- [x] Update the existing PR, complete CI, and audit review surfaces.
 
 ## Acceptance
 
