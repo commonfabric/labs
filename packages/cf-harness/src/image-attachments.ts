@@ -247,6 +247,35 @@ export const createHarnessImageAttachment = async (
   };
 };
 
+/** Decode and validate inline bytes before a host accepts or stores a job. */
+export const decodeHarnessInlineImage = (
+  options: { base64: string; mediaType: HarnessImageMediaType },
+): Uint8Array => {
+  const { base64, mediaType } = options;
+  if (base64.length > Math.ceil(MAX_IMAGE_ATTACHMENT_BYTES / 3) * 4) {
+    throw new Error(
+      `the image is too large (max ${MAX_IMAGE_ATTACHMENT_BYTES} bytes)`,
+    );
+  }
+  const bytes = decodeBase64(base64);
+  if (bytes.byteLength === 0) {
+    throw new Error("the image is empty");
+  }
+  if (bytes.byteLength > MAX_IMAGE_ATTACHMENT_BYTES) {
+    throw new Error(
+      `the image is too large (${bytes.byteLength} bytes, max ${MAX_IMAGE_ATTACHMENT_BYTES})`,
+    );
+  }
+  if (encodeBase64(bytes) !== base64) {
+    throw new Error("the image must use canonical base64");
+  }
+  // No path to fall back on: only the bytes' own signature decides.
+  if (detectImageMediaType(bytes, "") !== mediaType) {
+    throw new Error(`the image is not ${mediaType}`);
+  }
+  return bytes;
+};
+
 /**
  * Makes an attachment of base64-encoded image bytes a tool produced rather
  * than read from the workspace — a browser host's screenshot, say. The bytes
@@ -265,24 +294,7 @@ export const createHarnessImageAttachmentFromBase64 = async (
   },
 ): Promise<HarnessImageAttachment> => {
   const { base64, mediaType, snapshotDir } = options;
-  if (base64.length > Math.ceil(MAX_IMAGE_ATTACHMENT_BYTES / 3) * 4) {
-    throw new Error(
-      `the image is too large (max ${MAX_IMAGE_ATTACHMENT_BYTES} bytes)`,
-    );
-  }
-  const bytes = decodeBase64(base64);
-  if (bytes.byteLength === 0) {
-    throw new Error("the image is empty");
-  }
-  if (bytes.byteLength > MAX_IMAGE_ATTACHMENT_BYTES) {
-    throw new Error(
-      `the image is too large (${bytes.byteLength} bytes, max ${MAX_IMAGE_ATTACHMENT_BYTES})`,
-    );
-  }
-  // No path to fall back on: only the bytes' own signature decides.
-  if (detectImageMediaType(bytes, "") !== mediaType) {
-    throw new Error(`the image is not ${mediaType}`);
-  }
+  const bytes = decodeHarnessInlineImage({ base64, mediaType });
   const digest = await sha256Digest(bytes);
   const snapshotPath = await writeImageAttachmentSnapshot(
     snapshotDir,

@@ -294,6 +294,40 @@ describe("agent runner", () => {
     expect(result.key("result").get()).toEqual({ answer: "Hyperion" });
   });
 
+  for (const complete of [true, false, undefined]) {
+    it(`retains observed model attribution with completeness ${complete} across a new runtime`, async () => {
+      const result = await submit();
+      const runtime = connect(CLOUD);
+      const attribution = complete === undefined ? {} : {
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: complete,
+        modelResponses: [
+          { modelTurn: 1, model: "provider-served-model" },
+          { modelTurn: 2, model: complete ? "provider-served-model" : null },
+        ],
+      };
+      await startRunner(async (run) => {
+        const execution = await completing(() => runtime)(run);
+        return {
+          ...execution,
+          report: { ...execution.report, ...attribution },
+        };
+      }, { runtimeForHost: () => Promise.resolve(runtime) });
+      await waitForState(result, "completed");
+
+      const fresh = connect(CLOUD);
+      const record = await waitForCellValue<AgentRunRecord>(
+        fresh,
+        recordOf(result, fresh),
+        (value) => value?.state === "completed",
+      );
+      expect(record.actualModels).toEqual(attribution.actualModels);
+      expect(record.modelResponses).toEqual(attribution.modelResponses);
+      expect(record.modelAttributionComplete).toBe(complete);
+      expect(record.modelTurns).toBe(2);
+    });
+  }
+
   it("ends a record `failed` with the executor's error code", async () => {
     const result = await submit();
     await startRunner(() =>
@@ -867,13 +901,20 @@ describe("agent runner", () => {
   });
 
   it("writes nothing over a record another runner took while its run was out", async () => {
+    const runnerSide = connect(CLOUD);
     const held = defer<AgentRunExecution>();
+    const started = defer<ClaimedAgentRun>();
     const reports: string[] = [];
-    await startRunner(() => held.promise, {
+    await startRunner((run) => {
+      started.resolve(run);
+      return held.promise;
+    }, {
       report: (message) => reports.push(message),
+      runtimeForHost: () => Promise.resolve(runnerSide),
     });
     const result = await submit();
     await waitForState(result, "running");
+    const oldRun = await started.promise;
 
     // The lease passed and another runner recovered and claimed the record.
     await patternSide.editWithRetry((tx) => {
@@ -896,6 +937,21 @@ describe("agent runner", () => {
     expect(recordOf(result).get()?.claim?.runner).toBe("did:key:other#1");
     expect(reports.some((line) => line.includes("was no longer held"))).toBe(
       true,
+    );
+    const beforeLateRenewal = [...reports];
+    const editWithRetry = runnerSide.editWithRetry;
+    runnerSide.editWithRetry = () => {
+      throw new Error("a retired executor must not open a lease transaction");
+    };
+    try {
+      await oldRun.renewLease();
+    } finally {
+      runnerSide.editWithRetry = editWithRetry;
+    }
+    await runners[0].idle();
+    expect(reports).toEqual(beforeLateRenewal);
+    expect(recordOf(result).get()?.claim?.leaseUntil).toBe(
+      "2026-09-18T13:00:00.000Z",
     );
   });
 

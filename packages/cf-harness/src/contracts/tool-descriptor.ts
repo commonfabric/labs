@@ -37,6 +37,7 @@ export type BuiltinToolId =
   | "loom_profile"
   | "list_commands"
   | "run_command"
+  | "run_read_command"
   | "submit_result";
 
 export const DEFAULT_PARENT_TOOL_IDS = [
@@ -166,7 +167,7 @@ export const LOOM_RETRIEVAL_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
 ]);
 
 /**
- * The two tools over the commands a host admits, backed only by an
+ * The tools over the commands a host admits, backed only by an
  * explicitly configured host command broker. Gated apart from the authoring
  * and retrieval tools: which commands a run may list and run is the broker's
  * grant, which the host configures for this family alone.
@@ -174,6 +175,7 @@ export const LOOM_RETRIEVAL_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
 export const LOOM_COMMAND_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
   "list_commands",
   "run_command",
+  "run_read_command",
 ]);
 
 /**

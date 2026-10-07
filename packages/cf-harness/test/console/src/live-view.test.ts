@@ -2553,6 +2553,7 @@ describe("console/src/live-view", () => {
         toolStarted("call-2", "browser"),
         toolStarted("call-3", "browser"),
         toolStarted("call-4", "browser"),
+        toolStarted("call-5", "run_read_command"),
       ));
       view.details = new Map([["turn-1", {
         ...await runDetail(),
@@ -2578,6 +2579,10 @@ describe("console/src/live-view", () => {
             "denied",
             "cfc_enforce_strict_requires_direct_command",
           ),
+          step("call-5", "allowed", "cfc_enforce_strict_host_command_read", {
+            role: "context",
+            surface: "cli",
+          }),
         ],
       }]]);
 
@@ -2593,6 +2598,9 @@ describe("console/src/live-view", () => {
       );
       expect(text).toContain(
         "Blocked</span> Nothing records who asked for this work, so the check could not trace it back to a request from you.",
+      );
+      expect(text).toContain(
+        "The host allows this context task to discover commands and invoke only its granted read commands.",
       );
     });
 

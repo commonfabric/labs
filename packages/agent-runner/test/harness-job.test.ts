@@ -2,10 +2,14 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
-import type {
-  CreateHarnessPromptLoopOptions,
-  HarnessPromptLoopResult,
+import {
+  CfHarnessPromptLoop,
+  type CreateHarnessPromptLoopOptions,
+  type HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
+import type { HarnessModelUsage } from "@commonfabric/cf-harness/model/client";
+import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/image";
+import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { renderCellReference } from "@commonfabric/runner/shared";
@@ -40,6 +44,7 @@ const plainSpec = (
 interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
+  images?: readonly HarnessImageAttachment[];
   role?: string;
   systemPrompt?: string;
   maxModelTurns?: number;
@@ -90,6 +95,7 @@ describe("runHarnessJob()", () => {
     script: (context: {
       resultPath: string;
       emit: () => Promise<void>;
+      emitUsage: (usage: HarnessModelUsage) => Promise<void>;
     }) => Promise<HarnessPromptLoopResult>,
     options: {
       signal?: AbortSignal;
@@ -122,6 +128,7 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.images = prompt.imageAttachments;
               seen.systemPrompt = prompt.systemPrompt;
               seen.maxModelTurns = prompt.maxModelTurns ??
                 loopOptions.maxModelTurns;
@@ -129,6 +136,9 @@ describe("runHarnessJob()", () => {
               seen.signal = prompt.signal;
               return script({
                 resultPath: join(runRoot, "workspace", "agent-result.json"),
+                emitUsage: async (usage) => {
+                  await prompt.onModelUsage?.({ usage, totalUsage: usage });
+                },
                 emit: async () => {
                   const message = {
                     role: "assistant",
@@ -155,6 +165,105 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
+
+  for (const valid of [true, false]) {
+    it(`keeps the real loop's final-turn ${valid ? "submission" : "failure report"}`, async () => {
+      let calls = 0;
+      const reported: string[] = [];
+      const result = await runHarnessJob(
+        plainSpec({ tools: [], maxModelTurns: 1 }),
+        {
+          runRoot,
+          report: (line) => reported.push(line),
+          signal: new AbortController().signal,
+          harnessDeps: {
+            env: {
+              CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+              CF_HARNESS_SANDBOX_RUNTIME: "docker",
+              CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: join(
+                runRoot,
+                "contexts",
+              ),
+              CF_HARNESS_RUNSC_CFC_RESULT_DIR: join(runRoot, "results"),
+            },
+            createPromptLoop: (options) =>
+              new CfHarnessPromptLoop({
+                ...options,
+                modelClient: {
+                  providerId: "fixture",
+                  complete: () => {
+                    calls++;
+                    return Promise.resolve({
+                      assistant: {
+                        role: "assistant",
+                        content: "",
+                        toolCalls: [{
+                          id: "submit-one",
+                          type: "function",
+                          function: {
+                            name: "submit_result",
+                            arguments: JSON.stringify({
+                              result: valid
+                                ? { answer: "Titan" }
+                                : { wrong: true },
+                            }),
+                          },
+                        }],
+                      },
+                      usage: { totalTokens: 17 },
+                    });
+                  },
+                },
+              }),
+          },
+        },
+      );
+      if (calls === 0) throw new Error(reported.join("\n"));
+      expect(calls).toBe(1);
+      expect(result.outcome).toBe(valid ? "completed" : "failed");
+      if (!valid) expect(result).toMatchObject({ errorCode: "LIMIT_REACHED" });
+      expect(result.report).toMatchObject({
+        modelTurns: 1,
+        toolCalls: 1,
+        usage: { totalTokens: 17 },
+        usageCoverage: "including-descendants",
+      });
+    });
+  }
+
+  it("snapshots inline image bytes inside the job workspace and sends the image to the model", async () => {
+    const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" } as const;
+    const { seen } = await runScripted(
+      plainSpec({ imageAttachments: [image] }),
+      answering("Titan"),
+    );
+    expect(seen.images).toHaveLength(1);
+    const attachment = seen.images![0];
+    expect(
+      attachment.hostPath.startsWith(
+        await Deno.realPath(join(runRoot, "workspace", ".job-images")) + "/",
+      ),
+    ).toBe(true);
+    expect(await materializeImageAttachmentContentPart(attachment))
+      .toMatchObject({
+        type: "image_url",
+        image_url: { url: "data:image/png;base64," + image.base64 },
+      });
+    expect(attachment.digest).toMatch(/^sha256:/);
+  });
+
+  it("passes model ceilings into the loop's shared model client", async () => {
+    const { seen } = await runScripted(
+      plainSpec({ maxInputBytes: 65536, maxOutputTokens: 8192 }),
+      answering("Titan"),
+    );
+    expect(seen.loopOptions).toMatchObject({
+      maxInputBytes: 65536,
+      maxOutputTokens: 8192,
+      stopOnStructuredResult: true,
+    });
+  });
 
   it("passes the trusted job identity through the commands config into the harness", async () => {
     const configPath = join(runRoot, "commands.json");
@@ -366,6 +475,25 @@ describe("runHarnessJob()", () => {
   });
 
   describe("how a job ends", () => {
+    it("retains observed model attribution in the public job report", async () => {
+      const modelResponses = [
+        { modelTurn: 1, model: "provider-served-model" },
+        { modelTurn: 2, model: null },
+      ];
+      const { result } = await runScripted(plainSpec(), async (context) => ({
+        ...await answering("Titan")(context),
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: false,
+        modelResponses,
+      }));
+      expect(result.outcome).toBe("completed");
+      expect(result.report).toMatchObject({
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: false,
+        modelResponses,
+      });
+    });
+
     it("tells the caller of each transcript event before passing it on, and gives the loop the job's signal", async () => {
       const events: string[] = [];
       const controller = new AbortController();
@@ -388,7 +516,7 @@ describe("runHarnessJob()", () => {
       expect(seen.signal).toBe(controller.signal);
     });
 
-    it("ends `cancelled` when its signal aborted", async () => {
+    it("retains the completed loop report when cancellation wins before the job returns", async () => {
       const controller = new AbortController();
       const { result } = await runScripted(
         plainSpec(),
@@ -399,6 +527,50 @@ describe("runHarnessJob()", () => {
         { signal: controller.signal },
       );
 
+      expect(result).toEqual({
+        outcome: "cancelled",
+        report: {
+          modelTurns: 2,
+          toolCalls: 1,
+          usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+          usageCoverage: "direct",
+          runRef: join(runRoot, "artifacts"),
+        },
+      });
+    });
+
+    for (const cancelled of [false, true]) {
+      it(`retains partial usage when a paid loop ${cancelled ? "is cancelled" : "fails"}`, async () => {
+        const controller = new AbortController();
+        const { result } = await runScripted(
+          plainSpec(),
+          async ({ emitUsage }) => {
+            await emitUsage({ totalTokens: 123 });
+            if (cancelled) controller.abort();
+            throw new Error("provider disconnected after usage");
+          },
+          { signal: controller.signal },
+        );
+        expect(result.outcome).toBe(cancelled ? "cancelled" : "failed");
+        expect(result.report).toMatchObject({
+          usage: { totalTokens: 123 },
+          usageCoverage: "including-descendants",
+          toolCalls: 0,
+        });
+        expect(result.report).not.toHaveProperty("modelTurns");
+      });
+    }
+
+    it("keeps cancellation accounting absent when the loop supplied no measurements", async () => {
+      const controller = new AbortController();
+      const { result } = await runScripted(
+        plainSpec(),
+        () => {
+          controller.abort();
+          return Promise.reject(new Error("cancelled before a measured turn"));
+        },
+        { signal: controller.signal },
+      );
       expect(result).toEqual({ outcome: "cancelled" });
     });
 

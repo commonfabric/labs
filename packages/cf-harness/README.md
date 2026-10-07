@@ -201,11 +201,12 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands` and `run_command` (present only with
+  - `list_commands`, `run_command`, and `run_read_command` (present only with
     `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
-    the host's broker admits for this run, run as the agent; each answer
-    `run_command` returns is measured like a retrieval row, and the listing is
-    the host's command metadata, unmeasured)
+    the host's broker admits for this run, run as the agent; each command result
+    is measured like a retrieval row, and the listing is the host's command
+    metadata, unmeasured; `run_read_command` requires a fresh read declaration
+    and read-only broker grant, while `run_command` remains write-class)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -532,8 +533,13 @@ research, and descendant calls. Each completed model call contributes once,
 including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
-that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the
+that total usage object. The report's `model` is the requested identifier.
+`modelResponses` records the provider's returned model identifier for each
+direct call, or `null` when unavailable. `actualModels` contains the distinct
+observed identifiers; `modelAttributionComplete` is true only when every direct
+turn has one. Research and descendant attribution belongs to those runs' own
+reports. `costUsd`, when present, came from the provider; `estimatedCostUsd` is
+an estimate based on the
 [public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
 for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
 subscription quota conversion.

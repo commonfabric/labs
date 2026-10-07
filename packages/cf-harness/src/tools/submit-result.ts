@@ -45,7 +45,7 @@ export const submitResultTool: HarnessToolDefinition<
     toolId: "submit_result",
     title: "Submit Result",
     description:
-      "Submit this run's structured result. Pass the whole result as `result`; it is validated against the schema this run was configured with. A refused submission returns `invalid_result` with the reason: correct the value and submit again. A later valid submission replaces an earlier one. Write a handle token where the result refers to something you hold a handle for; do not write out an address. Submit before your final answer.",
+      "Submit this run's structured result. Pass the whole result as `result`; it is validated against the schema this run was configured with. A refused submission returns `invalid_result` with the reason: correct the value and submit again. A later valid submission replaces an earlier one. Write a handle token where the result refers to something you hold a handle for; do not write out an address. Call this tool alone in its model turn. The host may end the job immediately after a successful submission; otherwise submit before your final answer.",
     // The call changes nothing outside the run's own record: it is how the
     // run returns, as `finish_task` is how it stops.
     effectClass: "read",

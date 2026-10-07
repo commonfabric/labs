@@ -190,6 +190,19 @@ export const AgentRunRecordSchema = internSchema(
       startedAt: { type: "string" },
       finishedAt: { type: "string" },
       modelTurns: { type: "number" },
+      actualModels: { type: "array", items: { type: "string" } },
+      modelAttributionComplete: { type: "boolean" },
+      modelResponses: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            modelTurn: { type: "number" },
+            model: { type: ["string", "null"] },
+          },
+          required: ["modelTurn", "model"],
+        },
+      },
       toolCalls: { type: "number" },
       usage: { type: "object", additionalProperties: true },
       usageCoverage: {

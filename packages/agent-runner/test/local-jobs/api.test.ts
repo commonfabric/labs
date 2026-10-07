@@ -121,6 +121,132 @@ describe("local-jobs/api", () => {
   });
 
   describe("POST /jobs", () => {
+    it("accepts inline image bytes and binds them to idempotency without granting host paths", async () => {
+      const { post, store } = apiWith();
+      const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" };
+      try {
+        const response = await post("/jobs", {
+          ...BODY,
+          imageAttachments: [image],
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).job.request.imageAttachments).toEqual([
+          image,
+        ]);
+        expect((await post("/jobs", { ...BODY, imageAttachments: [] })).status)
+          .toBe(409);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("refuses malformed images, undeclared host paths and too many images before enqueue", async () => {
+      const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" };
+      for (
+        const imageAttachments of [
+          {},
+          [null],
+          [{ ...image, mediaType: "image/jpeg" }],
+          [{ ...image, base64: "not base64!" }],
+          [{ ...image, base64: "" }],
+          [{ ...image, hostPath: "/private/owner/image.png" }],
+          [{ ...image, base64: "iVBORw0KGgo=\n" }],
+          Array(9).fill(image),
+        ]
+      ) {
+        const { post, store, kicked } = apiWith();
+        try {
+          expect((await post("/jobs", { ...BODY, imageAttachments })).status)
+            .toBe(400);
+          expect(store.list(10)).toEqual([]);
+          expect(kicked).toEqual([]);
+        } finally {
+          store.close();
+        }
+      }
+    });
+
+    it("retains valid caller model limits and rejects invalid bounds before enqueue", async () => {
+      const { post, store } = apiWith();
+      try {
+        const response = await post("/jobs", {
+          ...BODY,
+          maxInputBytes: 65536,
+          maxOutputTokens: 8192,
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).job.request).toMatchObject({
+          maxInputBytes: 65536,
+          maxOutputTokens: 8192,
+        });
+        for (const bad of [0, -1, 1.5, "8192", Number.MAX_SAFE_INTEGER + 1]) {
+          expect((await post("/jobs", { ...BODY, maxInputBytes: bad })).status)
+            .toBe(400);
+          expect(
+            (await post("/jobs", { ...BODY, maxOutputTokens: bad })).status,
+          ).toBe(400);
+        }
+        expect(store.list(10)).toHaveLength(1);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("accepts a body of exactly 1 MiB and refuses the next UTF-8 byte", async () => {
+      const { post, store, kicked } = apiWith();
+      const empty = JSON.stringify({ ...BODY, task: "" });
+      const limit = 1024 * 1024;
+      const task = "é".repeat(
+        Math.floor((limit - new TextEncoder().encode(empty).length) / 2),
+      );
+      const body = JSON.stringify({ ...BODY, task });
+      const exact = body +
+        " ".repeat(limit - new TextEncoder().encode(body).length);
+      try {
+        expect(new TextEncoder().encode(exact).byteLength).toBe(limit);
+        const accepted = await post("/jobs", exact);
+        expect(accepted.status).toBe(201);
+        const refused = await post("/jobs", exact + " ");
+        expect(refused.status).toBe(413);
+        expect(await refused.json()).toMatchObject({ code: "too_large" });
+        expect(store.list(10)).toHaveLength(1);
+        expect(kicked).toEqual(["kick"]);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("stops an oversized chunked body before parsing JSON even when its declared length is small", async () => {
+      const { call, store, kicked } = apiWith();
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+          controller.enqueue(new TextEncoder().encode("unread"));
+          controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      const parse = spy(JSON, "parse");
+      try {
+        const response = await call("/jobs", {
+          method: "POST",
+          headers: { "content-length": "1" },
+          body,
+        });
+        expect(response.status).toBe(413);
+        expect(parse.calls).toHaveLength(0);
+        expect(cancelled).toBe(true);
+        expect(store.list(10)).toEqual([]);
+        expect(kicked).toEqual([]);
+      } finally {
+        parse.restore();
+        store.close();
+      }
+    });
+
     it("returns 201 with a new job and starts the lane, then 200 with the same job for the same request", async () => {
       const { post, kicked } = apiWith();
 
@@ -409,6 +535,26 @@ describe("local-jobs/api", () => {
 
       expect(await frames(await call(`/jobs/${job.id}/events?after=9`)))
         .toEqual([]);
+    });
+
+    it("does not replay job events to a request that was already cancelled", async () => {
+      const { store, post, call } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.requestCancel(job.id);
+        const cancellation = new AbortController();
+        cancellation.abort();
+        expect(
+          await frames(
+            await call(`/jobs/${job.id}/events`, {
+              signal: cancellation.signal,
+            }),
+          ),
+        ).toEqual([]);
+        expect(store.get(job.id)?.state).toBe("cancelled");
+      } finally {
+        store.close();
+      }
     });
 
     it("returns 400 for an `after` that is not a whole number", async () => {

@@ -15,6 +15,9 @@
  * them twice.
  */
 
+import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
+import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
+
 import { hashStringOf } from "@commonfabric/data-model";
 import { Database } from "@db/sqlite";
 
@@ -39,13 +42,14 @@ export const LOCAL_JOB_TERMINAL_STATES: ReadonlySet<LocalJobState> = new Set([
 export const RUNNER_RESTARTED = "RUNNER_RESTARTED";
 
 /** What a caller asked for: everything but who asked and under which key. */
-export interface LocalJobRequest {
+export interface LocalJobRequest extends HarnessModelLimits {
   task: string;
   instructions?: string;
   context?: unknown;
   resultSchema: unknown;
   tools?: string[];
   maxModelTurns?: number;
+  imageAttachments?: HarnessInlineImageAttachment[];
 
   /**
    * The caller can host the job's browser. Its contents are not read yet;
@@ -104,7 +108,7 @@ export interface LocalJobEnding {
 
 const PRAGMAS = `
   PRAGMA journal_mode = WAL;
-  PRAGMA synchronous = NORMAL;
+  PRAGMA synchronous = FULL;
   PRAGMA busy_timeout = 5000;
   PRAGMA foreign_keys = ON;
 `;

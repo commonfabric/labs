@@ -109,6 +109,9 @@ export const localJobSpecOf = (
   const model = profile.model ?? runner.model;
   return {
     task: request.task,
+    ...(request.imageAttachments !== undefined
+      ? { imageAttachments: request.imageAttachments }
+      : {}),
     commandJobId: job.id,
     taskRole: profile.taskRole,
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
@@ -120,6 +123,12 @@ export const localJobSpecOf = (
       ? { subagentProfiles: [LOCAL_JOB_BROWSER_SUBAGENT_PROFILE] }
       : {}),
     maxModelTurns: profile.maxModelTurns,
+    ...(profile.maxInputBytes !== undefined
+      ? { maxInputBytes: profile.maxInputBytes }
+      : {}),
+    ...(profile.maxOutputTokens !== undefined
+      ? { maxOutputTokens: profile.maxOutputTokens }
+      : {}),
     ...(framing.length > 0 ? { instructions: framing.join("\n\n") } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(loomRetrievalConfigPath !== undefined
@@ -133,7 +142,7 @@ export const localJobSpecOf = (
 
 /**
  * The progress events one transcript event reports: a `step` for each tool
- * the model called, and a `command` for each `run_command` the host ran.
+ * the model called, and a `command` for each command the host ran.
  * A child loop's events report nothing; the job's own loop is what a caller
  * watches.
  */
@@ -150,7 +159,11 @@ export const localJobEventsOf = (
       body: { turn, tool: call.function.name },
     }));
   }
-  if (message.role !== "tool" || message.toolName !== "run_command") return [];
+  if (
+    message.role !== "tool" ||
+    (message.toolName !== "run_command" &&
+      message.toolName !== "run_read_command")
+  ) return [];
   let output: unknown;
   try {
     output = JSON.parse(message.content);

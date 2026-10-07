@@ -41,6 +41,15 @@ export interface AgentRunReport {
   modelTurns?: number;
   toolCalls?: number;
 
+  /** Provider-reported model identifiers for the direct loop's responses. */
+  actualModels?: string[];
+
+  /** Whether every direct turn has a provider-reported model identifier. */
+  modelAttributionComplete?: boolean;
+
+  /** Per-response attribution, independent of token usage availability. */
+  modelResponses?: { modelTurn: number; model: string | null }[];
+
   /** Operator-only reference to the run's artifact root. */
   runRef?: string;
 }
@@ -639,6 +648,17 @@ export class AgentRunner {
       }
       if (report.modelTurns !== undefined) {
         current.key("modelTurns").set(report.modelTurns);
+      }
+      if (report.actualModels !== undefined) {
+        current.key("actualModels").set(report.actualModels);
+      }
+      if (report.modelAttributionComplete !== undefined) {
+        current.key("modelAttributionComplete").set(
+          report.modelAttributionComplete,
+        );
+      }
+      if (report.modelResponses !== undefined) {
+        current.key("modelResponses").set(report.modelResponses);
       }
       if (report.toolCalls !== undefined) {
         current.key("toolCalls").set(report.toolCalls);

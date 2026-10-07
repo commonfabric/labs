@@ -69,7 +69,15 @@ export interface HarnessModelAttemptDiagnostic {
   retry?: HarnessModelAttemptRetry;
 }
 
-export interface HarnessModelTurnRequest {
+/** Optional host ceilings; bounded turns make exactly one provider attempt. */
+export interface HarnessModelLimits {
+  /** Final serialized request bytes; this is a byte bound, not a token estimate. */
+  maxInputBytes?: number;
+  /** Generated tokens, including hidden reasoning, enforced by the provider. */
+  maxOutputTokens?: number;
+}
+
+export interface HarnessModelTurnRequest extends HarnessModelLimits {
   model: string;
   transcript: readonly HarnessTranscriptMessage[];
   tools: readonly HarnessModelToolDescriptor[];
@@ -159,7 +167,14 @@ export const HARNESS_MODEL_USAGE_NUMERIC_FIELDS = [
 export interface HarnessModelTurnResult {
   assistant: HarnessAssistantTranscriptMessage;
   usage?: HarnessModelUsage;
+
+  /** Model identifier returned by the provider for this response. */
+  observedModel?: string;
 }
+
+/** Returns a nonempty provider-reported model identifier when present. */
+export const observedModelId = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value : undefined;
 
 export interface HarnessModelCatalogEntry {
   id: string;

@@ -147,6 +147,12 @@ advertised capability as dependency readiness.
 - CFC authority: Common Fabric runner/runtime evidence and trusted sandbox
   sidecars. Harness-local policy logic is conservative transport/enforcement,
   not the source of label meaning.
+- Host-broker context reads: at strict enforcement, an explicitly context-bound
+  task may discover the host's command catalog and invoke `run_read_command`.
+  The invocation requires a fresh host read-effect declaration and per-job
+  read-only grant, then the host revalidates both at execution. This narrow
+  authority path changes no other strict read or write gate; quoted and absent
+  task authority remain refused. See [Host commands](LOOM_COMMANDS.md).
 - Host execution: no parent-run shell reaches the host. Bounded host-side
   surfaces exist beside the sandbox: the browser child profile's typed `browser`
   tool, which a browser host attached to the run carries out when there is one
@@ -207,26 +213,27 @@ Current selectable parent tools are `bash`, `read_file`, `view_image`,
 `research`, `loom_compose`, `loom_inspect`, `loom_authoring_context`, and the
 eight read-only Loom tools `loom_search`, `loom_page_discover`,
 `loom_page_inspect`, `loom_page_read`, `loom_people`, `loom_calendar_list`,
-`loom_context`, and `loom_profile`, the two host-command tools `list_commands`
-and `run_command`, plus `submit_result`. Individual runs receive only their
-configured subset; `web_fetch` and `run_skill_script` are not in the ordinary
-default surface. Optional tools are gated on the backing a run can supply — a
-fabric session for `run_pattern`, `assign_slug`, and `acquire_skill`, the
-pattern index for `search_patterns` and `record_feedback`, configured skills.sh
-discovery for `search_skills`, and a resolved documentation corpus or pattern
-index for `research`, explicit host Loom authoring configuration for the three
-authoring tools, explicit host Loom retrieval configuration for the eight
-retrieval tools, explicit host command broker configuration for `list_commands`
-and `run_command`, and a configured structured-result schema for `submit_result`
-— and a tool the run cannot back is absent from the surface rather than present
-and failing, so an explicit allowlist naming it does not conjure it.
-`run_pattern` additionally requires the three `--fabric-*` session flags.
-`browser` exists only as a built-in used by the authorized browser child profile
-and cannot be selected as a parent CLI tool. It sends its typed action
-vocabulary to a browser host attached to the run when there is one, and
-otherwise drives the host `agent-browser` CLI, with the Browser Access CDP
-endpoint attached by the harness rather than written by the model. In neither
-case does an input name a session, an endpoint, or a jar.
+`loom_context`, and `loom_profile`, the host-command tools `list_commands`,
+`run_command`, and `run_read_command`, plus `submit_result`. Individual runs
+receive only their configured subset; `web_fetch` and `run_skill_script` are not
+in the ordinary default surface. Optional tools are gated on the backing a run
+can supply — a fabric session for `run_pattern`, `assign_slug`, and
+`acquire_skill`, the pattern index for `search_patterns` and `record_feedback`,
+configured skills.sh discovery for `search_skills`, and a resolved documentation
+corpus or pattern index for `research`, explicit host Loom authoring
+configuration for the three authoring tools, explicit host Loom retrieval
+configuration for the eight retrieval tools, explicit host command broker
+configuration for `list_commands`, `run_command`, and `run_read_command`, and a
+configured structured-result schema for `submit_result` — and a tool the run
+cannot back is absent from the surface rather than present and failing, so an
+explicit allowlist naming it does not conjure it. `run_pattern` additionally
+requires the three `--fabric-*` session flags. `browser` exists only as a
+built-in used by the authorized browser child profile and cannot be selected as
+a parent CLI tool. It sends its typed action vocabulary to a browser host
+attached to the run when there is one, and otherwise drives the host
+`agent-browser` CLI, with the Browser Access CDP endpoint attached by the
+harness rather than written by the model. In neither case does an input name a
+session, an endpoint, or a jar.
 
 `submit_result` is how a run returns its structured result without a sandbox
 write. It takes the value as its input, validates it with the structured-result
