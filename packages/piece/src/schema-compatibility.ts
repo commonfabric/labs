@@ -360,7 +360,10 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * that a runtime must not apply the monotone constraint to the derived one.
  * This comparison is that monotone constraint, so it drops these keys — except
  * for the part of a mint that an `ownerPrincipal` beside it turns into
- * authorization evidence, which `comparableIfc` keeps.
+ * authorization evidence, which `comparableIfc` keeps. `inputConfidentiality`
+ * takes this role too: it names which clauses of `confidentiality` stand in
+ * for the label a measured write produces, and those clauses are compared
+ * under `confidentiality` itself.
  *
  * `writerIdentity` is the write authorization, compared except for the parts of
  * its claim that move without the authorization moving. `writerAlternatives`
@@ -643,12 +646,14 @@ const comparableIfc = (ifc: unknown): unknown => {
  * stops at every keyword that holds a value rather than a schema, so a
  * `default`, a `const`, and an `enum` entry are compared whole.
  *
- * The `ifc` comparison drops one key as well. `addIntegrity` names the derived
- * per-value label rather than the store's declared policy, so a path gaining or
- * losing a mint is not a change to the contract between two versions of the
- * pattern — except beside an `ownerPrincipal`, where the atoms of that mint
- * claiming to represent a principal are what authorizes the write, and those
- * are compared. `comparableIfc` performs both reductions, and
+ * The `ifc` comparison drops two keys as well. `addIntegrity` names the
+ * derived per-value label rather than the store's declared policy, so a path
+ * gaining or losing a mint is not a change to the contract between two versions
+ * of the pattern — except beside an `ownerPrincipal`, where the atoms of that
+ * mint claiming to represent a principal are what authorizes the write, and
+ * those are compared. `inputConfidentiality` names which clauses of
+ * `confidentiality` a module's input join put there, and the clauses
+ * themselves are compared under `confidentiality`. `comparableIfc` performs both reductions, and
  * {@link IfcKeyRole} states which keys take part in each.
  */
 /** How a refusal of {@link assertPatternSchemasBackwardCompatible} opens. */

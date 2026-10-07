@@ -18,10 +18,8 @@
  * source joined, so the invariant fails toward declaring.
  */
 
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-
 import type { JSONSchemaObj, JSONValue } from "../builder/types.ts";
-import { type CfcConfClause, normalizeClause } from "./clause.ts";
+import { type CfcConfClause, clausesEqual } from "./clause.ts";
 
 /** Where the clauses of a confidentiality came from. */
 export interface ConfidentialitySources {
@@ -36,12 +34,10 @@ export interface ConfidentialitySources {
 export const holdsClause = (
   clauses: readonly unknown[],
   clause: unknown,
-): boolean => {
-  const normal = normalizeClause(clause as CfcConfClause);
-  return clauses.some((other) =>
-    deepEqual(normalizeClause(other as CfcConfClause), normal)
+): boolean =>
+  clauses.some((other) =>
+    clausesEqual(other as CfcConfClause, clause as CfcConfClause)
   );
-};
 
 /**
  * The sources of the confidentiality `ifc` holds: the clauses its
