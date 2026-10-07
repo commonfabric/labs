@@ -608,12 +608,10 @@ describe("condition-builtin-reads", () => {
     };
 
     describe("defaults, empty containers, falsy values, links and type mismatches", () => {
-      // `truthy` is the condition's truthiness as its schema reads it. Typed
-      // through the argument, all three builtins read it so. Typed through
-      // the link, with or without an argument schema that admits anything,
-      // `ifElse` does and `when` and `unless` read the stored value without
-      // the schema, which `linkTyped` records where the two part: a default
-      // stands in, or the stored value fails at the root.
+      // `truthy` is the condition's truthiness as its schema reads it. All
+      // three builtins read it so, typed through the argument or through the
+      // link, with or without an argument schema that admits anything: a
+      // default stands in, and a stored value failing at the root is `false`.
       let zero: FabricValue;
       let empty: FabricValue;
       let object: FabricValue;
@@ -635,19 +633,11 @@ describe("condition-builtin-reads", () => {
       const nullable: JSONSchema = {
         anyOf: [{ type: "object" }, { type: "null" }],
       };
-      // What `when` and `unless` take where they read a value the schema
-      // carried on its link refuses at the root, or a default it supplies.
-      const onlyIfElseReadsTheLinkSchema = (ifElse: boolean): Branches => ({
-        ifElse,
-        when: !ifElse,
-        unless: !ifElse,
-      });
       const cases = (): Array<{
         name: string;
         stored: FabricValue | undefined;
         schema?: JSONSchema;
         truthy: boolean;
-        linkTyped?: Branches;
       }> => [
         { name: "`[]`", stored: [], schema: { type: "array" }, truthy: true },
         { name: "`{}`", stored: {}, schema: { type: "object" }, truthy: true },
@@ -718,7 +708,6 @@ describe("condition-builtin-reads", () => {
           stored: { a: 1 },
           schema: union,
           truthy: false,
-          linkTyped: onlyIfElseReadsTheLinkSchema(false),
         },
         {
           name: "`null` under `object | null`",
@@ -766,21 +755,18 @@ describe("condition-builtin-reads", () => {
           stored: undefined,
           schema: { type: "boolean", default: true },
           truthy: true,
-          linkTyped: onlyIfElseReadsTheLinkSchema(true),
         },
         {
           name: "an absent value defaulting to `{}`",
           stored: undefined,
           schema: { type: "object", default: {} },
           truthy: true,
-          linkTyped: onlyIfElseReadsTheLinkSchema(true),
         },
         {
           name: "an absent value defaulting to `[]`",
           stored: undefined,
           schema: { type: "array", default: [] },
           truthy: true,
-          linkTyped: onlyIfElseReadsTheLinkSchema(true),
         },
         {
           name: "an absent value under a union defaulting to `true`",
@@ -790,28 +776,24 @@ describe("condition-builtin-reads", () => {
             default: true,
           },
           truthy: true,
-          linkTyped: onlyIfElseReadsTheLinkSchema(true),
         },
         {
           name: "`5` under `string`",
           stored: 5,
           schema: { type: "string" },
           truthy: false,
-          linkTyped: onlyIfElseReadsTheLinkSchema(false),
         },
         {
           name: "an object under `string`",
           stored: { a: 1 },
           schema: { type: "string" },
           truthy: false,
-          linkTyped: onlyIfElseReadsTheLinkSchema(false),
         },
         {
           name: "an array under `object`",
           stored: [1],
           schema: { type: "object" },
           truthy: false,
-          linkTyped: onlyIfElseReadsTheLinkSchema(false),
         },
         {
           name: "an object failing below a root default",
@@ -845,10 +827,7 @@ describe("condition-builtin-reads", () => {
           }
 
           expect(observed).toEqual(
-            cases().map(({ name, truthy, linkTyped }) => ({
-              name,
-              ...(typedBy !== "argument" && linkTyped || allTake(truthy)),
-            })),
+            cases().map(({ name, truthy }) => ({ name, ...allTake(truthy) })),
           );
           expect(actionErrors).toEqual([]);
         });
@@ -858,10 +837,7 @@ describe("condition-builtin-reads", () => {
     describe("a condition that fails its schema only below its root", () => {
       // The root settles truthiness, and what lies below it is not read, so a
       // record whose root the schema admits reads as truthy whatever it holds.
-      // Reading the whole value would find these `undefined`. Typed through
-      // the link, `when` and `unless` read the stored value without the
-      // schema, as the cases above show, and take the truthy branch either
-      // way.
+      // Reading the whole value would find these `undefined`.
       const failingBelowRoot: Array<{
         name: string;
         stored: FabricValue;
@@ -918,8 +894,10 @@ describe("condition-builtin-reads", () => {
 
       it("returns the condition from `unless`, which a read typed by the condition's schema finds `undefined`", async () => {
         // `unless` hands its condition on when the condition's root is truthy,
-        // and a reader of the output applies its own schema to it, exactly as
-        // it would reading the condition itself.
+        // through a reference carrying the condition's schema. A reader of the
+        // output reads it as it would read the condition itself: one typed by
+        // that schema finds the whole value `undefined`, and one with no
+        // schema of its own adopts the reference's and finds `n` invalid.
         const [{ stored, schema }] = failingBelowRoot;
         const result = await runPattern(
           "unless-below",
@@ -933,7 +911,7 @@ describe("condition-builtin-reads", () => {
           fallback: shown.get() === "fallback",
           n: shown.key("box").key("n").get(),
           typed: shown.asSchema(schema).get(),
-        }).toEqual({ fallback: false, n: "bad", typed: undefined });
+        }).toEqual({ fallback: false, n: undefined, typed: undefined });
       });
     });
   });

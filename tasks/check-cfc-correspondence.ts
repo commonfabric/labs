@@ -82,8 +82,8 @@ export const SPEC_PENDING_BUDGET = 3;
 /**
  * The source files the CFC rule in `.claude/rules/cfc.md` governs, which is
  * where a `SPEC-PENDING` marker may sit: the runner's CFC sources and their
- * tests, the render boundaries in `html`, and the harness's CFC modules. The
- * two lists are kept in step by hand.
+ * tests, the render boundaries in `html`, the harness's CFC modules, and the
+ * harness console's display ceiling. The two lists are kept in step by hand.
  */
 export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^packages\/runner\/src\/cfc\/.*\.tsx?$/,
@@ -94,6 +94,7 @@ export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^packages\/cf-harness\/src\/cfc-[^/]*\.ts$/,
   /^packages\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
   /^packages\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
+  /^packages\/cf-harness\/console\/display-ceiling\.ts$/,
 ];
 
 /** Whether `path` is one the CFC rule governs. */

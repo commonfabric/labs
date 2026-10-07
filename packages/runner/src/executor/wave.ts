@@ -44,6 +44,10 @@ import {
 } from "@commonfabric/memory/v2";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type {
+  ServedAclChange,
+  ServedAclChangeVerdict,
+} from "@commonfabric/memory/v2/server";
+import type {
   CommitError,
   IExtendedStorageTransaction,
   ISpaceReplica,
@@ -63,6 +67,8 @@ import type {
 import { parsePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { applyAccessListChanges, validateStoredAcl } from "../acl-manager.ts";
+import type { SpaceAccessChange } from "../builder/types.ts";
 import { ACL_DOCUMENT_WRITE_REFUSED } from "../scheduler/types.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import {
@@ -413,6 +419,34 @@ export function requireWaveAcceptance(tx: IExtendedStorageTransaction): void {
   requiresWaveAcceptance.add(tx.tx);
 }
 
+const stagedSpaceAccessChanges = new WeakMap<
+  IStorageTransaction,
+  Map<MemorySpace, SpaceAccessChange[]>
+>();
+
+/**
+ * Stages `changes`, the access-list changes a served handler run made through
+ * `grantSpaceAccess()` and `revokeSpaceAccess()`, by space and each space's in
+ * call order, on the run's transaction `tx`. They ride `tx` into the wave it
+ * seals into: the seal checks them, and the wave commits them ahead of
+ * everything else the run wrote or sent (`WaveAccumulator.commitWave()`).
+ */
+export function stageSpaceAccessChanges(
+  tx: IExtendedStorageTransaction,
+  changes: ReadonlyMap<MemorySpace, readonly SpaceAccessChange[]>,
+): void {
+  let staged = stagedSpaceAccessChanges.get(tx.tx);
+  if (staged === undefined) {
+    staged = new Map();
+    stagedSpaceAccessChanges.set(tx.tx, staged);
+  }
+  for (const [space, list] of changes) {
+    const forSpace = staged.get(space) ?? [];
+    for (const change of list) forSpace.push(change);
+    staged.set(space, forSpace);
+  }
+}
+
 /** The sealed tx's wave settlement: resolves ok when every sealed space
  * promoted or its write-free publication was accepted, error when any
  * withdrew (conflict drop, requeue, abort, abandon). Undefined for a tx
@@ -557,8 +591,8 @@ export interface WaveSpaceCommit {
 
 /**
  * Whether `error` is the seal's refusal of a transaction that writes a space's
- * ACL document, carried as the `reason` Error's message, the sentinel
- * `ACL_DOCUMENT_WRITE_REFUSED`.
+ * ACL document, or of an access-list change it staged, carried as the
+ * `reason` Error's message, the sentinel `ACL_DOCUMENT_WRITE_REFUSED`.
  */
 export function isAclDocumentWriteRefusal(
   error: unknown,
@@ -647,6 +681,18 @@ export interface WaveCommitSink {
   commitWave(
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>>;
+
+  /**
+   * Commits `change`, a served run's change to a space's access list, as a
+   * commit of its own holding nothing else, under the run's delegated
+   * carriage and admitted by the memory server's INV-12 check keyed on the
+   * carried actor (`Server.commitServedAclChange()`). A change that leaves
+   * the list as it is commits nothing, and resolves with no `seq`. A sink
+   * that cannot commit one omits this, and a wave holding one cannot commit.
+   */
+  commitSpaceAccessChange?(
+    change: ServedAclChange,
+  ): Promise<Result<{ seq?: number }, WaveCommitRejection>>;
 }
 
 /**
@@ -694,6 +740,17 @@ interface WaveContribution {
    * ride (its event replays and re-emits, the model's committed-only
    * `cascadesCross` fold). */
   outboundAppends: OutboxAppendRow[];
+
+  /**
+   * The access-list changes this run staged (`stageSpaceAccessChanges()`),
+   * by space, which the seal admitted. They commit ahead of every batch
+   * carrying the run's writes or appends, iff the contribution survives the
+   * wave's conflict resolution.
+   */
+  spaceAccessChanges: ReadonlyArray<{
+    space: MemorySpace;
+    changes: readonly SpaceAccessChange[];
+  }>;
 
   /** The run's DISCOVERED scope at seal (scopes.md §2 S1 — the
    * transaction's read-scope ratchet, learned by running): the narrowest
@@ -941,6 +998,9 @@ export class WaveAccumulator
   readonly #onForeignWriteRefusal:
     | ((info: { space: MemorySpace; actionId?: string }) => void)
     | undefined;
+  readonly #spaceAccessAuthority:
+    | ((change: ServedAclChange) => Promise<ServedAclChangeVerdict>)
+    | undefined;
   #contributions: WaveContribution[] = [];
   #assembly: PendingAssembly | undefined;
   #closed = false;
@@ -1069,6 +1129,16 @@ export class WaveAccumulator
     onForeignWriteRefusal?: (
       info: { space: MemorySpace; actionId?: string },
     ) => void;
+
+    /**
+     * The memory server's decision on a served run's access-list change, as
+     * committing it would decide against the store as it stands
+     * (`Server.checkServedAclChange()`), asked when the run's transaction
+     * seals. Without it the seal refuses every transaction carrying one.
+     */
+    spaceAccessAuthority?: (
+      change: ServedAclChange,
+    ) => Promise<ServedAclChangeVerdict>;
   }) {
     this.#space = options.space;
     this.#basisSeq = options.basisSeq;
@@ -1094,6 +1164,7 @@ export class WaveAccumulator
       );
     }
     this.#onForeignWriteRefusal = options.onForeignWriteRefusal;
+    this.#spaceAccessAuthority = options.spaceAccessAuthority;
   }
 
   get space(): MemorySpace {
@@ -1226,6 +1297,10 @@ export class WaveAccumulator
     // keep the wave counted as holding work.
     const pendingAppends = this.#pendingAppendsByTx.get(tx) ?? [];
     this.#txsWithStagedAppends.delete(tx);
+    const spaceAccessChanges = [
+      ...(stagedSpaceAccessChanges.get(inner) ?? new Map()),
+    ].map(([space, changes]) => ({ space, changes }));
+    stagedSpaceAccessChanges.delete(inner);
     const context = waveRunContextOf(tx);
     // seal() runs one tx at a time: sealInto hands spaces back through
     // sealSpaceCommit below, and actions run serially per space
@@ -1297,6 +1372,29 @@ export class WaveAccumulator
     const localAcceptance = requiresWaveAcceptance.has(inner) ||
       (context?.kind === "derivation" && hasPendingWriteElision(tx));
     try {
+      // An access-list change is decided before anything of the run reaches
+      // the overlay. A refusal is deterministic, as the refusal of a write to
+      // the list is, so it fails this run alone, and the entry the run
+      // delivers carries the error (`noteSealFailure()`).
+      if (spaceAccessChanges.length > 0) {
+        const refusal = await this.#refuseSpaceAccessChanges(
+          context,
+          spaceAccessChanges,
+        );
+        if (refusal !== undefined) {
+          logger.warn("access-list-change-refused", () => [
+            `access-list change refused at wave accumulation: action ` +
+            `${context?.actionId ?? "<unstamped>"}: ${refusal}`,
+          ]);
+          return {
+            error: {
+              name: "StorageTransactionAborted",
+              message: refusal,
+              reason: new Error(ACL_DOCUMENT_WRITE_REFUSED),
+            },
+          };
+        }
+      }
       // Closing releases the transaction's activity; write-free publication
       // obligations need its read identities after the storage no-op has closed.
       const localReads = localAcceptance
@@ -1336,7 +1434,7 @@ export class WaveAccumulator
       // silently.
       if (
         assembly.spaces.length === 0 && pendingAppends.length === 0 &&
-        !localAcceptance
+        spaceAccessChanges.length === 0 && !localAcceptance
       ) {
         return result;
       }
@@ -1367,7 +1465,11 @@ export class WaveAccumulator
             "(serving-loop.md §3d, RULED 2026-08-05)",
         );
       }
-      const emptySettlement = assembly.spaces.length === 0 && localAcceptance
+      // A contribution with no replica writes still has its settlement wait
+      // on the wave when it carries a publication obligation or an
+      // access-list change, either of which the wave can withdraw.
+      const emptySettlement = assembly.spaces.length === 0 &&
+          (localAcceptance || spaceAccessChanges.length > 0)
         ? Promise.withResolvers<Result<Unit, StorageTransactionRejected>>()
         : undefined;
       if (emptySettlement !== undefined) {
@@ -1387,6 +1489,7 @@ export class WaveAccumulator
         // Copied: a (refused) post-seal enqueue must not be able to
         // mutate the sealed contribution through the shared array.
         outboundAppends: [...pendingAppends],
+        spaceAccessChanges,
         discoveredScope: assembly.discoveredScope,
         viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
       };
@@ -1424,12 +1527,12 @@ export class WaveAccumulator
    * unreachable in production.
    *
    * `error` is the seal's refusal, when the caller has it. A refusal of a
-   * write to a space's ACL document by a run delivering a durable entry
-   * (one whose context carries its `streamEntry`) notes nothing: the refusal
-   * is deterministic, the scheduler seals it as that entry's error
-   * consequence, and a replay would reach the identical refusal. The same
-   * refusal of an in-process run, which has no entry to carry the error,
-   * requeues its event like any other failed seal.
+   * write to a space's ACL document, or of an access-list change, by a run
+   * delivering a durable entry (one whose context carries its `streamEntry`)
+   * notes nothing: the refusal is deterministic, the scheduler seals it as
+   * that entry's error consequence, and a replay would reach the identical
+   * refusal. The same refusal of an in-process run, which has no entry to
+   * carry the error, requeues its event like any other failed seal.
    */
   noteSealFailure(context: WaveRunContext | undefined, error?: unknown): void {
     if (context?.kind !== "event-handler" || context.eventId === undefined) {
@@ -1597,8 +1700,10 @@ export class WaveAccumulator
     // No run on the served plane writes a space's ACL document, home or
     // foreign, in any memory ACL mode: nothing here checks INV-12's shape or
     // the acting user's level, and the engine-direct commit skips the memory
-    // server's check (09-invariants.md, INV-12). Refusing at the seal fails
-    // only this run; `noteSealFailure()` says what happens to its event.
+    // server's check (09-invariants.md, INV-12). A run changes an access list
+    // only by staging the change (`stageSpaceAccessChanges()`), which the
+    // memory server admits. Refusing at the seal fails only this run;
+    // `noteSealFailure()` says what happens to its event.
     const aclId = aclDocId(space);
     if (native.operations.some((operation) => operation.id === aclId)) {
       const actionId = assembly.context?.actionId;
@@ -2309,6 +2414,45 @@ export class WaveAccumulator
 
     await resolveConflicts();
 
+    // access-list changes FIRST of all (space-access-changes.md): ahead of
+    // every batch carrying a run's writes or appends, so whatever the run
+    // sends lands after the change it made, as on a client. Each surviving
+    // contribution's go in seal order, each space's as one commit. A change
+    // the seal admitted can still be refused here, for a list changed since:
+    // its contribution requeues, and the replay's seal decides it against the
+    // list as it then stands. A change that landed stands whatever the wave
+    // does next, as a foreign provisioning commit does, and a replay of its
+    // event finds nothing left to change.
+    let spaceAccessChangeRefused = false;
+    for (const contribution of this.#contributions) {
+      if (
+        requeued.has(contribution.index) ||
+        droppedWhole.has(contribution.index)
+      ) {
+        continue;
+      }
+      for (const { space, changes } of contribution.spaceAccessChanges) {
+        if (this.#tenureEnded) return this.#abortForLostLease(outcome);
+        const result = await this.#commitSpaceAccessChange(
+          sink,
+          contribution,
+          space,
+          changes,
+        );
+        if (result.error === undefined) continue;
+        logger.warn("access-list-change-commit-refused", () => [
+          `access-list change to ${space} by event ` +
+          `${contribution.context.eventId} refused at the wave commit; ` +
+          "its event requeues",
+          result.error,
+        ]);
+        requeued.add(contribution.index);
+        spaceAccessChangeRefused = true;
+        break;
+      }
+    }
+    if (spaceAccessChangeRefused) await resolveConflicts();
+
     // foreign provisioning commits FIRST (protocol.md §2b)
     //
     // Committed exactly once, before the home commit loop below: a home
@@ -2539,6 +2683,111 @@ export class WaveAccumulator
   //
   // helpers
   //
+
+  /**
+   * Helper for `seal()`, which returns why the wave refuses `changes`, the
+   * access-list changes a transaction staged under the run context `context`,
+   * or `undefined` when the memory server would admit each space's changes
+   * against the store as it stands.
+   */
+  async #refuseSpaceAccessChanges(
+    context: WaveRunContext | undefined,
+    changes: WaveContribution["spaceAccessChanges"],
+  ): Promise<string | undefined> {
+    const authority = this.#spaceAccessAuthority;
+    if (authority === undefined) {
+      return "This wave admits no change to an access list.";
+    }
+    for (const { space, changes: list } of changes) {
+      const served = context === undefined
+        ? undefined
+        : this.#servedAclChangeFor(context, space, list);
+      if (served === undefined) {
+        return "Only a handler run delivering a durable stream entry may " +
+          "change an access list, and only as the actor it acts for.";
+      }
+      const verdict = await authority(served);
+      if ("refused" in verdict) {
+        return `The change to the access list of ${space} was refused: ` +
+          verdict.refused;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns the memory server's form of `changes` to the access list of
+   * `space`, made by the run of `context`, or `undefined` when that run may
+   * not change an access list: when it is not a handler run delivering a
+   * durable stream entry, carries no delegated carriage, or holds a change
+   * made as an actor other than the carried one.
+   */
+  #servedAclChangeFor(
+    context: WaveRunContext,
+    space: MemorySpace,
+    changes: readonly SpaceAccessChange[],
+  ): ServedAclChange | undefined {
+    const carriage = delegatedCarriageOf(context);
+    const { eventId, streamEntry } = context;
+    if (
+      context.kind !== "event-handler" || eventId === undefined ||
+      streamEntry === undefined || carriage === undefined ||
+      changes.some((change) => change.actor !== carriage.acting.user)
+    ) {
+      return undefined;
+    }
+    return {
+      space,
+      actingPrincipal: carriage.acting.user,
+      ...(carriage.acting.session !== undefined
+        ? { actingSession: carriage.acting.session }
+        : {}),
+      capabilityRef: carriage.capabilityRef,
+      sourceEvent: {
+        space: this.#space,
+        sidecarId: streamEntry.sidecarId,
+        eventId,
+      },
+      change: (stored) =>
+        applyAccessListChanges(space, validateStoredAcl(stored), changes),
+    };
+  }
+
+  /**
+   * Helper for `commitWave()`, which commits `contribution`'s `changes` to the
+   * access list of `space` through `sink`.
+   *
+   * @throws Error when `sink` cannot commit an access-list change, which
+   *   only a wave host that wired the seal's check and not the commit makes.
+   */
+  #commitSpaceAccessChange(
+    sink: WaveCommitSink,
+    contribution: WaveContribution,
+    space: MemorySpace,
+    changes: readonly SpaceAccessChange[],
+  ): Promise<Result<{ seq?: number }, WaveCommitRejection>> {
+    if (sink.commitSpaceAccessChange === undefined) {
+      throw new Error(
+        "a contribution carries an access-list change, and the wave's " +
+          "commit sink has no `commitSpaceAccessChange()` to commit it with",
+      );
+    }
+    const served = this.#servedAclChangeFor(
+      contribution.context,
+      space,
+      changes,
+    );
+    if (served === undefined) {
+      return Promise.resolve({
+        error: {
+          name: "AclDocumentWriteRefused",
+          message: `the run that changed the access list of ${space} may ` +
+            "not change one",
+        },
+      });
+    }
+    return sink.commitSpaceAccessChange(served);
+  }
 
   #homeSealed(
     contribution: WaveContribution,

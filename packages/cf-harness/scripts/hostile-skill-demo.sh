@@ -50,7 +50,9 @@
 # environment and never echoed, logged, or copied.
 #
 # Requires: docker with the runsc-cfc runtime, network (GitHub + skills.sh), a
-# running toolshed, and the pinned Deno on PATH.
+# running toolshed, and the pinned Deno on PATH. The run names Docker as its
+# sandbox runtime, which a Mac does not default to, unless the environment
+# already names one in CF_HARNESS_SANDBOX_RUNTIME.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # packages/cf-harness
@@ -79,8 +81,12 @@ ARTIFACT_ROOT="${ARTIFACT_ROOT:-$here/.cf-harness-hostile-demo}"
 WORKSPACE="${WORKSPACE:-$ARTIFACT_ROOT/workspace}"
 MAX_TURNS="${MAX_TURNS:-40}"
 
+# The sidecar directories below are the Docker driver's, so the run names that
+# driver rather than taking its platform's default.
+: "${CF_HARNESS_SANDBOX_RUNTIME:=docker}"
 : "${CF_HARNESS_RUNSC_CFC_RESULT_DIR:=$HOME/.local/share/runsc-cfc/sidecars/results}"
 : "${CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR:=$HOME/.local/share/runsc-cfc/sidecars/invocation-context}"
+export CF_HARNESS_SANDBOX_RUNTIME
 export CF_HARNESS_RUNSC_CFC_RESULT_DIR CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR
 
 mkdir -p "$ARTIFACT_ROOT" "$WORKSPACE"
@@ -183,6 +189,7 @@ echo "acquire id:    $ACQUIRE_SKILL_ID"
 echo "acquired pin:  $ACQUIRE_SKILL_ID@$ACQUIRE_COMMIT"
 echo "allowed:       $ACQUIRE_SKILL_SCRIPT (run_skill_script at that pin)"
 echo "posture:       max-enforcement / enforce-strict / flow-labels persist"
+echo "sandbox:       $CF_HARNESS_SANDBOX_RUNTIME (CF_HARNESS_SANDBOX_RUNTIME)"
 echo
 
 set +e

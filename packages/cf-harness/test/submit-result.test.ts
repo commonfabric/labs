@@ -12,11 +12,8 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 
-import {
-  createCfHarnessCliCapabilities,
-  parseCfHarnessCliArgs,
-  runCfHarnessCli,
-} from "../src/cli.ts";
+import { createCfHarnessCliCapabilities } from "../src/cli.ts";
+import { parseCfHarnessCliArgs, runCfHarnessCli } from "./support/on-linux.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";

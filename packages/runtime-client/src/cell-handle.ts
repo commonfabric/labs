@@ -13,6 +13,7 @@ import {
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { DID } from "@commonfabric/identity";
 import { type CfcCellLinkRefPayload } from "@commonfabric/runner/cfc";
+import type { NativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   cfcLabelViewsEqual,
   rebaseCfcLabelView,
@@ -111,6 +112,19 @@ export type CellSubscribeOptions = {
    * value it was given, which the worker may now refuse.
    */
   onRefused: (refusal: CellReadRefusal) => void;
+};
+
+/** How a strict send of an event waits on it. */
+export type CellSendOptions = {
+  /**
+   * Whether to wait for the event's handling as well: the outcome of the run
+   * of the stream's handler, which under server execution is the consequence
+   * the served run recorded. The send then rejects, with the reason, when
+   * that run's commit is refused, as it is for a write whose UI contract the
+   * event does not satisfy, and when the run throws or the event is dropped
+   * or refused admission.
+   */
+  awaitHandling?: boolean;
 };
 
 /**
@@ -607,18 +621,75 @@ export class CellHandle<T = unknown> {
     await this.#enqueueOperation(() => this.#send(serialized));
   }
 
-  /** Send a stream event and reject when the runtime refuses it. */
-  async sendStrict(event: T): Promise<void> {
+  /**
+   * Sends `event` to the stream this handle names, and rejects when the
+   * runtime refuses to take it. Resolving confirms only that the event was
+   * delivered to the runtime, on its way to the stream's handler: a write the
+   * handler makes that the runtime refuses, such as one whose UI contract the
+   * event does not satisfy, does not reject it. `options.awaitHandling` waits
+   * for the handling too, and rejects on its refusal.
+   */
+  async sendStrict(event: T, options?: CellSendOptions): Promise<void> {
     const serialized = CellHandle.serialize(event as ClientCellValue);
-    await this.#enqueueOperation(() => this.#send(serialized, true));
+    await this.#enqueueOperation(() =>
+      this.#send(serialized, true, options?.awaitHandling === true)
+    );
   }
 
-  #send(event: FabricValue, propagateFailure = false): Promise<void> {
+  /**
+   * Sends `event` to the stream this handle names as the action `control`
+   * names, taken on a control the host draws itself, bound to that trusted
+   * surface and action. The runtime stamps the event with `native`
+   * provenance for them, replacing any `provenance` field `event` carries,
+   * and marks it renderer-trusted, so that it satisfies the UI contract of a
+   * write gated on that surface and action, such as a `TrustedActionWrite`,
+   * as a reviewed gesture on the pattern's rendered surface does. It is not a
+   * trusted gesture, so it confirms no snapshot share, custody seal, reviewed
+   * intent, or change to an access list. The write is held to every other
+   * check.
+   *
+   * It resolves once the run of the stream's handler has committed, which
+   * under server execution is the consequence the served run recorded, and
+   * rejects with the reason when the runtime refuses the event, when that
+   * run's commit is refused, as it is for a write whose UI contract the event
+   * does not satisfy, and when the run throws or the event is dropped or
+   * refused admission. The surface and action are read once, here.
+   *
+   * This mints trusted events. The host calls it only from the control's
+   * real user-input path, with exactly the values the control displayed and
+   * the surface and action from the control's own definition, never from an
+   * event or a payload; and it keeps it, and the connection carrying it, out
+   * of reach of pattern code, loaded content, automation and agent
+   * interfaces, URL handlers, and restored state.
+   *
+   * @throws If `event` is not a record, or `control` names a blank surface or
+   *   action.
+   */
+  async sendReviewed(event: T, control: NativeUiControl): Promise<void> {
+    const serialized = CellHandle.serialize(event as ClientCellValue);
+    const { surface, action } = control;
+    await this.#enqueueOperation(() =>
+      this.#conn.request<RequestType.CellSendReviewed>({
+        type: RequestType.CellSendReviewed,
+        cell: this.ref(),
+        event: serialized,
+        surface,
+        action,
+      })
+    );
+  }
+
+  #send(
+    event: FabricValue,
+    propagateFailure = false,
+    awaitHandling = false,
+  ): Promise<void> {
     const request = this.#conn.request<RequestType.CellSend>({
       type: RequestType.CellSend,
       cell: this.ref(),
       event,
       ...(propagateFailure && { awaitCommit: true }),
+      ...(awaitHandling && { awaitHandling: true }),
     });
     if (propagateFailure) return request;
     return request.catch((error) => {

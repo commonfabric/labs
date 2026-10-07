@@ -123,7 +123,8 @@ Each stream is a one-way, asynchronous request to the manager. Sending an event
 finishes when the event is accepted, not when it takes effect, and returns no
 value. So every event carries a `requestId` its sender chooses, and the manager
 records the outcome under that id in `requests`: `pending`, then `done` or
-`refused`. A sender watches for it there.
+`refused`. A sender watches for it there. An event a stream does not admit, by
+the rules below, is not a request, and records no outcome.
 
 Each stream below is written as a call, with its event's keys as the parameters:
 `openDirect(requestId: string, counterpart: string)` sends
@@ -180,7 +181,7 @@ conversation from splitting.
 - `members: string[]` — The DIDs of the people to admit besides this user,
   each a principal's. Duplicates, and this user's own DID, are ignored. It may
   be empty, which creates a group room of one, and people can be added later
-  through the space's own tools.
+  from the room's add control.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 - `joinableByLink?: boolean` — Whether the room admits anyone who has its

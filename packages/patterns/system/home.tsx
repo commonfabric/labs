@@ -48,6 +48,7 @@ import {
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
+  type RetainedPrivateInboxes,
 } from "./private-inbox.tsx";
 
 // Types from favorites-manager.tsx
@@ -115,13 +116,19 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
-  // The user's private inbox, where others deliver offers to them: the one a
-  // profile already pointed at when `ensurePrivateInbox` first ran, if the host
-  // vetted it, or, when no profile advertises an inbox, one it created. Each of
-  // their profiles that points at no inbox is pointed here; one that points at
-  // another inbox keeps it. Absent until `ensurePrivateInbox` runs, and while a
-  // profile advertises an inbox that failed vetting.
+  // The user's private inbox, where others deliver offers to them: the one the
+  // deciding profile points at, if the host vetted it, or, when no profile
+  // advertises an inbox, one it created. The deciding profile is the first, in
+  // the order `#profile` answers in, that points at an inbox. Home keeps the
+  // inbox it holds while that profile points at it, and while no profile
+  // points at an inbox. Each of their profiles that points at no inbox is
+  // pointed here; one that points at another inbox keeps it. Absent until
+  // `ensurePrivateInbox` runs, and while Home holds none and the advertised
+  // inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
+  // The inboxes `privateInbox` held before, in the order Home gave them up, so
+  // that what senders delivered to them stays readable.
+  retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
     SharedSpaceRegistration,
@@ -132,10 +139,14 @@ export type HomeOutput = {
     SharedSpaceMembershipResult
   >;
   createProfile: Stream<CreateProfileEvent>;
-  // Gives Home a private inbox if it holds none, adopting the one the host
-  // vetted from a profile's pointer, or creating one when no profile points at
-  // an inbox, and points every profile that points at no inbox at it. The host
-  // sends it once per runtime worker, the first time the worker brings up Home.
+  // Gives Home the private inbox the deciding profile advertises: it adopts the
+  // one the host vetted and names, with that profile, when the profile is in
+  // Home's list and still points at it, or creates one when Home holds none
+  // and no profile points at an inbox, and points every profile that points at
+  // no inbox at Home's.
+  // The host sends it the first time a runtime worker brings up Home, and
+  // again at that worker's next bring-up if the ensure failed, so Home adopts
+  // again only then.
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
@@ -327,6 +338,10 @@ const Home = pattern(
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
+    // The inboxes Home held before, where `ensurePrivateInbox` moves the one
+    // Home holds when it adopts another.
+    const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
+      .for("retainedPrivateInboxes");
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
     // create a profile. The actual create UI lives in the profile picker below.
@@ -351,6 +366,7 @@ const Home = pattern(
     const chatManager = FabriChatManager({});
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
+      retainedPrivateInboxes,
       profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({
         privateInbox,
@@ -493,6 +509,7 @@ const Home = pattern(
       agentQueue,
       chatManager,
       privateInbox,
+      retainedPrivateInboxes,
 
       sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
 

@@ -4,6 +4,7 @@ import type { HarnessRunManifest } from "./contracts/run-manifest.ts";
 import { ProcessTimeoutError } from "./sandbox/process-runner.ts";
 import type {
   SandboxRuntime,
+  SandboxRuntimeChoice,
   SandboxRuntimeDescription,
   SandboxRuntimeMountDescription,
   SandboxRuntimeMountKind,
@@ -468,7 +469,12 @@ const createCfcCapabilitySnapshot = (
   options: CollectHarnessCapabilitySnapshotOptions,
 ): HarnessCfcCapabilitySnapshot => {
   const mode = options.cfcEnforcementMode ?? "enforce-explicit";
-  const sandboxDescription = sandbox.describe();
+  const sandboxDescription: SandboxRuntimeDescription = {
+    ...sandbox.describe(),
+    ...(options.sandboxRuntimeChoice !== undefined
+      ? { selection: options.sandboxRuntimeChoice }
+      : {}),
+  };
   return {
     enforcementMode: mode,
     absenceBehavior: cfcAbsenceBehaviorForMode(mode),
@@ -500,6 +506,9 @@ export interface CollectHarnessCapabilitySnapshotOptions {
   runManifestPath?: string;
   modelProvider?: HarnessModelProviderId;
   gatewayAuthMode?: "bearer" | "none";
+
+  /** How the run's sandbox runtime was selected, recorded in its description. */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
 }
 
 export const collectHarnessCapabilitySnapshot = async (

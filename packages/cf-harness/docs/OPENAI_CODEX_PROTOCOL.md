@@ -66,6 +66,14 @@ expose token material, account identifiers, expiry, or raw responses.
   `include: ["reasoning.encrypted_content"]`, `tool_choice: "auto"`, and
   `parallel_tool_calls: true`; text verbosity is `low` and function schemas are
   passed through unchanged with `strict: null`
+- Every request asks for a readable summary of the model's reasoning,
+  `reasoning.summary: "auto"`, beside `reasoning.effort` when the run names one.
+- Three of these fields depend on capabilities that Codex's model list states
+  per model: `supports_reasoning_summary_parameter`, `support_verbosity`, and
+  `supports_parallel_tool_calls`. Every model in the list that OpenAI's
+  open-source Codex client bundles sets all three to `true`, and the first
+  defaults to `true` when absent. This client does not read the flags; it sends
+  all three fields to every model.
 - Optional reasoning experiments pass `reasoning.effort`. The ChatGPT/Codex
   backend rejects the API `prompt_cache_options` field, so this provider uses
   implicit prompt caching with the stable affinity key; cache-mode controls and

@@ -6,6 +6,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 
 import { readConsoleTurnResult } from "../../console/turn-result.ts";
 import {
@@ -575,6 +576,50 @@ describe("console/turn-result", () => {
       expect(result?.revealed).toEqual({
         [token]: "https://shop.example/item/7",
       });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
+  it("returns no string for a return referent whose label does not fit the console's display", async () => {
+    const artifactRoot = await Deno.makeTempDir({
+      prefix: "cf-harness-console-result-",
+    });
+    try {
+      const { table, token } = await mintReferentHandle(
+        createHarnessHandleTable("turn-with-unfit-referent"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "https://shop.example/item/7",
+          label: {
+            confidentiality: [{
+              type: CFC_ATOM_TYPE.Expires,
+              timestamp: 9,
+            }],
+          },
+          labelSource: "child",
+        },
+      );
+      await writeTranscript(artifactRoot, "turn-with-unfit-referent", [
+        { role: "user", content: "find the item" },
+        { role: "assistant", content: `Found it at ${token}.` },
+      ]);
+      await Deno.writeTextFile(
+        join(artifactRoot, "turn-with-unfit-referent", "run-state.json"),
+        JSON.stringify({ handleTable: table }),
+      );
+
+      const result = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
+        artifactRoot,
+        turnId: "turn-with-unfit-referent",
+        spaceName: "console-test",
+      });
+
+      expect(result?.finalText).toBe(`Found it at ${token}.`);
+      expect(result?.revealed).toBeUndefined();
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }

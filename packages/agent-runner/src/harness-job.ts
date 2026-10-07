@@ -20,7 +20,9 @@ import {
   type CfHarnessStructuredResultValidation,
   runCfHarnessCli,
   type RunCfHarnessCliDependencies,
+  selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
@@ -80,6 +82,13 @@ export interface HarnessJobSpec {
   /** The tools the job may use; `submit_result` is always added. */
   tools: readonly string[];
 
+  /**
+   * The subagent profiles `delegate_task` may spawn; none when absent. A job
+   * that browses through a host names `browser` here and `delegate_task` in
+   * its tools.
+   */
+  subagentProfiles?: readonly string[];
+
   /** Model name passed to `cf-harness`. */
   model?: string;
 
@@ -120,6 +129,9 @@ export interface HarnessJobOptions {
 
   /** The harness's own seams; `createPromptLoop` replaces the model loop. */
   harnessDeps?: RunCfHarnessCliDependencies;
+
+  /** The client hosting the job's browser, for a job that declared one. */
+  browserHost?: HarnessBrowserHost;
 
   /** Operator-facing lines the harness prints. */
   report?: (message: string) => void;
@@ -221,8 +233,30 @@ const argvOf = (
   ...[...spec.tools, "submit_result"].flatMap(
     (tool) => ["--allow-tool", tool],
   ),
+  ...(spec.subagentProfiles ?? []).flatMap(
+    (profile) => ["--allow-subagent-profile", profile],
+  ),
   ...(spec.model !== undefined ? ["--model", spec.model] : []),
 ];
+
+/**
+ * What every job is started with that decides its sandbox runtime. The
+ * argument list is written here, so whoever runs a job selects the runtime
+ * through the environment and never by a flag.
+ */
+const SANDBOX_SELECTION = { sandboxSelectionFlags: false };
+
+/**
+ * Derives the sandbox runtime the harness would give a job run with
+ * `harnessDeps`, without starting one. A runner calls this as it starts, so
+ * that a selection the harness would refuse every job for refuses the runner
+ * instead.
+ *
+ * @throws HarnessControlError where the harness would refuse the job.
+ */
+export const selectHarnessJobSandboxRuntime = (
+  harnessDeps: RunCfHarnessCliDependencies = {},
+) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
 
 /**
  * Runs one job. It ends `completed` with the value the model submitted and
@@ -262,8 +296,12 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
+    ...SANDBOX_SELECTION,
     ...(spec.commandJobId !== undefined
       ? { commandJobId: spec.commandJobId }
+      : {}),
+    ...(options.browserHost !== undefined
+      ? { browserHost: options.browserHost }
       : {}),
     io: {
       stdout: (text) => options.report?.(text.trimEnd()),

@@ -8,6 +8,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 
+import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import type { LocalJobsConfig } from "@commonfabric/agent-runner/local-jobs/service";
 import {
   type AgentRunnerCommandConfig,
@@ -32,6 +33,7 @@ const stubDeps = (
   const deps: AgentRunnerCommandDeps = {
     env: (name) => options.env?.[name],
     loadIdentity: () => Promise.resolve({ did: () => DID }),
+    selectSandboxRuntime: () => Promise.resolve(),
     start: (config) => {
       fabric.push(config);
       if (options.fabricFails) {
@@ -293,6 +295,62 @@ describe("cf agent runner local jobs", () => {
         ValidationError,
       );
       expect(events).toEqual(["local:start", "local:stop"]);
+    });
+
+    describe("with a sandbox runtime the harness would refuse every job for", () => {
+      /**
+       * Makes `deps` select as a Mac with no native runtime set up and no
+       * runtime named does, and returns the home it selects under.
+       */
+      const onMacWithNoStore = async (
+        deps: AgentRunnerCommandDeps,
+      ): Promise<string> => {
+        // By the path the file system has for it: a home reached through a
+        // link is refused for that before its store is looked at.
+        const home = await Deno.realPath(await Deno.makeTempDir());
+        deps.selectSandboxRuntime = () =>
+          selectHarnessJobSandboxRuntime({
+            platform: "darwin",
+            env: { HOME: home },
+          });
+        return home;
+      };
+
+      for (
+        const [lanes, argv] of [
+          ["local jobs alone", [...LOCAL, "--local-only"]],
+          ["local jobs and the Fabric lane", [
+            ...LOCAL,
+            "--identity",
+            "/keys/me.key",
+            "--api-url",
+            "http://localhost:8100",
+          ]],
+        ] as const
+      ) {
+        it(`refuses to start, and starts neither lane, for ${lanes}`, async () => {
+          const { deps, events } = stubDeps();
+          const home = await onMacWithNoStore(deps);
+
+          try {
+            const refusal = await run(deps, ["runner", ...argv]).then(
+              () => undefined,
+              (error: unknown) => error,
+            );
+
+            expect(refusal).toBeInstanceOf(ValidationError);
+            expect(refusal).toMatchObject({
+              exitCode: 1,
+              message: expect.stringMatching(
+                /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and it is not set up at `.*`: .*\. Set it up there, or select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`\.$/,
+              ),
+            });
+            expect(events).toEqual([]);
+          } finally {
+            await Deno.remove(home, { recursive: true });
+          }
+        });
+      }
     });
 
     it("reports a Fabric start failure that is not an `Error` by its text", async () => {

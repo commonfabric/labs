@@ -216,6 +216,12 @@ export {
   SYSTEM_PATTERN_SOURCE_SCHEME,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
+export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
+export {
+  orderProfileCandidates,
+  profileCellIsValid,
+  type ProfileOrder,
+} from "./profile-order.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,

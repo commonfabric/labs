@@ -7,8 +7,17 @@
  */
 
 import { join } from "@std/path";
+import { clauseAlternatives, type IFCLabel } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessRunState } from "../src/run-state.ts";
-import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
+import type {
+  HarnessHandleReferent,
+  HarnessHandleTable,
+} from "../src/contracts/handle-table.ts";
+import {
+  type ConsoleDisplayFit,
+  publicConsoleDisplay,
+} from "./display-ceiling.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import {
   isHarnessTranscriptOmissions,
@@ -111,6 +120,11 @@ const cellLabelIndex = async (
 /** Everything `/api/runs/<run-id>` answers with. */
 export interface ConsoleRunDetail {
   summary: ConsoleRunSummary;
+
+  /**
+   * The run's state, without the values its return referents stand for, which
+   * reach the owner only through `revealed`.
+   */
   runState: HarnessRunState;
   transcript: readonly HarnessTranscriptMessage[];
   lens: ConsoleRunLens;
@@ -125,6 +139,22 @@ export interface ConsoleRunDetail {
    * that cell would otherwise read as coming from nowhere.
    */
   handles: readonly ConsoleHandle[];
+
+  /**
+   * The values another agent found that this run holds as return referents,
+   * by token, for showing to the owner and never to a model. A value is here
+   * when it is a string whose label fits what the console may show.
+   */
+  revealed: Readonly<Record<string, string>>;
+
+  /**
+   * The sites each value in `revealed` came from, by token, as the hosts of
+   * the web pages its label says it was read from.
+   */
+  sites: Readonly<Record<string, readonly string[]>>;
+
+  /** The tokens of the run's return referents the console may not show. */
+  hidden: readonly string[];
 
   /**
    * Whether the run's space was read for per-cell labels, and what it said.
@@ -251,10 +281,67 @@ export const listConsoleRuns = async (
   return sortConsoleRuns(summaries);
 };
 
+/** `runState` with its handle table holding no return referents. */
+const withoutReferents = (runState: HarnessRunState): HarnessRunState =>
+  runState.handleTable === undefined ? runState : {
+    ...runState,
+    handleTable: {
+      ...runState.handleTable,
+      referents: runState.handleTable.referents?.filter((referent) =>
+        referent.kind !== "return"
+      ),
+    },
+  };
+
+/**
+ * The hosts of the web pages `label` says its value was read from: the
+ * sources of the caveats a page's content carries.
+ */
+const labelSites = (label: IFCLabel): readonly string[] => {
+  const sites = new Set<string>();
+  const atoms = (label.confidentiality ?? []).flatMap(clauseAlternatives);
+  for (const atom of atoms) {
+    if (!isObjectNotArray(atom) || !isObjectNotArray(atom.source)) continue;
+    const { class: kind, subject } = atom.source;
+    if (kind !== "WebPage" || typeof subject !== "string") continue;
+    try {
+      sites.add(new URL(subject).host);
+    } catch {
+      // A page whose origin could not be read names no site.
+    }
+  }
+  return [...sites];
+};
+
+/**
+ * The return referents of a run as the console may show them: each string
+ * whose label fits `display` by its token, with the sites it came from, and
+ * the token of every other.
+ */
+const referentDisplay = (
+  referents: readonly HarnessHandleReferent[],
+  display: ConsoleDisplayFit,
+): Pick<ConsoleRunDetail, "revealed" | "sites" | "hidden"> => {
+  const revealed: Record<string, string> = {};
+  const sites: Record<string, readonly string[]> = {};
+  const hidden: string[] = [];
+  for (const referent of referents) {
+    if (referent.kind !== "return") continue;
+    if (typeof referent.value === "string" && display(referent.label)) {
+      revealed[referent.token] = referent.value;
+      sites[referent.token] = labelSites(referent.label);
+    } else {
+      hidden.push(referent.token);
+    }
+  }
+  return { revealed, sites, hidden };
+};
+
 /** One run read whole, or `undefined` when the artifact root holds no such run. */
 export const readConsoleRun = async (
   artifactRoot: string,
   runId: string,
+  display: ConsoleDisplayFit = publicConsoleDisplay,
 ): Promise<ConsoleRunDetail | undefined> => {
   const root = runRoot(artifactRoot, runId);
   if (root === undefined) {
@@ -316,11 +403,12 @@ export const readConsoleRun = async (
   };
   return {
     summary: summarizeConsoleRun(runState, transcript),
-    runState,
+    runState: withoutReferents(runState),
     transcript,
     lens: consoleRunLens(transcript),
     steps,
     handles: consoleRunHandles(steps, table, labels),
+    ...referentDisplay(runState.handleTable?.referents ?? [], display),
     cellLabels: consoleCellLabelsSummary(labels),
     artifactNames: await namesPresent(root, RUN_ARTIFACT_NAMES),
     toolOutputNames: outputNames,

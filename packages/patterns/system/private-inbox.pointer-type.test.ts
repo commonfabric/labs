@@ -5,10 +5,11 @@
  * another space: its sends are then refused, and, when the event drain
  * delivers it, so is its record that it handled the event. Read as a typed
  * link, the pointer joins no confidentiality. Every reader, the host vetting
- * the inbox a profile advertises, Home's ensure step, both the profiles'
- * pointers and the inbox the host names for it to adopt, Home's pointing step,
- * the seed step that points a profile once it is created, and a sender reading
- * through `profile-home.tsx`'s own types, therefore reads it as a typed link.
+ * the inbox a profile advertises, Home's ensure step, the profiles' pointers,
+ * the inbox the host names for it to adopt, the inbox Home holds and the ones
+ * it retains, Home's pointing step, the seed step that points a profile once
+ * it is created, and a sender reading through `profile-home.tsx`'s own types,
+ * therefore reads it as a typed link.
  *
  * The check is made by the type checker. A pointee that is `unknown` or `any`
  * fails to compile here under `deno task check`, and so does one naming a
@@ -27,7 +28,9 @@ import type {
   advertisedInbox,
   EnsurePrivateInboxEvent,
   PointTarget,
+  PrivateInboxHolder,
   PrivateInboxOutput,
+  RetainedPrivateInboxes,
 } from "./private-inbox.tsx";
 import type { SeedProfileTarget } from "./profile-create.tsx";
 import type { ProfileInbox } from "./profile-home.tsx";
@@ -60,6 +63,14 @@ const adoptedInboxReachesOnlyTheName: ReachesOnlyTheName<
   PointeeOf<{ piece?: EnsurePrivateInboxEvent["adopt"] }>
 > = true;
 
+const heldInboxReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<PrivateInboxHolder>
+> = true;
+
+const retainedInboxReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<{ piece?: RetainedPrivateInboxes[number] }>
+> = true;
+
 /** The pointee the host reads an advertised inbox's link as. */
 type HostPointee = Schema<typeof inboxPieceLinkSchema> extends Cell<infer T> ? T
   : Schema<typeof inboxPieceLinkSchema>;
@@ -89,6 +100,14 @@ describe("private-inbox pointer type", () => {
 
   it("types the inbox the ensure step adopts as a link naming only the inbox's name", () => {
     expect(adoptedInboxReachesOnlyTheName).toBe(true);
+  });
+
+  it("types the inbox Home holds as a link naming only the inbox's name", () => {
+    expect(heldInboxReachesOnlyTheName).toBe(true);
+  });
+
+  it("types each inbox Home retains as a link naming only the inbox's name", () => {
+    expect(retainedInboxReachesOnlyTheName).toBe(true);
   });
 
   it("types the pointing step's pointer as a link naming only the inbox's name", () => {

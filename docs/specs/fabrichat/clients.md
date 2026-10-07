@@ -108,6 +108,7 @@ gesture on the reviewed surface its policy names:
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
+| add a member | room's rendering | `addMember` | `ChatAddMemberSurface` |
 
 A client sends to the room's own streams, never through a placement or an
 adapter.

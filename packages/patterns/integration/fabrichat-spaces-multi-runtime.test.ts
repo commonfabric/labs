@@ -32,6 +32,17 @@ const PROGRAM_PATH = join(
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
 
+// The reviewed action a start is admitted from, as
+// `../fabrichat/schemas.tsx` names it.
+const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
+
+// The reviewed action a member is added from, as `../fabrichat/schemas.tsx`
+// names it.
+const ADD_MEMBER_ACTION = {
+  surface: "ChatAddMemberSurface",
+  action: "ChatAddMember",
+};
+
 describe("fabrichat spaces across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let starter: MultiRuntimeSession;
@@ -58,14 +69,15 @@ describe("fabrichat spaces across runtimes", () => {
   });
 
   /**
-   * Has the starter send `event` on the manager's `stream`, checks that the
-   * request was done, and returns the address of the room it produced.
+   * Has the starter send `event` on the manager's `stream` from its reviewed
+   * start control, checks that the request was done, and returns the address
+   * of the room it produced.
    */
   async function start(
     stream: "openDirect" | "createGroup",
     event: Record<string, FabricValue> & { requestId: string },
   ): Promise<PieceAddress> {
-    await starter.send(stream, event);
+    await starter.send(stream, event, START_ACTION);
     await harness.settle();
     expect(await starter.read(["requests", event.requestId, "status"]))
       .toBe("done");
@@ -135,6 +147,28 @@ describe("fabrichat spaces across runtimes", () => {
 
     expect(await stranger.read(["about", "title"], { piece: room }))
       .toBe("Open team");
+  });
+
+  it("lets a group room's member add a stranger from the room's add control", async () => {
+    const room = await start("createGroup", {
+      requestId: "g-add",
+      title: "Growing team",
+      members: [member.identity.did()],
+    });
+    const adding = { target: { value: stranger.identity.did() } };
+
+    // Sent as anything but the person's gesture, the add admits no one.
+    await member.send("addMember", adding, undefined, { piece: room });
+    await harness.settle();
+    await expect(stranger.read(["about", "title"], { piece: room })).rejects
+      .toThrow(`lacks READ on space ${room.space}`);
+
+    // A member admitted at creation holds OWNER, so their own add, from the
+    // room's control, admits the stranger.
+    await member.send("addMember", adding, ADD_MEMBER_ACTION, { piece: room });
+    await harness.settle();
+    expect(await stranger.read(["about", "title"], { piece: room }))
+      .toBe("Growing team");
   });
 
   it("lets a direct room's counterpart read it, and refuses a stranger", async () => {

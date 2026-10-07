@@ -2,9 +2,10 @@
  * Host-approved profiles for local jobs: the authority a job runs with,
  * chosen by name. A profile says which tools a job may use, which host
  * configurations back them, how many model turns it gets, and the
- * prompt-slot role its task binds as. The host writes the file; a caller
- * names a profile and may only narrow it — fewer tools, fewer turns —
- * never widen it, and never set its role.
+ * prompt-slot role its task binds as, and whether a job may bring a browser
+ * host. The host writes the file; a caller names a profile and may only
+ * narrow it — fewer tools, fewer turns, no browser — never widen it, and
+ * never set its role.
  */
 
 import { isAbsolute } from "@std/path";
@@ -38,6 +39,14 @@ export interface LocalJobProfile {
 
   /** Model name passed to `cf-harness`. */
   model?: string;
+
+  /**
+   * Whether a job may declare a browser host. A job that does browses
+   * through it: the lane adds `delegate_task` and the `browser` subagent
+   * profile to that job alone, so a job without a host never gains them.
+   * The console's operator flag, `--allow-browser-host`, is the same grant.
+   */
+  browserHost?: boolean;
 }
 
 /** The profiles a host file names, by name. */
@@ -47,6 +56,9 @@ export type LocalJobProfiles = ReadonlyMap<string, LocalJobProfile>;
 export interface LocalJobNarrowing {
   tools?: readonly string[];
   maxModelTurns?: number;
+
+  /** The request's browser host declaration, when it made one. */
+  browserHost?: unknown;
 }
 
 const ROLES: readonly PromptSlotRole[] = ["direct-command", "context", "quote"];
@@ -66,6 +78,7 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     loomRetrievalConfig,
     loomCommandsConfig,
     model,
+    browserHost,
   } = record;
   if (
     !Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")
@@ -102,6 +115,9 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   if (model !== undefined && typeof model !== "string") {
     fail("`model` must be a string");
   }
+  if (browserHost !== undefined && typeof browserHost !== "boolean") {
+    fail("`browserHost` must be true or false");
+  }
   return {
     tools: [...(tools as string[])],
     maxModelTurns: maxModelTurns as number,
@@ -114,6 +130,7 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
       ? { loomCommandsConfig: loomCommandsConfig as string }
       : {}),
     ...(model !== undefined ? { model: model as string } : {}),
+    ...(browserHost === true ? { browserHost: true } : {}),
   };
 };
 
@@ -142,14 +159,15 @@ export const readLocalJobProfiles = async (
 
 /**
  * The profile a caller's request runs under: `profile` narrowed to the tools
- * and turns the caller asked for, or the reason the request asks for more
- * than the profile allows.
+ * and turns the caller asked for, and to a browser host only when the
+ * request declared one, or the reason the request asks for more than the
+ * profile allows.
  */
 export const narrowLocalJobProfile = (
   profile: LocalJobProfile,
   narrowing: LocalJobNarrowing,
 ): { profile: LocalJobProfile } | { refusal: string } => {
-  const { tools, maxModelTurns } = narrowing;
+  const { tools, maxModelTurns, browserHost } = narrowing;
   const beyond = tools?.filter((tool) => !profile.tools.includes(tool)) ?? [];
   if (beyond.length > 0) {
     return {
@@ -164,11 +182,16 @@ export const narrowLocalJobProfile = (
         `The profile allows at most ${profile.maxModelTurns} model turns.`,
     };
   }
+  if (browserHost !== undefined && profile.browserHost !== true) {
+    return { refusal: "The profile does not admit a browser host." };
+  }
+  const { browserHost: _admitted, ...rest } = profile;
   return {
     profile: {
-      ...profile,
+      ...rest,
       ...(tools !== undefined ? { tools: [...tools] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
+      ...(browserHost !== undefined ? { browserHost: true } : {}),
     },
   };
 };

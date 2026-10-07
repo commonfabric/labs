@@ -129,7 +129,7 @@ provide, the document says so, under the heading "Prerequisites".
 - **Member.** A principal the room space's access list admits. A member with
   READ reads only the newest messages; WRITE or OWNER is needed to act. Who is
   a member changes through the space's own tools, such as the CLI's `cf acl`,
-  never through the room.
+  and, for a room in a space of its own, through the room's add control.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
@@ -268,9 +268,9 @@ in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
 home pattern holds a manager, and `#chatManager` resolves to it (see
 [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)), but
 home renders it nowhere of its own: a page shows it at its path in home's
-result, with the user's rooms, the room chosen among them, the controls that
-start a direct or a group chat, and, when the session's latest start was
-refused, the reason. A refusal of text that isn't a principal
+result, with the user's rooms, each a link that opens the room as a page of its
+own, the controls that start a direct or a group chat, and, when the session's
+latest start was refused, the reason. A refusal of text that isn't a principal
 also shows the text. Where the runtime lacks a prerequisite, the patterns depart
 from this design, as below.
 
@@ -278,9 +278,11 @@ from this design, as below.
 
 - **Membership is set at creation, then the space's.** The manager creates a
   space for a conversation with `FabriChatRoom.inSpace()`, naming grants: the
-  creator OWNER, each other member WRITE, and everyone WRITE for a group made
-  joinable by its link. After that, who is in it changes only
-  through the space's own tools. The room's participants come from the space's
+  creator and each other member OWNER, and everyone WRITE for a group made
+  joinable by its link. After that, who is in it changes through the space's
+  own tools, and through the room's add control, from which any OWNER admits
+  someone as OWNER with `grantSpaceAccess()`. That control needs a DOM gesture,
+  so a host drawing a room natively can't offer it. The room's participants come from the space's
   default pattern, which a host creates the first time someone opens the
   space, so until then they are only the room's authors.
 - **Principals.** A handler learns the principal it acts for
@@ -310,16 +312,23 @@ from this design, as below.
   times, activity and its numbering, and each session's windows) has a write
   policy listing the handlers that write it (`WritePolicyAnyOf`), so no other
   code can write it, even code a member runs in the room's space.
-- **Starts are not gesture-checked.** `openDirect` and `createGroup` are sent
-  from controls marked `ChatStartSurface`, but no write policy requires the
-  gesture, since the manager's records are also written by acts with none.
-  One handler, `commitManager`, writes the manager's records, and each of its
-  streams is a binding of it.
+- **A start is checked where it creates a room.** `openDirect` and
+  `createGroup` are performed by a handler of their own, `commitStart`, and the
+  record a manager-created room keeps about itself names that handler and
+  `ChatStart` on `ChatStartSurface` as its only writer, so a start that creates
+  a room commits only from that reviewed gesture; without it, its run is
+  refused whole, and records no outcome. A start that creates none,
+  `openDirect` finding a direct room already shared or a start that is
+  refused, commits without one, and grants no one access. The manager's other
+  acts are performed by `commitManager`, with no gesture. A participant's chip
+  in a room sends its click to the viewer's manager's `openDirect` itself,
+  naming the participant's principal as `target.dataset.counterpart`, since a
+  reviewed gesture does not carry across a `send` from another handler.
 - **Labels without a gesture.** Messages and reactions are labeled
-  `authored-by` under a reviewed gesture, as the design says. A
-  `recentActivity` entry and `about.record` are labeled too, by writers that
-  name no gesture (each handler appending an entry, and the manager's
-  `commitManager`), so their label says whose run wrote them, not that the
+  `authored-by` under a reviewed gesture, as the design says, and so is
+  `about.record`, under the start that created the room. A `recentActivity`
+  entry is labeled too, by a writer that names no gesture (each handler
+  appending an entry), so its label says whose run wrote it, not that the
   person made a gesture. `about` is the room's own view, with its `policy`, a
   document the room writes when it starts, and `about.record` links the stored
   record.

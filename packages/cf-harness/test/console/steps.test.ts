@@ -11,6 +11,7 @@ import type { HarnessHandleTable } from "../../src/contracts/handle-table.ts";
 import type { HarnessCfcInvocationContext } from "../../src/contracts/cfc-invocation-context.ts";
 import type { HarnessPolicyDecisionRecord } from "../../src/contracts/policy-trace.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
+import { createCliPromptSlotBinding } from "../../src/contracts/prompt-slot.ts";
 import {
   HARNESS_CELL_LABELS_TYPE,
   type HarnessCellLabelRecord,
@@ -688,6 +689,41 @@ describe("console/steps CFC and disclosure", () => {
     expect(steps[0].policy?.decision).toBe("allowed");
     expect(steps[0].policy?.effectClass).toBe("side-effect");
     expect(steps[0].status).toBe("ok");
+  });
+
+  it("carries the role and surface of the prompt slot a decision was made on", () => {
+    const decision = {
+      type: "cf-harness.policy-decision" as const,
+      sequence: 1,
+      runId: "r",
+      at: "2026-01-01T00:00:00.000Z",
+      toolActivitySequence: 1,
+      toolCallId: "c1",
+      toolId: "browser",
+      cfcEnforcementMode: "enforce-explicit" as const,
+      decision: "denied" as const,
+      reasonCodes: ["cfc_enforce_explicit_requires_direct_command" as const],
+    };
+    const bound = consoleRunSteps(
+      [call("c1", "browser", {}), result("c1", "browser", { status: "ok" })],
+      [{
+        ...decision,
+        promptSlot: createCliPromptSlotBinding({
+          kernelName: "cf-harness",
+          role: "context",
+        }),
+      }],
+    );
+    const unbound = consoleRunSteps(
+      [call("c1", "browser", {}), result("c1", "browser", { status: "ok" })],
+      [decision],
+    );
+
+    expect(bound[0].policy?.promptSlot).toEqual({
+      role: "context",
+      surface: "cli",
+    });
+    expect(unbound[0].policy?.promptSlot).toBeUndefined();
   });
 
   it("reads a step as denied when a policy event denied its observation", () => {

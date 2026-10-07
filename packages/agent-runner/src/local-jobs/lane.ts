@@ -4,7 +4,10 @@
  * run through `runHarnessJob` with no fabric under its profile's authority,
  * and ended in the store; while it runs, the transcript events the harness
  * persists become `step` events (the tool the job is using) and `command`
- * events (each command the host ran for it).
+ * events (each command the host ran for it). A job that declared a browser
+ * host, under a profile that admits one, browses through it: the lane holds
+ * the job's {@link LocalJobBrowserHost} from the first attach or the run's
+ * start, whichever is first, until the job ends.
  *
  * Nothing here waits on a timer. The lane looks for work when it starts,
  * when a job is enqueued, and when a job ends.
@@ -21,9 +24,11 @@ import {
   type HarnessJobSpec,
   runHarnessJob,
 } from "../harness-job.ts";
+import { LocalJobBrowserHost } from "./browser-host.ts";
 import type { LocalJobProfile, LocalJobProfiles } from "./profiles.ts";
 import { narrowLocalJobProfile } from "./profiles.ts";
 import {
+  LOCAL_JOB_TERMINAL_STATES,
   type LocalJob,
   type LocalJobStore,
   RUNNER_RESTARTED,
@@ -34,6 +39,12 @@ export const LOCAL_JOB_ERROR_MAX_LENGTH = 500;
 
 /** The error code of a job whose profile the host no longer names. */
 export const PROFILE_UNAVAILABLE = "PROFILE_UNAVAILABLE";
+
+/** The subagent profile a job browses through its host with. */
+export const LOCAL_JOB_BROWSER_SUBAGENT_PROFILE = "browser";
+
+/** The tool that spawns it. */
+export const LOCAL_JOB_DELEGATE_TOOL = "delegate_task";
 
 /** What the lane runs with. */
 export interface LocalJobLaneOptions {
@@ -69,7 +80,9 @@ export interface LocalJobLaneOptions {
  * The spec a job runs as: its request's task, framing and schema, under its
  * profile narrowed to what the request asked for. The task binds as the
  * profile's role, never as anything the request says. Screen context and
- * other plain values the caller sends ride in the system prompt as data.
+ * other plain values the caller sends ride in the system prompt as data. A
+ * profile narrowed to a browser host adds the tool and the subagent profile
+ * the browser runs under, for this job alone.
  *
  * SHORTCUT: context reaches the model inside the system prompt, marked as
  * data rather than instructions, because a batch job has one prompt slot and
@@ -99,7 +112,13 @@ export const localJobSpecOf = (
     commandJobId: job.id,
     taskRole: profile.taskRole,
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
-    tools: profile.tools,
+    tools: profile.browserHost === true &&
+        !profile.tools.includes(LOCAL_JOB_DELEGATE_TOOL)
+      ? [...profile.tools, LOCAL_JOB_DELEGATE_TOOL]
+      : profile.tools,
+    ...(profile.browserHost === true
+      ? { subagentProfiles: [LOCAL_JOB_BROWSER_SUBAGENT_PROFILE] }
+      : {}),
     maxModelTurns: profile.maxModelTurns,
     ...(framing.length > 0 ? { instructions: framing.join("\n\n") } : {}),
     ...(model !== undefined ? { model } : {}),
@@ -199,6 +218,7 @@ const argumentsOf = (
 export class LocalJobLane {
   #options: LocalJobLaneOptions;
   #running = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  #hosts = new Map<string, LocalJobBrowserHost>();
   #stopping = false;
 
   /** Constructs an instance; `start` begins its work. */
@@ -235,7 +255,30 @@ export class LocalJobLane {
   cancel(id: string): LocalJob | undefined {
     const job = this.#options.store.requestCancel(id);
     this.#running.get(id)?.abort.abort();
+    // A queued job ends at once, with no run to close its host.
+    if (job !== undefined && LOCAL_JOB_TERMINAL_STATES.has(job.state)) {
+      this.#closeHost(id);
+    }
     return job;
+  }
+
+  /**
+   * The browser host of job `id`, when the job declared one: the live one
+   * while the job has not ended, and a closed one after, whose stream says
+   * so. `undefined` for an unknown job or one that declared no host.
+   */
+  browserHost(id: string): LocalJobBrowserHost | undefined {
+    const held = this.#hosts.get(id);
+    if (held !== undefined) return held;
+    const job = this.#options.store.get(id);
+    if (job?.request.browserHost === undefined) return undefined;
+    const host = new LocalJobBrowserHost();
+    if (LOCAL_JOB_TERMINAL_STATES.has(job.state)) {
+      host.close();
+      return host;
+    }
+    this.#hosts.set(id, host);
+    return host;
   }
 
   /**
@@ -277,35 +320,45 @@ export class LocalJobLane {
         state: "failed",
         errorCode: PROFILE_UNAVAILABLE,
       });
+      this.#closeHost(job.id);
       return;
     }
+    const browserHost = narrowed.profile.browserHost === true
+      ? this.browserHost(job.id)
+      : undefined;
     let result: HarnessJobResult;
+    // The host closes however the run ends, a report that throws included.
     try {
-      result = await (this.#options.runJob ?? runHarnessJob)(
-        localJobSpecOf(job, narrowed.profile, this.#options),
-        {
-          runRoot: join(this.#options.workRoot, job.id),
-          signal,
-          onEvent: (event) => {
-            for (const { kind, body } of localJobEventsOf(event)) {
-              store.report(job.id, kind, body);
-            }
+      try {
+        result = await (this.#options.runJob ?? runHarnessJob)(
+          localJobSpecOf(job, narrowed.profile, this.#options),
+          {
+            runRoot: join(this.#options.workRoot, job.id),
+            signal,
+            ...(browserHost !== undefined ? { browserHost } : {}),
+            onEvent: (event) => {
+              for (const { kind, body } of localJobEventsOf(event)) {
+                store.report(job.id, kind, body);
+              }
+            },
+            ...(this.#options.harnessDeps !== undefined
+              ? { harnessDeps: this.#options.harnessDeps }
+              : {}),
+            ...(this.#options.report !== undefined
+              ? { report: this.#options.report }
+              : {}),
           },
-          ...(this.#options.harnessDeps !== undefined
-            ? { harnessDeps: this.#options.harnessDeps }
-            : {}),
-          ...(this.#options.report !== undefined
-            ? { report: this.#options.report }
-            : {}),
-        },
-      );
-    } catch (error) {
-      this.#options.report?.(
-        `agent runner: local job ${job.id} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
+        );
+      } catch (error) {
+        this.#options.report?.(
+          `agent runner: local job ${job.id} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
+      }
+    } finally {
+      this.#closeHost(job.id);
     }
     // A run the lane's own stop aborted stays `running`, to be ended
     // `interrupted` when the runner next starts.
@@ -320,5 +373,11 @@ export class LocalJobLane {
         ? { report: { ...result.report } as Record<string, unknown> }
         : {}),
     });
+  }
+
+  /** Helper for a job's end, which closes and drops its browser host. */
+  #closeHost(id: string): void {
+    this.#hosts.get(id)?.close();
+    this.#hosts.delete(id);
   }
 }

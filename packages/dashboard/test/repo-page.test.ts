@@ -458,6 +458,36 @@ describe("repo-page", () => {
       expect(html).not.toContain(">change 3</a>");
     });
 
+    it("stars each charted and listed run whose commit the green branch is or was at, solid only for the commit it is at now", async () => {
+      const runs = [
+        run({ id: 1, head_sha: "1".repeat(40), green: { branch: "main-green", current: true } }),
+        run({ id: 2, head_sha: "2".repeat(40), green: { branch: "main-green", current: false } }),
+        run({ id: 3, head_sha: "3".repeat(40), conclusion: "failure", green: { branch: "main-green", current: false } }),
+        run({ id: 4, head_sha: "4".repeat(40) }),
+      ];
+      const { html } = await page(
+        board([TRUST], {}, new Map([[runSourceKey(LABS_MAIN), { runs }]])),
+        collection(),
+        "?name=labs",
+      );
+      const solid = `<span class="green-star" role="img" aria-label="main-green is at this commit" title="main-green is at this commit">★</span>`;
+      const hollow = `<span class="green-star" role="img" aria-label="main-green was at this commit" title="main-green was at this commit">☆</span>`;
+      // Each marked run has a bar, and the three marked runs are the three
+      // newest, which have a row each as well.
+      expect(occurrences(html, solid)).toBe(2);
+      expect(occurrences(html, hollow)).toBe(4);
+      expect(html).toContain(`<span class="what">${solid}<a href=`);
+      expect(html).toContain(`<span class="what">${hollow}<a href=`);
+      expect(html).toMatch(
+        /<a class="bar green"[^>]* title="[^"]* · main-green is at this commit"><span class="green-star"[^>]*>★<\/span><\/a>/,
+      );
+      expect(html).toMatch(
+        /<a class="bar red"[^>]* title="[^"]* · main-green was at this commit"><span class="green-star"[^>]*>☆<\/span><\/a>/,
+      );
+      // The unmarked run's bar is empty, and says nothing of the branch.
+      expect(html).toMatch(/<a class="bar green"[^>]* title="[^"]* ago"><\/a>/);
+    });
+
     it("links a workflow's run in progress, named for a screen reader", async () => {
       const { html } = await page(
         board([]),

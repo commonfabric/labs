@@ -43,7 +43,7 @@ import {
   windowCount,
   windowSlice,
 } from "./logic.ts";
-import type { commitManager } from "./manager.tsx";
+import type { commitStart } from "./manager.tsx";
 import {
   type AboutRecord,
   CHAT_DELETE_ACTION,
@@ -56,6 +56,8 @@ import {
   CHAT_REACT_SURFACE,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
   CHAT_UNREACT_ACTION,
   type ChatDeletedBody,
   type ChatMessageVersion,
@@ -369,12 +371,18 @@ export type WindowsCell = Writable<WindowsValue>;
 
 /**
  * What a room created by a manager says about itself: written once, by the
- * manager's `commitManager` as it creates the room, and labeled `authored-by`
- * the room's creator, which `principalOf(about, "authored-by")` reads. It has
- * no default, which something other than its writer would write.
+ * manager's `commitStart` as it creates the room, from a reviewed `ChatStart`
+ * on `ChatStartSurface`, and labeled `authored-by` the room's creator, which
+ * `principalOf(about, "authored-by")` reads. It has no default, which
+ * something other than its writer would write.
  */
 export type StoredAbout = AuthoredByCurrentUser<
-  WriteAuthorizedBy<AboutRecord, typeof commitManager>
+  TrustedActionWrite<
+    AboutRecord,
+    typeof commitStart,
+    typeof CHAT_START_ACTION,
+    typeof CHAT_START_SURFACE
+  >
 >;
 
 //

@@ -87,7 +87,9 @@ The vocabulary:
    `packages/html/src/worker/reconciler.ts` and
    `packages/html/src/worker/display-fit.ts`, to the harness's CFC enforcement
    in `packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
-   `sandbox/runsc-cfc-result.ts`), or to a `docs/specs/cfc-*.md` document
+   `sandbox/runsc-cfc-result.ts`), to the harness console's display ceiling in
+   `packages/cf-harness/console/display-ceiling.ts`, or to a
+   `docs/specs/cfc-*.md` document
    starts by reading the governing section at the pin, and the kernel function
    for any critical function the change touches, or, until that function has
    been carved out, the adapter code that decides it today, which the kernel
@@ -302,8 +304,9 @@ on four things, each read against the committed snapshot:
 - More than three `SPEC-PENDING` markers across the files the CFC rule
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
   sources and their tests, the render boundaries `reconciler.ts` and
-  `display-fit.ts` in `packages/html`, and the harness's `cfc-*.ts`,
-  `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`; or one on a line
+  `display-fit.ts` in `packages/html`, the harness's `cfc-*.ts`,
+  `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`, and the harness
+  console's `display-ceiling.ts`; or one on a line
   naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker
   outside those files is not counted, and the rule does not reach there.
 
