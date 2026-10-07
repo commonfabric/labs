@@ -1125,12 +1125,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   /** Fresh-call containers in flight, so `close()` can take them down. */
   readonly #liveCalls = new Set<string>();
   /**
-   * The calls in flight under pasta, each with what stops it and what tells
-   * that it has ended, its state taken down.
+   * Every fresh call from the moment it is set up until it has ended, its
+   * bundle and state gone: what stops it under pasta, what tells that it has
+   * ended, and whether it has started. `close()` waits for a call under pasta,
+   * which it stops, and for one not yet started, which then refuses to.
    */
-  readonly #pastaCalls = new Map<
+  readonly #calls = new Map<
     string,
-    { stop: AbortController; ended: Promise<void> }
+    { stop: AbortController; ended: Promise<void>; started: boolean }
   >();
   #sessionsStarted = 0;
   #scratchVerified: Promise<void> | undefined;
@@ -1522,6 +1524,30 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const callId = `c-${this.#runTag}-${crypto.randomUUID().slice(0, 8)}`;
     // Validated before anything is written or registered.
     const specText = this.#spec(request);
+    // Registered before anything is awaited, so a close() that begins while
+    // the call is set up finds it.
+    let ended!: () => void;
+    const call = {
+      stop: new AbortController(),
+      ended: new Promise<void>((resolve) => (ended = resolve)),
+      started: false,
+    };
+    this.#calls.set(callId, call);
+    try {
+      return await this.#setUpAndRun(request, callId, specText, call);
+    } finally {
+      this.#calls.delete(callId);
+      ended();
+    }
+  }
+
+  /** {@link RunscSandboxRuntime.#runOnce}, once the call is registered. */
+  async #setUpAndRun(
+    request: SandboxCommandRequest,
+    callId: string,
+    specText: string,
+    call: { stop: AbortController; started: boolean },
+  ): Promise<SandboxCommandResult> {
     const underPasta = this.#pasta() !== undefined;
     this.#liveCalls.add(callId);
     const bundleDir = await this.#writeBundle(callId, specText).catch(
@@ -1568,15 +1594,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     // happens below: a run that throws — a timeout, a runsc that will not
     // start — must not leave one behind per call, since the bash tool turns
     // timeouts into recoverable results and the model may repeat them.
-    // Under pasta, how `close()` stops the call, and learns it has ended.
-    const stop = new AbortController();
-    let ended!: () => void;
-    if (underPasta) {
-      this.#pastaCalls.set(callId, {
-        stop,
-        ended: new Promise<void>((resolve) => (ended = resolve)),
-      });
-    }
     try {
       let result: ProcessRunResult;
       try {
@@ -1586,11 +1603,12 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         if (this.#closed) {
           throw new Error("sandbox runtime closed before the call started");
         }
+        call.started = true;
         result = await this.#runner.run({
           ...this.#starting("/bin/sh", shellArgs),
           stdinText: request.stdinText,
           timeoutMs: request.timeoutMs,
-          ...(underPasta ? { signal: stop.signal } : {}),
+          ...(underPasta ? { signal: call.stop.signal } : {}),
         });
       } finally {
         // A timed-out or killed run leaves the container registered; make
@@ -1610,10 +1628,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           await this.#destroyContainer(callId);
         }
         this.#liveCalls.delete(callId);
-        if (underPasta) {
-          this.#pastaCalls.delete(callId);
-          ended();
-        }
       }
       const commandResult: SandboxCommandResult = {
         stdout: result.stdout,
@@ -2002,14 +2016,21 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       await this.#dropSession(state);
     }
     // A call under pasta is stopped through pasta, and its container ends
-    // with it; its bundle goes once it has.
-    const pastaCalls = [...this.#pastaCalls.values()];
-    for (const call of pastaCalls) {
-      call.stop.abort(
-        new Error("the sandbox runtime closed while the call was running"),
-      );
+    // with it; one not yet started refuses to start. Both are waited for,
+    // their bundles and state gone, before anything here is taken down. A
+    // started call off pasta has its container destroyed below.
+    const waited: Promise<void>[] = [];
+    for (const call of this.#calls.values()) {
+      if (this.#pasta() !== undefined) {
+        call.stop.abort(
+          new Error("the sandbox runtime closed while the call was running"),
+        );
+      }
+      if (this.#pasta() !== undefined || !call.started) {
+        waited.push(call.ended);
+      }
     }
-    await Promise.all(pastaCalls.map((call) => call.ended));
+    await Promise.all(waited);
     for (const callId of [...this.#liveCalls]) {
       // Not under pasta, for the reason `#runOnce` gives.
       if (this.#pasta() === undefined) await this.#destroyContainer(callId);

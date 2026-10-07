@@ -1857,7 +1857,7 @@ Deno.test("under pasta, closing the runtime stops a call in flight through pasta
   // Pasta ending is slow next to all a close does: many reads of the file
   // system go by before the state its `runsc run` left is there.
   const ending = async (root: string): Promise<void> => {
-    for (let read = 0; read < 50; read += 1) await Deno.stat(c.scratchDir);
+    for (let read = 0; read < 50; read += 1) await Deno.stat(".");
     await Deno.mkdir(root, { recursive: true });
     await Deno.writeTextFile(join(root, "container.state"), "{}");
   };
