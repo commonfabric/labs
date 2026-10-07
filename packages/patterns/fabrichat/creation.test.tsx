@@ -17,7 +17,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  clickButton,
+  countElements,
   findNode,
   findNodeById,
   findNodeByProp,
@@ -64,12 +64,6 @@ const displayOf = (root: unknown, id: string): unknown =>
       ?.display,
   );
 
-// Which of a manager's two parts it shows: the chosen room, or the prompt to
-// choose one.
-const shownPart = (root: unknown): string =>
-  `selected:${displayOf(root, "fabrichat-selected")} ` +
-  `unselected:${displayOf(root, "fabrichat-unselected")}`;
-
 // What a manager shows about the session's latest start: how its refusal is
 // displayed, and what it says.
 const shownRefusal = (root: unknown): string =>
@@ -77,7 +71,8 @@ const shownRefusal = (root: unknown): string =>
   textContent(findNodeById(root, "fabrichat-start-refusal"));
 
 // The cell the first `cf-cell-link` labeled `label` under `root` links: a
-// listed room's, labeled `Open`, or a notice's, which carries no label.
+// listed room's, labeled as its entry is, or a notice's, which carries no
+// label.
 const cellLinked = (
   root: unknown,
   label: string | undefined,
@@ -249,26 +244,20 @@ export default pattern(() => {
         ),
       },
       // The notice offers the room's link, for its creator to send on, and
-      // so does the room's entry in the list, for whoever is added later.
+      // the room's entry in the list is a link to it, labeled with whom it is
+      // with, which opens it as a page of its own: the manager renders no
+      // room itself.
       {
         assertion: assert(() =>
           equals(
             cellLinked(direct[UI], undefined),
             directRooms.key(0).key("room"),
           ) &&
-          equals(cellLinked(direct[UI], "Open"), directRooms.key(0).key("room"))
-        ),
-      },
-      // Choosing the room shows it in place of the prompt to choose one.
-      {
-        assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:none unselected:block"
-        ),
-      },
-      { action: action(() => clickButton(direct[UI], `With ${BOB}`)) },
-      {
-        assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:block unselected:none"
+          equals(
+            cellLinked(direct[UI], `With ${BOB}`),
+            directRooms.key(0).key("room"),
+          ) &&
+          countElements(direct[UI], "cf-render") === 0
         ),
       },
       // The conversation with one person is always the same room.

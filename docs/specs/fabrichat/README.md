@@ -268,9 +268,9 @@ in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
 home pattern holds a manager, and `#chatManager` resolves to it (see
 [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)), but
 home renders it nowhere of its own: a page shows it at its path in home's
-result, with the user's rooms, the room chosen among them, the controls that
-start a direct or a group chat, and, when the session's latest start was
-refused, the reason. A refusal of text that isn't a principal
+result, with the user's rooms, each a link that opens the room as a page of its
+own, the controls that start a direct or a group chat, and, when the session's
+latest start was refused, the reason. A refusal of text that isn't a principal
 also shows the text. Where the runtime lacks a prerequisite, the patterns depart
 from this design, as below.
 

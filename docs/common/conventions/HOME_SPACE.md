@@ -241,8 +241,9 @@ a space of its own. Everything it holds is private to the user, as the home
 space is.
 
 Home holds it but renders it nowhere of its own: a page shows it at its path
-in home's result, `chatManager`, with the user's rooms, the room chosen among
-them, and the controls that start a direct or a group chat.
+in home's result, `chatManager`, with the user's rooms, each a link that opens
+the room as a page of its own, and the controls that start a direct or a group
+chat.
 
 A home space whose system home pattern was set up before it held a chat manager
 holds none until the home space is next opened, since nothing updates a piece

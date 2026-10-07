@@ -584,17 +584,6 @@ export type FabriChatManagerView = Omit<
   typeof NAME | typeof UI | typeof VIEWS
 >;
 
-/** Shows `room` in the manager's own rendering. */
-const selectRoom = handler<
-  unknown,
-  {
-    selected: Writable<{ room?: Cell<ChatRoomLink> }>;
-    room: Cell<ChatRoomLink>;
-  }
->((_event, { selected, room }) => {
-  selected.set({ room });
-});
-
 /** A room in the manager's own rendering. */
 interface ShownEntry {
   /** The room. */
@@ -622,9 +611,6 @@ export const FabriChatManagerCore = pattern<
   ({ myProfile, rooms, direct, requests, outgoingNotices }) => {
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
-    const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
-      {},
-    );
     const records = {
       myProfile,
       rooms,
@@ -651,21 +637,11 @@ export const FabriChatManagerCore = pattern<
           : entry.room.key("about").get()?.title ?? "Group chat",
       }))
     );
-    const hasSelection = computed(() => selected.get()?.room !== undefined);
-    const selectedRoom = computed(() => selected.get()?.room);
-    // The chosen room differs by session, so both parts are always rendered
-    // and one is hidden by a prop: a tree built differently per session is
-    // stored once for every session, and runtimes that built it differently
-    // overwrite each other without end. Each part is `hidden` until its
-    // display has a value, as `FabriChatMessageRow` says.
-    const selectedDisplay = computed(
-      (): ChatDisplay => (hasSelection ? "block" : "none"),
-    );
-    const unselectedDisplay = computed(
-      (): ChatDisplay => (hasSelection ? "none" : "block"),
-    );
-    // A refusal is the session's too, and is hidden by a prop for the same
-    // reason.
+    // A refusal differs by session, so it is always rendered and hidden by a
+    // prop: a tree built differently per session is stored once for every
+    // session, and runtimes that built it differently overwrite each other
+    // without end. It is `hidden` until its display has a value, as
+    // `FabriChatMessageRow` says.
     const refusalDisplay = computed((): ChatDisplay =>
       startRefusal.get() === "" ? "none" : "block"
     );
@@ -704,14 +680,7 @@ export const FabriChatManagerCore = pattern<
           <cf-vstack id="fabrichat-rooms" gap="1">
             {shown.map((entry) => (
               <cf-hstack gap="2" align="center">
-                <cf-button
-                  size="sm"
-                  variant="ghost"
-                  onClick={selectRoom({ selected, room: entry.room })}
-                >
-                  {entry.label}
-                </cf-button>
-                <cf-cell-link $cell={entry.room} label="Open" />
+                <cf-cell-link $cell={entry.room} label={entry.label} />
                 <cf-button
                   size="sm"
                   variant="ghost"
@@ -726,20 +695,6 @@ export const FabriChatManagerCore = pattern<
               </cf-hstack>
             ))}
           </cf-vstack>
-          <div
-            id="fabrichat-selected"
-            hidden
-            style={{ display: selectedDisplay }}
-          >
-            <cf-render $cell={selectedRoom} />
-          </div>
-          <div
-            id="fabrichat-unselected"
-            hidden
-            style={{ display: unselectedDisplay }}
-          >
-            <cf-empty-state message="Choose a chat, or start one." />
-          </div>
           <div
             id="fabrichat-my-address"
             hidden
