@@ -29,6 +29,7 @@ const stubDeps = (
 ) => {
   const events: string[] = [];
   const local: LocalJobsConfig[] = [];
+  const readiness: { state: string; reason: string | null }[] = [];
   const fabric: AgentRunnerCommandConfig[] = [];
   const deps: AgentRunnerCommandDeps = {
     env: (name) => options.env?.[name],
@@ -52,6 +53,7 @@ const stubDeps = (
       if (options.localFailure !== undefined) throw options.localFailure;
       events.push("local:start");
       return Promise.resolve({
+        setFabricReadiness: (next) => readiness.push(next),
         setFabricLane: (running: boolean) =>
           events.push(`local:fabric=${running}`),
         stop: () => {
@@ -66,7 +68,7 @@ const stubDeps = (
     },
     report: (message) => events.push(`report:${message}`),
   };
-  return { deps, events, local, fabric };
+  return { deps, events, local, fabric, readiness };
 };
 
 /** Parses `argv` through the command tree, throwing rather than exiting. */
@@ -226,9 +228,13 @@ describe("cf agent runner local jobs", () => {
     });
 
     it("serves local jobs alone with `--local-only`, needing no identity or API URL", async () => {
-      const { deps, events, local, fabric } = stubDeps();
+      const { deps, events, local, fabric, readiness } = stubDeps();
 
       await run(deps, ["runner", ...LOCAL, "--local-only"]);
+      expect(readiness).toEqual([{
+        state: "down",
+        reason: "Fabric lane disabled by --local-only",
+      }]);
 
       expect(local).toHaveLength(1);
       expect(fabric).toEqual([]);
@@ -266,8 +272,33 @@ describe("cf agent runner local jobs", () => {
       );
     });
 
+    it("passes the runner's captured labs revision to the local service", async () => {
+      const { deps, local } = stubDeps();
+      deps.labsCommit = () => Promise.resolve("fixture-labs-head");
+      await run(deps, ["runner", ...LOCAL, "--local-only"]);
+      expect(local[0].labsCommit).toBe("fixture-labs-head");
+    });
+
+    it("preserves a queue failure observed before Fabric startup returns", async () => {
+      const { deps, readiness } = stubDeps();
+      deps.start = (_config, _report, changed) => {
+        changed?.({ state: "down", reason: "Queue scan failed" });
+        return Promise.resolve({ stop: () => Promise.resolve() });
+      };
+      await run(deps, [
+        "runner",
+        ...LOCAL,
+        "--identity",
+        "/keys/me.key",
+        "--api-url",
+        "http://localhost:8100",
+      ]);
+      expect(readiness.every((next) => next.state === "down")).toBe(true);
+      expect(readiness).not.toHaveLength(0);
+    });
+
     it("keeps serving local jobs when the Fabric lane does not start", async () => {
-      const { deps, events } = stubDeps({ fabricFails: true });
+      const { deps, events, readiness } = stubDeps({ fabricFails: true });
 
       await run(deps, [
         "runner",
@@ -278,6 +309,10 @@ describe("cf agent runner local jobs", () => {
         "http://localhost:8100",
       ]);
 
+      expect(readiness).toEqual([{
+        state: "refused",
+        reason: "The home space holds no agent queue",
+      }]);
       expect(events).toContain(
         "report:agent runner: the Fabric lane did not start, so this runner serves local jobs only: The home space holds no agent queue",
       );
@@ -354,7 +389,7 @@ describe("cf agent runner local jobs", () => {
     });
 
     it("reports a Fabric start failure that is not an `Error` by its text", async () => {
-      const { deps, events } = stubDeps();
+      const { deps, events, readiness } = stubDeps();
       deps.start = () => Promise.reject("estuary is down");
 
       await run(deps, [
@@ -366,6 +401,10 @@ describe("cf agent runner local jobs", () => {
         "http://localhost:8100",
       ]);
 
+      expect(readiness).toEqual([{
+        state: "refused",
+        reason: "estuary is down",
+      }]);
       expect(events).toContain(
         "report:agent runner: the Fabric lane did not start, so this runner serves local jobs only: estuary is down",
       );

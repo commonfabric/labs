@@ -16,6 +16,7 @@ import {
   type AgentRunnerOptions,
 } from "@commonfabric/agent-runner";
 import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
+import type { LaneTransition } from "@commonfabric/agent-runner/local-jobs/readiness";
 import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import {
   type LocalJobsConfig,
@@ -40,8 +41,10 @@ import {
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
+import { createAgentStatusCommand } from "./agent-status.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { cliText } from "../lib/cli-name.ts";
+import { resolveCliGitSha } from "../lib/build-info.ts";
 import { loadIdentity } from "../lib/identity.ts";
 import { loadPieces } from "../lib/piece.ts";
 import { absPath } from "../lib/utils.ts";
@@ -130,6 +133,7 @@ export interface AgentRunnerCommandDeps {
   start: (
     config: AgentRunnerCommandConfig,
     report: (message: string) => void,
+    readiness?: (next: LaneTransition) => void,
   ) => Promise<{ stop(): Promise<void> }>;
 
   /** Resolves when the process is asked to stop. */
@@ -137,11 +141,16 @@ export interface AgentRunnerCommandDeps {
 
   report: (message: string) => void;
 
+  /** Labs revision of this running CLI, captured once at startup. */
+  labsCommit?: () => Promise<string | null>;
+
   /** Starts serving local jobs; `startLocalJobs` unless a test replaces it. */
   startLocal?: (
     config: LocalJobsConfig,
     report: (message: string) => void,
-  ) => Promise<Pick<LocalJobsService, "setFabricLane" | "stop">>;
+  ) => Promise<
+    Pick<LocalJobsService, "setFabricLane" | "setFabricReadiness" | "stop">
+  >;
 }
 
 /** Helper for the config, which reads an API URL option as an origin. */
@@ -280,6 +289,7 @@ export async function startAgentRunner(
   report: (message: string) => void,
   connections: AgentRunnerConnections = deployedConnections,
   execute?: AgentRunnerOptions["execute"],
+  readiness?: (next: LaneTransition) => void,
 ): Promise<{ stop(): Promise<void> }> {
   const { home, homeHost, identityPath } = config;
   const homeSpace = home as `did:${string}:${string}`;
@@ -353,6 +363,7 @@ export async function startAgentRunner(
         report,
       }),
       report,
+      readiness,
     });
     await runner.start();
     return {
@@ -401,7 +412,9 @@ export const defaultAgentRunnerCommandDeps: AgentRunnerCommandDeps = {
   env: (name) => Deno.env.get(name),
   loadIdentity,
   selectSandboxRuntime: () => selectHarnessJobSandboxRuntime(),
-  start: startAgentRunner,
+  start: (config, report, readiness) =>
+    startAgentRunner(config, report, undefined, undefined, readiness),
+  labsCommit: resolveCliGitSha,
   untilStopped: untilSignalled,
   report: (message) => console.error(message),
 };
@@ -491,9 +504,15 @@ export async function agentRunnerAction(
       : error;
   });
   if (localConfig === undefined) return await runFabricLane(options, deps);
-  let local: Pick<LocalJobsService, "setFabricLane" | "stop">;
+  let local: Pick<
+    LocalJobsService,
+    "setFabricLane" | "setFabricReadiness" | "stop"
+  >;
   try {
-    local = await (deps.startLocal ?? startLocalJobs)(localConfig, deps.report);
+    local = await (deps.startLocal ?? startLocalJobs)({
+      ...localConfig,
+      ...(deps.labsCommit ? { labsCommit: await deps.labsCommit() } : {}),
+    }, deps.report);
   } catch (error) {
     if (options.localOnly) throw error;
     deps.report(
@@ -506,18 +525,35 @@ export async function agentRunnerAction(
   let fabric: { stop(): Promise<void> } | undefined;
   try {
     if (options.localOnly) {
+      local.setFabricReadiness({
+        state: "down",
+        reason: "Fabric lane disabled by --local-only",
+      });
       deps.report("agent runner: serving local jobs only (--local-only)");
     } else {
       const config = await resolveAgentRunnerConfig(options, deps);
       try {
-        fabric = await deps.start(config, deps.report);
-        local.setFabricLane(true);
+        let observed: LaneTransition | undefined;
+        fabric = await deps.start(
+          config,
+          deps.report,
+          (next) => {
+            observed = next;
+            local.setFabricReadiness(next);
+          },
+        );
+        if (observed === undefined) local.setFabricLane(true);
+        else local.setFabricReadiness(observed);
         deps.report(
           `agent runner: following ${config.home} on ${config.homeHost}, offering ${
             config.tools.join(", ")
           }`,
         );
       } catch (error) {
+        local.setFabricReadiness({
+          state: "refused",
+          reason: error instanceof Error ? error.message : String(error),
+        });
         deps.report(
           `agent runner: the Fabric lane did not start, so this runner serves local jobs only: ${
             error instanceof Error ? error.message : String(error)
@@ -801,6 +837,7 @@ export const createAgentCommand = (
     .description("Run and inspect agent requests.")
     .default("help")
     .command("runner", runnerCommand)
+    .command("status", createAgentStatusCommand())
     .command("ls", listCommand)
     .command("show", showCommand)
     .command("cancel", cancelCommand).reset();

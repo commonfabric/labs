@@ -29,6 +29,8 @@ import type { MemorySpace } from "@commonfabric/runner/storage/cache.deno";
 import { addressKey } from "@commonfabric/runner/shared";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
+import type { LaneTransition } from "./local-jobs/readiness.ts";
+
 /** The `agentRunner` entry a runner writes into the user's queue. */
 export type AgentRunnerEntry = NonNullable<AgentQueueIndex["agentRunner"]>;
 
@@ -121,6 +123,9 @@ export interface AgentRunnerOptions {
 
   /** Operator-facing progress lines. */
   report?: (message: string) => void;
+
+  /** Observed queue failures and recovery; no idle-time staleness inference. */
+  readiness?: (next: LaneTransition) => void;
 }
 
 /** A record this runner follows. */
@@ -280,6 +285,10 @@ export class AgentRunner {
           await this.#scanOnce();
         }
       } catch (error) {
+        this.#options.readiness?.({
+          state: "down",
+          reason: error instanceof Error ? error.message : String(error),
+        });
         this.#options.report?.(
           `agent runner: a queue scan failed: ${
             error instanceof Error ? error.message : String(error)
@@ -293,7 +302,7 @@ export class AgentRunner {
   }
 
   /** Helper for the scan, which follows every record the queue names. */
-  async #followEntries(): Promise<boolean> {
+  async #followEntries(): Promise<string | undefined> {
     const runtime = await this.#options.runtimeForHost(
       this.#options.homeHost,
     );
@@ -309,7 +318,7 @@ export class AgentRunner {
       followed.stopFollowing();
       this.#followed.delete(key);
     }
-    let failed = false;
+    let failure: string | undefined;
     for (const entry of entries) {
       const link = entry.run.getAsNormalizedFullLink();
       const key = recordKey(entry.host, link);
@@ -330,7 +339,9 @@ export class AgentRunner {
           stopFollowing: record.sink(() => this.#requestScan()),
         });
       } catch (error) {
-        failed = true;
+        failure ??= `Could not follow ${key}: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
         this.#options.report?.(
           `agent runner: could not follow ${key}: ${
             error instanceof Error ? error.message : String(error)
@@ -338,7 +349,7 @@ export class AgentRunner {
         );
       }
     }
-    return failed;
+    return failure;
   }
 
   /** One pass over the queue: cancels, recovery, then claims. */
@@ -404,6 +415,13 @@ export class AgentRunner {
         nextWake = deadline;
       }
     }
+    // Silence alone cannot establish a dead subscription (CT-2546).
+    // Hardening needs a runtime disconnect signal, rather than a deadline
+    // that mistakes an idle queue for a failed one.
+    this.#options.readiness?.({
+      state: followFailed ? "down" : "up",
+      reason: followFailed ?? null,
+    });
     if (nextWake !== undefined && !this.#stopped) {
       this.#scheduleWake(nextWake);
     }

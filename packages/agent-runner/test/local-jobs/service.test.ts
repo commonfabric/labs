@@ -87,12 +87,47 @@ describe("startLocalJobs()", () => {
       ) {
         expect((await Deno.stat(join(dir, name))).mode! & 0o777).toBe(0o600);
       }
-      expect((await call("/health")).body).toEqual({
+      expect((await call("/health")).body).toMatchObject({
         ok: true,
         lanes: { local: true, fabric: false },
       });
+      const health = (await call("/health")).body;
+      expect(health.readiness.local).toMatchObject({
+        state: "up",
+        reason: null,
+      });
+      expect(health.readiness.fabric).toMatchObject({ state: "starting" });
+      expect(health.profileFile).toBe(join(dir, "profiles.json"));
+      expect(health.storePath).toBe(join(dir, "jobs.sqlite"));
+      expect(health.labsCommit).toBeNull();
+      expect(health.routes).toContainEqual({
+        method: "GET",
+        path: "/jobs/:id/browser/stream",
+      });
+      expect(health.routes).toContainEqual({
+        method: "POST",
+        path: "/jobs/:id/browser/result",
+      });
+      const again = (await call("/health")).body;
+      expect(again.readiness).toEqual(health.readiness);
       running.setFabricLane(true);
       expect((await call("/health")).body.lanes.fabric).toBe(true);
+      running.setFabricReadiness({ state: "refused", reason: "No queue" });
+      const refused = (await call("/health")).body;
+      expect(refused.lanes.fabric).toBe(false);
+      expect(refused.readiness.fabric).toMatchObject({
+        state: "refused",
+        reason: "No queue",
+      });
+      running.setFabricReadiness({
+        state: "down",
+        reason: "Queue scan failed",
+      });
+      expect((await call("/health")).body.readiness.fabric.state).toBe("down");
+      running.setFabricLane(false);
+      expect((await call("/health")).body.readiness.fabric.reason).toBe(
+        "The Fabric lane stopped",
+      );
       expect(reported.join("\n")).toContain(
         "serving local jobs on " + join(dir, "jobs.sock"),
       );
@@ -257,7 +292,10 @@ describe("startLocalJobs()", () => {
     const rejected = expect(startup).rejects.toThrow("chmod failed");
     await entered.promise;
     try {
-      expect((await call("/health")).status).toBe(503);
+      const starting = await call("/health");
+      expect(starting.status).toBe(503);
+      expect(starting.body.lanes.local).toBe(false);
+      expect(starting.body.readiness.local.state).toBe("starting");
       expect(
         (await call("/jobs", {
           method: "POST",
