@@ -1,7 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { CFC_CONCEPT_KIND, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import type { IFCLabel } from "@commonfabric/runner/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { consoleRunLens, summarizeConsoleRun } from "../../console/runs.ts";
+import { ownerConsoleDisplay } from "../../console/display-ceiling.ts";
 import {
   listConsoleRuns,
   readConsoleRun,
@@ -10,6 +14,10 @@ import {
   readConsoleToolOutput,
 } from "../../console/run-store.ts";
 import { createHarnessRunState } from "../../src/run-state.ts";
+import {
+  createHarnessHandleTable,
+  mintReferentHandle,
+} from "../../src/handle-table.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {
@@ -309,6 +317,114 @@ describe("console/runs", () => {
     it("is empty rather than failing when no run has been made", async () => {
       await withArtifactRoot(async (root) => {
         expect(await listConsoleRuns(join(root, "absent"))).toEqual([]);
+      });
+    });
+
+    it("reads the strings the run's return referents stand for when they fit the owner's display, and the tokens of the rest", async () => {
+      await withArtifactRoot(async (root) => {
+        const owner = "did:key:z6Mkowner";
+        const referent = (value: FabricValue, label: IFCLabel) => ({
+          kind: "return" as const,
+          source: "delegate_task:child",
+          value,
+          label,
+          labelSource: "child" as const,
+        });
+        const page = await mintReferentHandle(
+          createHarnessHandleTable("r1"),
+          referent("12 Main St", {
+            confidentiality: [
+              cfcAtom.caveat(
+                CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+                cfcAtom.resource("WebPage", "https://shop.test"),
+              ),
+            ],
+          }),
+        );
+        const mine = await mintReferentHandle(
+          page.table,
+          referent("my note", { confidentiality: [cfcAtom.user(owner)] }),
+        );
+        const theirs = await mintReferentHandle(
+          mine.table,
+          referent("their note", {
+            confidentiality: [cfcAtom.user("did:key:z6Mkothers")],
+          }),
+        );
+        const structured = await mintReferentHandle(
+          theirs.table,
+          referent({ street: "12 Main St" }, {}),
+        );
+        const caveat = (source: CfcAtom) => ({
+          confidentiality: [
+            cfcAtom.caveat(
+              CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+              source,
+            ),
+          ],
+        });
+        const sourcedElsewhere = await mintReferentHandle(
+          structured.table,
+          referent("from a person", caveat(cfcAtom.user(owner))),
+        );
+        const opaquePage = await mintReferentHandle(
+          sourcedElsewhere.table,
+          referent(
+            "from an opaque page",
+            caveat(cfcAtom.resource("WebPage", "opaque origin")),
+          ),
+        );
+        const document = await mintReferentHandle(opaquePage.table, {
+          kind: "document",
+          source: "loom_search",
+          value: "a row",
+          label: {},
+          labelSource: "row",
+        });
+        const runRoot = join(root, "r1");
+        await Deno.mkdir(runRoot, { recursive: true });
+        await Deno.writeTextFile(
+          join(runRoot, "run-state.json"),
+          JSON.stringify({
+            ...runState("r1", "2026-01-01T00:00:01.000Z"),
+            handleTable: document.table,
+          }),
+        );
+        await Deno.writeTextFile(join(runRoot, "transcript.json"), "[]");
+
+        const shown = await readConsoleRun(
+          root,
+          "r1",
+          ownerConsoleDisplay(owner),
+        );
+        const unowned = await readConsoleRun(root, "r1");
+
+        expect(shown?.revealed).toEqual({
+          [page.token]: "12 Main St",
+          [mine.token]: "my note",
+          [sourcedElsewhere.token]: "from a person",
+          [opaquePage.token]: "from an opaque page",
+        });
+        expect(shown?.sites).toEqual({
+          [page.token]: ["shop.test"],
+          [mine.token]: [],
+          [sourcedElsewhere.token]: [],
+          [opaquePage.token]: [],
+        });
+        expect(shown?.hidden).toEqual([theirs.token, structured.token]);
+        expect(unowned?.revealed).toEqual({});
+        expect(unowned?.hidden).toEqual([
+          page.token,
+          mine.token,
+          theirs.token,
+          structured.token,
+          sourcedElsewhere.token,
+          opaquePage.token,
+        ]);
+        expect(
+          shown?.runState.handleTable?.referents?.map(({ token }) => token),
+        )
+          .toEqual([document.token]);
       });
     });
 

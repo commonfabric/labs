@@ -1443,6 +1443,10 @@ export class SpaceServer implements TransactionSealDestination {
       onHomeRefused: () => {
         this.#confirmLease(engine);
       },
+      // A served run's access-list change is admitted and committed by the
+      // memory server itself, through the check its sessions' commits pass.
+      commitServedAclChange: (change, envelope) =>
+        this.#options.server.commitServedAclChange({ ...change, ...envelope }),
     });
     this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
@@ -2334,6 +2338,10 @@ export class SpaceServer implements TransactionSealDestination {
         onForeignWriteRefusal: () => {
           this.#options.stats.foreignWriteRefusals += 1;
         },
+        // The memory server decides a served run's access-list change when
+        // the run seals, as its commit would against the store then.
+        spaceAccessAuthority: (change) =>
+          this.#options.server.checkServedAclChange(change),
       });
     }
     return this.#currentWave;

@@ -16,12 +16,14 @@ import {
   type AgentRunnerOptions,
 } from "@commonfabric/agent-runner";
 import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
+import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import {
   type LocalJobsConfig,
   type LocalJobsService,
   startLocalJobs,
 } from "@commonfabric/agent-runner/local-jobs/service";
 import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -117,6 +119,12 @@ export interface AgentRunnerCommandConfig {
 export interface AgentRunnerCommandDeps {
   env: (name: string) => string | undefined;
   loadIdentity: (path: string) => Promise<{ did(): string }>;
+
+  /**
+   * Derives the sandbox runtime the harness would give this runner's runs,
+   * and rejects with a `HarnessControlError` where it would refuse them.
+   */
+  selectSandboxRuntime: () => Promise<unknown>;
 
   /** Connects, registers, and starts following the queue. */
   start: (
@@ -392,6 +400,7 @@ async function untilSignalled(): Promise<void> {
 export const defaultAgentRunnerCommandDeps: AgentRunnerCommandDeps = {
   env: (name) => Deno.env.get(name),
   loadIdentity,
+  selectSandboxRuntime: () => selectHarnessJobSandboxRuntime(),
   start: startAgentRunner,
   untilStopped: untilSignalled,
   report: (message) => console.error(message),
@@ -472,6 +481,15 @@ export async function agentRunnerAction(
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
 ): Promise<void> {
   const localConfig = resolveLocalJobsConfig(options, deps);
+  // Every job of either lane goes to the harness's sandbox. A runtime
+  // selection the harness would refuse each of them for refuses the runner
+  // here, with the harness's own message, before either lane connects to
+  // anything, listens or registers.
+  await deps.selectSandboxRuntime().catch((error: unknown) => {
+    throw error instanceof HarnessControlError
+      ? new ValidationError(error.message, { exitCode: 1 })
+      : error;
+  });
   if (localConfig === undefined) return await runFabricLane(options, deps);
   let local: Pick<LocalJobsService, "setFabricLane" | "stop">;
   try {

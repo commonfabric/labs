@@ -4,8 +4,31 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { maxOf, minOf } from "@commonfabric/utils/math";
-import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
+import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, pullRequestLinks, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
+
+Deno.test("pullRequestLinks: each (#N) links to its PR, the rest to the given href", () => {
+  const link = (attributes: string, href: string, text: string) =>
+    `<a${attributes} href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  assertEquals(
+    pullRequestLinks('Revert "a (#12)" (#34)', "o/r", "https://run"),
+    link("", "https://run", "Revert &quot;a ") + link(' class="pr"', "https://github.com/o/r/pull/12", "(#12)") +
+      link("", "https://run", "&quot; ") + link(' class="pr"', "https://github.com/o/r/pull/34", "(#34)"),
+  );
+  assertEquals(
+    pullRequestLinks("a (#12) b", "o/r", "https://run", "t"),
+    link(' data-focus-key="t-0"', "https://run", "a ") +
+      link(' class="pr" data-focus-key="t-1"', "https://github.com/o/r/pull/12", "(#12)") +
+      link(' data-focus-key="t-2"', "https://run", " b"),
+  );
+});
+
+Deno.test("pullRequestLinks: a #N without parentheses stays part of the text", () => {
+  assertEquals(
+    pullRequestLinks("fix: follow-ups from #4401 <review>", "o/r", "https://run"),
+    `<a href="https://run" target="_blank" rel="noopener">fix: follow-ups from #4401 &lt;review&gt;</a>`,
+  );
+});
 
 Deno.test("landingHref: squash-merge trailing (#N) -> the PR", () => {
   assertEquals(
@@ -357,10 +380,11 @@ Deno.test("multiSparkline: a highlighted scale lets older extremes leave the cha
   const [first, second] = basesOf(
     multiSparkline(lines, { highlight: { count: 3 }, scale: { highlighted: true } }),
   );
-  // The highlighted 1..6 fill the chart's drawing band; the older 100 and -50
-  // fall above and below it.
-  assertEquals(first.slice(1), [31, 25.4, 19.8]);
-  assertEquals(second.slice(1), [14.2, 8.6, 3]);
+  // The scale reaches 12.5% of the highlighted 1..6 range past each end, so
+  // those points sit inside the 3..31 drawing band. The older 100 and -50 fall
+  // above and below the chart.
+  assertEquals(first.slice(1), [28.2, 23.7, 19.2]);
+  assertEquals(second.slice(1), [14.8, 10.3, 5.8]);
   assert(first[0] < 0, "an older high leaves the top");
   assert(second[0] > 34, "an older low leaves the bottom");
 
@@ -370,13 +394,16 @@ Deno.test("multiSparkline: a highlighted scale lets older extremes leave the cha
     { vals: [10, 20], color: "#0a0", highlightCount: 1 },
     { vals: [100, 1, 2, 3], color: "#00a", highlightCount: 3 },
   ], { scale: { highlighted: true } }));
-  assertEquals(plain, [17.7, 3]);
-  assertEquals(tinted.slice(1), [31, 29.5, 28.1]);
+  assertEquals(plain, [17.6, 5.8]);
+  assertEquals(tinted.slice(1), [28.2, 27, 25.8]);
   assert(tinted[0] < 0, "the tinted line's older high leaves the top");
 
-  // Without the option, or with nothing highlighted, every point sets the scale.
-  const [whole] = basesOf(multiSparkline(lines, { highlight: { count: 3 } }));
-  assertEquals(whole[0], 3);
+  // Without the option, or with nothing highlighted, every point sets the
+  // scale, and the extremes keep the same headroom.
+  const [whole, wholeLow] = basesOf(
+    multiSparkline(lines, { highlight: { count: 3 } }),
+  );
+  assertEquals([whole[0], wholeLow[0]], [5.8, 28.2]);
   assertEquals(
     multiSparkline(lines, { scale: { highlighted: true } }),
     multiSparkline(lines),
@@ -607,7 +634,7 @@ Deno.test("multiSparkline: one-point markers are explicit", () => {
   ]);
   assert(
     svg.includes(
-      '<circle cx="165.0" cy="31.0" r="1.0" fill="#d97757"/>',
+      '<circle cx="165.0" cy="17.0" r="1.0" fill="#d97757"/>',
     ),
   );
   assertEquals([...svg.matchAll(/<polyline/g)].length, 0);
@@ -630,21 +657,21 @@ Deno.test("multiSparkline: large horizontal gaps split paths without losing poin
   }));
   assertEquals(paths, [
     {
-      points: ["0.0,31.0", "44.0,24.0"],
+      points: ["0.0,28.2", "44.0,22.6"],
       stroke: "#d97757",
     },
     {
-      points: ["90.2,17.0", "110.0,10.0"],
+      points: ["90.2,17.0", "110.0,11.4"],
       stroke: "#d97757",
     },
     {
-      points: ["90.2,17.0", "110.0,10.0"],
+      points: ["90.2,17.0", "110.0,11.4"],
       stroke: lighten("#d97757"),
     },
   ]);
   assert(
     svg.includes(
-      `<circle cx="176.0" cy="3.0" r="1.0" fill="${
+      `<circle cx="176.0" cy="5.8" r="1.0" fill="${
         lighten("#d97757")
       }"/>`,
     ),

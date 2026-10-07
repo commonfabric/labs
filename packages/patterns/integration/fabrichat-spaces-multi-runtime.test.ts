@@ -32,6 +32,10 @@ const PROGRAM_PATH = join(
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
 
+// The reviewed action a start is admitted from, as
+// `../fabrichat/schemas.tsx` names it.
+const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
+
 describe("fabrichat spaces across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let starter: MultiRuntimeSession;
@@ -58,14 +62,15 @@ describe("fabrichat spaces across runtimes", () => {
   });
 
   /**
-   * Has the starter send `event` on the manager's `stream`, checks that the
-   * request was done, and returns the address of the room it produced.
+   * Has the starter send `event` on the manager's `stream` from its reviewed
+   * start control, checks that the request was done, and returns the address
+   * of the room it produced.
    */
   async function start(
     stream: "openDirect" | "createGroup",
     event: Record<string, FabricValue> & { requestId: string },
   ): Promise<PieceAddress> {
-    await starter.send(stream, event);
+    await starter.send(stream, event, START_ACTION);
     await harness.settle();
     expect(await starter.read(["requests", event.requestId, "status"]))
       .toBe("done");

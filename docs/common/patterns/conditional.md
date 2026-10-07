@@ -40,6 +40,12 @@ branches are evaluated eagerly as arguments — they do not short-circuit. So
 branch needs `computed()` deferral; see
 [Eager Ternary Branch Evaluation](../../development/debugging/gotchas/eager-ternary-branch-evaluation.md).
 
+A ternary's result is a reference to the branch the condition selected, not a
+copy of its value, and the reference carries that branch's schema. So an input
+declared with a `Default` and returned through a ternary, or through `&&` or
+`||`, reads as its default when the input holds no value, exactly as the input
+itself does.
+
 ## Showing and Hiding Through a Prop
 
 A ternary in child position renders nothing until its condition has a value,

@@ -470,12 +470,32 @@ async function githubResponse(
   return { response: response!, operation };
 }
 
+/** A page of a GitHub response, and the path of the page after it, if any. */
+export interface GitHubPage<T> {
+  /** The page's JSON. */
+  readonly value: T;
+
+  /** The path of the next page, relative to the GitHub API, if any. */
+  readonly next: string | undefined;
+}
+
+/**
+ * The path, relative to the GitHub API, of the page that a `Link` header names
+ * as the next one.
+ */
+function nextPagePath(link: string | null): string | undefined {
+  const next = link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+  if (next === undefined) return undefined;
+  const { pathname, search } = new URL(next);
+  return `${pathname}${search}`;
+}
+
 async function githubJson<T>(
   path: string,
   credential: GitHubCredential,
   performance: boolean,
   options: GitHubRequestOptions,
-): Promise<T> {
+): Promise<GitHubPage<T>> {
   const { response: res, operation } = await githubResponse(
     path,
     credential,
@@ -513,7 +533,7 @@ async function githubJson<T>(
   try {
     const value = await res.json() as T;
     finishGitHubOperation(operation, res, false);
-    return value;
+    return { value, next: nextPagePath(res.headers.get("link")) };
   } catch (error) {
     console.error(
       `GitHub API operation ${operation.id} for ${operation.path} could not read valid JSON ` +
@@ -531,7 +551,25 @@ export async function github<T = unknown>(
   options: GitHubRequestOptions = {},
 ): Promise<T> {
   const t = githubCredential(path, credential);
-  return await githubJson<T>(path, t, false, options);
+  return (await githubJson<T>(path, t, false, options)).value;
+}
+
+/**
+ * Like `github()`, except that it also returns the path of the next page, for
+ * a list GitHub pages through a cursor in the `Link` header rather than by
+ * page number.
+ */
+export async function githubPage<T = unknown>(
+  path: string,
+  credential?: GitHubCredential,
+  options: GitHubRequestOptions = {},
+): Promise<GitHubPage<T>> {
+  return await githubJson<T>(
+    path,
+    githubCredential(path, credential),
+    false,
+    options,
+  );
 }
 
 export async function githubDownload(
@@ -554,7 +592,7 @@ export async function performanceGithub<T = unknown>(
   options: GitHubRequestOptions = {},
 ): Promise<T> {
   const t = githubCredential(path, credential);
-  return await githubJson<T>(path, t, true, options);
+  return (await githubJson<T>(path, t, true, options)).value;
 }
 
 export async function performanceGithubDownload(
@@ -859,8 +897,9 @@ export function sparkline(
 // fraction of the chart. `showSinglePoint` draws explicit markers for a
 // one-sample series and for points isolated by those breaks. All overlays are
 // HTML or gradients, so preserveAspectRatio="none" cannot distort them. The
-// span it covers is drawn separately by a tile's `duration` slot. `opts.scale`
-// has the same trimming behavior as `sparkline`. With `opts.scale.highlighted`,
+// span it covers is drawn separately by a tile's `duration` slot. The vertical
+// scale has the same 25% headroom as `sparkline`, and `opts.scale` has the
+// same trimming behavior. With `opts.scale.highlighted`,
 // a line that draws a highlight contributes only its highlighted points to the
 // vertical scale, so its older extremes can extend outside the chart. A line
 // that draws no highlight contributes all of its points.
@@ -904,9 +943,7 @@ export function multiSparkline(
     : all;
   const scaled = scaleValues(basis, opts.scale);
   const lo = minOf(scaled), hi = maxOf(scaled);
-  // Match sparkline's centered flat range when trimming or the highlight leaves
-  // out values and the rest are equal.
-  const pad = scaled.length === all.length || lo !== hi ? 0 : 0.5;
+  const pad = (hi - lo) * 0.125 || 0.5; // as in sparkline
   const w = 220, h = 34, min = lo - pad, max = hi + pad, rng = (max - min) || 1;
   const yv = (v: number) => h - 3 - ((v - min) / rng) * (h - 6);
 
@@ -1170,6 +1207,23 @@ export function strip(
   ).join("");
   const className = labelSpace ? "cells labeled" : "cells";
   return `<div class="${className}">${html}</div>`;
+}
+
+/**
+ * A title as links: each "(#N)" in it links to pull request N of `repo`, with
+ * the class "pr", and the text around them links to `href`. With a
+ * `focusKey`, each link carries that key followed by its position.
+ */
+export function pullRequestLinks(title: string, repo: string, href: string, focusKey?: string): string {
+  const link = (to: string, text: string, index: number, className = "") =>
+    `<a${className}${
+      focusKey === undefined ? "" : ` data-focus-key="${escapeHtml(`${focusKey}-${index}`)}"`
+    } href="${escapeHtml(to)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
+  return title.split(/(\(#\d+\))/).map((part, index) =>
+    index % 2 === 1
+      ? link(`https://github.com/${repo}/pull/${part.slice(2, -1)}`, part, index, ' class="pr"')
+      : part && link(href, part, index)
+  ).join("");
 }
 
 // The PR that landed a commit: squash titles end "(#123)", merge commits start

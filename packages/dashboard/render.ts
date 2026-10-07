@@ -24,6 +24,7 @@ import {
   TEXTURE_WIDTH,
 } from "./palette.ts";
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
+import { GREEN_STAR_RULES } from "./green-star.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
@@ -248,14 +249,15 @@ ${TILE_RULES}
   ${textureRules(["tile"])}
   ${tileContentRules(SPARKLINE_HEIGHT)}
   ${BIG_RULES}
+  ${GREEN_STAR_RULES}
   a.cell{display:block}
   a.cell:hover{outline:1px solid var(--accent);outline-offset:-1px}
   a.tile.link:hover{border-color:var(--border-hover)}
   .evscroll{max-height:340px;overflow:auto}
   .ev{display:flex;align-items:center;gap:11px;padding:6px 0;font-size:13px;border-top:1px solid var(--divider)}.ev:first-child{border-top:0}
   .ev .t{color:var(--text-muted);min-width:54px;flex:none}
-  .evtxt{color:inherit;text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .1s}
-  .evtxt:hover{color:var(--text-strong)}
+  .evtxt{flex:1;min-width:0;overflow:clip;overflow-clip-margin:3px;text-overflow:ellipsis;white-space:nowrap}
+  .evtxt a{color:inherit;text-decoration:none;transition:color .1s}.evtxt:has(:focus-visible){white-space:normal}.evtxt a:hover{color:var(--text-strong)}.evtxt a.pr{color:var(--accent)}.evtxt a.pr:hover{text-decoration:underline}
   .evdur{color:var(--text-muted);text-decoration:none;text-align:right;min-width:64px;flex:none;font-variant-numeric:tabular-nums}
   a.evdur:hover{color:var(--accent)}
   .evarrow{color:var(--icon-subtle);text-decoration:none;flex:none;font-size:11px;transition:color .1s}

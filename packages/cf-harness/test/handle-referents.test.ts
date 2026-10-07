@@ -492,8 +492,30 @@ describe("referent handles", () => {
         returnReferentValues(
           `Bought ${returned.token}; see ${document.token} and cfh:v:zzzzz.`,
           document.table,
+          () => true,
         ),
       ).toEqual({ [returned.token]: "https://shop.example/item/7" });
+    });
+
+    it("returns no entry for a return referent whose label does not fit the display", async () => {
+      const returned = await mintReferentHandle(
+        createHarnessHandleTable("run-reveal"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "https://shop.example/item/7",
+          label: {},
+          labelSource: "child",
+        },
+      );
+
+      expect(
+        returnReferentValues(
+          `Bought ${returned.token}.`,
+          returned.table,
+          () => false,
+        ),
+      ).toEqual({});
     });
   });
 

@@ -4,7 +4,7 @@
  * revoked when its grant goes away, the genesis and shape rules an ACL
  * document is held to, the delegated READ binding a delegating principal
  * opens with `actingAs: "space-owner"`, the serving plane's
- * `foreignWriteAuthorityFor()`, and `sameAcl()`.
+ * `foreignWriteAuthorityFor()` and its access-list changes, and `sameAcl()`.
  */
 
 import { expect } from "@std/expect";
@@ -3107,6 +3107,258 @@ describe("v2-server-acl", () => {
         expect(await server.foreignWriteAuthorityFor(home, home)).toEqual({
           granted: true,
         });
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  describe("checkServedAclChange() and commitServedAclChange()", () => {
+    // Each case serves a change of the access list of `space`, which alice
+    // owns and bob may write, made by a run delivering an event on a stream
+    // of `home`. The change functions here apply no check of their own, so
+    // what refuses a change is the server's.
+
+    const space = "did:key:z6Mk-served-acl-space";
+    const home = "did:key:z6Mk-served-acl-home";
+    const sidecarId = "of:stream-events:served-acl";
+
+    /**
+     * Returns a server in `mode` holding `space`'s list, and an entry for each
+     * of `fired`'s events on `home`'s stream, each fired by its user.
+     */
+    const servedAclServer = async (
+      label: string,
+      mode: "off" | "enforce",
+      fired: Record<string, string>,
+    ): Promise<Server> => {
+      const server = createAclServer(`memory://served-acl-${label}`, { mode });
+      await initializeSpaceAcl(server, space, {
+        [ALICE]: "OWNER",
+        [BOB]: "WRITE",
+      });
+      await initializeSpaceAcl(server, home, { [home]: "OWNER" });
+      await server.writeDocument(home, sidecarId, {
+        entries: Object.entries(fired).map(([eventId, user]) => ({
+          eventId,
+          stream: { id: "of:served-acl-stream", path: [] },
+          firedAt: { user, session: `${user}-session` },
+        })),
+      });
+      return server;
+    };
+
+    /** A change made as `actor`, for its event `eventId`, adding `entry`. */
+    const served = (
+      actor: string,
+      eventId: string,
+      entry: Record<string, "READ" | "WRITE" | "OWNER">,
+    ) => ({
+      space,
+      actingPrincipal: actor,
+      actingSession: `${actor}-session`,
+      capabilityRef: `event-consequence:${eventId}`,
+      sourceEvent: { space: home, sidecarId, eventId },
+      change: (stored: unknown) =>
+        ({ ...(stored as Record<string, string>), ...entry }) as never,
+    });
+
+    /** The envelope the serving loop's sink commits under. */
+    const envelope = (localSeq: number) => ({
+      sessionId: "served-acl-holder",
+      localSeq,
+    });
+
+    it("commits an `OWNER`'s change as an authored commit of the list alone, under the delegated carriage", async () => {
+      const server = await servedAclServer("owner", "enforce", { e1: ALICE });
+      try {
+        const verdict = await server.commitServedAclChange({
+          ...served(ALICE, "e1", { [CAROL]: "WRITE" }),
+          ...envelope(1),
+        });
+
+        expect(verdict).toEqual({ admitted: true, seq: 2 });
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE", [CAROL]: "WRITE" });
+        const engine = await server.engineForSpace(space);
+        expect(
+          engine.database.prepare(
+            `SELECT class, session_id, acting_principal, acting_session, ` +
+              `capability_ref FROM "commit" WHERE seq = 2`,
+          ).get(),
+        ).toEqual({
+          class: "authored",
+          session_id: "served-acl-holder",
+          acting_principal: ALICE,
+          acting_session: `${ALICE}-session`,
+          capability_ref: "event-consequence:e1",
+        });
+        expect(
+          engine.database.prepare(
+            `SELECT id FROM revision WHERE commit_seq = 2`,
+          ).all(),
+        ).toEqual([{ id: `of:${space}` }]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a `WRITE` member's change, as a transact of the same list from that member is refused", async () => {
+      const server = await servedAclServer("write-member", "enforce", {
+        e1: BOB,
+      });
+      try {
+        const refusal = {
+          refused: `Principal ${BOB} lacks OWNER on space ${space}`,
+        };
+        const change = served(BOB, "e1", { [BOB]: "OWNER" });
+
+        expect(await server.checkServedAclChange(change)).toEqual(refusal);
+        expect(
+          await server.commitServedAclChange({ ...change, ...envelope(1) }),
+        ).toEqual(refusal);
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("admits a member's removal of its own entry and nothing else", async () => {
+      const server = await servedAclServer("self-removal", "enforce", {
+        e1: BOB,
+      });
+      try {
+        const change = {
+          ...served(BOB, "e1", {}),
+          change: () => ({ [ALICE]: "OWNER" as const }),
+        };
+
+        expect(
+          await server.commitServedAclChange({ ...change, ...envelope(1) }),
+        ).toEqual({ admitted: true, seq: 2 });
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a change leaving no concrete `OWNER`, and whatever the change itself throws", async () => {
+      const server = await servedAclServer("shape", "enforce", { e1: ALICE });
+      try {
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e1", {}),
+            change: () => ({ "*": "OWNER" as const }),
+          }),
+        ).toEqual({
+          refused: "ACL must be valid and retain at least one concrete OWNER",
+        });
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e1", {}),
+            change: () => {
+              throw new Error("the change refuses");
+            },
+          }),
+        ).toEqual({ refused: "the change refuses" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a change to a space with no list, which only its own DID may create", async () => {
+      const server = await servedAclServer("genesis", "enforce", { e1: ALICE });
+      const fresh = "did:key:z6Mk-served-acl-fresh";
+      try {
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e1", {}),
+            space: fresh,
+            change: () => ({ [ALICE]: "OWNER" as const }),
+          }),
+        ).toEqual({
+          refused:
+            `Only the space identity or a service DID may initialize ${fresh}`,
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a grant naming an event the carried actor did not fire, or naming another event than the one delivered", async () => {
+      const server = await servedAclServer("grant", "enforce", {
+        e1: BOB,
+        e2: ALICE,
+      });
+      try {
+        expect(
+          await server.checkServedAclChange(
+            served(ALICE, "e1", { [CAROL]: "READ" }),
+          ),
+        ).toEqual({
+          refused: `The event e1 was not fired by ${ALICE}, the actor the ` +
+            "change is made as.",
+        });
+        expect(
+          await server.checkServedAclChange({
+            ...served(ALICE, "e2", { [CAROL]: "READ" }),
+            capabilityRef: "event-consequence:e1",
+          }),
+        ).toEqual({
+          refused: "The grant event-consequence:e1 does not name the event " +
+            "e2 the run delivers.",
+        });
+        expect(
+          await server.checkServedAclChange(
+            served(ALICE, "e2", { [CAROL]: "READ" }),
+          ),
+        ).toEqual({ admitted: true });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns admission from the check and commits nothing, and commits nothing for a change leaving the list as it is", async () => {
+      const server = await servedAclServer("no-op", "enforce", { e1: ALICE });
+      try {
+        const engine = await server.engineForSpace(space);
+        const seqBefore = engine.database.prepare(
+          `SELECT MAX(seq) AS seq FROM "commit"`,
+        ).get();
+
+        expect(
+          await server.checkServedAclChange(
+            served(ALICE, "e1", { [CAROL]: "READ" }),
+          ),
+        ).toEqual({ admitted: true });
+        expect(
+          await server.commitServedAclChange({
+            ...served(ALICE, "e1", { [BOB]: "WRITE" }),
+            ...envelope(1),
+          }),
+        ).toEqual({ admitted: true });
+        expect(
+          engine.database.prepare(`SELECT MAX(seq) AS seq FROM "commit"`)
+            .get(),
+        ).toEqual(seqBefore);
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual({ [ALICE]: "OWNER", [BOB]: "WRITE" });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("admits a `WRITE` member's change in `off` mode, as a transact is admitted there", async () => {
+      const server = await servedAclServer("off", "off", { e1: BOB });
+      try {
+        expect(
+          await server.commitServedAclChange({
+            ...served(BOB, "e1", { [BOB]: "OWNER" }),
+            ...envelope(1),
+          }),
+        ).toEqual({ admitted: true, seq: 2 });
       } finally {
         await server.close();
       }

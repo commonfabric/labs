@@ -247,11 +247,58 @@ export class SandboxSessionUnavailableError extends Error {
   }
 }
 
+/** The sandbox runtimes an entrypoint selects between. */
+export type SandboxRuntimeKind = "docker" | "runsc";
+
+/**
+ * A platform whose default sandbox runtime can apply, as `Deno.build.os`
+ * writes it. A name outside this set is a type error rather than a platform
+ * that reads as "not macOS".
+ */
+export type SandboxPlatform = typeof Deno.build.os;
+
+/** The platform whose default sandbox runtime is the native one. */
+export type NativeRuntimePlatform = "darwin";
+
+/**
+ * How a selection came to its runtime, kept so that a run and the console can
+ * tell a runtime someone named from one the platform defaulted to. Each
+ * default is its platform's, so a defaulted Docker on macOS, and a defaulted
+ * native runtime anywhere else, are not choices there can be.
+ */
+export type SandboxRuntimeChoice =
+  /** A flag or the environment named the runtime. */
+  | { runtime: SandboxRuntimeKind; source: "flag" | "environment" }
+  /** Nothing named one, on a platform whose default is Docker. */
+  | {
+    runtime: "docker";
+    source: "default";
+    platform: Exclude<SandboxPlatform, NativeRuntimePlatform>;
+  }
+  /**
+   * Nothing named one, on the platform whose default is the native runtime,
+   * which runs from the cfc-vm store at `nativeStore`.
+   */
+  | {
+    runtime: "runsc";
+    source: "default";
+    platform: NativeRuntimePlatform;
+    nativeStore: string;
+  };
+
 export interface SandboxRuntimeDescription {
   kind: "docker-runsc-cfc" | "runsc-cfc";
   defaultWorkingDirectory: string;
   /** Whether `session` on a request is honoured rather than ignored. */
   sessions?: boolean;
+
+  /**
+   * How an entrypoint selected this runtime. A runtime does not describe this
+   * of itself: the engine adds it where it was built with a selection, and
+   * it is absent for an engine a caller built without one.
+   */
+  selection?: SandboxRuntimeChoice;
+
   cfc?: {
     runtimeRequested: boolean;
     runtimeName?: string;

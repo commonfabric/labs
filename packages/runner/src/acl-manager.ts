@@ -1,8 +1,10 @@
 /**
  * Changes to a space's access list after its genesis. `ACLManager` changes a
  * list from outside any pattern, retrying on a conflict; `writeAcl()` is the
- * single write both it and a handler's `grantSpaceAccess()` and
- * `revokeSpaceAccess()` go through.
+ * single write both it and a client handler's `grantSpaceAccess()` and
+ * `revokeSpaceAccess()` go through, and `applyAccessListChanges()` is how
+ * those two calls' changes are applied to a list, on a client and on a
+ * serving runtime.
  */
 
 import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
@@ -15,9 +17,15 @@ import {
   hasConcreteOwner,
   isACL,
 } from "@commonfabric/memory/acl";
-import type { Capability, URI } from "@commonfabric/memory/interface";
+import type {
+  Capability,
+  MemorySpace,
+  URI,
+} from "@commonfabric/memory/interface";
 
+import type { SpaceAccessChange } from "./builder/types.ts";
 import type { Cell } from "./cell.ts";
+import { spaceReaderRole } from "./cfc/space-membership.ts";
 import type { Runtime } from "./runtime.ts";
 import type {
   IExtendedStorageTransaction,
@@ -123,8 +131,10 @@ export class ACLManager {
 /**
  * Replaces, in `tx`, the access list of `space` with what `mutate` returns
  * given the list `tx` reads there, or `null` when the space has none, and
- * returns the replacement. This is the one place the runtime writes an access
- * list after a space's genesis.
+ * returns the replacement. This is the one place a runtime writes an access
+ * list after a space's genesis. A handler on a serving runtime changes one
+ * through the memory server instead, which writes it
+ * (`Server.commitServedAclChange()`).
  *
  * The write is the single whole-document `set` of the access-list document
  * that the memory server requires of an access-list change (INV-12 in
@@ -186,4 +196,41 @@ export function validateStoredAcl(aclData: unknown): ACL | null {
   // otherwise freezes a clone. Callers that change the list build a fresh
   // object rather than mutating this.
   return cloneIfNecessary(aclData) as ACL;
+}
+
+/**
+ * Returns `current`, the access list of `space`, with `changes` applied in
+ * order. `current` is `null` when the space has no list. A handler's staged
+ * `grantSpaceAccess()` and `revokeSpaceAccess()` calls are applied through
+ * this on a client and on a serving runtime alike.
+ *
+ * @throws Error when a change's actor holds no `OWNER` in the list it
+ *   changes, or when a change would leave no concrete `OWNER`.
+ */
+export function applyAccessListChanges(
+  space: MemorySpace,
+  current: ACL | null,
+  changes: readonly SpaceAccessChange[],
+): ACL {
+  let acl: ACL | null = current;
+  for (const { principal, level, actor } of changes) {
+    if (acl === null || spaceReaderRole(acl, actor) !== "owner") {
+      throw new Error(
+        `Changing the access list of ${space} requires \`OWNER\` there, ` +
+          `which ${actor} does not hold.`,
+      );
+    }
+    const { [principal]: _removed, ...rest } = acl;
+    const next: ACL = level === undefined
+      ? rest
+      : { ...rest, [principal]: level };
+    if (!hasConcreteOwner(next)) {
+      throw new Error(
+        `Changing the entry of ${principal} would leave the access list of ` +
+          `${space} with no concrete \`OWNER\`.`,
+      );
+    }
+    acl = next;
+  }
+  return acl ?? {};
 }

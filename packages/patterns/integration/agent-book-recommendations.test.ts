@@ -193,6 +193,11 @@ describe("agent book recommendations", () => {
         CF_HARNESS_GATEWAY_AUTH_MODE: "none",
         // Context-role tasks can read Loom only at this explicit operator-selected rung.
         CF_HARNESS_CFC_ENFORCEMENT_MODE: "enforce-explicit",
+        // The two sidecar directories this run takes from its environment are
+        // the Docker driver's, and macOS runs another driver where none is
+        // named. An operator who names one keeps it.
+        CF_HARNESS_SANDBOX_RUNTIME:
+          Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME")?.trim() || "docker",
       };
       const previous = new Map(
         Object.keys(environment).map((key) => [key, Deno.env.get(key)]),

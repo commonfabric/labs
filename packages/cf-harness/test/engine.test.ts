@@ -333,6 +333,7 @@ Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a wo
     createdAt: "2026-04-15T19:00:00.000Z",
     updatedAt: "2026-04-15T19:00:00.000Z",
     cfcEnforcementMode: "enforce-explicit",
+    sandboxRuntime: "docker",
     currentDir: "/workspace",
     docsCorpus: {
       type: "cf-harness.docs-corpus-record",
@@ -2048,6 +2049,8 @@ Deno.test("CfHarnessEngine getRunState returns a deep clone", () => {
     endedAt: "2026-04-17T20:10:01.000Z",
     terminalReason: "assistant_completed",
     cfcEnforcementMode: "observe",
+    // The engine wrote it: the state it was handed names no runtime.
+    sandboxRuntime: "docker",
     currentDir: "/workspace",
     policyEvents: [createHarnessPolicyEvent({
       severity: "warning",
