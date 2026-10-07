@@ -50,6 +50,7 @@ import {
   experimentalOptionsFromEnv,
   getPatternEnvironment,
   type PatternCoverageData,
+  type PatternEnvironment,
   setPatternEnvironment,
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
@@ -217,6 +218,39 @@ const RPC_TIMEOUT_MS = 120_000;
 const SERVED_SETTLE_QUIESCENCE_BUDGET_MS = 10_000;
 
 /**
+ * The claims harnesses in this process hold on its pattern environment,
+ * oldest first, each with the environment that was in force when it was
+ * made. The environment is the newest claim's; releasing a claim hands what it
+ * found to the claim made after it, or puts it back when there is none.
+ */
+const patternEnvironmentClaims: {
+  claim: symbol;
+  previous: PatternEnvironment;
+}[] = [];
+
+/**
+ * Sets this process's pattern environment to `apiUrl`, and returns what
+ * releases that claim, once however many times it is called. A harness
+ * released while one made after it still holds a claim leaves that one's
+ * environment in force.
+ */
+export function claimPatternEnvironment(apiUrl: URL): () => void {
+  const claim = Symbol("pattern environment claim");
+  patternEnvironmentClaims.push({ claim, previous: getPatternEnvironment() });
+  setPatternEnvironment({ apiUrl });
+  return () => {
+    const index = patternEnvironmentClaims.findIndex((each) =>
+      each.claim === claim
+    );
+    if (index === -1) return;
+    const [released] = patternEnvironmentClaims.splice(index, 1);
+    const next = patternEnvironmentClaims[index];
+    if (next === undefined) setPatternEnvironment(released.previous);
+    else next.previous = released.previous;
+  };
+}
+
+/**
  * The authored patterns tree this repository deploys, served at the same
  * address as the in-process storage server.
  *
@@ -256,6 +290,7 @@ const coverageFile =
 class WorkerClient {
   #worker: Worker;
   #ready = false;
+  #terminated = false;
   #lifetimeLock?: string;
   #nextId = 1;
   #pending = new Map<
@@ -319,6 +354,9 @@ class WorkerClient {
     cmd: string,
     args: Record<string, FabricValue> = {},
   ): Promise<FabricValue> {
+    if (this.#terminated) {
+      return Promise.reject(new Error(`[${this.label}] worker terminated`));
+    }
     const id = this.#nextId++;
     const request: WorkerRequest = {
       id,
@@ -349,8 +387,12 @@ class WorkerClient {
     });
   }
 
-  /** Collects this realm before releasing its runtime and instrumented graph. */
+  /**
+   * Collects this realm before releasing its runtime and instrumented graph.
+   * A terminated realm has neither to give, so disposing one does nothing.
+   */
   async dispose(): Promise<void> {
+    if (this.#terminated) return;
     const collector = patternCoverageCollector();
     const directory = patternCoverageDir();
     if (collector && directory) {
@@ -366,9 +408,10 @@ class WorkerClient {
 
   /**
    * Rejects every call in flight, and terminates the worker, settling once it
-   * has been torn down.
+   * has been torn down. A call made after this is refused at once.
    */
   async terminate(): Promise<void> {
+    this.#terminated = true;
     for (const pending of this.#pending.values()) {
       pending.reject(new Error(`[${this.label}] worker terminated`));
     }
@@ -692,7 +735,7 @@ export class MultiRuntimeHarness {
   readonly pieceId: string;
   #server?: HostedServer;
   #awaitsServedConsequences: boolean;
-  #restorePatternEnvironment: () => void;
+  #releasePatternEnvironment: () => void;
 
   private constructor(
     sessions: MultiRuntimeSession[],
@@ -700,14 +743,14 @@ export class MultiRuntimeHarness {
     pieceId: string,
     server: HostedServer | undefined,
     awaitsServedConsequences: boolean,
-    restorePatternEnvironment: () => void,
+    releasePatternEnvironment: () => void,
   ) {
     this.sessions = sessions;
     this.spaceDid = spaceDid;
     this.pieceId = pieceId;
     this.#server = server;
     this.#awaitsServedConsequences = awaitsServedConsequences;
-    this.#restorePatternEnvironment = restorePatternEnvironment;
+    this.#releasePatternEnvironment = releasePatternEnvironment;
   }
 
   static async create(
@@ -746,13 +789,10 @@ export class MultiRuntimeHarness {
     // serving loop runs in, which a toolshed sets to its own address. The
     // serving loop hosted here runs in this process, so this process's is set
     // to the address the harness hosts, as a handler run by a session's own
-    // runtime sees it, until the harness is disposed.
-    const savedPatternEnvironment = getPatternEnvironment();
-    const restorePatternEnvironment = () =>
-      setPatternEnvironment(savedPatternEnvironment);
-    if (serverExecutionOn && server !== undefined) {
-      setPatternEnvironment({ apiUrl: targetUrl });
-    }
+    // runtime sees it, until the harness is disposed or terminated.
+    const releasePatternEnvironment = serverExecutionOn && server !== undefined
+      ? claimPatternEnvironment(targetUrl)
+      : () => {};
 
     const sessions: MultiRuntimeSession[] = [];
     let bootstrap: WorkerClient | undefined;
@@ -846,7 +886,7 @@ export class MultiRuntimeHarness {
         pieceId,
         server,
         server === undefined || serverExecutionOn,
-        restorePatternEnvironment,
+        releasePatternEnvironment,
       );
     } catch (error) {
       await bootstrap?.terminate();
@@ -854,7 +894,7 @@ export class MultiRuntimeHarness {
         await session.disposeSession().catch(() => {});
       }
       await server?.close().catch(() => {});
-      restorePatternEnvironment();
+      releasePatternEnvironment();
       throw error;
     }
   }
@@ -1007,7 +1047,7 @@ export class MultiRuntimeHarness {
     try {
       await this.#server?.close();
     } finally {
-      this.#restorePatternEnvironment();
+      this.#releasePatternEnvironment();
     }
   }
 
@@ -1018,9 +1058,11 @@ export class MultiRuntimeHarness {
    * this one exists so a harness held for the life of a process is still
    * released deterministically rather than left to process teardown. The
    * in-process server is not closed, because closing it is asynchronous and it
-   * has nothing outside this process to release.
+   * has nothing outside this process to release. The pattern environment the
+   * harness set is released, as `dispose()` releases it.
    */
   terminate(): void {
     for (const session of this.sessions) void session.client().terminate();
+    this.#releasePatternEnvironment();
   }
 }
