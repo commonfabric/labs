@@ -391,6 +391,9 @@ const commandTool = (
     if (listed.status === "error") {
       return notSent(listed.code, listed.message);
     }
+    if (context.signal?.aborted) {
+      return notSent("cancelled", "The turn was cancelled before the command.");
+    }
     const entry = listed.catalog.entries.find((entry) =>
       entry.name === command
     );

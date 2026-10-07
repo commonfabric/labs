@@ -37,6 +37,7 @@ import {
   loomCommandModelContextObservation,
   type RunCommandOutput,
   runCommandTool,
+  runReadCommandTool,
 } from "../../src/tools/loom-commands.ts";
 import { LOOM_RETRIEVAL_MAX_OUTPUT_CHARS } from "../../src/tools/loom-retrieval.ts";
 import { getBuiltinTool } from "../../src/tools/registry.ts";
@@ -84,6 +85,7 @@ const contextWith = (
     config?: HarnessLoomCommandsConfig;
     configured?: boolean;
     aborted?: boolean;
+    cancelDuringListing?: boolean;
     ceiling?: readonly unknown[];
     queryLabel?: unknown[];
     referents?: Record<string, unknown>[];
@@ -99,6 +101,7 @@ const contextWith = (
       run(request: ProcessRunRequest): Promise<ProcessRunResult> {
         calls.push(request);
         if (request.args[1] === "list") {
+          if (options.cancelDuringListing) controller.abort();
           return Promise.resolve({
             stdout: options.manifest ?? JSON.stringify(MANIFEST),
             stderr: "",
@@ -419,6 +422,31 @@ describe("loom-commands tools", () => {
         expect(output.reason).toContain(`${HARNESS_COMMAND_ARGS_MAX_BYTES}`);
       }
       expect(calls).toHaveLength(0);
+    });
+
+    it("does not dispatch after cancellation while the fresh catalog is loading", async () => {
+      for (const tool of [runCommandTool, runReadCommandTool]) {
+        const { context, calls } = contextWith({
+          cancelDuringListing: true,
+          manifest: JSON.stringify({
+            commands: [{
+              id: "loom.inspect",
+              effect: "read",
+              readOnlyGranted: true,
+              inputs: { type: "object" },
+            }],
+          }),
+        });
+        expect(
+          await tool.invoke(context, { command: "loom.inspect", args: {} }),
+        )
+          .toMatchObject({
+            status: "failed_to_deliver",
+            code: "cancelled",
+            landed: "no",
+          });
+        expect(calls.map((call) => call.args[1])).toEqual(["list"]);
+      }
     });
 
     it("returns an error without starting a process once the turn is cancelled", async () => {
