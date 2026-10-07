@@ -1194,6 +1194,39 @@ Deno.test("parseCfHarnessCliArgs rejects an empty research reasoning effort flag
   );
 });
 
+Deno.test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot role or CFC enforcement mode, and an empty pattern index URL", async () => {
+  for (
+    const [args, message] of [
+      [
+        ["--output-mode", "verbose"],
+        "output mode must be one of operator, batch",
+      ],
+      [
+        ["--prompt-slot-role", "advisory"],
+        "prompt slot role must be one of direct-command, context, quote",
+      ],
+      [
+        ["--cfc-enforcement-mode", "lenient"],
+        "cfc enforcement mode must be one of disabled, observe, enforce-explicit, enforce-strict",
+      ],
+      [
+        ["--pattern-index-url", "  "],
+        "--pattern-index-url requires a non-empty value",
+      ],
+    ] as const
+  ) {
+    await assertRejects(
+      () =>
+        parseCfHarnessCliArgs(["--prompt", "hi", ...args], {
+          cwd: "/tmp/project",
+          env: {},
+        }),
+      Error,
+      message,
+    );
+  }
+});
+
 Deno.test("parseCfHarnessCliArgs resolves sandbox docker runtime from flag and environment", async () => {
   const fromFlag = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--sandbox-docker-runtime", "runc"],
