@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
+import type { Cell } from "../../src/cell.ts";
 import { collectionKeyBucket } from "../../src/builtins/collection-index-key.ts";
 import type {
   CollectionIndexMembership,
@@ -11,6 +12,7 @@ import type {
 import { ownedCell } from "../../src/builtins/runtime-owned-store.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -180,13 +182,24 @@ describe("collection-index-label-fanout", () => {
     });
   }
 
-  it("runs a member again when the reference in its own state slot is replaced", async () => {
-    // The member's argument document names the shared state and index it
-    // maintains. Resolving those documents is plumbing and wakes no member
-    // when another member's write stamps them, but which document a slot
-    // names stays the member's own dependency: a write that retargets the
-    // slot runs the member again, against the document it now names.
-    const signer = await Identity.fromPassphrase("index-label-fanout-retarget");
+  /**
+   * Runs `body` against a `groupBy` index over one labeled row, settled, with
+   * the member's argument document, which names the state and index it
+   * maintains, and a reader of that member's scheduler node.
+   */
+  async function withIndexMember(
+    passphrase: string,
+    body: (fixture: {
+      runtime: Runtime;
+      space: ReturnType<Identity["did"]>;
+      result: Cell<{ index: MaintainedCollectionIndex; selected: unknown }>;
+      argument: Cell<unknown>;
+      member: () => ReturnType<
+        Runtime["scheduler"]["getGraphSnapshot"]
+      >["nodes"][number];
+    }) => Promise<void>,
+  ): Promise<void> {
+    const signer = await Identity.fromPassphrase(passphrase);
     const space = signer.did();
     const storage = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -259,8 +272,7 @@ describe("collection-index-label-fanout", () => {
       const member = () =>
         runtime.scheduler.getGraphSnapshot().nodes
           .find((node) => node.id.startsWith("raw:collectionIndexMember:"))!;
-      const before = member().stats?.runCount ?? 0;
-      expect(before).toBeGreaterThan(0);
+      expect(member().stats?.runCount ?? 0).toBeGreaterThan(0);
       // The member's argument document is the one it reads its key from.
       const reads = member().reads as string[];
       const argumentRead = reads.find((read) =>
@@ -275,30 +287,99 @@ describe("collection-index-label-fanout", () => {
         id: argumentId as `${string}:${string}`,
         path: [],
       });
-      // A store the member may write into: enrolled as runtime-owned, as the
-      // coordinator's own state is.
-      const retarget = runtime.edit();
-      const replacement = ownedCell<CollectionIndexMembership>(
-        runtime,
-        retarget,
-        result,
-        { replacementState: true },
-        undefined,
-        "space",
-      );
-      replacement.set({ assignments: {}, members: {}, occupied: {} });
-      argument.withTx(retarget).key("state").set(replacement);
-      expect((await retarget.commit().settled).error).toBeUndefined();
-      await runtime.idle();
-      expect(member().stats?.runCount).toBe(before + 1);
-      // The member maintained the document its slot now names.
-      expect(Object.keys(replacement.key("assignments").get() ?? {}))
-        .toHaveLength(1);
+      await body({ runtime, space, result, argument, member });
     } finally {
       cancel?.();
       await storage.synced();
       await runtime.dispose({ closeStorage: false });
       await storage.close();
     }
+  }
+
+  /** A store the member may write into: enrolled as runtime-owned, as the coordinator's own state is. */
+  const emptyMembershipStore = (
+    runtime: Runtime,
+    tx: IExtendedStorageTransaction,
+    owner: Cell<unknown>,
+    cause: string,
+  ): Cell<CollectionIndexMembership> => {
+    const store = ownedCell<CollectionIndexMembership>(
+      runtime,
+      tx,
+      owner,
+      { [cause]: true },
+      undefined,
+      "space",
+    );
+    store.set({ assignments: {}, members: {}, occupied: {} });
+    return store;
+  };
+
+  it("runs a member again when the reference in its own state slot is replaced", async () => {
+    // The member's argument document names the shared state and index it
+    // maintains. Resolving those documents is plumbing and wakes no member
+    // when another member's write stamps them, but which document a slot
+    // names stays the member's own dependency: a write that retargets the
+    // slot runs the member again, against the document it now names.
+    await withIndexMember(
+      "index-label-fanout-retarget",
+      async ({ runtime, result, argument, member }) => {
+        const before = member().stats?.runCount ?? 0;
+        const retarget = runtime.edit();
+        const replacement = emptyMembershipStore(
+          runtime,
+          retarget,
+          result,
+          "replacementState",
+        );
+        argument.withTx(retarget).key("state").set(replacement);
+        expect((await retarget.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        expect(member().stats?.runCount).toBe(before + 1);
+        // The member maintained the document its slot now names.
+        expect(Object.keys(replacement.key("assignments").get() ?? {}))
+          .toHaveLength(1);
+      },
+    );
+  });
+
+  it("runs a member again when a link along its state slot's chain is replaced", async () => {
+    // A slot may name its document through further links. Every link the
+    // member follows on the way is its own dependency, not only the first:
+    // replacing one partway along the chain runs the member again, against
+    // the document the chain now reaches.
+    await withIndexMember(
+      "index-label-fanout-retarget-chain",
+      async ({ runtime, space, result, argument, member }) => {
+        // Route the slot through an intermediate link to the state it names.
+        const reroute = runtime.edit();
+        const via = runtime.getCell<CollectionIndexMembership>(
+          space,
+          "state-via",
+          undefined,
+          reroute,
+        );
+        via.set(argument.withTx(reroute).key("state").resolveAsCell());
+        argument.withTx(reroute).key("state").set(via);
+        expect((await reroute.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        const rerouted = member().stats?.runCount ?? 0;
+        // Replace the link partway along the chain; the slot itself is untouched.
+        const retarget = runtime.edit();
+        const replacement = emptyMembershipStore(
+          runtime,
+          retarget,
+          result,
+          "replacementStateViaChain",
+        );
+        via.withTx(retarget).set(replacement);
+        expect((await retarget.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        expect(member().stats?.runCount).toBe(rerouted + 1);
+        // The member maintained the document the chain now reaches.
+        expect(Object.keys(replacement.key("assignments").get() ?? {}))
+          .toHaveLength(1);
+      },
+    );
   });
 });
