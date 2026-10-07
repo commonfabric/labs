@@ -142,7 +142,8 @@ These rules hold for every stream:
 - A request that is interrupted is resumed by sending the same event again with
   the same `requestId`. It never creates a second room.
 - Every stream changes only this user's own manager, except `openDirect` and
-  `createGroup`, which also create a room and grant other people access to it.
+  `createGroup`, which also create a room and grant other people access to it,
+  and `openDirect`, which can also offer the room to the other person.
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
@@ -234,9 +235,10 @@ Records a room this user has been admitted to.
   `direct` already has an entry for `counterpart`, in which case that entry
   stays, as under [crossing creations](#crossing-creations).
 - **Outcome:** `done` with the entry, or `refused` if the request names no
-  room or this user can't read the room, or if the room is direct and its label names no creator, names this
-  user, or names someone other than a `counterpart` sent, or, once there are
-  member sets, the counterpart isn't a member.
+  room, or this user can't read the room, or if the room is direct and its
+  label names no creator, names this user, or names someone other than a
+  `counterpart` sent, or, once there are member sets, the counterpart isn't a
+  member.
 
 A client also sends `accept` when the user first opens the chat of an existing
 shared space, which is created with its space and not by a manager.

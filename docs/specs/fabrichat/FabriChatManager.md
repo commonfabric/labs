@@ -78,9 +78,8 @@ member's profile, as `openDirect` does with its `profile`, step 3 offers the
 room there, in that envelope, from an event of its own that follows the
 room's creation, since the offer names the room's space (see
 [`ChatManagerOutput`](ChatManagerOutput.md#offers)). Nothing reads those offers
-yet: that waits on a share intake in Home, which stages what is offered into
-its catalog of shared spaces, and the recipient's manager then accepts the
-room. A space's access list can admit any writer, but that is the `"*"` grant
+yet: reading them waits on a share intake in Home, which stages what is offered
+into its catalog of shared spaces. A space's access list can admit any writer, but that is the `"*"` grant
 a room has only when its creator makes a group joinable by its link, and then
 its address, sent some other way, is the notice.
 

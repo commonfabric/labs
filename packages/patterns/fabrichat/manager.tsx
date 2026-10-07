@@ -296,9 +296,10 @@ export interface OfferRoomEvent {
  * space and the host serving it, this pattern's own, and the principal
  * sending it as its sender.
  *
- * It runs as an event of its own, queued by the one that creates the room: the
- * offer names the room's space, which is known only once the room's creation
- * has committed. While the space is not known, nothing is sent.
+ * It runs as an event of its own, queued by the one that creates the room, so
+ * that it reads the room's space once the room's creation has committed, and
+ * the members' profiles are read apart from that creation. While the space is
+ * not known, nothing is sent.
  */
 const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
   (event) => {
