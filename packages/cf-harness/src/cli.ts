@@ -1415,6 +1415,8 @@ type CliSandboxSelectionDependencies = Pick<
   | "platform"
   | "arch"
   | "uid"
+  | "readSysctl"
+  | "which"
   | "sandboxRuntimeNamedBy"
   | "sandboxSelectionFlags"
 >;
@@ -1475,6 +1477,8 @@ export const parseCfHarnessCliArgs = async (
     | "platform"
     | "arch"
     | "uid"
+    | "readSysctl"
+    | "which"
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"

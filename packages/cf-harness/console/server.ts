@@ -1384,8 +1384,10 @@ export const consoleHealthRows = (
  * the options every turn is built with, as the engine resolves them, in the
  * environment `env` on `platform`, `Deno.build.os` where absent: on macOS an
  * unnamed rootfs is the kitchen-sink image of the store `CFC_VM_HOME` there
- * names, else of the one under its `HOME`. Throws where a turn would be
- * refused.
+ * names, else of the one under its `HOME`; on Linux it is the unpacked
+ * kitchen-sink image of the store under its `HOME`,
+ * `.local/share/runsc-cfc/images/kitchensink`, which `CFC_VM_HOME` does not
+ * move. Throws where a turn would be refused.
  */
 const resolveConsoleRunscConfig = (
   config: ConsoleConfig,

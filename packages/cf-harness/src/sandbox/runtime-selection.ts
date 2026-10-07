@@ -9,7 +9,9 @@
  * runtime, taken from the platform's store and refused where the store cannot
  * provide it: on macOS the cfc-vm store, whose VM runs on Apple silicon
  * alone, and on Linux the store gVisor's Linux installer writes, whose
- * `runsc` runs containers only as root. On every other platform it is Docker,
+ * `runsc` runs as it is for root and with `--rootless` for any other user,
+ * where the host allows that user a user namespace. On every other platform
+ * it is Docker,
  * because no other platform has a native runtime. Nothing here falls back
  * from one runtime to the other. An entrypoint whose caller must name the
  * runtime takes no default at all, and refuses a run that names none.
@@ -820,9 +822,14 @@ const locateLinuxStore = (home: string | undefined, flags: boolean): string => {
  * store's own. It runs on Apple silicon alone. On Linux it is the store under
  * the home; the `runsc` binary is the store's, the rootfs is the store's
  * unpacked image, and the CFC policy is the store's, which is the default one
- * under the home. It runs for root alone, unless a `runsc` binary is named. A
- * companion that is named replaces the store's, as it does for a named
- * `runsc`.
+ * under the home. Unless a `runsc` binary is named, the store's runs as it is
+ * for root, and for any other user with `--rootless`, in a user namespace of
+ * its own, which needs the host to allow unprivileged user namespaces
+ * (`user.max_user_namespaces` above 0, and neither
+ * `kernel.unprivileged_userns_clone` at 0 nor
+ * `kernel.apparmor_restrict_unprivileged_userns` at 1). Its unnamed network is
+ * `pasta`'s, which root's runs inside `unshare`. A companion that is named
+ * replaces the store's, as it does for a named `runsc`.
  *
  * For a named `runsc` the default CFC policy is the one under the home, so
  * both runtimes label the same files the same way. It is looked up only when
@@ -832,10 +839,14 @@ const locateLinuxStore = (home: string | undefined, flags: boolean): string => {
  * @throws HarnessControlError where nothing names a runtime and the entrypoint
  * takes no default; and where nothing names one on macOS or Linux and the
  * native runtime cannot be provided: on macOS a process that is not running
- * on Apple silicon, on Linux one that is not root and names no `runsc`
- * binary, a setting of the Docker driver is given, the store cannot be
- * located or on macOS is reached through a link, a piece the selection would
- * take from it is not there, or no CFC policy is found and none was named.
+ * on Apple silicon; on Linux, unless a `runsc` binary is named, a process
+ * whose user cannot be read, or that is not root and whose host refuses it a
+ * user namespace or whose kernel parameters cannot be read; on Linux, for the
+ * unnamed network, no `pasta` (or, for a `runsc` that is not rootless, no
+ * `unshare`) on `PATH`; a
+ * setting of the Docker driver is given; the store cannot be located or on
+ * macOS is reached through a link; a piece the selection would take from it
+ * is not there; or no CFC policy is found and none was named.
  * Each message says what is in the way and how a runtime is named. Also, for
  * a runtime that is or defaults to `runsc`, where a default CFC policy could
  * not be examined for any reason but its not being there.

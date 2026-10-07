@@ -3099,6 +3099,47 @@ describe("sandbox-runtime-default", () => {
       }
     });
 
+    it("refuses before a run, with no runtime named on Linux for a process that is not root, on the kernel parameters its caller reads", async () => {
+      await installLinuxStore(home);
+
+      const refusal = await rejection(
+        selectCfHarnessCliSandboxRuntime({
+          cwd: root,
+          env: { HOME: home },
+          platform: "linux",
+          uid: () => 1000,
+          readSysctl: (name) =>
+            Promise.resolve(
+              name === "user.max_user_namespaces" ? "0" : undefined,
+            ),
+          which: withPasta,
+        }),
+      );
+
+      expect(refusal).toBeInstanceOf(HarnessControlError);
+      expect(messageOf(refusal)).toContain(
+        "`user.max_user_namespaces` is 0, which allows no user namespace at all",
+      );
+    });
+
+    it("parses, with no runtime named on Linux, to the `pasta` and `unshare` the lookup its caller hands it finds", async () => {
+      await installLinuxStore(home);
+
+      // Paths no host has, so that only the lookup handed over finds them.
+      const parsed = await parseCfHarnessCliArgs(["hello"], {
+        cwd: root,
+        env: { HOME: home },
+        platform: "linux",
+        uid: () => 0,
+        which: (name) => `/handed/${name}`,
+      });
+
+      expect(parsed).toMatchObject({
+        sandboxRunscNetworkHelper: "/handed/pasta",
+        sandboxRunscUnshare: "/handed/unshare",
+      });
+    });
+
     it("leaves the sandbox line out of a summary given no selection", () => {
       expect(formatCfHarnessCliResult(completed())).not.toContain("sandbox:");
       expect(
