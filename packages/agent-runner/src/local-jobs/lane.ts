@@ -344,7 +344,7 @@ export class LocalJobLane {
       ? this.browserHost(job.id)
       : undefined;
     let parentStep: Record<string, unknown> | undefined;
-    let childCall: string | undefined;
+    const childSteps = new Map<string, Record<string, unknown>>();
     let lastStep: string | undefined;
     // A browse publishes transitions, not every repeated snapshot or click.
     // Turn numbers alone are not a visible change. Commands are never reduced.
@@ -365,25 +365,28 @@ export class LocalJobLane {
             signal,
             ...(browserHost !== undefined ? { browserHost } : {}),
             onEvent: (event) => {
-              if (event.subagent !== undefined) {
-                childCall = event.subagent.parentToolCallId;
-              } else if (
+              if (
+                event.subagent === undefined &&
                 event.message.role === "tool" &&
                 event.message.toolName === LOCAL_JOB_DELEGATE_TOOL &&
-                event.message.toolCallId === childCall
+                childSteps.delete(event.message.toolCallId)
               ) {
-                childCall = undefined;
-                if (parentStep !== undefined) reportStep(parentStep);
+                const active = [...childSteps.values()].at(-1) ?? parentStep;
+                if (active !== undefined) reportStep(active);
               }
               for (const { kind, body } of localJobEventsOf(event)) {
                 if (kind === "command") {
                   lastStep = undefined;
                   store.report(job.id, kind, body);
                 } else if (event.subagent !== undefined) {
+                  // Children have depth 1; among siblings, latest activity wins.
+                  const id = event.subagent.parentToolCallId;
+                  childSteps.delete(id);
+                  childSteps.set(id, body);
                   reportStep(body);
                 } else {
                   parentStep = body;
-                  if (childCall === undefined) reportStep(parentStep);
+                  if (childSteps.size === 0) reportStep(parentStep);
                 }
               }
             },

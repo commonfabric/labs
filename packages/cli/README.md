@@ -1361,9 +1361,10 @@ step; changing action or child publishes a new one. Commands are never
 coalesced, and a command breaks the step's repetition. Volume is bounded by
 these visible transitions plus command receipts, rather than transcript size.
 The job snapshot's `step` names the active child's tool until the parent's
-`delegate_task` result arrives, then resumes the parent's step. Children cannot
-delegate further; nested progress needs lineage in the harness's transcript
-contract before that restriction is widened.
+`delegate_task` result arrives. Among pending siblings the latest activity wins;
+a returning child reveals its sibling's last step, and the parent's step resumes
+when no child remains. Children cannot delegate further; nested progress needs
+lineage in the harness's transcript contract before that restriction is widened.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

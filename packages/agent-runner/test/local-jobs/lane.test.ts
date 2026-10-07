@@ -529,6 +529,46 @@ describe("local-jobs/lane", () => {
       await reached(store, id, "failed");
     });
 
+    it("keeps a pending sibling's step when the most recently active child returns", async () => {
+      const { store, lane, nextRun, enqueue } = laneWith();
+      lane.start();
+      const id = enqueue("siblings");
+      const run = await nextRun(0);
+      const events = delegatedBrowse();
+      await run.options.onEvent?.(events[0]);
+      const sibling = {
+        ...browserChild,
+        parentToolCallId: "delegate-2",
+        childRunId: "job-browse.subagent.2",
+      };
+      await run.options.onEvent?.({ ...events[1], subagent: sibling });
+      const click = events.find((event) =>
+        event.message.role === "assistant" &&
+        event.message.toolCalls?.[0].id === "click"
+      )!;
+      await run.options.onEvent?.(click);
+      const returned = events.find((event) =>
+        event.message.role === "tool" &&
+        event.message.toolName === "delegate_task"
+      )!;
+      await run.options.onEvent?.(returned);
+      expect(store.get(id)!.step).toMatchObject({
+        tool: "browser",
+        action: "open",
+        child: { childRunId: sibling.childRunId },
+      });
+      if (returned.message.role !== "tool") {
+        throw new Error("Expected a delegate result");
+      }
+      await run.options.onEvent?.({
+        ...returned,
+        message: { ...returned.message, toolCallId: "delegate-2" },
+      });
+      expect(store.get(id)!.step).toEqual({ turn: 1, tool: "delegate_task" });
+      run.settle({ outcome: "failed", errorCode: "LIMIT_REACHED" });
+      await reached(store, id, "failed");
+    });
+
     it("keeps every child command and reports the same tool again after a receipt", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
       lane.start();
