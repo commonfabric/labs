@@ -563,6 +563,10 @@ export class ShareIntake {
     if (!isWriter(acl?.[this.#identity] ?? acl?.["*"])) {
       return "recipient-access-refused";
     }
+    // When the pointer reaches no document of the space, this read returns
+    // the space cell's own `defaultPattern` key, so the path check is what
+    // refuses a pointer into another space. The space check covers a read that
+    // follows such a pointer; no test reaches it, since this read does not.
     if (
       !isCell(root) || root.space !== offer.space ||
       root.getAsNormalizedFullLink().path.length !== 0
