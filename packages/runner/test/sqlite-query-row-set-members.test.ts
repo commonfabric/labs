@@ -47,7 +47,10 @@ import { runtimeSecretLink } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import {
+  internalVerifierRead,
+  linkResolutionProbe,
+} from "../src/storage/reactivity-log.ts";
 import { toURI } from "../src/uri-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
@@ -723,11 +726,11 @@ describe("sqlite-query-row-set-members", () => {
       return rows;
     };
 
-    /** The salt stored in this space, read under an abandoned transaction. */
+    /** The salt stored in this space, read as the runtime reads it. */
     const storedSalt = (): unknown => {
       const tx = runtime.edit();
       try {
-        return runtime.getCellFromLink(saltLink, undefined, tx).getRaw();
+        return tx.readValueOrThrow(saltLink, { meta: internalVerifierRead });
       } finally {
         tx.abort("salt read");
       }
@@ -755,13 +758,32 @@ describe("sqlite-query-row-set-members", () => {
       expect(storedSalt()).toBe(salt);
     });
 
-    it("carries a label no ceiling admits on a read of the salt", async () => {
+    it("stores the salt under a label no ceiling admits", async () => {
       await saltedRows("salt-label");
 
-      const join = joinOf((tx) => {
-        runtime.getCellFromLink(saltLink, undefined, tx).get();
-      });
-      expect(join).toContainEqual(CFC_LABEL_READ_FAILED_ATOM);
+      const tx = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(tx, saltLink);
+        expect(
+          metadata?.labelMap.entries.flatMap((entry) =>
+            entry.label.confidentiality ?? []
+          ),
+        ).toContainEqual(CFC_LABEL_READ_FAILED_ATOM);
+      } finally {
+        tx.abort("salt label read");
+      }
+    });
+
+    it("refuses a read of the salt from outside the runtime", async () => {
+      await saltedRows("salt-read");
+
+      const tx = runtime.edit();
+      try {
+        expect(() => runtime.getCellFromLink(saltLink, undefined, tx).get())
+          .toThrow(/runtime secret/);
+      } finally {
+        tx.abort("refused read");
+      }
     });
 
     it("replaces a salt stored without the runtime's writer claim", async () => {

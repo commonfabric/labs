@@ -1683,6 +1683,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
+  /**
+   * The read chokepoint of the runtime-secret namespace: no executed code
+   * reads a runtime secret, whatever link or id names it. The runtime's own
+   * reads pass, which are verifier-internal or made inside a privileged
+   * system write; the marker the first carries is private to the runtime.
+   */
+  #assertRuntimeSecretUnread(
+    address: Pick<IMemorySpaceAddress, "id">,
+    options: IReadOptions | undefined,
+  ): void {
+    if (
+      !isRuntimeSecretId(address.id) || this.#privilegedSystemWriteDepth > 0 ||
+      isInternalVerifierRead(options?.meta)
+    ) {
+      return;
+    }
+    throw new Error(
+      `${address.id} is a runtime secret: only the runtime reads it.`,
+    );
+  }
+
   #prepareRead(address: Pick<IMemorySpaceAddress, "scope">): void {
     this.#noteCfcActivity();
     if (this.#cfcState.prepare.status === "prepared") {
@@ -3275,6 +3296,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
@@ -3287,6 +3309,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, readOptions);
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {
       return this.tx.trackReadPaths(address, paths, readOptions);
@@ -3307,6 +3330,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
+    this.#assertRuntimeSecretUnread(address, options);
     this.#prepareRead(address);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);
