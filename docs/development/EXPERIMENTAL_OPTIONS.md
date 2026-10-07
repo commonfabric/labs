@@ -2059,11 +2059,16 @@ control point, and then reads the effective state back so that
 
 First-party construction config is centralized in
 [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts),
-while flag parsing, environment mappings, and deployed-client adoption live in
+while flag parsing, environment mappings, each flag's authority and the rule
+for adopting a server's posture live in
 [`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts).
-The browser-safe `@commonfabric/runner/experimental-posture` export provides
-those functions to standalone hosts without loading the runtime implementation.
-`runtime-presets.ts` re-exports those functions. The modules use these
+A deployed client reads `/api/meta` through `settingsForDeployedClient` in
+[`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts),
+which returns both the posture it adopts and the memory URL the deployment
+names. The browser-safe `@commonfabric/runner/experimental-posture` and
+`@commonfabric/runner/deployment-meta` exports provide those functions to
+standalone hosts without loading the runtime implementation.
+`runtime-presets.ts` re-exports the posture functions. The modules use these
 registries:
 
 - `EXPERIMENTAL_ENV_VARS` is
