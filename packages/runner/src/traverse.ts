@@ -90,7 +90,12 @@ import {
   parseLink,
   schemaForSpaceCrossing,
 } from "./link-utils.ts";
-import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
+import {
+  canFollowScopedLink,
+  isCellScope,
+  noteDeclaredReadScope,
+  scopeRank,
+} from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
@@ -2901,6 +2906,7 @@ function followPointer(
     ]);
     return [notFound(target), selector];
   }
+  noteDeclaredReadScope(tx, schemaScope, link.scope);
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
     // Remove the portions of doc.path from selector.path, limiting schema if

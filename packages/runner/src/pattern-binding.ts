@@ -53,7 +53,12 @@ import {
   sigilLinkAddressOnly,
 } from "./link-utils.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
+import {
+  CELL_SCOPES,
+  isCellScope,
+  narrowerScopeCap,
+  scopeRank,
+} from "./scope.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   internalVerifierRead,
@@ -241,6 +246,54 @@ const descriptorForPartialCauseAlias = (
 };
 
 /**
+ * The scope a stored scoped link at `ref` already places this output at: the
+ * narrowest scope reached by following, from `ref`, links to `ref`'s own
+ * address at a narrower scope. `undefined` when `ref` holds no such link.
+ *
+ * A broad output location that holds a link to its own narrower-scoped
+ * instance was written by a computation whose reads narrowed. A later run
+ * whose reads did not narrow, in this process or another, still writes
+ * behind that link rather than over it: the link is what every reader of the
+ * broad location follows to its own instance, and replacing it with one
+ * reader's plain value would make the next reader whose reads narrow put it
+ * back, with no run ever converging. The reads here are an internal
+ * write-placement decision: kept out of scheduling and CFC taint.
+ */
+function storedOutputScope(
+  tx: IExtendedStorageTransaction,
+  ref: NormalizedFullLink,
+): CellScope | undefined {
+  let scope: CellScope | undefined;
+  let at = ref;
+  for (let hops = 0; hops < CELL_SCOPES.length; hops++) {
+    const stored = tx.readValueOrThrow(at, {
+      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    });
+    const link = isCellLink(stored) ? parseLink(stored, at) : undefined;
+    if (
+      link === undefined || link.id !== ref.id || link.space !== ref.space ||
+      !deepEqual(link.path, ref.path) ||
+      scopeRank(link.scope) <= scopeRank(at.scope)
+    ) {
+      return scope;
+    }
+    scope = link.scope;
+    at = { ...ref, scope: link.scope };
+  }
+  return scope;
+}
+
+/** The narrower of two optional scopes; `undefined` when both are. */
+function narrowerOutputScope(
+  a: CellScope | undefined,
+  b: CellScope | undefined,
+): CellScope | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return scopeRank(a) >= scopeRank(b) ? a : b;
+}
+
+/**
  * Sends a value to a binding. If the binding is an array or object, it'll
  * traverse the binding and the value in parallel accordingly. If the binding is
  * an alias, it will follow all aliases and send the value to the last aliased
@@ -349,7 +402,10 @@ function sendValueToBindingInner<T>(
       "writeRedirect",
       { preserveOverwrite: true },
     );
-    const outputScope = options.narrowestReadScope;
+    const outputScope = narrowerOutputScope(
+      options.narrowestReadScope,
+      storedOutputScope(tx, ref),
+    );
     if (
       outputScope !== undefined &&
       scopeRank(outputScope) > scopeRank(ref.scope)

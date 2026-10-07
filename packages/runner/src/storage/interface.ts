@@ -2107,6 +2107,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   resetNarrowestReadScope(scope?: CellScope): void;
 
   /**
+   * Narrows the transaction's read scope to `scope` when it is narrower than
+   * what the reads so far established. A read records the scope of the
+   * address it lands on by itself; this is for a read that learns a narrower
+   * scope from a declaration rather than from an address, such as a followed
+   * link whose target position is declared narrower than the link's own
+   * scope.
+   */
+  noteReadScope(scope: CellScope): void;
+
+  /**
    * Turn lazy materialization on (or off) for this transaction.
    *
    * A marked transaction hands a reader views that resolve each path as it is
