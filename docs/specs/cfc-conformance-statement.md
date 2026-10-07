@@ -221,8 +221,10 @@ statement.
 
 **Deviations, with direction.**
 
-- The mint is omitted when the writing identity is ambiguous or the join is
-  empty: an under-claim of integrity, the fail-safe direction, stated in
+- The mint is omitted when the writing identity is ambiguous or the join of
+  what the transaction read is empty; a join that value-intrinsic exchange
+  emptied (§5.3) is still minted, so the release is recorded. The omission is
+  an under-claim of integrity, the fail-safe direction, stated in
   [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)
   under "What fails closed".
 - The atom carries an input-witness summary in place of the pseudocode's

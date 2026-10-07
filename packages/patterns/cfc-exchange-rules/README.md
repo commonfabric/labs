@@ -20,6 +20,14 @@ handler copying a raw input, or a different version of the module does not
 satisfy the rule. `blessed-object.tsx` does the same for a function returning an
 object, whose object node is released along with its fields.
 
+A rule like these, with no sink, path or grant scope and guarded only by
+integrity bound to the value it releases, is value-intrinsic, and its release
+carries onto what is computed from the released value: a `computed()` over it, a
+`.map()` over a list in it, and a store a handler copies it into each carry the
+released label. A value that also reads a sealed input keeps that input's
+clause. A rule scoped to a sink or guarded on a grant releases only at the
+boundary it was evaluated for, and nothing derived carries it.
+
 `custody-answer-room.tsx` is a room whose members seal their stances into the
 policy's custody through the host's `cf-custody-seal`, and whose policy releases
 only what its projector computes over the sealed box, one of the listed answers,

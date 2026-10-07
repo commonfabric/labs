@@ -132,7 +132,13 @@ adds:
    same consumed labels the sink-request and input gates already fit, only
    rewritten first — so it may advance on its own schedule. It is only
    *useful* once `cfcPolicyRecords` are configured (an empty policy set makes
-   evaluation a no-op at every setting).
+   evaluation a no-op at every setting). Under `cfcFlowLabels: persist` the
+   dial also decides what a derived value's label persists: at `enforce`, the
+   result of value-intrinsic rules at each location a transformation observed
+   carries onto the label of what it writes (§5.3), at `observe` the raw label
+   persists beside a diagnostic, and at `off` nothing is evaluated. A carried
+   label is never wider than the raw one, so this too only loosens, and
+   exhaustion there keeps the raw label rather than recording a reason.
 
 Everything else is free: a deployment may sit at any enforcement level with
 flow `off` (the floor and the explicit gate need no derived labels), and may
