@@ -193,7 +193,6 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.SetBreakpoints]: setting,
   [RequestType.UploadBlob]: write,
   [RequestType.GetSpaceRootPattern]: reference,
-  [RequestType.RecreateSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
   [RequestType.PieceGet]: reference,
   [RequestType.PieceGetSlug]: {

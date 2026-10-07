@@ -254,41 +254,70 @@ remedies, rather than resolving to nothing.
 ## Custom Home Pattern
 
 The home space's default pattern is the home experience itself — by default,
-`/api/patterns/system/home.tsx`. An existing Home owns account data, including
-profiles, favorites, navigation, and shared-space membership. Update its source
-in place to retain that data. Root recreation refuses an existing Home before
-stopping or unlinking it, even if its target cannot currently be loaded.
+`/api/patterns/system/home.tsx`. A Home is created once, on its user's first
+open, and from then on it owns account data: profiles, favorites, navigation,
+the shared-space catalog and the private inbox pointer. It is changed only in
+place, with `cf piece setsrc` on its root, which retains that data. Nothing
+creates, replaces or unlinks the root of an identity Home: root recreation
+refuses it before stopping, unlinking or compiling anything, whether the Home
+is absent, installed, or pointing at a target that cannot currently be loaded,
+and the low-level unlink refuses it too. (`cf space set-home` is retired; see [Retired: `cf space
+set-home`](../../../packages/cli/README.md#retired-cf-space-set-home).)
 
-For an identity that has no Home root yet, initialize custom or system source
-using the CF CLI:
+To run custom Home source, open the Home once so it exists, find its root, and
+update the root in place with the complete authored source and its tests:
 
 ```bash
 # Run its automated pattern test
 cf test ./my-home.test.tsx
 
-# Initialize a custom Home with its test attached
-cf space set-home -i ./my.key -a http://localhost:8000 \
-  --test ./my-home.test.tsx ./my-home.tsx
+# The Home space is the identity's DID; its root is the piece the list names
+cf piece ls -i ./my.key -a http://localhost:8000 -s "$(cf id did ./my.key)"
 
-# Alternatively, initialize the system Home
-cf space set-home -i ./my.key -a http://localhost:8000 --reset
+# Update the existing Home in place, retaining the tested source package
+cf piece setsrc -i ./my.key -a http://localhost:8000 --cell <home-root> \
+  --test ./my-home.test.tsx ./my-home.tsx
 ```
 
 Write automated tests for new or changed home-pattern behavior. Repeat
 `--test` for every authored test entry. Deployment packages and type-checks
 the tests but does not run them, so run each entry with `cf test` first.
+Compatible source changes retain the Home's owned cells; incompatible changes
+require an explicit migration, rehearsed on a `cf space clone` first.
 
-`set-home`, including `--reset`, initializes only an absent Home. It rechecks
-the root in the creation transaction so two initializers cannot replace each
-other's Home. To change an existing Home, use `cf piece setsrc` on that root
-with the complete authored source and test entries. Compatible source changes
-retain its owned cells; incompatible changes require an explicit migration.
+### A Home that will not load
+
+There is no supported reset. A Home that misbehaves is repaired in place, and
+the first step is to say which kind of trouble it is:
+
+1. **The root's source will not load** — the browser shows the Home failing
+   to start, or `cf piece setsrc` reports that the stored source cannot be
+   loaded for its compatibility check (the
+   [stale source closure](../../development/debugging/gotchas/stale-source-closure-cfhelpers.md)
+   gotcha is the common cause). Update the root in place as above. When the
+   old source cannot be loaded to compare against, rehearse the update on a
+   clone of the space (`cf space clone`, then `verify` and `reset`), and only
+   then run the real one with `--dangerously-allow-incompatible-schema`.
+2. **Storage is refusing every commit** — nothing in the space can be
+   written, not only the Home, and the server's own health says so. That is
+   not a Home problem; no operation on the root helps, and the fix is on the
+   server (a restart of the engine serving the space). Do not touch the root.
+3. **Neither** — the root loads and commits land, but the Home is wrong.
+   That is a bug in the Home pattern or its data, and is fixed as one.
+
+A Home that is truly unrecoverable has no supported path. The only low-level
+option, a direct write clearing the space cell's `defaultPattern` followed by
+a first open, is not an account operation: it loses profiles, favorites,
+navigation and the catalog, and it leaves every outside record that named the
+old Home (loom's inbox binding, lobby entries) pointing at the wrong profile.
+Until a recovery contract that carries those forward is designed, that call is
+the platform owners', not an operator's.
 
 ### Identity Matching
 
 The home space DID equals the user's identity DID. This means **the CLI identity
-must match the browser identity** for `set-home` to affect what the browser
-displays.
+must match the browser identity** for a source update to affect what the
+browser displays.
 
 That equality is also the ACL genesis authority. When the home space has no ACL
 document and no history, remote storage opens a temporary session with the same
@@ -354,11 +383,11 @@ Both the home pattern and the default app pattern follow the same mechanism:
      `/api/patterns/system/default-app.tsx`
 3. The pattern is compiled, run, linked as `spaceCell.defaultPattern`, and its
    source URL is stamped as `patternSource` for future updates
-4. `recreateDefaultPattern()` can replace a non-Home root or initialize an absent
-   Home. It refuses an existing identity Home, which must be updated in place.
-   A URL-based pattern stamps `patternSource`; a custom `RuntimeProgram` (used
-   by `cf space set-home`) remains untracked by the URL updater and may carry a
-   separate repository locator
+4. `recreateDefaultPattern()` replaces a non-Home root, and refuses an identity
+   Home, absent or present, which is created on first open and updated in
+   place. A URL-based pattern stamps `patternSource`; a custom `RuntimeProgram`
+   remains untracked by the URL updater and may carry a separate repository
+   locator
 5. Before an existing eligible root starts, it is reconciled in place. A root
    with stored `patternSource` tracks that source. A pre-provenance root is
    admitted only when its stored `{ identity, symbol }` exactly matches the

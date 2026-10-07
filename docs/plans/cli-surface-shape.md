@@ -46,7 +46,7 @@ itself part of the problem.
 | **Authoring** — work on source files, never touching a live space | `check`, `test`, `view` (pager), `init`, `deps update` |
 | **Identity and access** — who you are, and who may do what | `id` (new/did/derive/from-mnemonic), `acl` (ls/set/remove) |
 | **Live data** — reading and writing running state | `cell get`/`set`/`get-label`/`set-label`, `piece call`/`apply`/`link`/`step`/`verbs`/`inspect`, `wish` |
-| **Piece and space lifecycle** — deploying and managing running programs, and rebuilding a space's own patterns | `piece new`/`setsrc`/`getsrc`/`rm`/`ls`/`search`/`map`/`set-slug`, `space recreate-root`/`set-home` |
+| **Piece and space lifecycle** — deploying and managing running programs, and rebuilding a space's own patterns | `piece new`/`setsrc`/`getsrc`/`rm`/`ls`/`search`/`map`/`set-slug`, `space recreate-root` |
 | **Rendering** — turning things into something to look at | `piece view` (terminal), `piece render` (HTML), `view` (source pager) |
 | **Storage forensics** — reading the database directly, mostly offline (`inspect pull` fetches from a remote) | `inspect` (22 subcommands), `space` (clone/verify/reset/fingerprint) |
 | **Filesystem projection** — exposing cells as files | `fuse` (mount/unmount/status), `exec` |
@@ -175,7 +175,7 @@ cf wish  <query>                      <read opts>  # a query, not an address
 cf exec  <mountedFile> [args]         <read opts>  # through a filesystem mount
 
 cf piece new|setsrc|getsrc|rm|ls|search|verbs|set-slug|step|link|inspect|…
-cf space recreate-root|set-home|clone|verify|reset|fingerprint
+cf space recreate-root|clone|verify|reset|fingerprint
 cf id … | cf acl … | cf fuse …
 cf inspect …                                     # offline forensics
 cf check | test | view | init | deps             # working on source
@@ -646,8 +646,9 @@ than taking anything away.
    did, are gone.
 7. **Put each command under the noun it acts on.** `cf cell` gains `get`,
    `set`, `get-label` and `set-label`; `piece` gains `call`; `space` gains
-   `recreate-root` and `set-home`. Each moved command stays answerable at the
-   spelling it had, hidden and dated, so a script keeps working while it is
+   `recreate-root` and `set-home` (the latter since retired: a Home is created
+   on first open and changed in place). Each moved command stays answerable at
+   the spelling it had, hidden and dated, so a script keeps working while it is
    migrated. The date bounds a guarantee rather than schedules an execution:
    removing those mounts is 7b, a separate change, the way 6b was separate
    from 6a. 7b takes the notice and its dated constant with the mounts, and

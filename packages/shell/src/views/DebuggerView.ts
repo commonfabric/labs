@@ -843,8 +843,6 @@ export class XDebuggerView extends LitElement {
   private accessor openDropdowns = new Set<TopicKey>();
 
   @state()
-  private accessor isRecreatingSpaceRootPattern = false;
-
   @state()
   private accessor searchText = "";
 
@@ -1030,22 +1028,6 @@ export class XDebuggerView extends LitElement {
       // None selected, select all
       this.#initializeAllSubtopics();
     }
-  }
-
-  #recreateSpaceRootPattern() {
-    if (this.isRecreatingSpaceRootPattern) return;
-    this.isRecreatingSpaceRootPattern = true;
-    this.dispatchEvent(
-      new CustomEvent("recreate-space-root-pattern", {
-        bubbles: true,
-        composed: true,
-        detail: {
-          done: () => {
-            this.isRecreatingSpaceRootPattern = false;
-          },
-        },
-      }),
-    );
   }
 
   #clearEvents() {
@@ -2770,17 +2752,6 @@ export class XDebuggerView extends LitElement {
                   <span class="stat-label">Filters:</span>
                   <span class="stat-value">${this.activeSubtopics.size}</span>
                 </div>
-                <button
-                  type="button"
-                  class="action-button"
-                  style="background-color: #dc2626; color: white;"
-                  @click="${this.#recreateSpaceRootPattern}"
-                  ?disabled="${this.isRecreatingSpaceRootPattern}"
-                >
-                  ${this.isRecreatingSpaceRootPattern
-                    ? "Recreating..."
-                    : "Recreate Root Pattern"}
-                </button>
               </div>
             </div>
 

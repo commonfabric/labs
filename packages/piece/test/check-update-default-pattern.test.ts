@@ -28,6 +28,7 @@ import {
   readPieceSourceState,
   reconcilePieceSource,
 } from "../src/ops/piece-origin.ts";
+import { installCustomRoot } from "./install-custom-root.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { getLogger } from "@commonfabric/utils/logger";
 
@@ -1613,11 +1614,9 @@ describe("opening a space root", () => {
 
   it("reports a custom home root with no origin as detached", async () => {
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const before = getPatternIdentityRef(root);
@@ -1706,11 +1705,9 @@ describe("opening a space root", () => {
 
   it("replaces an unloadable stale sourceless home root", async () => {
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1754,11 +1751,9 @@ describe("opening a space root", () => {
     // home.tsx is handler-rich.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1828,11 +1823,9 @@ describe("opening a space root", () => {
     // internal cells were never materialized on the reused doc.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1876,11 +1869,9 @@ describe("opening a space root", () => {
     // healed at cold start itself.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -1918,11 +1909,9 @@ describe("opening a space root", () => {
   it("swaps in a pattern whose argument adds an owner-protected defaulted field", async () => {
     await setupHome();
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1988,11 +1977,9 @@ describe("opening a space root", () => {
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");
 
     // 1. Age the doc: materialize a favorites-less vintage.
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2127,11 +2114,9 @@ describe("opening a space root", () => {
   const pinOldRequiredHome = async () => {
     await setupHome();
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2444,11 +2429,9 @@ describe("opening a space root", () => {
     // only the identity matches.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2497,11 +2480,9 @@ describe("opening a space root", () => {
     // identity alone treated this as already-official and left it unhealable.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2672,11 +2653,9 @@ describe("opening a space root", () => {
     // without also asserting the argument contract.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2742,11 +2721,9 @@ describe("opening a space root", () => {
     // outcome, and each guard must surface the ORIGINAL start error.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2802,11 +2779,9 @@ describe("opening a space root", () => {
     // ref-undefined guard must surface the original start failure.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2881,11 +2856,9 @@ describe("opening a space root", () => {
     // ambiguous sourceless root. Fail closed, mutate nothing.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -2917,11 +2890,9 @@ describe("opening a space root", () => {
     // replaced.
 
     await setupHome({ cfcEnforcementMode: "disabled" });
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -3090,14 +3061,6 @@ describe("opening a space root", () => {
       expect(getPatternIdentityRef(updated)?.identity).toBe(
         await identityForSource(customV2, {}, CUSTOM_APP_URL),
       );
-    });
-
-    it("stamps a recreated home root with home.tsx", async () => {
-      await setupHome();
-
-      await controller.recreateDefaultPattern();
-      const root = (await controller.getDefaultPattern(false))!;
-      expect(getPatternSource(root)).toBe(HOME_PATTERN_SOURCE);
     });
   });
 });

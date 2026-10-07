@@ -350,44 +350,6 @@ describe("RuntimeInternals", () => {
       }
     });
 
-    it("caches a recreated root as started", async () => {
-      const client = new MockRuntimeClient();
-      const recreated = { id: "recreated-root" };
-      const starts: Array<boolean | undefined> = [];
-      client.getSpaceRootPattern = (
-        space: DID,
-        options?: { start?: boolean },
-      ) => {
-        client.spaceRootCalls.push(space);
-        starts.push(options?.start);
-        return Promise.resolve({ id: "fetched-root" } as never);
-      };
-      (client as unknown as {
-        recreateSpaceRootPattern: (space: DID) => Promise<unknown>;
-      }).recreateSpaceRootPattern = () => Promise.resolve(recreated);
-      const runtime = new RuntimeInternals(client as any);
-      const space = "did:key:z6Mk-root-recreate" as DID;
-
-      try {
-        await runtime.getSpaceRootPattern(space, { start: false });
-        expect(starts).toEqual([false]);
-
-        // Recreating replaces whatever was cached, and what it caches IS
-        // started — so neither kind of caller refetches afterwards.
-        await expect(runtime.recreateSpaceRootPattern(space)).resolves.toBe(
-          recreated,
-        );
-        await expect(runtime.getSpaceRootPattern(space)).resolves.toBe(
-          recreated,
-        );
-        await expect(runtime.getSpaceRootPattern(space, { start: false }))
-          .resolves.toBe(recreated);
-        expect(starts).toEqual([false]);
-      } finally {
-        await runtime.dispose();
-      }
-    });
-
     it("retries a root-pattern lookup after rejection", async () => {
       const client = new MockRuntimeClient();
       const runtime = new RuntimeInternals(client as any);

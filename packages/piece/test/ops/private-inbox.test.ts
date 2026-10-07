@@ -13,6 +13,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import * as ops from "../../src/ops/mod.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
+import { installCustomRoot } from "../install-custom-root.ts";
 import {
   ensurePrivateInboxOf,
   type PrivateInboxEnsure,
@@ -82,9 +83,7 @@ describe("ensurePrivateInboxOf()", () => {
       runtime,
     );
     await controller.synced();
-    home = (await controller.recreateDefaultPattern({ customProgram: program }))
-      .getCell();
-    await runtime.idle();
+    home = await installCustomRoot(runtime, controller, program);
   });
 
   afterEach(async () => {

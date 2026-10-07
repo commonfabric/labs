@@ -2163,11 +2163,21 @@ removes them, and nothing holds them open past that date.
 | `cf cell set-label`      | `cf piece set-label`     |
 | `cf piece call`          | `cf call`                |
 | `cf space recreate-root` | `cf piece recreate-root` |
-| `cf space set-home`      | `cf piece set-home`      |
 
 This is a migration aid rather than a second surface: nothing here teaches the
 right column as an alternative spelling to keep using. `--piece` is a different
 case — a deprecated name for `--cell` that carries no end date and no notice.
+
+### Retired: `cf space set-home`
+
+A Home is created on its user's first open and changed only in place, so a
+command that installs a Home root has no job. `cf space set-home` and its
+`cf piece set-home` mount are retired: both are hidden, and a run of either
+refuses and says what does each half of the work — first open for creation,
+`cf piece setsrc --cell <home-root>` for the source (`cf piece ls` in the Home
+space names the root). **The spelling stops answering after 2026-10-21**, when a
+later change removes the mounts. See
+[Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern).
 
 ## Evaluating patterns from another tool
 
