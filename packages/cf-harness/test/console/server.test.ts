@@ -2,6 +2,7 @@ import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   consoleDataDirectories,
@@ -25,6 +26,7 @@ import {
   harnessSessionEngineOptions,
 } from "../../src/session-assembly.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
+import { createHarnessRunState } from "../../src/run-state.ts";
 import {
   bashToolDescriptor,
   bashToolDescriptorForRuntime,
@@ -37,6 +39,10 @@ import {
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
+import {
+  createHarnessHandleTable,
+  mintReferentHandle,
+} from "../../src/handle-table.ts";
 import { MAX_HARNESS_PATTERN_REFS } from "../../src/pattern-refs.ts";
 import {
   type HarnessInteractiveChatEventListener,
@@ -3849,6 +3855,109 @@ describe("console/server", () => {
       expect((await response.json()).error).toBe(
         "pattern index recordEvent failed (404)",
       );
+    });
+  });
+
+  describe("GET /api/runs/<runId>", () => {
+    /**
+     * A run holding two strings a browsing child returned, one labeled for
+     * `owner` and one for someone else, read by a server whose fabric session
+     * signs with the key at `keyPath`.
+     */
+    const runDetailFrom = async (
+      keyPath: string,
+      root: string,
+      owner: string,
+    ) => {
+      const referent = (value: string, subject: string) => ({
+        kind: "return" as const,
+        source: "delegate_task:child",
+        value,
+        label: { confidentiality: [cfcAtom.user(subject)] },
+        labelSource: "child" as const,
+      });
+      const mine = await mintReferentHandle(
+        createHarnessHandleTable("run-1"),
+        referent("my note", owner),
+      );
+      const theirs = await mintReferentHandle(
+        mine.table,
+        referent("their note", "did:key:zOther"),
+      );
+      await Deno.mkdir(join(root, "run-1"), { recursive: true });
+      await Deno.writeTextFile(
+        join(root, "run-1", "run-state.json"),
+        JSON.stringify({
+          ...createHarnessRunState({
+            runId: "run-1",
+            cfcEnforcementMode: "enforce-strict",
+            currentDir: "/workspace",
+            now: "2026-01-01T00:00:00.000Z",
+          }),
+          handleTable: theirs.table,
+        }),
+      );
+      await Deno.writeTextFile(join(root, "run-1", "transcript.json"), "[]");
+      const configured = await config();
+      const owned = new ConsoleServer(
+        {
+          ...configured,
+          artifactRoot: root,
+          fabricSession: {
+            ...configured.fabricSession,
+            identityKeyPath: keyPath,
+          },
+        },
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            createPromptLoop: answeringLoop,
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      const response = await owned.handle(getRequest("/api/runs/run-1"));
+      return {
+        detail: await response.json(),
+        mine: mine.token,
+        theirs: theirs.token,
+      };
+    };
+
+    it("returns the strings that fit the display of the identity the console signs as", async () => {
+      const root = await Deno.makeTempDir();
+      try {
+        const keyPath = join(root, "owner.pkcs8");
+        const key = await Identity.generatePkcs8();
+        await Deno.writeFile(keyPath, key);
+        const owner = (await Identity.fromPkcs8(key)).did();
+
+        const { detail, mine, theirs } = await runDetailFrom(
+          keyPath,
+          root,
+          owner,
+        );
+
+        expect(detail.revealed).toEqual({ [mine]: "my note" });
+        expect(detail.hidden).toEqual([theirs]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns no strings when the console cannot read its identity", async () => {
+      const root = await Deno.makeTempDir();
+      try {
+        const { detail, mine, theirs } = await runDetailFrom(
+          join(root, "missing.pkcs8"),
+          root,
+          signer.did(),
+        );
+
+        expect(detail.revealed).toEqual({});
+        expect(detail.hidden).toEqual([mine, theirs]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
     });
   });
 

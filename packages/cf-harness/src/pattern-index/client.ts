@@ -13,13 +13,13 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { Identity } from "@commonfabric/identity";
 import {
   type FirstPartyHttpSigner,
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessPatternIndexConfig } from "../config.ts";
+import { loadHarnessIdentity } from "../identity-key.ts";
 import {
   defaultHarnessFetch,
   type HarnessFetch,
@@ -588,9 +588,7 @@ export const createHarnessPatternIndexClientFactory = (
   fetchFn?: HarnessFetch,
 ): HarnessPatternIndexClientFactory =>
 async () => {
-  const identity = await Identity.fromPkcs8(
-    await Deno.readFile(identityKeyPath),
-  );
+  const identity = await loadHarnessIdentity(identityKeyPath);
   return new PatternIndexClient({
     baseUrl: config.baseUrl,
     signer: identity,

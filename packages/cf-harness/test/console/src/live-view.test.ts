@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { spy } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
+import { nothing } from "lit";
 import {
   ConsoleLive,
   consoleLiveAddress,
@@ -10,6 +11,7 @@ import {
   consoleLiveEntries,
   type ConsoleLiveEntry,
   consoleLivePieceHref,
+  consoleLivePolicyMark,
   consoleLiveRunReads,
   consoleLiveState,
   consoleLiveToolLine,
@@ -23,6 +25,7 @@ import type {
   ConsoleChatStructuredEvent,
 } from "../../../console/turn-result.ts";
 import type { ConsoleStep } from "../../../console/steps.ts";
+import type { BrowserToolAction } from "../../../src/tools/browser.ts";
 import {
   HARNESS_CHAT_EVENT_TYPE,
   HARNESS_CHAT_PROTOCOL_VERSION,
@@ -542,6 +545,7 @@ describe("console/src/live-view", () => {
         kind: "subagent",
         key: "1",
         turnId: "turn-1",
+        parentToolCallId: "call-1",
         profile: "pattern-author",
         goal: "write the card",
         status: "failed",
@@ -736,6 +740,135 @@ describe("console/src/live-view", () => {
     });
   });
 
+  describe("consoleLivePolicyMark()", () => {
+    const step = (
+      policy: ConsoleStep["policy"],
+      withheld: ConsoleStep["withheld"] = {
+        status: "recorded",
+        locations: [],
+      },
+    ): ConsoleStep => ({
+      index: 0,
+      kind: "tool",
+      toolName: "browser",
+      toolCallId: "call-1",
+      handlesIntroduced: [],
+      handlesInScope: [],
+      status: "ok",
+      ...(policy === undefined ? {} : { policy }),
+      policyEvents: [],
+      withheld,
+    });
+
+    it("returns a quiet shield, and no word, for an allowance that held nothing back", () => {
+      const text = templateText(consoleLivePolicyMark(step({
+        decision: "allowed",
+        effectClass: "side-effect",
+        reasonCodes: ["cfc_enforce_strict_direct_command"],
+      })));
+
+      expect(text).toContain("live-policy ok");
+      expect(text).toContain('<span class="live-spoken">Allowed</span>');
+      expect(text).not.toContain('<span aria-hidden="true">');
+    });
+
+    it("returns a shield saying blocked for a denial", () => {
+      const text = templateText(consoleLivePolicyMark(step({
+        decision: "denied",
+        reasonCodes: ["cfc_handle_destination_not_allowed"],
+      })));
+
+      expect(text).toContain("live-policy bad");
+      expect(text).toContain('<span aria-hidden="true">blocked</span>');
+    });
+
+    it("returns a shield saying withheld for an allowance that held something back", () => {
+      const text = templateText(consoleLivePolicyMark(step(
+        { decision: "allowed", reasonCodes: [] },
+        {
+          status: "record-unreadable",
+          locations: [],
+        },
+      )));
+
+      expect(text).toContain("live-policy warn");
+      expect(text).toContain('<span aria-hidden="true">withheld</span>');
+      expect(text).toContain(
+        '<span class="live-spoken">Partly withheld</span>',
+      );
+    });
+
+    it("returns a shield saying flagged for a warning on an allowance", () => {
+      const text = templateText(consoleLivePolicyMark({
+        ...step({ decision: "allowed", reasonCodes: [] }),
+        policyEvents: [{
+          type: "cf-harness.policy-event",
+          severity: "warning",
+          mode: "observe",
+          toolId: "browser",
+          detail: "observed",
+          at: "2026-01-01T00:00:00.000Z",
+        }],
+      }));
+
+      expect(text).toContain("live-policy warn");
+      expect(text).toContain('<span aria-hidden="true">warning</span>');
+      expect(text).toContain(
+        '<span class="live-spoken">Allowed with a warning</span>',
+      );
+      expect(text).not.toContain("withheld");
+    });
+
+    it("returns a shield saying the decision for one that is neither an allowance nor a denial", () => {
+      const text = templateText(consoleLivePolicyMark(step({
+        decision: "invalid",
+        reasonCodes: [],
+      })));
+
+      expect(text).toContain("live-policy warn");
+      expect(text).toContain('<span aria-hidden="true">invalid</span>');
+      expect(text).toContain('<span class="live-spoken">Invalid</span>');
+    });
+
+    it("returns a quiet shield for a step CFC only labeled the inputs of", () => {
+      const text = templateText(consoleLivePolicyMark({
+        ...step(undefined),
+        invocation: {
+          type: "cf-harness.cfc-invocation-context",
+          version: 1,
+          sequence: 1,
+          runId: "r",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          toolId: "browser",
+          operation: "shell",
+          cfcEnforcementMode: "enforce-explicit",
+          cwd: "/workspace",
+          runManifest: { present: false },
+          inputs: {},
+          cfcInputLabels: {
+            version: 1,
+            entries: [{
+              path: ["url"],
+              label: {
+                confidentiality: [{
+                  type: "test.cfc/ObservedOutput",
+                  subject: "did:key:observed",
+                }],
+              },
+            }],
+          },
+        },
+      }));
+
+      expect(text).toContain("live-policy ok");
+      expect(text).toContain('<span class="live-spoken">Recorded</span>');
+    });
+
+    it("returns nothing for a step CFC recorded nothing about", () => {
+      expect(consoleLivePolicyMark(step(undefined))).toBe(nothing);
+    });
+  });
+
   describe("consoleLiveState()", () => {
     it("returns `connecting` for a feed with no events yet", () => {
       expect(consoleLiveState([])).toBe("connecting");
@@ -751,7 +884,7 @@ describe("console/src/live-view", () => {
       expect(consoleLiveState(consoleLiveEntries(log(
         turnStarted,
         toolStarted("call-1", "run_pattern"),
-      )))).toBe("run_pattern");
+      )))).toBe("run pattern");
     });
 
     it("returns `working` between one call finishing and the next starting", () => {
@@ -801,12 +934,30 @@ describe("console/src/live-view", () => {
         "done",
       );
       expect(consoleLiveState(consoleLiveEntries(envelopes))).toBe(
-        "run_pattern",
+        "run pattern",
       );
     });
   });
 
   describe("consoleLiveToolLine()", () => {
+    /**
+     * The text of the line `consoleLiveToolLine()` returns, the tool's name in
+     * angle brackets and each reference bracketed with what it names:
+     * `<Run pattern> attempt 1`, `Click [ref an element of the page]`, `Click [link “Buy”]`.
+     */
+    const lineText = (
+      ...args: Parameters<typeof consoleLiveToolLine>
+    ): string =>
+      consoleLiveToolLine(...args).map((part) =>
+        part.kind === "words"
+          ? part.text
+          : part.kind === "tool"
+          ? `<${part.text}>`
+          : part.kind === "element"
+          ? `[“${part.text}” from ${part.source}]`
+          : `[${part.kind} ${part.text}]`
+      ).join("");
+
     const entry = (
       toolCallId: string,
       toolName: string,
@@ -821,10 +972,11 @@ describe("console/src/live-view", () => {
       ...(resultSummary === undefined ? {} : { resultSummary }),
     });
 
+    /** A run that has read nothing but `lens`, holding no steps or handles. */
     const detail = (
       lens: Partial<ConsoleRunDetail["lens"]>,
-    ): ConsoleRunDetail =>
-      ({
+    ): ConsoleRunDetail => {
+      const read: Partial<ConsoleRunDetail> = {
         lens: {
           patternAttempts: [],
           searches: [],
@@ -832,10 +984,42 @@ describe("console/src/live-view", () => {
           pieces: [],
           ...lens,
         },
-      }) as ConsoleRunDetail;
+        steps: [],
+        handles: [],
+        revealed: {},
+        sites: {},
+        hidden: [],
+      };
+      return read as ConsoleRunDetail;
+    };
+
+    /** A step in which `toolName` was called with `input`. */
+    const toolStep = (
+      toolName: string,
+      input: Record<string, unknown>,
+    ): ConsoleStep => ({
+      index: 0,
+      kind: "tool",
+      toolName,
+      toolCallId: "call-1",
+      input,
+      handlesIntroduced: [],
+      handlesInScope: [],
+      status: "ok",
+      policyEvents: [],
+      withheld: { status: "unrecorded", locations: [] },
+    });
+
+    /** The line a `browser` call given `input` reads as. */
+    const browserLineFor = (input: Record<string, unknown>) =>
+      lineText(
+        entry("call-1", "browser"),
+        undefined,
+        toolStep("browser", input),
+      );
 
     it("returns the numbered attempt and the compiler's word for `run_pattern`", () => {
-      expect(consoleLiveToolLine(
+      expect(lineText(
         entry("call-2", "run_pattern"),
         detail({
           patternAttempts: [
@@ -849,11 +1033,11 @@ describe("console/src/live-view", () => {
           ],
         }),
         undefined,
-      )).toBe("attempt 2 · error: Type mismatch");
+      )).toBe("<Run pattern> attempt 2 · error: Type mismatch");
     });
 
     it("returns the slug `assign_slug` registered", () => {
-      expect(consoleLiveToolLine(
+      expect(lineText(
         entry("call-1", "assign_slug"),
         detail({
           pieces: [{
@@ -863,120 +1047,356 @@ describe("console/src/live-view", () => {
           }],
         }),
         undefined,
-      )).toBe("reading-list");
+      )).toBe("<Assign slug> reading-list");
     });
 
     it("returns the slug from the result of a call the run has not been read for", () => {
-      expect(consoleLiveToolLine(
+      expect(lineText(
         entry("call-1", "assign_slug", '{"slug":"reading-list"}'),
         undefined,
         undefined,
-      )).toBe("reading-list");
+      )).toBe("<Assign slug> reading-list");
     });
 
-    it("returns `undefined` for a result the tool did not write as JSON", () => {
-      expect(consoleLiveToolLine(
+    it("returns only the tool's name for a result the tool did not write as JSON", () => {
+      expect(lineText(
         entry("call-1", "assign_slug", "the slug is reading-list"),
         undefined,
         undefined,
-      )).toBeUndefined();
+      )).toBe("<Assign slug>");
     });
 
     it("returns the query `search_patterns` was given", () => {
-      expect(consoleLiveToolLine(
+      expect(lineText(
         entry("call-1", "search_patterns"),
         detail({
           searches: [{ toolCallId: "call-1", query: "reading list", hits: [] }],
         }),
         undefined,
-      )).toBe("reading list");
+      )).toBe("<Search patterns> reading list");
     });
 
     it("returns the question `query_docs` asked, from the step's own input", () => {
-      const step: ConsoleStep = {
-        index: 0,
-        kind: "tool",
-        toolName: "query_docs",
-        toolCallId: "call-1",
-        input: { question: "how does\na handler write?" },
-        handlesIntroduced: [],
-        handlesInScope: [],
-        status: "ok",
-        policyEvents: [],
-        withheld: { status: "unrecorded", locations: [] },
-      };
+      const step = toolStep("query_docs", {
+        question: "how does\na handler write?",
+      });
 
       expect(
-        consoleLiveToolLine(entry("call-1", "query_docs"), undefined, step),
+        lineText(entry("call-1", "query_docs"), undefined, step),
       )
-        .toBe("how does a handler write?");
+        .toBe("<Query docs> how does a handler write?");
     });
 
     it("returns the Common Fabric task `research` investigated", () => {
-      const step: ConsoleStep = {
-        index: 0,
-        kind: "tool",
-        toolName: "research",
-        toolCallId: "call-1",
-        input: { task: "compose a checklist\nwith a cost total" },
-        handlesIntroduced: [],
-        handlesInScope: [],
-        status: "ok",
-        policyEvents: [],
-        withheld: { status: "unrecorded", locations: [] },
-      };
+      const step = toolStep("research", {
+        task: "compose a checklist\nwith a cost total",
+      });
 
       expect(
-        consoleLiveToolLine(entry("call-1", "research"), undefined, step),
-      ).toBe("compose a checklist with a cost total");
+        lineText(entry("call-1", "research"), undefined, step),
+      ).toBe("<Research> compose a checklist with a cost total");
     });
 
-    it("returns `undefined` for a search whose run holds no record of it", () => {
-      expect(consoleLiveToolLine(
+    it("returns what each `browser` action did and what it acted on", () => {
+      const lines = {
+        open: [{ url: "https://example.com/" }, "Open https://example.com/"],
+        back: [{}, "Go back"],
+        forward: [{}, "Go forward"],
+        reload: [{}, "Reload the page"],
+        scroll: [
+          { direction: "up", ref: "@e4" },
+          "Scroll up within [ref an element of the page]",
+        ],
+        snapshot: [
+          { interactive: true },
+          "Look over the page and the controls on it",
+        ],
+        get: [
+          { kind: "text", target: "main" },
+          "Read the text of the part of the page matching main",
+        ],
+        console: [{}, "Read the messages the page logged"],
+        errors: [{}, "Read the errors the page reported"],
+        screenshot: [{}, "Take a screenshot"],
+        wait: [{ ms: 0 }, "Wait 0 ms"],
+        click: [{ x: 0, y: 340 }, "Click at 0, 340 on the screenshot"],
+        check: [{ ref: "@e6" }, "Check [ref an element of the page]"],
+        fill: [
+          { ref: "@e3", value: "Ada" },
+          'Fill [ref an element of the page] with "Ada"',
+        ],
+        type: [
+          { ref: "@e3", value: 'say "cat\nfood"' },
+          'Type "say \\"cat food\\"" into [ref an element of the page]',
+        ],
+        select: [
+          { ref: "@e7", value: "Large" },
+          'Choose "Large" in [ref an element of the page]',
+        ],
+        press: [{ key: "Enter" }, "Press Enter"],
+        handoff: [
+          { reason: "sign-in" },
+          "Hand the page to you to sign in",
+        ],
+      } satisfies Record<
+        BrowserToolAction,
+        readonly [Record<string, unknown>, string]
+      >;
+
+      for (const [action, [input, line]] of Object.entries(lines)) {
+        expect(browserLineFor({ action, ...input })).toBe(line);
+      }
+    });
+
+    it("returns a `browser` line naming only the arguments the call set", () => {
+      expect(browserLineFor({ action: "scroll", direction: "down" }))
+        .toBe("Scroll down");
+      expect(browserLineFor({ action: "snapshot" })).toBe("Look over the page");
+      expect(browserLineFor({ action: "get", kind: "title" })).toBe(
+        "Read the page's title",
+      );
+      expect(browserLineFor({ action: "wait", loadState: "load" }))
+        .toBe("Wait for the page to load");
+      expect(browserLineFor({ action: "wait", urlPattern: "**/done" }))
+        .toBe("Wait for the address to match **/done");
+      expect(browserLineFor({ action: "wait", ref: "@e2" }))
+        .toBe("Wait for [ref an element of the page]");
+      expect(browserLineFor({ action: "click", ref: "@e5" })).toBe(
+        "Click [ref an element of the page]",
+      );
+      expect(browserLineFor({ action: "handoff" }))
+        .toBe("Hand the page to you");
+    });
+
+    it("returns an empty `browser` value quoted rather than left out", () => {
+      expect(browserLineFor({ action: "fill", ref: "@e3", value: "" }))
+        .toBe('Fill [ref an element of the page] with ""');
+    });
+
+    it("returns the handle a `browser` call bound in place of the value", () => {
+      expect(
+        browserLineFor({
+          action: "type",
+          ref: "@e3",
+          valueHandle: "cfh:a:q2345",
+        }),
+      ).toBe("Type [address a stored item] into [ref an element of the page]");
+      expect(browserLineFor({ action: "open", urlHandle: "cfh:v:p3n8w" }))
+        .toBe("Open [unseen a value another agent found]");
+    });
+
+    it("returns the action of a `browser` call the tool does not define", () => {
+      expect(browserLineFor({ action: "teleport", url: "https://a.test/" }))
+        .toBe("teleport");
+    });
+
+    it("returns only the tool's name for a `browser` call that names no action", () => {
+      expect(browserLineFor({ url: "https://example.com/" })).toBe("<Browser>");
+    });
+
+    it("returns a `browser` line elided to the width a line has for it", () => {
+      const line = browserLineFor({ action: "type", value: "w".repeat(400) });
+
+      expect(line).toHaveLength(140);
+      expect(line.startsWith('Type "www')).toBe(true);
+      expect(line.endsWith("…")).toBe(true);
+    });
+
+    it("returns only the tool's name for a `browser` call whose run has not been read", () => {
+      expect(
+        lineText(entry("call-1", "browser"), undefined, undefined),
+      ).toBe("<Browser>");
+    });
+
+    it("returns the element a `browser` ref names, as the last snapshot before it described it", () => {
+      const snapshot = (
+        index: number,
+        output: string,
+        page?: { url: string; title: string },
+      ): ConsoleStep => ({
+        ...toolStep("browser", { action: "snapshot", interactive: true }),
+        index,
+        output: {
+          status: "ok",
+          outputId: `o${index}`,
+          output,
+          ...(page === undefined ? {} : { page }),
+        },
+      });
+      const click = toolStep("browser", { action: "click", ref: "@e3" });
+      const at = (steps: readonly ConsoleStep[], index: number) =>
+        lineText(
+          entry("call-1", "browser"),
+          { ...detail({}), steps },
+          { ...click, index },
+        );
+      const older = snapshot(0, '- button "Old" [@e3 at 0,0 10x10]');
+      const newer = snapshot(
+        1,
+        [
+          '- heading "Shop" [level 1]',
+          '  - combobox "Search \\"cats\\"" [@e2 at 1,2 3x4] autocomplete=off',
+          '  - button "Buy now" [@e3 at 5,6 7x8]',
+        ].join("\n"),
+      );
+
+      expect(at([older, newer], 2)).toBe(
+        "Click [“Buy now” from the page] button",
+      );
+      expect(at([older, newer], 1)).toBe("Click [“Old” from the page] button");
+      expect(at([older, newer], 2)).toBe(
+        "Click [“Buy now” from the page] button",
+      );
+      expect(at([snapshot(0, '- button "bad \\q escape" [@e3]')], 1))
+        .toBe("Click [ref an element of the page]");
+      expect(
+        at([
+          snapshot(0, '- button "Pay" [@e3]', {
+            url: "not an address",
+            title: "Cart",
+          }),
+        ], 1),
+      ).toBe("Click [“Pay” from the page] button");
+      expect(at([snapshot(0, '- textbox "Name" [ref=e3]')], 1)).toBe(
+        "Click [“Name” from the page] text field",
+      );
+      expect(
+        at([
+          snapshot(0, '- link "Pay” button, then “Cancel" [@e3]', {
+            url: "https://shop.test/cart",
+            title: "Cart",
+          }),
+        ], 1),
+      ).toBe("Click [“Pay” button, then “Cancel” from shop.test] link");
+      expect(at([snapshot(0, '- button "Other" [@e9 at 0,0 1x1]')], 1))
+        .toBe("Click [ref an element of the page]");
+      expect(at([snapshot(0, '- textbox "Q" value="[ref=e3]" [@e9]')], 1))
+        .toBe("Click [ref an element of the page]");
+      expect(at([snapshot(0, '- button "Pay cfh:v:q2345" [@e3]')], 1))
+        .toBe("Click [ref an element of the page]");
+      expect(at([], 0)).toBe("Click [ref an element of the page]");
+    });
+
+    it("returns a handle as what it stands for, as far as the run that holds it says", () => {
+      const holding: ConsoleRunDetail = {
+        ...detail({}),
+        revealed: { "cfh:v:q2345": "12 Main St" },
+        hidden: ["cfh:v:m2345"],
+        handles: [{
+          token: "cfh:a:k2345",
+          slug: "delivery-addresses",
+          introducedAtStep: 0,
+          uses: [],
+          confidentiality: [],
+        }],
+      };
+
+      expect(lineText(
+        entry("call-1", "browser"),
+        holding,
+        toolStep("browser", {
+          action: "type",
+          ref: "@e3",
+          valueHandle: "cfh:v:q2345",
+        }),
+      )).toBe("Type [unseen 12 Main St] into [ref an element of the page]");
+      expect(lineText(
+        entry("call-1", "research"),
+        holding,
+        toolStep("research", {
+          task:
+            "save cfh:v:q2345 and cfh:v:m2345 to cfh:a:k2345 and cfh:a:m2345",
+        }),
+      )).toBe(
+        "<Research> save [unseen 12 Main St] and [unseen a value hidden from this view] to [address delivery-addresses] and [address a stored item]",
+      );
+    });
+
+    it("returns a found value with its control and direction characters written as escapes", () => {
+      expect(lineText(
+        entry("call-1", "research"),
+        { ...detail({}), revealed: { "cfh:v:q2345": "pay\u202Eedoc" } },
+        toolStep("research", { task: "use cfh:v:q2345" }),
+      )).toBe("<Research> use [unseen pay\\u{202E}edoc]");
+    });
+
+    it("returns a `browser` read's target as a reference when it is a ref", () => {
+      expect(browserLineFor({ action: "get", kind: "text", target: "@e9" }))
+        .toBe("Read the text of [ref an element of the page]");
+      expect(browserLineFor({ action: "get", kind: "text", target: "main" }))
+        .toBe("Read the text of the part of the page matching main");
+    });
+
+    it("returns a value a `browser` call wrote out as words, whatever it reads as", () => {
+      expect(browserLineFor({ action: "type", value: "cfh:v:q2345" }))
+        .toBe('Type "cfh:v:q2345"');
+    });
+
+    it("returns the handles in another tool's subject as references", () => {
+      expect(lineText(
+        entry("call-1", "research"),
+        undefined,
+        toolStep("research", {
+          task: "summarize cfh:a:k2345 and (cfh:v:p3n8w).",
+        }),
+      )).toBe(
+        "<Research> summarize [address a stored item] and ([unseen a value another agent found]).",
+      );
+    });
+
+    it("returns a line cut before a reference that would not fit whole", () => {
+      expect(lineText(
+        entry("call-1", "research"),
+        undefined,
+        toolStep("research", { task: `${"w".repeat(120)} cfh:v:q2345` }),
+      )).toBe(`<Research> ${"w".repeat(120)}…`);
+    });
+
+    it("returns a line whose reference ends at the width a line has", () => {
+      expect(lineText(
+        entry("call-1", "research"),
+        undefined,
+        toolStep("research", { task: `${"w".repeat(103)} cfh:v:q2345` }),
+      )).toBe(
+        `<Research> ${"w".repeat(103)} [unseen a value another agent found]`,
+      );
+    });
+
+    it("returns only the tool's name for a search whose run holds no record of it", () => {
+      expect(lineText(
         entry("call-1", "search_patterns"),
         detail({ searches: [] }),
         undefined,
-      )).toBeUndefined();
+      )).toBe("<Search patterns>");
     });
 
-    it("returns `undefined` for a naming whose result never reached the pane", () => {
+    it("returns only the tool's name for a naming whose result never reached the pane", () => {
       expect(
-        consoleLiveToolLine(
+        lineText(
           entry("call-1", "assign_slug"),
           undefined,
           undefined,
         ),
       )
-        .toBeUndefined();
+        .toBe("<Assign slug>");
     });
 
     it("returns a question elided to the width a line has for it", () => {
-      const step: ConsoleStep = {
-        index: 0,
-        kind: "tool",
-        toolName: "query_docs",
-        toolCallId: "call-1",
-        input: { question: "w".repeat(400) },
-        handlesIntroduced: [],
-        handlesInScope: [],
-        status: "ok",
-        policyEvents: [],
-        withheld: { status: "unrecorded", locations: [] },
-      };
+      const step = toolStep("query_docs", { question: "w".repeat(400) });
       const line = consoleLiveToolLine(
         entry("call-1", "query_docs"),
         undefined,
         step,
-      );
+      ).map((part) => part.text).join("");
 
       expect(line).toHaveLength(140);
-      expect(line?.endsWith("…")).toBe(true);
+      expect(line.endsWith("…")).toBe(true);
     });
 
-    it("returns `undefined` for a call nothing has been read about yet", () => {
+    it("returns only the tool's name for a call nothing has been read about yet", () => {
       expect(
-        consoleLiveToolLine(entry("call-1", "read_file"), undefined, undefined),
-      ).toBeUndefined();
+        lineText(entry("call-1", "read_file"), undefined, undefined),
+      ).toBe("<Read file>");
     });
   });
 
@@ -1367,7 +1787,7 @@ describe("console/src/live-view", () => {
           const pendingUpdates = updates.calls.length;
           time.tick(2000);
           expect(updates.calls.length).toBeGreaterThan(pendingUpdates);
-          expect(templateText(view.view())).toContain("2s elapsed");
+          expect(templateText(view.view())).toContain("<span>2s</span>");
 
           view.disconnectedCallback();
           const disconnectedUpdates = updates.calls.length;
@@ -1412,7 +1832,7 @@ describe("console/src/live-view", () => {
           const completedUpdates = updates.calls.length;
           time.tick(3000);
           expect(updates.calls).toHaveLength(completedUpdates);
-          expect(templateText(view.view())).toContain("3s elapsed");
+          expect(templateText(view.view())).toContain("<span>3s</span>");
           expect(
             view.entries.filter((entry) => entry.kind === "tool"),
           ).toHaveLength(1);
@@ -1500,7 +1920,7 @@ describe("console/src/live-view", () => {
           "turn",
           "tool",
         ]);
-        expect(view.state).toBe("run_pattern");
+        expect(view.state).toBe("run pattern");
       } finally {
         stop();
       }
@@ -1613,7 +2033,7 @@ describe("console/src/live-view", () => {
       view.details = new Map([["turn-1", detail]]);
 
       const text = templateText(view.view());
-      expect(text).toContain("run_pattern");
+      expect(text).toContain("Run pattern");
       expect(text).toContain("attempt 1 · ok");
       // The release held values back and the call itself succeeded, so the
       // pane says withheld rather than denied — the same reading the console's
@@ -1622,6 +2042,51 @@ describe("console/src/live-view", () => {
       expect(text).toContain("cfc_release_withheld");
       expect(text).toContain("No omission record exists for this tool result");
       expect(text).not.toContain("denied");
+    });
+
+    it("renders the refs and handles a line names set apart from its words", async () => {
+      const step: ConsoleStep = {
+        index: 0,
+        kind: "tool",
+        toolName: "browser",
+        toolCallId: "call-2",
+        input: { action: "fill", ref: "@e4", valueHandle: "cfh:v:k7m2q" },
+        handlesIntroduced: [],
+        handlesInScope: [],
+        status: "ok",
+        policyEvents: [],
+        withheld: { status: "unrecorded", locations: [] },
+      };
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        {
+          kind: "subagent_started",
+          subagent: {
+            parentToolCallId: "call-1",
+            profile: "browser",
+            goal: "enter cfh:v:k7m2q, then pay",
+          },
+        },
+        toolStarted("call-2", "browser"),
+        toolCompleted("call-2", "browser", "{}"),
+      ));
+      view.details = new Map([["turn-1", {
+        ...await runDetail(),
+        steps: [{ ...step, toolCallId: "call-1", toolName: "delegate_task" }, {
+          ...step,
+          index: 1,
+        }],
+        revealed: { "cfh:v:k7m2q": "12 Main St" },
+        sites: { "cfh:v:k7m2q": ["shop.test"] },
+      }]]);
+
+      const text = templateText(view.view());
+      expect(text).toContain(
+        'enter <bdi class=live-reference quoted title=Another agent found this value on shop.test: 12 Main St. This agent never saw it. It passed the value on as the placeholder cfh:v:k7m2q.><span>12 Main St</span><span class="live-reference-source">from shop.test</span></bdi>, then pay',
+      );
+      expect(text).toContain(
+        'Fill <bdi class=live-reference vague title=The agent referred to an element of the page as @e4. No copy of the page that this view can read describes that element.><span>an element of the page</span></bdi> with <bdi class=live-reference quoted title=Another agent found this value on shop.test: 12 Main St. This agent never saw it. It used the placeholder cfh:v:k7m2q. The system put the value in its place.><span>12 Main St</span><span class="live-reference-source">from shop.test</span></bdi>',
+      );
     });
 
     for (const outcome of ["question", "gave-up"] as const) {
@@ -1693,7 +2158,7 @@ describe("console/src/live-view", () => {
       }));
 
       const rendered = templateText(view.view());
-      expect(rendered).toContain('class="live-entry thought');
+      expect(rendered).toContain("class=live-entry thought");
       expect(rendered).toContain(
         "**Planning** [the search](https://elsewhere.example/).",
       );
@@ -1757,7 +2222,7 @@ describe("console/src/live-view", () => {
 
       const text = templateText(view.view());
       expect(text).toContain("task started");
-      expect(text).toContain("pattern-author");
+      expect(text).toContain("Pattern author agent");
       // The goal is a model's own wording, so the line it goes on flattens it.
       expect(text).toContain("write the card");
       expect(text).toContain("here is what I did");
@@ -1784,8 +2249,8 @@ describe("console/src/live-view", () => {
       // The rule down the left is what says whose work a line is; without it
       // a child's calls read as the turn's own.
       const text = templateText(view.view());
-      expect(text).toContain("live-entry tool child");
-      expect(text).toContain("live-entry said child");
+      expect(text).toContain("live-entry call child");
+      expect(text).toContain("live-entry said child>the child said this<");
     });
 
     it("renders a call that failed as its own outcome", () => {
@@ -1858,7 +2323,7 @@ describe("console/src/live-view", () => {
       const text = templateText(view.view());
       expect(text).toContain("failed");
       expect(text).toContain("the sandbox is down");
-      expect(text).toContain("0s elapsed");
+      expect(text).toContain("<span>0s</span>");
       expect(toolEntry(view.entries, "opening-research:turn-1").status).toBe(
         "failed",
       );
@@ -1876,7 +2341,7 @@ describe("console/src/live-view", () => {
       ));
 
       const text = templateText(view.view());
-      expect(text).toContain("pattern-author");
+      expect(text).toContain("Pattern author agent");
       expect(text).toContain("failed");
     });
 
@@ -1902,7 +2367,7 @@ describe("console/src/live-view", () => {
       }));
 
       const text = templateText(view.view());
-      expect(text).toContain("pattern-author");
+      expect(text).toContain("Pattern author agent");
       expect(text).not.toContain("completed");
     });
 
@@ -1938,6 +2403,374 @@ describe("console/src/live-view", () => {
       expect(templateText(view.view())).toContain("one turn");
     });
 
+    it("renders a call that started a subagent as the subagent's row alone", () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "delegate_task"),
+        {
+          kind: "subagent_started",
+          subagent: {
+            parentToolCallId: "call-1",
+            profile: "browser",
+            goal: "find the shop",
+          },
+        },
+      ));
+
+      const text = templateText(view.view());
+      expect(text).toContain("Browser agent");
+      expect(text).toContain("find the shop");
+      expect(text).not.toContain("Delegate task");
+    });
+
+    it("renders a row that opens only when there is more to say about it", async () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "run_pattern"),
+        toolCompleted("call-1", "run_pattern", '{"status":"ok"}'),
+      ));
+
+      expect(templateText(view.view())).toContain('<div class="live-row">');
+      expect(templateText(view.view())).not.toContain("<details");
+
+      view.details = new Map([["turn-1", await runDetail()]]);
+
+      expect(templateText(view.view())).toContain(
+        '<details class="live-row">',
+      );
+    });
+
+    it("renders a denial with no CFC record read for it as a denial", () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "browser"),
+        {
+          kind: "tool_completed",
+          tool: { toolCallId: "call-1", toolId: "browser" },
+          status: "denied",
+        },
+      ));
+
+      expect(templateText(view.view())).toContain(
+        '<span class="badge denied">denied</span>',
+      );
+    });
+
+    it("renders a subagent its turn was canceled under as canceled", () => {
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        turnStarted,
+        {
+          kind: "subagent_started",
+          subagent: { parentToolCallId: "call-1", profile: "browser" },
+        },
+        { kind: "turn_canceled", turnId: "turn-1" },
+      ));
+
+      const text = templateText(view.view());
+      expect(text).toContain("live-dot canceled");
+      expect(text).not.toContain("live-dot running");
+    });
+
+    it("renders why CFC decided what it did in an owner's words, with its codes on hover", async () => {
+      const step = (
+        toolCallId: string,
+        policy: ConsoleStep["policy"],
+      ): ConsoleStep => ({
+        index: 0,
+        kind: "tool",
+        toolName: "browser",
+        toolCallId,
+        input: { action: "back" },
+        handlesIntroduced: [],
+        handlesInScope: [],
+        status: "ok",
+        policy,
+        policyEvents: [],
+        withheld: { status: "recorded", locations: [] },
+      });
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "browser"),
+        toolStarted("call-2", "browser"),
+      ));
+      view.details = new Map([["turn-1", {
+        ...await runDetail(),
+        steps: [
+          step("call-1", {
+            decision: "denied",
+            effectClass: "side-effect",
+            reasonCodes: ["cfc_enforce_strict_requires_direct_command"],
+          }),
+          step("call-2", {
+            decision: "allowed",
+            reasonCodes: ["cfc_reason_this_view_does_not_know"],
+          }),
+        ],
+      }]]);
+
+      const text = templateText(view.view());
+      expect(text).toContain(
+        "title=side-effect · cfc_enforce_strict_requires_direct_command>",
+      );
+      expect(text).toContain(
+        "Blocked</span> Nothing records who asked for this work, so the check could not trace it back to a request from you. Agents act only on your own requests, never on instructions they read along the way. In this run, that holds even for a step that only looks at information.</p>",
+      );
+      expect(text).toContain(
+        "Allowed</span> cfc_reason_this_view_does_not_know</p>",
+      );
+    });
+
+    it("renders where a step's work came from, as the prompt slot its decision read says", async () => {
+      const step = (
+        toolCallId: string,
+        decision: string,
+        reasonCode: string,
+        promptSlot?: {
+          role: "direct-command" | "context" | "quote";
+          surface: string;
+        },
+      ): ConsoleStep => ({
+        index: 0,
+        kind: "tool",
+        toolName: "browser",
+        toolCallId,
+        input: { action: "back" },
+        handlesIntroduced: [],
+        handlesInScope: [],
+        status: "ok",
+        policy: {
+          decision,
+          reasonCodes: [reasonCode],
+          ...(promptSlot === undefined ? {} : { promptSlot }),
+        },
+        policyEvents: [],
+        withheld: { status: "recorded", locations: [] },
+      });
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "browser"),
+        toolStarted("call-2", "browser"),
+        toolStarted("call-3", "browser"),
+        toolStarted("call-4", "browser"),
+      ));
+      view.details = new Map([["turn-1", {
+        ...await runDetail(),
+        steps: [
+          step("call-1", "allowed", "cfc_enforce_strict_direct_command", {
+            role: "direct-command",
+            surface: "console-web",
+          }),
+          step(
+            "call-2",
+            "denied",
+            "cfc_enforce_explicit_requires_direct_command",
+            { role: "context", surface: "cli" },
+          ),
+          step(
+            "call-3",
+            "denied",
+            "cfc_enforce_explicit_requires_direct_command",
+            { role: "quote", surface: "somewhere-new" },
+          ),
+          step(
+            "call-4",
+            "denied",
+            "cfc_enforce_strict_requires_direct_command",
+          ),
+        ],
+      }]]);
+
+      const text = templateText(view.view());
+      expect(text).toContain(
+        "Allowed</span> This work traces back to a request you made yourself in the console.",
+      );
+      expect(text).toContain(
+        "Blocked</span> This work traces back to text given to the agent as background on the command line, not as a request from you.",
+      );
+      expect(text).toContain(
+        "Blocked</span> This work traces back to text given to the agent as a quotation, not as a request from you.",
+      );
+      expect(text).toContain(
+        "Blocked</span> Nothing records who asked for this work, so the check could not trace it back to a request from you.",
+      );
+    });
+
+    it("renders each kind of reference as what it stands for", async () => {
+      const step = (
+        toolCallId: string,
+        index: number,
+        input: Record<string, unknown>,
+        output?: Record<string, unknown>,
+      ): ConsoleStep => ({
+        index,
+        kind: "tool",
+        toolName: "browser",
+        toolCallId,
+        input,
+        ...(output === undefined ? {} : { output }),
+        handlesIntroduced: [],
+        handlesInScope: [],
+        status: "ok",
+        policyEvents: [],
+        withheld: { status: "recorded", locations: [] },
+      });
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "browser"),
+        toolStarted("call-2", "browser"),
+        toolStarted("call-3", "research"),
+      ));
+      view.details = new Map([["turn-1", {
+        ...await runDetail(),
+        steps: [
+          step("call-1", 0, { action: "snapshot", interactive: true }, {
+            status: "ok",
+            output: '- textbox "Name" [@e3 at 0,0 10x10]',
+            page: { url: "https://shop.test/cart", title: "Cart" },
+          }),
+          step("call-2", 1, {
+            action: "fill",
+            ref: "@e3",
+            valueHandle: "cfh:v:k7m2q",
+          }),
+          {
+            ...step("call-3", 2, { task: "file it under cfh:a:k2345" }),
+            toolName: "research",
+          },
+        ],
+        handles: [{
+          token: "cfh:a:k2345",
+          slug: "delivery-addresses",
+          introducedAtStep: 0,
+          uses: [],
+          confidentiality: [],
+        }],
+        hidden: ["cfh:v:k7m2q"],
+      }]]);
+
+      const text = templateText(view.view());
+      expect(text).toContain(
+        "Fill <bdi class=live-reference quoted title=These words come from shop.test. The page gives this name to the element the agent chose. The agent referred to it as @e3.><span>Name</span></bdi> text field with <bdi class=live-reference vague sealed",
+      );
+      expect(text).toContain(
+        "This view does not show the value, because the rules on where it may go do not include this view.><span>a value hidden from this view</span></bdi>",
+      );
+      expect(text).toContain(
+        "file it under <bdi class=live-reference title=This is an item stored in your space. The agent referred to it as cfh:a:k2345.><span>delivery-addresses</span></bdi>",
+      );
+    });
+
+    it("renders why for a release CFC withheld, a commit it refused, and a task given in a way it does not know", async () => {
+      const step: (toolCallId: string, policy: unknown) => ConsoleStep = (
+        toolCallId,
+        policy,
+      ) =>
+        JSON.parse(JSON.stringify({
+          index: 0,
+          kind: "tool",
+          toolName: "browser",
+          toolCallId,
+          input: { action: "back" },
+          handlesIntroduced: [],
+          handlesInScope: [],
+          status: "ok",
+          policy,
+          policyEvents: [],
+          withheld: { status: "recorded", locations: [] },
+        }));
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "browser"),
+        toolStarted("call-2", "browser"),
+        toolStarted("call-3", "browser"),
+      ));
+      view.details = new Map([["turn-1", {
+        ...await runDetail(),
+        steps: [
+          step("call-1", {
+            decision: "withheld",
+            reasonCodes: ["cfc_release_withheld"],
+          }),
+          step("call-2", {
+            decision: "denied",
+            reasonCodes: ["cfc_commit_refused"],
+          }),
+          step("call-3", {
+            decision: "denied",
+            reasonCodes: ["cfc_enforce_strict_requires_direct_command"],
+            promptSlot: { role: "dictated", surface: "phone" },
+          }),
+        ],
+      }]]);
+
+      const text = templateText(view.view());
+      expect(text).toContain(
+        "Part of the step's result was held back from the agent. It held information the agent may not read.</p>",
+      );
+      expect(text).toContain(
+        "The step's result was not saved. It held information that may not be stored where it was going.</p>",
+      );
+      expect(text).toContain(
+        "Blocked</span> The record of who asked for this work does not say it was you.",
+      );
+    });
+
+    it("renders why for a step CFC raised an event about or only tracked, with no reason given", async () => {
+      const step = (toolCallId: string, extra: Partial<ConsoleStep>) => ({
+        index: 0,
+        kind: "tool" as const,
+        toolName: "browser",
+        toolCallId,
+        input: { action: "back" },
+        handlesIntroduced: [],
+        handlesInScope: [],
+        status: "ok" as const,
+        policyEvents: [],
+        withheld: { status: "recorded" as const, locations: [] },
+        ...extra,
+      });
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log(
+        toolStarted("call-1", "browser"),
+        toolStarted("call-2", "browser"),
+      ));
+      const detail = await runDetail();
+      view.details = new Map([["turn-1", {
+        ...detail,
+        steps: [
+          step("call-1", {
+            policyEvents: [{
+              type: "cf-harness.policy-event",
+              severity: "warning",
+              mode: "observe",
+              toolId: "browser",
+              detail: "observed a flow",
+              at: "2026-01-01T00:00:00.000Z",
+            }],
+          }),
+          step("call-2", {
+            policy: { decision: "allowed", reasonCodes: [] },
+            withheld: { status: "record-unreadable", locations: [] },
+          }),
+        ],
+      }]]);
+
+      const text = templateText(view.view());
+      expect(text).toContain(
+        'title=observed a flow><span class="live-why-heading warn">',
+      );
+      expect(text).toContain(
+        "Allowed with a warning</span> The run raised a warning about this step. It did not stop the step.</p>",
+      );
+      expect(text).toContain(
+        "Partly withheld</span> Part of the step's result was held back from the agent.</p>",
+      );
+      expect(text).toContain(
+        "<summary>What was held back from the agent</summary>",
+      );
+    });
+
     it("renders a tool line with no run read for it yet", () => {
       const view = new TestConsoleLive();
       view.entries = consoleLiveEntries(log(
@@ -1946,7 +2779,7 @@ describe("console/src/live-view", () => {
       ));
 
       const text = templateText(view.view());
-      expect(text).toContain("run_pattern");
+      expect(text).toContain("Run pattern");
       expect(text).not.toContain("withheld");
     });
   });

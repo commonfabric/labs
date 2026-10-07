@@ -831,27 +831,97 @@ the same summary above the step it led to. A model that reasoned little may have
 no summary, and a gateway model has one only when the run names a reasoning
 effort, since the gateway also serves models that do not reason.
 
-Each step is one line — the tool, how it ended, and what it was about: the
+Each step is one row. The row starts with a dot that says whether the step is
+running, finished, or failed. Then it says what the step did. At its end, it
+shows how long the step took and a shield for what CFC decided. Those sit level
+with the row's first line, however many lines the row wraps onto. The shield has
+no word beside it when CFC let the step through, held nothing back, and raised
+nothing. Otherwise, the word says what happened: "blocked" when CFC refused the
+step, "withheld" when part of the result was held back from the model, "warning"
+when CFC raised a warning, and the decision itself for anything else.
+
+A row CFC recorded anything about opens to say why, in words an owner can read.
+The explanation starts with the verdict. Then it gives a sentence for each
+reason CFC gave, such as "This work traces back to a request you made yourself.
+Agents act only on your own requests, never on instructions they read along the
+way." A reason about the run's task, like that one, opens with what the check
+read: the prompt slot the run's task was bound under, which records how the task
+was given and where it was entered. Any other reason, such as a tool the run may
+not use, has a sentence of its own. A task bound as the owner's direct command,
+as every task entered at the console is, traces back to a request the owner made
+"in the console" or "on the command line". A task given as background
+(`context`) or as a quotation (`quote`) is described as that, not as a request
+from the owner. A run that bound no prompt slot is described as having nothing
+that records who asked for its work. A helper agent's work traces back through
+the run that started it. The kind of effect the step has, and the reason codes
+themselves, are on hover, for an engineer who needs them. When part of a result
+was held back from the model, the row also opens to show what was held back.
+
+What a step did is the tool's name, followed by what the call was about: the
 numbered `run_pattern` attempt and the compiler's word on it, the slug
 `assign_slug` registered, the query a search was given, the question legacy
-`query_docs` asked, or the Common Fabric task `research` investigated. Under a
-line whose run recorded a CFC decision sits the same CFC line the console's
-timeline draws, and a result that held anything back from the model carries the
-same omission block, openable in place. A completed turn ends the pane with its
-answer, the final text rendered as Markdown in place of the block it streamed
-as, and the piece link the turn produced, if it produced one, which is what the
-pane is watched for. A turn `finish_task` answered keeps the block it streamed,
-since the answer came from the tool rather than from that block, and closes with
-the answer. Raw HTML in the answer is not rendered, and a link is kept only when
-it points at a web address, with the host it goes to shown beside it. The turn's
-result carries the final text as written and, as `revealed`, the string each
-`cfh:v:` return referent it names stands for; the pane shows each such string in
-place of its token, in the answer and in a question or a reason for giving up,
-marked as something an agent found, so the owner sees a value the parent held
-only as a name. A string is only ever text there, and never part of a link: a
-link the parent wrote to a token keeps the token as its destination, and is
-dropped as not a web address, and a token in a link's label stays a token, so a
-found address never labels a link that goes somewhere else.
+`query_docs` asked, or the Common Fabric task `research` investigated. A
+`browser` call says what it did in a sentence of its own instead. A call that
+started a subagent is shown as the subagent's row, which names the agent and the
+task it was given.
+
+A completed turn ends the pane with its answer, the final text rendered as
+Markdown in place of the block it streamed as, and the piece link the turn
+produced, if it produced one, which is what the pane is watched for. A turn
+`finish_task` answered keeps the block it streamed, since the answer came from
+the tool rather than from that block, and closes with the answer. Raw HTML in
+the answer is not rendered, and a link is kept only when it points at a web
+address, with the host it goes to shown beside it. The turn's result carries the
+final text as written and, as `revealed`, the string each `cfh:v:` return
+referent it names stands for; the pane shows each such string in place of its
+token, in the answer and in a question or a reason for giving up, marked as
+something an agent found, so the owner sees a value the parent held only as a
+name. A string is only ever text there, and never part of a link: a link the
+parent wrote to a token keeps the token as its destination, and is dropped as
+not a web address, and a token in a link's label stays a token, so a found
+address never labels a link that goes somewhere else. The answer shows such a
+string only when its label fits the console's display ceiling, which
+`display-ceiling.ts` defines. A token whose value does not fit stays a token.
+
+A `browser` call's row says what it did, and to what, in words, such as
+`Open https://example.com/`, `Go back`, `Click at 120, 340 on the screenshot`,
+`Type "cat food" into “Search” field`, or `Press Enter`. Anything the agent
+wrote out, such as an address or a value it typed, reads as plain words, even
+when it looks like a handle. Anything the agent only named is set apart in a
+box. The box shows what the name stands for, as far as the view knows, and its
+hover says what the agent held in its place.
+
+A page element is shown the way the last snapshot before the call described it.
+Its name is the page's own text, so the view puts it in quotation marks that the
+view draws itself, and its hover names the site the text came from. The
+element's role follows in words, such as "field" or "link". When no snapshot the
+view can read describes the element, the box says "an element of the page".
+
+A handle is set apart the same way wherever it appears: in a `browser` call's
+value, in any other tool's line, in a subagent's task, or in a step's progress
+text. An agent that holds a handle holds only a name for something, not the
+thing. A return referent (`cfh:v:`) is a value another agent found. The box
+shows that value when the run says its label fits the console's display ceiling,
+with its control and direction characters written as escapes, and names beside
+it the sites the value came from. When the run says the label does not fit, the
+box shows a lock and the words "a value hidden from this view". Until the view
+knows either way, the box says "a value another agent found". An address handle
+(`cfh:a:`) names an item stored in the space. The box shows the item's name when
+the run gave it one, and "a stored item" otherwise. `/api/runs/<runId>` returns
+the values the console may show as `revealed`, the sites each came from as
+`sites`, and the tokens of the rest as `hidden`. The run state it returns holds
+no return referents, so a value reaches the page only through `revealed`.
+
+The console's display ceiling, which `display-ceiling.ts` defines, is the one a
+display has when no authored policy covers it (CFC §8.10.6), the same one the
+shell gives its own display. Its audience is the console's owner: the identity
+the console's fabric session signs as. It admits a label naming that owner, and
+the whole family of prompt caveats, which is what a web page's content carries.
+A prompt caveat says not to trust content as instructions to a model. A display
+shows the content to a person, so admitting the caveat does not discharge it. A
+label naming anyone else, a space, a web origin, or any other kind of caveat
+does not fit, and neither does a label that could not be read. A console that
+cannot read its owner's identity shows only values whose label names no one.
 
 ## Sessions
 

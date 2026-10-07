@@ -210,8 +210,9 @@ what to do without access to the private specs repository. It governs
 `packages/html/src/worker/reconciler.ts` and
 `packages/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
 `packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
-`sandbox/runsc-cfc-result.ts`), and every `docs/specs/cfc-*.md`; the harness
-audit's clause derivation is
+`sandbox/runsc-cfc-result.ts`), the harness console's display ceiling in
+`packages/cf-harness/console/display-ceiling.ts`, and every
+`docs/specs/cfc-*.md`; the harness audit's clause derivation is
 `docs/specs/agent-harness/04-cfc-spec-correspondence.md`.
 
 Everything else is indexed rather than listed here. `docs/README.md` maps the
