@@ -139,7 +139,9 @@ any `provenance` the payload carries, and marks it renderer-trusted, so a write
 gated on that surface and action commits as it would for a reviewed gesture on
 the pattern's rendered surface. It always waits for the handler's run, as
 `sendStrict()` does with `awaitHandling`, and rejects with the reason on the
-same refusals. It mints trusted events, so it is for the host's own code alone;
+same refusals. The event is renderer-trusted but is not a trusted gesture, so it
+confirms no snapshot share, custody seal, reviewed intent, or change to an
+access list. It mints trusted events, so it is for the host's own code alone;
 [host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
 says what it owes in exchange.
 
