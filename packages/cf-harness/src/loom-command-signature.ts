@@ -207,21 +207,27 @@ const parameterOf = (
 
 /**
  * The parameters an argument schema declares, required ones first and each
- * group in the schema's order. `["..."]` for a schema that names none and
- * leaves its arguments open; `[]` for one that names none and closes them.
+ * group in the schema's order. A required input named in `hostFilled`, one
+ * the host fills from a call's context, reads as optional, since a call may
+ * leave it out. `["..."]` for a schema that names none and leaves its
+ * arguments open; `[]` for one that names none and closes them.
  */
-export const parametersOf = (schema: JSONObject | true): string[] => {
+export const parametersOf = (
+  schema: JSONObject | true,
+  hostFilled: readonly string[] = [],
+): string[] => {
   if (schema === true) return ["..."];
   const properties = isObjectNotArray(schema.properties)
     ? schema.properties
     : {};
+  const declared = Array.isArray(schema.required)
+    ? schema.required.filter((name) => typeof name === "string")
+    : [];
   const required = new Set(
-    Array.isArray(schema.required)
-      ? schema.required.filter((name) => typeof name === "string")
-      : [],
+    declared.filter((name) => !hostFilled.includes(name)),
   );
   const names = [
-    ...new Set([...Object.keys(properties), ...required]),
+    ...new Set([...Object.keys(properties), ...declared]),
   ];
   if (names.length === 0) {
     return schema.additionalProperties === false ? [] : ["..."];
@@ -242,7 +248,7 @@ export const parametersOf = (schema: JSONObject | true): string[] => {
 export const renderCommandSignature = (
   entry: Pick<
     LoomCommandEntry,
-    "name" | "inputSchema" | "outputs" | "effect" | "target"
+    "name" | "inputSchema" | "outputs" | "effect" | "target" | "hostFilled"
   >,
 ): string => {
   const returns = entry.outputs !== undefined && entry.outputs.length > 0
@@ -258,7 +264,7 @@ export const renderCommandSignature = (
     tail.length - 3;
   const shown: string[] = [];
   let used = 0;
-  for (const parameter of parametersOf(entry.inputSchema)) {
+  for (const parameter of parametersOf(entry.inputSchema, entry.hostFilled)) {
     const width = parameter.length + (shown.length > 0 ? 2 : 0);
     if (used + width > room) {
       shown.push("…");

@@ -53,6 +53,21 @@ describe("loom-command-signature", () => {
       ).toBe("loom.inspect()  [loom]");
     });
 
+    it("returns a required input the host fills from context as optional, and other required inputs as required", () => {
+      expect(
+        renderCommandSignature({
+          name: "pane.rename",
+          inputSchema: {
+            type: "object",
+            required: ["pane", "title"],
+            properties: { pane: { type: "string" }, title: { type: "string" } },
+          },
+          hostFilled: ["pane"],
+          target: "global",
+        }),
+      ).toBe("pane.rename(title: string, pane?: string)  [global]");
+    });
+
     it("returns `(...)` for a schema that leaves its arguments open", () => {
       for (const inputSchema of [true, { type: "object" }] as const) {
         expect(
