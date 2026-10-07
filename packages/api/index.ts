@@ -2991,7 +2991,7 @@ export type FetchJsonUncheckedFunction = (
 /**
  * A keyed hash of the string `input` under the key of the module policy `T`
  * names: the lowercase hex of HMAC-SHA-256 over the input, the same for every
- * runtime and every run given the same input.
+ * runtime of the space and every run given the same input.
  *
  * `T` is required, and must be a string confidential to exactly one module
  * policy, `Confidential<string, readonly [PolicyOf<typeof rules>]>`; the
@@ -3000,11 +3000,12 @@ export type FetchJsonUncheckedFunction = (
  * per space and policy, and no code reads it. The result carries the policy's
  * clause and the input's labels, so only the exchange rules of the policies
  * those name release anything computed from it. It is `undefined` until the
- * key is available, and on a runtime that does not enforce CFC or does not
- * persist flow labels. docs/specs/cfc-policy-secret.md says what this
- * protects and what it does not.
+ * key is available. On a runtime that does not enforce CFC or does not persist
+ * flow labels it stays `undefined`, and every run reports an error.
+ * docs/specs/cfc-policy-secret.md says what this protects and what it does
+ * not.
  */
-export type PolicySecretHashFunction = <T>(
+export type PolicySecretHashFunction = <T extends string>(
   params: FactoryInput<{
     input: string;
     schema?: JSONSchema;

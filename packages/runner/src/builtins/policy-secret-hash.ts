@@ -1,7 +1,12 @@
-import { hmac } from "@noble/hashes/hmac.js";
-import { sha256 } from "@noble/hashes/sha2.js";
+/**
+ * The `policySecretHash` builtin: keyed hashes under a module policy's key, a
+ * runtime secret minted once per space and policy that no code reads, handed
+ * to pattern code in the policy's custody so that only the policy's exchange
+ * rules release anything computed from them. docs/specs/cfc-policy-secret.md
+ * is the design, and says what it protects and what it does not.
+ */
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { hmacSha256 } from "@commonfabric/content-hash";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { fromBase64url } from "@commonfabric/utils/base64url";
 import { encode } from "@commonfabric/utils/encoding";
@@ -10,16 +15,24 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { JSONSchema } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
 import {
+  type CfcModulePolicyMarker,
+  isExactModulePolicyMarker,
+  OWNING_SPACE_PLACEHOLDER,
+} from "../cfc/policy.ts";
+import {
   CFC_ENFORCING_STRICTNESS,
   cfcEnforcementStrictness,
   runtimeWritePolicyAuthorization,
 } from "../cfc/types.ts";
+import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
 import {
   modulePolicySecret,
   readRuntimeSecretIntoFlow,
   type RuntimeSecret,
   runtimeSecretLink,
+  RuntimeSecretUnresolvedError,
+  watchRuntimeSecret,
 } from "../runtime-secret.ts";
 import type { Action } from "../scheduler.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
@@ -39,28 +52,6 @@ const INPUT_SCHEMA = {
   },
 } as const satisfies JSONSchema;
 
-const MODULE_POLICY_MARKER_KEYS = [
-  "moduleIdentity",
-  "policyDigest",
-  "policyRefKind",
-  "subject",
-  "symbol",
-  "type",
-];
-
-/**
- * A compiled `PolicyOf` marker: a module-policy reference whose subject is
- * the placeholder commit preparation binds to the owning space.
- */
-type ModulePolicyMarker = {
-  readonly type: typeof CFC_ATOM_TYPE.Policy;
-  readonly policyRefKind: "module";
-  readonly moduleIdentity: string;
-  readonly symbol: string;
-  readonly policyDigest: string;
-  readonly subject: { readonly __ctOwningSpace: true };
-};
-
 /**
  * Returns the module policy a `policySecretHash` result schema names, the one
  * compiled marker in the one clause of a string's confidentiality, as a plain
@@ -68,7 +59,7 @@ type ModulePolicyMarker = {
  *
  * @throws Error when `schema` is anything else.
  */
-const policyMarkerOf = (schema: unknown): ModulePolicyMarker => {
+const policyMarkerOf = (schema: unknown): CfcModulePolicyMarker => {
   const ifc = isObjectNotArray(schema) && schema.type === "string"
     ? schema.ifc
     : undefined;
@@ -77,20 +68,9 @@ const policyMarkerOf = (schema: unknown): ModulePolicyMarker => {
     : undefined;
   const marker = Array.isArray(confidentiality) &&
       confidentiality.length === 1
-    ? confidentiality[0]
+    ? snapshotQueryResult(confidentiality[0])
     : undefined;
-  if (
-    !isObjectNotArray(marker) ||
-    Object.keys(marker).sort().join() !== MODULE_POLICY_MARKER_KEYS.join() ||
-    marker.type !== CFC_ATOM_TYPE.Policy ||
-    marker.policyRefKind !== "module" ||
-    typeof marker.moduleIdentity !== "string" ||
-    typeof marker.symbol !== "string" ||
-    typeof marker.policyDigest !== "string" ||
-    !isObjectNotArray(marker.subject) ||
-    Object.keys(marker.subject).join() !== "__ctOwningSpace" ||
-    marker.subject.__ctOwningSpace !== true
-  ) {
+  if (!isExactModulePolicyMarker(marker)) {
     throw new Error(
       "policySecretHash: the type argument must be a string confidential " +
         "to exactly one module policy, " +
@@ -98,12 +78,12 @@ const policyMarkerOf = (schema: unknown): ModulePolicyMarker => {
     );
   }
   return {
-    type: CFC_ATOM_TYPE.Policy,
-    policyRefKind: "module",
+    type: marker.type,
+    policyRefKind: marker.policyRefKind,
     moduleIdentity: marker.moduleIdentity,
     symbol: marker.symbol,
     policyDigest: marker.policyDigest,
-    subject: { __ctOwningSpace: true },
+    subject: { [OWNING_SPACE_PLACEHOLDER]: true },
   };
 };
 
@@ -114,7 +94,7 @@ const policyMarkerOf = (schema: unknown): ModulePolicyMarker => {
  */
 export const policySecretHashOf = (key: string, input: string): string =>
   Array.from(
-    hmac(sha256, fromBase64url(key), encode(input)),
+    hmacSha256(fromBase64url(key), encode(input)),
     (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
 
@@ -207,19 +187,28 @@ export function policySecretHash(
     const space = parentCell.space;
     const secret = modulePolicySecret(marker);
 
+    const input = inputs.key("input").get();
+    if (input !== undefined && typeof input !== "string") {
+      throw new Error("policySecretHash: `input` must be a string");
+    }
+
     let key: string | undefined;
-    try {
-      key = mintsInFlight.get(runtime)?.has(`${space}\n${secret.name}`)
-        ? undefined
-        : readRuntimeSecretIntoFlow(tx, space, secret.name);
-    } catch {
-      // The key's stored schema has not reached this replica yet; the sync
-      // that settles the key brings it.
-      key = undefined;
+    if (mintsInFlight.get(runtime)?.has(`${space}\n${secret.name}`)) {
+      watchRuntimeSecret(tx, space, secret);
+    } else {
+      try {
+        key = readRuntimeSecretIntoFlow(tx, space, secret);
+      } catch (error) {
+        // The key's stored schema has not reached this replica yet; the sync
+        // that settles the key brings it.
+        if (!(error instanceof RuntimeSecretUnresolvedError)) throw error;
+      }
     }
     if (key === undefined) {
       // Tracked, so the runtime is not idle while the key it waits on and
-      // the run that follows are still to come.
+      // the run that follows are still to come. A settle that fails leaves
+      // the run waiting on the key's document, which runs it again once a
+      // key is stored there.
       runtime.scheduler.trackBackgroundTask(
         settleKey(runtime, space, secret).then(rerun, (error) => {
           console.error(
@@ -228,12 +217,6 @@ export function policySecretHash(
           );
         }),
       );
-      return;
-    }
-
-    const input = inputs.key("input").get();
-    if (input !== undefined && typeof input !== "string") {
-      throw new Error("policySecretHash: `input` must be a string");
     }
     // The scheduler runs the action under no identity of its own, so the
     // write is attributed here, which is what stamps the hash as the
@@ -246,7 +229,9 @@ export function policySecretHash(
     try {
       sendResult(
         tx,
-        input === undefined ? undefined : policySecretHashOf(key, input),
+        key === undefined || input === undefined
+          ? undefined
+          : policySecretHashOf(key, input),
       );
     } finally {
       setCfcImplementationIdentity(tx, prior);

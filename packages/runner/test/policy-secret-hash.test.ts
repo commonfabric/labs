@@ -7,14 +7,19 @@ import { Identity } from "@commonfabric/identity";
 import { policySecretHashOf } from "../src/builtins/policy-secret-hash.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
+import {
+  type CfcModulePolicyMarker,
+  OWNING_SPACE_PLACEHOLDER,
+} from "../src/cfc/policy.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   modulePolicySecret,
   runtimeSecretLink,
 } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
@@ -75,7 +80,7 @@ export const drawWinner = lift(
 );
 `;
 
-// A second policy, whose rule releases what its own \`relabel\` computes.
+// A second policy, whose rule releases what its own `relabel` computes.
 const OTHER_POLICY = `/// <cts-enable />
 import { type Confidential, lift } from "commonfabric";
 import {
@@ -143,7 +148,12 @@ const standIn = lift((hash: string | undefined): string =>
   hash === undefined ? "" : parseInt(hash[0], 16) < 8 ? "0" : "f"
 );
 
+const rename = handler<void, { name: Writable<string> }>((_, { name }) => {
+  name.set("dave");
+});
+
 interface Rooms {
+  name: Writable<Default<string, "carol">>;
   roomWinner: Writable<Default<RoomText, "">>;
   roomEcho: Writable<Default<RoomText, "">>;
   roomRelabel: Writable<Default<RoomText, "">>;
@@ -151,7 +161,7 @@ interface Rooms {
 }
 
 export default pattern<Rooms>((
-  { roomWinner, roomEcho, roomRelabel, roomStandIn },
+  { name, roomWinner, roomEcho, roomRelabel, roomStandIn },
 ) => {
   const alice = policySecretHash<DrawHash>({ input: "alice" });
   const bob = policySecretHash<DrawHash>({ input: "bob" });
@@ -159,6 +169,7 @@ export default pattern<Rooms>((
   const aliceOther = policySecretHash<OtherHash>({ input: "alice" });
   // An input stored under the other policy's clause.
   const carolHash = policySecretHash<DrawHash>({ input: relabel(aliceOther) });
+  const nameHash = policySecretHash<DrawHash>({ input: name });
   const winner = drawWinner({
     candidates: ["alice", "bob"],
     hashes: [alice, bob],
@@ -173,6 +184,7 @@ export default pattern<Rooms>((
     aliceAgain,
     aliceOther,
     carolHash,
+    nameHash,
     winner,
     steered,
     roomWinner,
@@ -183,6 +195,7 @@ export default pattern<Rooms>((
     publishEcho: publish({ from: echo(alice), to: roomEcho }),
     publishRelabel: publish({ from: relabel(alice), to: roomRelabel }),
     publishStandIn: publish({ from: steered, to: roomStandIn }),
+    rename: rename({ name }),
   };
 });
 `;
@@ -202,6 +215,7 @@ type Draw = {
   aliceAgain?: string;
   aliceOther?: string;
   carolHash?: string;
+  nameHash?: string;
   winner?: string;
   steered?: string;
   roomWinner: string;
@@ -253,17 +267,21 @@ const runDraw = async (
   await body({ runtime, result, send, read });
 };
 
-/** A runtime on its own emulated storage, enforcing CFC in `mode`. */
+/**
+ * A runtime on its own emulated storage, enforcing CFC in `mode` with flow
+ * labels at `flowLabels`.
+ */
 const withRuntime = async (
   mode: "enforce-strict" | "observe",
   body: (runtime: Runtime) => Promise<void>,
+  flowLabels: "persist" | "off" = "persist",
 ): Promise<void> => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
     cfcEnforcementMode: mode,
-    cfcFlowLabels: "persist",
+    cfcFlowLabels: flowLabels,
   });
   try {
     await body(runtime);
@@ -313,20 +331,29 @@ const policyClauseOf = (
   return clauses[0];
 };
 
-/** The key stored for `policyDigest` in the space, read as the runtime does. */
-const storedKey = (runtime: Runtime, policyDigest: string): unknown => {
+/**
+ * The key stored in the space for the policy `clause` names, read below the
+ * transaction layer, which is where the read chokepoint is.
+ */
+const storedKey = (
+  runtime: Runtime,
+  clause: Record<string, unknown>,
+): unknown => {
+  const marker = {
+    ...clause,
+    subject: { [OWNING_SPACE_PLACEHOLDER]: true },
+  } as CfcModulePolicyMarker;
   const tx = runtime.edit();
   try {
-    return tx.readValueOrThrow(
-      runtimeSecretLink(space, modulePolicySecret({ policyDigest }).name),
-      { meta: internalVerifierRead },
-    );
+    return tx.tx.read(toMemorySpaceAddress(
+      runtimeSecretLink(space, modulePolicySecret(marker).name),
+    )).ok?.value;
   } finally {
     tx.abort("key read");
   }
 };
 
-describe("policySecretHash", () => {
+describe("policySecretHash()", () => {
   it("hands out a hex hash under its policy's clause, bound to the space", async () => {
     await withRuntime("enforce-strict", async (runtime) => {
       await runDraw(runtime, "draw-label", async ({ result, read }) => {
@@ -334,6 +361,7 @@ describe("policySecretHash", () => {
         expect(policyClauseOf(runtime, result.key("alice"))).toMatchObject({
           type: CFC_ATOM_TYPE.Policy,
           policyRefKind: "module",
+          symbol: "drawRules",
           subject: space,
         });
       });
@@ -345,13 +373,26 @@ describe("policySecretHash", () => {
       await runDraw(runtime, "draw-hash", async ({ result, read }) => {
         const draw = await read();
         const clause = policyClauseOf(runtime, result.key("alice"))!;
-        const key = storedKey(runtime, clause.policyDigest as string);
+        const key = storedKey(runtime, clause);
         expect(typeof key).toBe("string");
 
         expect(draw.alice).toBe(policySecretHashOf(key as string, "alice"));
         expect(draw.aliceAgain).toBe(draw.alice);
         expect(draw.bob).toBe(policySecretHashOf(key as string, "bob"));
         expect(draw.bob).not.toBe(draw.alice);
+      });
+    });
+  });
+
+  it("hashes the input it holds when the input changes", async () => {
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-rename", async ({ result, send, read }) => {
+        const clause = policyClauseOf(runtime, result.key("alice"))!;
+        const key = storedKey(runtime, clause) as string;
+        expect((await read()).nameHash).toBe(policySecretHashOf(key, "carol"));
+
+        await send("rename");
+        expect((await read()).nameHash).toBe(policySecretHashOf(key, "dave"));
       });
     });
   });
@@ -365,6 +406,35 @@ describe("policySecretHash", () => {
         expect(
           policyClauseOf(runtime, result.key("aliceOther"))?.policyDigest,
         ).not.toBe(policyClauseOf(runtime, result.key("alice"))?.policyDigest);
+      });
+    });
+  });
+
+  it("mints no key for a marker naming a policy's digest under another module", async () => {
+    // A key is named by its policy's digest alone, so a marker pairing one
+    // policy's digest with another module would put a key under that name
+    // with a clause the policy's rules never rewrite.
+
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-forged", async ({ result }) => {
+        const clause = policyClauseOf(runtime, result.key("alice"))!;
+        const other = policyClauseOf(runtime, result.key("aliceOther"))!;
+        const key = storedKey(runtime, clause);
+        const forged = {
+          ...clause,
+          moduleIdentity: other.moduleIdentity,
+          symbol: other.symbol,
+          subject: { [OWNING_SPACE_PLACEHOLDER]: true },
+        } as CfcModulePolicyMarker;
+
+        const tx = runtime.edit();
+        tx.ensureRuntimeSecret(
+          space,
+          modulePolicySecret(forged),
+          runtimeWritePolicyAuthorization,
+        );
+        expect((await tx.commit().settled).error).toBeDefined();
+        expect(storedKey(runtime, clause)).toBe(key);
       });
     });
   });
@@ -431,7 +501,7 @@ describe("policySecretHash", () => {
     });
   });
 
-  it("hands every runtime of the space the same hash", async () => {
+  it("hands every runtime of the space the same hash, however they race to mint the key", async () => {
     const server = newSharedServer();
     const managers = [
       EmulatedStorageManager.connectTo(server, { as: signer }),
@@ -446,18 +516,30 @@ describe("policySecretHash", () => {
       })
     );
     try {
-      const hashes: (string | undefined)[] = [];
-      for (const [index, runtime] of runtimes.entries()) {
-        await runDraw(runtime, `draw-shared-${index}`, async ({ read }) => {
-          hashes.push((await read()).alice);
-        });
-      }
+      // Both start together, so both find no key and mint one, and the
+      // commit that lands second conflicts on its read of the absence.
+      const hashes = await Promise.all(
+        runtimes.map((runtime, index) => {
+          let hash: string | undefined;
+          return runDraw(runtime, `draw-shared-${index}`, async ({ read }) => {
+            hash = (await read()).alice;
+          }).then(() => hash);
+        }),
+      );
       expect(hashes[0]).toMatch(/^[0-9a-f]{64}$/);
       expect(hashes[1]).toBe(hashes[0]);
     } finally {
       for (const runtime of runtimes) await runtime.dispose();
       for (const manager of managers) await manager.close();
     }
+  });
+
+  it("hands out nothing where flow labels are not persisted", async () => {
+    await withRuntime("enforce-strict", async (runtime) => {
+      await runDraw(runtime, "draw-no-flow", async ({ read }) => {
+        expect((await read()).alice).toBeUndefined();
+      });
+    }, "off");
   });
 
   it("hands out nothing where CFC is not enforced", async () => {

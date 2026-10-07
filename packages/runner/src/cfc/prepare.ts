@@ -190,7 +190,10 @@ import {
   clauseBearsReadFailedMarker,
   uniqueCfcAtoms,
 } from "./observation.ts";
-import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
+import {
+  CFC_POLICY_MANIFEST_ID_PREFIX,
+  OWNING_SPACE_PLACEHOLDER,
+} from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
@@ -7362,8 +7365,6 @@ const valueStampsOf = (
  * takes the branch.
  */
 type ValueStamp = IntegrityMint & { readonly lands: boolean };
-
-const OWNING_SPACE_PLACEHOLDER = "__ctOwningSpace";
 
 const resolvePolicyOfConfidentiality = (
   tx: IExtendedStorageTransaction,

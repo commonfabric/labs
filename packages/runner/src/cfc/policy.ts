@@ -1,5 +1,6 @@
 import {
   CFC_ATOM_TYPE,
+  type CfcAtomObject,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
@@ -62,37 +63,85 @@ const MODULE_POLICY_REF_KEYS = new Set([
   "subject",
 ]);
 
-/** A complete module-policy reference, with nothing missing or extra. */
-export const isExactModulePolicyRef = (
-  value: unknown,
-): value is CfcModulePolicyRefAtom => {
-  if (!isObjectNotArray(value)) return false;
-  if (
-    value.type !== CFC_ATOM_TYPE.Policy || value.policyRefKind !== "module" ||
-    typeof value.moduleIdentity !== "string" ||
-    value.moduleIdentity.length === 0 || typeof value.symbol !== "string" ||
-    value.symbol.length === 0 || typeof value.policyDigest !== "string" ||
-    value.policyDigest.length === 0 ||
-    !(
-      (typeof value.subject === "string" && value.subject.length > 0) ||
-      isCfcFieldCommitment(value.subject)
-    )
-  ) {
-    return false;
-  }
-  // The six fields must be the atom's own enumerable data properties and its
-  // only keys, so an inherited, accessor or hidden field cannot pass.
+/**
+ * Whether `value`'s own keys are exactly `keys`, each an enumerable data
+ * property, so that an inherited, accessor or hidden field cannot pass.
+ */
+const hasExactlyDataKeys = (
+  value: object,
+  keys: ReadonlySet<string>,
+): boolean => {
   const ownKeys = Reflect.ownKeys(value);
-  return ownKeys.length === MODULE_POLICY_REF_KEYS.size &&
+  return ownKeys.length === keys.size &&
     ownKeys.every((key) => {
-      if (typeof key !== "string" || !MODULE_POLICY_REF_KEYS.has(key)) {
-        return false;
-      }
+      if (typeof key !== "string" || !keys.has(key)) return false;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       return descriptor !== undefined && descriptor.enumerable === true &&
         "value" in descriptor;
     });
 };
+
+/**
+ * Whether `value` carries a module-policy reference's fields other than its
+ * subject, each well-formed.
+ */
+const hasModulePolicyRefFields = (value: Record<string, unknown>): boolean =>
+  value.type === CFC_ATOM_TYPE.Policy && value.policyRefKind === "module" &&
+  typeof value.moduleIdentity === "string" &&
+  value.moduleIdentity.length > 0 && typeof value.symbol === "string" &&
+  value.symbol.length > 0 && typeof value.policyDigest === "string" &&
+  value.policyDigest.length > 0;
+
+/** A complete module-policy reference, with nothing missing or extra. */
+export const isExactModulePolicyRef = (
+  value: unknown,
+): value is CfcModulePolicyRefAtom =>
+  isObjectNotArray(value) && hasModulePolicyRefFields(value) &&
+  ((typeof value.subject === "string" && value.subject.length > 0) ||
+    isCfcFieldCommitment(value.subject)) &&
+  hasExactlyDataKeys(value, MODULE_POLICY_REF_KEYS);
+
+/**
+ * The key of a compiled `PolicyOf` marker's subject placeholder, which commit
+ * preparation binds to the space the labeled document is stored in.
+ */
+export const OWNING_SPACE_PLACEHOLDER = "__ctOwningSpace";
+
+const OWNING_SPACE_SUBJECT_KEYS = new Set([OWNING_SPACE_PLACEHOLDER]);
+
+/**
+ * A compiled `PolicyOf` marker: a module-policy reference whose subject is
+ * still the owning-space placeholder.
+ */
+export type CfcModulePolicyMarker = CfcAtomObject & {
+  /** The policy-principal atom type. */
+  readonly type: typeof CFC_ATOM_TYPE.Policy;
+
+  /** The module-reference family of policy principals. */
+  readonly policyRefKind: "module";
+
+  /** The content identity of the module that defines the rule set. */
+  readonly moduleIdentity: string;
+
+  /** The rule set's export name in that module. */
+  readonly symbol: string;
+
+  /** The digest of the policy's manifest. */
+  readonly policyDigest: string;
+
+  /** The placeholder commit preparation binds to the owning space. */
+  readonly subject: { readonly [OWNING_SPACE_PLACEHOLDER]: true };
+};
+
+/** A complete compiled `PolicyOf` marker, with nothing missing or extra. */
+export const isExactModulePolicyMarker = (
+  value: unknown,
+): value is CfcModulePolicyMarker =>
+  isObjectNotArray(value) && hasModulePolicyRefFields(value) &&
+  isObjectNotArray(value.subject) &&
+  value.subject[OWNING_SPACE_PLACEHOLDER] === true &&
+  hasExactlyDataKeys(value.subject, OWNING_SPACE_SUBJECT_KEYS) &&
+  hasExactlyDataKeys(value, MODULE_POLICY_REF_KEYS);
 
 /**
  * Policy records + exchange rules (spec §4.3/§4.4, Epic B2 of

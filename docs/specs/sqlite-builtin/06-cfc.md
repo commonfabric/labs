@@ -892,9 +892,8 @@ chokepoint refuses every read of it but the runtime's own, so no executed code
 reads the salt. A stored salt is trusted only when its stored schema carries
 the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which the runtime
 records under that builtin identity when it mints one and which no executed
-code can satisfy. A value planted in the namespace before the chokepoint
-existed, or through a runtime without it, carries no such claim, and the next
-settle replaces it. A value whose stored schema cannot be resolved, in the
+code can satisfy. A value planted in the namespace through a runtime without
+the chokepoint carries no such claim, and the next settle replaces it. A value whose stored schema cannot be resolved, in the
 replica or the schema registry, is neither, and the settle refuses rather than
 replace it. The salt is labeled with the read-failed atom, which no ceiling
 admits; the builtin reads it as a verifier-internal read, which joins nothing

@@ -190,9 +190,12 @@ export const cellFromUrl = createNodeFactory({
   implementation: "cellFromUrl",
 }) as CellFromUrlFunction;
 
+// The result declares no confidentiality: the hash carries whatever the
+// builtin's flow carries, its policy's clause and its input's labels.
 export const policySecretHash = createNodeFactory({
   type: "ref",
   implementation: "policySecretHash",
+  resultSchema: { type: "string" },
 }) as PolicySecretHashFunction;
 
 export const fetchJsonUnchecked = createNodeFactory({

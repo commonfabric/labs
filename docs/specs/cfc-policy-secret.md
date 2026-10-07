@@ -76,12 +76,13 @@ the manifest refuses the commit, and nothing is stored.
 The namespace is the runtime's:
 
 - The write chokepoint refuses every write into it but the mint's.
-- The read chokepoint refuses every transaction read of it but three: a
-  verifier-internal read, which joins nothing; the ordinary read
-  `readRuntimeSecretIntoFlow()` makes, whose marker is private to
-  `runtime-secret.ts`; and a read inside the runtime's own privileged write.
-  A pattern, a handler, and a host read through a cell are refused, whatever
-  link or id names the document.
+- The read chokepoint refuses every read of a secret's value through
+  `IExtendedStorageTransaction` but the reads `runtime-secret.ts` makes, whose
+  marker is private to that module, and reads inside the runtime's own
+  privileged write. A pattern, a handler, and a host read through a cell are
+  refused, whatever link or id names the document. A read of the document's
+  label envelope holds nothing secret and is not refused. The scheduler's
+  diagnosis, which records what an action read, skips the namespace.
 
 A key never changes once a trusted one is stored:
 
@@ -92,10 +93,14 @@ A key never changes once a trusted one is stored:
   chokepoint, and the mint replaces it.
 - A value whose stored schema is named but resolves neither in the replica nor
   in the schema registry is neither trusted nor untrusted, and the mint refuses
-  rather than writing over it. A replica can hold a document before the schema
-  document its metadata names, and nothing in the commit would catch an
+  rather than writing over it, as §8.15.4 has an unreadable stored label
+  envelope never treated as absent. A replica can hold a document before the
+  schema document its metadata names, and nothing in the commit would catch an
   overwrite: the schema read is not a commit precondition, and the value read
   is of the current version.
+- A value carrying the claim over another confidentiality is untrusted too,
+  and the mint cannot replace it, since a stored label never weakens; the key
+  stays unusable, and no hash is handed out.
 - Two runtimes that mint concurrently both read the absence, and the commit
   that lands second conflicts on that read. Its retry finds the stored key and
   writes nothing.
@@ -232,7 +237,7 @@ function in the hash's place; under a rule guarded on the endorsed function's
 identity alone, whether the release fired reads out the bit, one run at a time.
 The stand-in carries its own code's `TransformedBy`, not the builtin's, so a
 rule requiring the builtin as a witness refuses it
-(`cfc-transformed-by-input-witnesses.md`). `dropClause` makes the decision
+([input witnesses](cfc-transformed-by-input-witnesses.md)). `dropClause` makes the decision
 public; a rule that should keep it among the space's readers adds them as
 alternatives instead, as `direct-release.tsx` does for its readers.
 
@@ -244,10 +249,11 @@ policy's clause is, and no better.
 
 - **Storage and replicas.** The key is stored in plaintext in the space, as
   every value is. The space's service, every replica of the space, a modified
-  runtime of any member, and tooling that reads the store below the
-  transaction layer (`cf inspect` reads the space's SQLite file) can read it,
-  and a modified runtime can write a key of its choosing under a forged writer
-  claim. The protection is the honest runtime's.
+  runtime of any member, and anything that reads below
+  `IExtendedStorageTransaction` (its inner storage transaction, or `cf inspect`,
+  which reads the space's SQLite file) can read it, and a modified runtime can
+  write a key of its choosing under a forged writer claim. The protection is
+  the honest runtime's.
 - **Chosen inputs.** The builtin hashes any input any code passes it, so any
   code holds the hash of any input it can name, under the policy's clause. An
   endorsed function that compares a hash against a caller-chosen number is an
@@ -276,11 +282,19 @@ policy's clause is, and no better.
   policy stays at its result location with the old clause until the builtin
   writes there again; where the store-label monotonicity check is enforced, a
   location may refuse the new clause, and the new policy's releases then stall.
+- **A stamp that outlives its value.** An output written unchanged is not
+  written again, so it keeps the stamp an earlier run left; a run over a
+  stand-in that happens to compute the same decision is released on the
+  earlier run's witness, and whether it is reads out whether the two agree
+  ([input witnesses](cfc-transformed-by-input-witnesses.md)).
 - **What every confidential value leaks.** Code that reads a hash can end its
   transaction early, run longer, fail, or write a runtime-owned store whose
   label then rises, depending on the hash; it can log it to the host's console;
   it can derive a document id from it, and use it where no render ceiling, LLM
   observation ceiling or sink ceiling is declared, as this runtime's default
-  posture declares none for the network. These are the gaps every label leaves
-  open here, and the hashes add none.
+  posture declares none for the network. A sink request that reads a hash
+  beside a value the endorsed function computed is measured against the
+  integrity of both together, so the release the endorsed value earns reaches
+  the hash too. These are the gaps every value under a policy's clause has
+  here, and the hashes add none.
 - **A handler's `Math.random`.** It is unchanged.
