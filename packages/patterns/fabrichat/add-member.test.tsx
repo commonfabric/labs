@@ -84,6 +84,12 @@ export default pattern(() => {
     about: { kind: "group" as const, title: "Team" },
     ...emptyRecords(),
   } as RoomArg);
+  // The same kind of room, to a viewer whose profile hasn't resolved.
+  const unresolvedRoom = FabriChatRoomCore({
+    myProfile: Writable.of<TestProfile | undefined>(undefined),
+    about: { kind: "group" as const, title: "Team" },
+    ...emptyRecords(),
+  } as RoomArg);
   // A space's own chat, which has no `about`.
   const sharedRoom = FabriChatRoomCore({
     myProfile: profile,
@@ -93,10 +99,12 @@ export default pattern(() => {
   return {
     [TESTS]: [
       // The viewer is an OWNER of the test's space, so a room in a space of
-      // its own offers them the control, and a space's own chat does not.
+      // its own offers them the control once their profile has resolved, and
+      // a space's own chat does not.
       {
         assertion: assert(() =>
           displayOf(ownRoom[UI], "fabrichat-add-member") === "flex" &&
+          displayOf(unresolvedRoom[UI], "fabrichat-add-member") === "none" &&
           displayOf(sharedRoom[UI], "fabrichat-add-member") === "none" &&
           shownOutcome(ownRoom[UI]) === "none:"
         ),

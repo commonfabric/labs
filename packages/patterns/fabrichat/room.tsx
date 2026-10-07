@@ -325,6 +325,9 @@ export interface AddMemberInput {
   /** One of the room's records, which names the room's space. */
   room: MessagesCell;
 
+  /** The viewer's profile, which holds no value while it is unknown. */
+  myProfile: ProfileCell | undefined;
+
   /**
    * Whether the room is one a manager created in a space of its own. A
    * space's own chat shares its space, whose members are its own business.
@@ -334,7 +337,10 @@ export interface AddMemberInput {
 
 /** What the control adding a member to a room provides. */
 export interface AddMemberOutput {
-  /** The control, shown only to an OWNER of a room in a space of its own. */
+  /**
+   * The control, shown only to an OWNER of a room in a space of its own whose
+   * profile has resolved, as the room's other controls are.
+   */
   [UI]: VNode;
 
   /** Admits the person the event's control names, from a trusted gesture. */
@@ -346,17 +352,20 @@ export interface AddMemberOutput {
  * their chat address.
  */
 export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
-  ({ room, ownSpace }) => {
+  ({ room, myProfile, ownSpace }) => {
     const outcome = new Writable.perSession<string>("");
     const add = commitAddMember({ room, ownSpace, outcome });
     // Who may add differs by viewer, and what came of an add by session, so
     // both are hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
     const addDisplay = computed((): ChatDisplay =>
-      ownSpace && spaceAccess(room) === "OWNER" ? "flex" : "none"
+      ownSpace && myProfile?.get() !== undefined &&
+        spaceAccess(room) === "OWNER"
+        ? "flex"
+        : "none"
     );
     const outcomeDisplay = computed((): ChatDisplay =>
-      outcome.get() === "" ? "none" : "block"
+      (outcome.get() ?? "") === "" ? "none" : "block"
     );
 
     return {
@@ -602,6 +611,7 @@ export const FabriChatRoomCore = pattern<
   // space, has none.
   const addMember = AddMember({
     room: messages,
+    myProfile,
     ownSpace: computed(() => about?.get() !== undefined),
   });
   const cannotSend = computed(() => !canSend);
