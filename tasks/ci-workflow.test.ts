@@ -1107,6 +1107,24 @@ Deno.test("Dashboard publishes only from main, never from a pull request", async
       "            ${{ env.IMAGE }}:${{ github.sha }}\n" +
       "            ${{ env.IMAGE }}:latest\n",
   );
+
+  // The infra repository's image-provenance check reads these labels from the
+  // image config and refuses a digest whose labels do not show a push to main.
+  const labelsAt = build.indexOf("\n          labels: |\n");
+  assert(labelsAt >= 0, "the build step sets no labels");
+  const labels = build.slice(labelsAt);
+  for (
+    const label of [
+      "org.opencontainers.image.revision=${{ github.sha }}",
+      "dev.commontools.provenance.repository=${{ github.repository }}",
+      "dev.commontools.provenance.ref=${{ github.ref }}",
+      "dev.commontools.provenance.event=${{ github.event_name }}",
+      "dev.commontools.provenance.workflow-ref=${{ github.workflow_ref }}",
+      "dev.commontools.provenance.run-id=${{ github.run_id }}",
+    ]
+  ) {
+    assertStringIncludes(labels, `\n            ${label}\n`);
+  }
 });
 
 Deno.test("the Dashboard workflow records no tests", async () => {

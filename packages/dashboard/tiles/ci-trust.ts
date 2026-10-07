@@ -65,6 +65,7 @@ function makeCiTrust(opts: { label: string; repo: string; workflow: string }): T
   const source = runSource(opts.repo, opts.workflow, "main");
   return {
     label: opts.label,
+    repo: opts.repo,
     intervalMs: 30_000,
     runSources: [source],
     async collect(ctx): Promise<TileView> {

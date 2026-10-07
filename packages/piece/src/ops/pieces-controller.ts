@@ -113,6 +113,7 @@ import {
   PieceInputPathError,
 } from "./piece-input-path.ts";
 import { reconcilePieceSource } from "./piece-origin.ts";
+import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { compileProgram } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
@@ -2231,17 +2232,27 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Has the identity's Home create the identity's private inbox if it holds
-   * none, and point each of the identity's profiles that points at no inbox
-   * at it, by sending Home's `ensurePrivateInbox`. Sending it again creates
-   * and re-points nothing. A Home pattern without that stream is left as it
-   * is. This controller must be over the identity's Home space.
+   * Gives the identity's Home its private inbox, if it holds none, and has it
+   * point each of the identity's profiles that points at no inbox at it, by
+   * sending Home's `ensurePrivateInbox` as `ensurePrivateInboxOf()` does: Home
+   * adopts the inbox a profile advertises when it passes vetting, creates one
+   * when no profile advertises one, and otherwise holds none, with the refusal
+   * logged. Sending it again creates and re-points nothing. A Home pattern
+   * without that stream is left as it is. This controller must be over the
+   * identity's Home space.
+   *
+   * Resolves once the event is sent, which is before Home's handler runs, so
+   * it rejects only when Home cannot be brought up, or vetting or the send
+   * itself throws; a failure inside the handler is not reported here.
    */
   async ensurePrivateInbox(): Promise<void> {
     this.#assertHomeSpace("ensure a private inbox");
     const home = (await this.ensureDefaultPattern()).getCell();
-    if (home.key("ensurePrivateInbox").getRaw() === undefined) return;
-    await home.key("ensurePrivateInbox").send({});
+    await ensurePrivateInboxOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+    );
   }
 
   #assertHomeSpace(operation: string): void {

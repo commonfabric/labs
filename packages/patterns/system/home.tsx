@@ -45,6 +45,7 @@ import ProfilePicker from "./profile-picker.tsx";
 import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
 import {
   ensurePrivateInbox,
+  type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
 } from "./private-inbox.tsx";
@@ -114,8 +115,12 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
-  // The user's private inbox, where others deliver offers to them, and which
-  // each of their profiles points at. Absent until `ensurePrivateInbox` runs.
+  // The user's private inbox, where others deliver offers to them: the one a
+  // profile already pointed at when `ensurePrivateInbox` first ran, if the host
+  // vetted it, or, when no profile advertises an inbox, one it created. Each of
+  // their profiles that points at no inbox is pointed here; one that points at
+  // another inbox keeps it. Absent until `ensurePrivateInbox` runs, and while a
+  // profile advertises an inbox that failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
@@ -127,9 +132,11 @@ export type HomeOutput = {
     SharedSpaceMembershipResult
   >;
   createProfile: Stream<CreateProfileEvent>;
-  // Creates the private inbox if there is none, and points every profile that
-  // points at no inbox at it. The host sends it once per sign-in.
-  ensurePrivateInbox: Stream<void>;
+  // Gives Home a private inbox if it holds none, adopting the one the host
+  // vetted from a profile's pointer, or creating one when no profile points at
+  // an inbox, and points every profile that points at no inbox at it. The host
+  // sends it once per runtime worker, the first time the worker brings up Home.
+  ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
     tags?: string[];
@@ -315,12 +322,17 @@ const Home = pattern(
       BackwardsCompatibleProfile | undefined
     >(undefined).for("defaultProfile");
     const mru = new Writable<BackwardsCompatibleProfile[]>([]).for("mru");
+    // Home's private inbox, which a profile is pointed at when it is created
+    // and when the host ensures the inbox.
+    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "privateInbox",
+    );
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
     // create a profile. The actual create UI lives in the profile picker below.
     const createProfileStream = submitProfileCreation({
       profiles: profiles as any,
-      seedName: seedProfileName({ profiles: profiles as any }),
+      seedName: seedProfileName({ profiles: profiles as any, privateInbox }),
     });
     // The home Profile tab IS the profile picker: it lists profiles natively,
     // sets the default, stamps MRU on selection, and creates more inline.
@@ -330,17 +342,16 @@ const Home = pattern(
       legacyDefaultProfile: legacyDefaultProfile as any,
       offersSetDefault: true,
       mru: mru as any,
+      privateInbox,
     });
 
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
     const chatManager = FabriChatManager({});
-    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
-      "privateInbox",
-    );
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
+      profiles: profiles as any,
       pointProfiles: pointProfilesAtPrivateInbox({
         privateInbox,
         profiles: profiles as any,

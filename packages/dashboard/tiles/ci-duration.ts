@@ -10,6 +10,7 @@
 import { fromFileUrl } from "@std/path";
 import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
+  type GreenMark,
   type Route,
   type Run,
   runSource,
@@ -19,6 +20,8 @@ import {
   type TileView,
 } from "../types.ts";
 import { CompletedAttempts } from "../completed-attempts.ts";
+import { greenBranchOf } from "../green-branch.ts";
+import { GREEN_STAR_RULES, greenStar } from "../green-star.ts";
 import {
   ciDurationSub,
   escapeHtml,
@@ -27,6 +30,7 @@ import {
   sparkline,
 } from "../lib.ts";
 import {
+  CI_RUNS_MAX_AGE_DAYS,
   CI_WORKFLOW,
   DUR_GOOD,
   DUR_MAX_AGE_HOURS,
@@ -446,7 +450,16 @@ function commitGanttParameters(url: URL): URLSearchParams | null {
   return parameters;
 }
 
-export function ciCommitGanttPage(url: URL): string {
+/**
+ * The page charting the runs `url` selects for one commit, which names the
+ * commit and wears the green branch's star when `markOf` gives the commit a
+ * mark. `markOf` defaults to what the repository's green branch says.
+ */
+export function ciCommitGanttPage(
+  url: URL,
+  markOf: (repo: string, sha: string) => GreenMark | undefined = (repo, sha) =>
+    greenBranchOf(repo)?.mark(sha),
+): string {
   const source = ciHistorySource(url.searchParams.get("repo"));
   const parameters = commitGanttParameters(url);
   const sha = parameters?.get("sha") ?? url.searchParams.get("sha") ?? "";
@@ -576,6 +589,7 @@ export function ciCommitGanttPage(url: URL): string {
 ${DASHBOARD_THEME_HEAD}
 <style>
   ${PERFORMANCE_VIEW_STYLES}
+  ${GREEN_STAR_RULES}
   body{max-width:1400px}
   .top{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;flex-wrap:wrap}
   a{color:var(--accent);text-decoration:none}.back{font-size:13px}.commit{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -585,7 +599,9 @@ ${DASHBOARD_THEME_HEAD}
 </style></head><body>
   <div class="top"><a class="back" href="/">← dashboard</a><b>CI Gantt</b><span>${
     escapeHtml(source.repo)
-  } · <a class="commit" href="${
+  } · ${
+    greenStar(markOf(source.repo, sha.toLowerCase()))
+  }<a class="commit" href="${
     escapeHtml(commitUrl)
   }" target="_blank" rel="noopener">${
     escapeHtml(shortSha)
@@ -622,7 +638,11 @@ function redirectGanttImage(url: URL, pathname: string): Response {
 const ganttRoutes: Route[] = [
   {
     path: "/ci-gantt",
-    handler(_request, url) {
+    async handler(_request, url) {
+      // The page does not change once served, so the green branch is read
+      // before it is drawn rather than after.
+      await greenBranchOf(ciHistorySource(url.searchParams.get("repo")).repo)
+        ?.refresh(Date.now() - CI_RUNS_MAX_AGE_DAYS * 86_400_000);
       return new Response(ciCommitGanttPage(url), {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
@@ -733,6 +753,7 @@ function makeCiDuration(
   const attempts = new CompletedAttempts(opts.source.repo);
   return {
     label: opts.label,
+    repo: opts.source.repo,
     intervalMs: 5 * 60_000,
     runSources: [opts.source],
     routes: opts.routes,

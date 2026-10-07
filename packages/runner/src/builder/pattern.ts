@@ -652,7 +652,6 @@ function factoryFromPattern<T, R>(
     defaultSpace?: string | unknown,
     spaceGrants?: InSpaceGrants,
     spaceRoot?: true,
-    spaceGrantsWithoutServerExecution?: InSpaceGrants,
   ): PatternFactory<T, R> => {
     if (spaceRoot) {
       // The runner places a result at the reserved root address only in the
@@ -685,7 +684,6 @@ function factoryFromPattern<T, R>(
             defaultSpace,
             spaceGrants,
             spaceRoot,
-            spaceGrantsWithoutServerExecution,
             frame,
           );
           if (targetSpace !== undefined) {
@@ -730,7 +728,6 @@ function factoryFromPattern<T, R>(
         defaultSpace,
         spaceGrants,
         spaceRoot,
-        spaceGrantsWithoutServerExecution,
       );
       noteDerivedCopy(derived, factory);
       return derived;
@@ -739,27 +736,10 @@ function factoryFromPattern<T, R>(
       // Pattern code is not trusted to keep to the type, nor to leave the
       // grants alone once they are checked, so what is checked and kept is a
       // copy. `*` is refused OWNER because a space anyone owns is anyone's to
-      // take from the identity the run acts for. The grants a runtime without
-      // server execution adds are held to READ or WRITE.
+      // take from the identity the run acts for.
       const grants: InSpaceGrants | undefined = options?.grants === undefined
         ? undefined
         : { ...options.grants };
-      const grantsWithoutServerExecution: InSpaceGrants | undefined =
-        options?.grantsWithoutServerExecution === undefined
-          ? undefined
-          : { ...options.grantsWithoutServerExecution };
-      for (
-        const [principal, capability] of Object.entries(
-          grantsWithoutServerExecution ?? {},
-        )
-      ) {
-        if (capability !== "READ" && capability !== "WRITE") {
-          throw new Error(
-            debugStr`inSpace() grantsWithoutServerExecution grants READ or ` +
-              debugStr`WRITE only, not $quote${capability} to $quote${principal}`,
-          );
-        }
-      }
       for (const [principal, capability] of Object.entries(grants ?? {})) {
         if (
           capability !== "READ" && capability !== "WRITE" &&
@@ -788,7 +768,6 @@ function factoryFromPattern<T, R>(
         space ?? "",
         grants,
         options?.root ? true : undefined,
-        grantsWithoutServerExecution,
       );
       noteDerivedCopy(derived, factory);
       return derived;
@@ -1198,15 +1177,11 @@ function assignComputedCellKinds(
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
  *   are derived from causes.
- *
- * The grants a created space takes are chosen here, by
- * {@link inSpaceGrantsFor}.
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
   grants: InSpaceGrants | undefined,
   root: true | undefined,
-  grantsWithoutServerExecution: InSpaceGrants | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1225,16 +1200,11 @@ function resolveInSpaceTargetSpace(
   const name = typeof space === "string" && space.length > 0
     ? space
     : anonymousSpaceName(frame!);
-  const createdGrants = inSpaceGrantsFor(
-    grants,
-    grantsWithoutServerExecution,
-    runtime.experimental.serverExecution === true,
-  );
   const resolved = runtime.resolveInSpaceNameSync(
     callingSpace,
     name,
     tx,
-    createdGrants,
+    grants,
     root,
   );
   if (resolved !== undefined) {
@@ -1243,34 +1213,11 @@ function resolveInSpaceTargetSpace(
   const pending = frame!.pendingSpaceNames ??= new Map();
   if (!pending.has(name)) {
     pending.set(name, {
-      ...(createdGrants !== undefined ? { grants: createdGrants } : {}),
+      ...(grants !== undefined ? { grants } : {}),
       ...(root ? { root } : {}),
     });
   }
   return undefined;
-}
-
-/**
- * Returns the access a space created for an `inSpace()` call grants beyond
- * its owner, on a runtime whose server execution is on when `serverExecution`
- * is `true`: `grants`, and without server execution
- * `grantsWithoutServerExecution` over them. `undefined` when that is nothing.
- *
- * The choice holds for the life of the space: a space created without server
- * execution keeps its added grants when a deployment turns server execution on
- * later.
- */
-function inSpaceGrantsFor(
-  grants: InSpaceGrants | undefined,
-  grantsWithoutServerExecution: InSpaceGrants | undefined,
-  serverExecution: boolean,
-): InSpaceGrants | undefined {
-  // TODO(danfuzz): Narrow a space created without server execution to its
-  // `grants` once the deployment turns server execution on, which needs a step
-  // that runs then and may change the space's access list.
-  const added = serverExecution ? undefined : grantsWithoutServerExecution;
-  if (added === undefined) return grants;
-  return { ...grants, ...added };
 }
 
 /**

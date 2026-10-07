@@ -362,7 +362,8 @@ const labelForEntriesAtPath = (
     }
     const component = entry.origin ?? "legacy";
     // Frozen-existence vs membership-template join (template-population
-    // §3.2.1): a frozen concrete `shape` entry records departed HISTORY;
+    // §3.2, first exception): a frozen concrete `shape` entry records
+    // departed HISTORY;
     // the `*` membership template records CURRENT shape. They answer
     // different questions under one class, so where both cover a read
     // their labels JOIN rather than compete in replace-down — replacing
@@ -11354,7 +11355,7 @@ export function* prepareBoundaryCommitSteps(
       // the schema walk) and must not be captured by the freeze carry
       // (review on this PR). `*`-path TEMPLATES are excluded too: the
       // shape-class membership template records CURRENT shape under
-      // replace-from-criteria (template-population §3.1/§3.2.1), so
+      // replace-from-criteria (template-population §3.1/§3.2), so
       // freezing it here would both unhinge it from the criteria and
       // accumulate stale J forever through the coalesce join.
       // RE-CREATION does not carry (§8.12.8, normative): a frozen entry

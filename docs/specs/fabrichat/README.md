@@ -245,9 +245,9 @@ names the ones it needs, and they are gathered here:
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
 - **Delivering a notice.** A room is offered to its recipient through the
-  private inbox their profile points at, but only when the request that
-  creates it names their profile, and the sender learns nothing of whether it
-  arrived; a recipient known only by their DID is reached by no offer (see
+  share inbox their profile points at when the request that creates it names
+  their profile, but nothing reads that offer yet, so nothing delivers a notice
+  to a principal who shares no space with the sender end to end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -267,9 +267,9 @@ in `schemas.tsx`. The room's stored records and the handlers that write them are
 in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
 home pattern holds a manager, and `#chatManager` resolves to it (see
 [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)). Home's
-**Chats** tab renders the manager: the user's rooms, the room chosen among them,
-the controls that start a direct or a group chat, and, when the session's
-latest start was refused, the reason. A refusal of text that isn't a principal
+**Chats** tab renders the manager: the user's rooms, each a link that opens the
+room as a page of its own, the controls that start a direct or a group chat,
+and, when the session's latest start was refused, the reason. A refusal of text that isn't a principal
 also shows the text. Where the runtime lacks a prerequisite, the patterns depart
 from this design, as below.
 
@@ -309,16 +309,23 @@ from this design, as below.
   times, activity and its numbering, and each session's windows) has a write
   policy listing the handlers that write it (`WritePolicyAnyOf`), so no other
   code can write it, even code a member runs in the room's space.
-- **Starts are not gesture-checked.** `openDirect` and `createGroup` are sent
-  from controls marked `ChatStartSurface`, but no write policy requires the
-  gesture, since the manager's records are also written by acts with none.
-  One handler, `commitManager`, writes the manager's records, and each of its
-  streams is a binding of it.
+- **A start is checked where it creates a room.** `openDirect` and
+  `createGroup` are performed by a handler of their own, `commitStart`, and the
+  record a manager-created room keeps about itself names that handler and
+  `ChatStart` on `ChatStartSurface` as its only writer, so a start that creates
+  a room commits only from that reviewed gesture; without it, its run is
+  refused whole, and records no outcome. A start that creates none,
+  `openDirect` finding a direct room already shared or a start that is
+  refused, commits without one, and grants no one access. The manager's other
+  acts are performed by `commitManager`, with no gesture. A participant's chip
+  in a room sends its click to the viewer's manager's `openDirect` itself,
+  naming the participant's principal as `target.dataset.counterpart`, since a
+  reviewed gesture does not carry across a `send` from another handler.
 - **Labels without a gesture.** Messages and reactions are labeled
-  `authored-by` under a reviewed gesture, as the design says. A
-  `recentActivity` entry and `about.record` are labeled too, by writers that
-  name no gesture (each handler appending an entry, and the manager's
-  `commitManager`), so their label says whose run wrote them, not that the
+  `authored-by` under a reviewed gesture, as the design says, and so is
+  `about.record`, under the start that created the room. A `recentActivity`
+  entry is labeled too, by a writer that names no gesture (each handler
+  appending an entry), so its label says whose run wrote it, not that the
   person made a gesture. `about` is the room's own view, with its `policy`, a
   document the room writes when it starts, and `about.record` links the stored
   record.
@@ -338,12 +345,10 @@ from this design, as below.
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
 - **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
-  JSON. A room is offered through a member's private inbox only when the
-  request names their profile (see
-  [first contact](FabriChatManager.md#first-contact)), so the manager's
+  JSON, and an offer's `id` is the `requestId` alone. Nothing delivers a notice
+  yet (see [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
-  creator to send on, and shows each room offered to its own user with "Add to
-  my chats" and "Dismiss". An offer's key is the `id` its inbox chose when it received it. And a room shows a viewer whose manager
+  creator to send on. And a room shows a viewer whose manager
   doesn't list it a control that asks the manager to `accept` it, so
   whoever opens the room's link can add it to their chats.
 - **Request ids.** A rendered control sends no `requestId`, and the room and

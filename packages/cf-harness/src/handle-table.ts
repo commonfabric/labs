@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import type { IFCLabel } from "@commonfabric/runner/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { sha256 } from "@commonfabric/content-hash";
 import {
@@ -497,19 +498,24 @@ export const resolveReferentToken = (
  * The strings the return referents `text` names stand for, by token, for
  * showing to the owner beside the text and never to a model. A parent can
  * write about what a child found without reading it — "bought the item at
- * cfh:v:…" — and the owner, whose run it is, can see the value. The text
- * itself is left as written, so a value cannot become part of its markup: a
- * link the parent wrote around a token keeps the token. A token that names
- * anything else, or nothing this table holds, has no entry.
+ * cfh:v:…" — and the owner, whose run it is, can see the value, when its label
+ * `fits` the display it is shown on. The text itself is left as written, so a
+ * value cannot become part of its markup: a link the parent wrote around a
+ * token keeps the token. A token that names anything else, nothing this table
+ * holds, or a value that does not fit the display has no entry.
  */
 export const returnReferentValues = (
   text: string,
   table: HarnessHandleTable,
+  fits: (label: IFCLabel) => boolean,
 ): Record<string, string> => {
   const values: Record<string, string> = {};
   for (const [token] of text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN))) {
     const referent = resolveReferentToken(table, token);
-    if (referent?.kind === "return" && typeof referent.value === "string") {
+    if (
+      referent?.kind === "return" && typeof referent.value === "string" &&
+      fits(referent.label)
+    ) {
       defineOwnEntry(values, token, referent.value);
     }
   }

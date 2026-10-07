@@ -33,6 +33,7 @@ import {
   harnessReleaseDecisionOutcome,
 } from "../src/contracts/policy-refusal.ts";
 import type { HarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
+import type { PromptSlotRole } from "../src/contracts/prompt-slot.ts";
 import type {
   HarnessTranscriptOmissionRule,
   HarnessTranscriptOmissions,
@@ -281,6 +282,13 @@ export interface ConsoleStep {
     decision: string;
     effectClass?: string;
     reasonCodes: readonly string[];
+
+    /**
+     * How the run's task was given, as the prompt slot the decision read
+     * says: its role, and the surface it was entered on. Absent when the run
+     * bound no prompt slot.
+     */
+    promptSlot?: { role: PromptSlotRole; surface: string };
   };
 
   /** Policy events raised against this call — a denial names its reason. */
@@ -828,6 +836,12 @@ export const consoleRunSteps = (
                 ? { effectClass: decision.effectClass }
                 : {}),
               reasonCodes: decision.reasonCodes,
+              ...(decision.promptSlot === undefined ? {} : {
+                promptSlot: {
+                  role: decision.promptSlot.role,
+                  surface: decision.promptSlot.surface,
+                },
+              }),
             },
           }
           : {}),

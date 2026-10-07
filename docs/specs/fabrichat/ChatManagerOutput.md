@@ -31,9 +31,6 @@ interface ChatManagerOutput {
     recipient: string;
   }[];
 
-  /** The rooms offered to this user that they haven't acted on, oldest first. */
-  offers: { key: string; room: Cell<ChatRoomOutput>; from: string }[];
-
   openDirect: Stream<{
     requestId: string;
     counterpart: string;
@@ -49,11 +46,9 @@ interface ChatManagerOutput {
     requestId: string;
     room: Cell<ChatRoomOutput>;
     counterpart?: string;
-    offer?: string;
   }>;
   forget: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
   delivered: Stream<{ requestId: string; id: string }>;
-  dismissOffer: Stream<{ requestId: string; offer: string }>;
 
   [VIEWS]: { chats: object };
 }
@@ -91,8 +86,8 @@ admitted to and by whom (see [delivering notices](#delivering-notices)).
 ## Views
 
 The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
-hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`, and
-`offers`, and every stream below. A native client drives the manager through that group as
+hosts that draw natively: `rooms`, `direct`, `requests`, and `outgoingNotices`,
+and every stream below. A native client drives the manager through that group as
 it drives a room through the room's `room` group (see
 [`clients.md`](clients.md#showing-a-room)).
 
@@ -125,12 +120,6 @@ in it needs to be `PerUser` or `PerSession`.
   another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
   until a client reports it delivered.
-- **`offers`** holds each room offered to this user through the private inbox
-  their profile points at that they have neither accepted nor dismissed, and
-  that isn't in `rooms` (see [offers](#offers)). Each is named by a `key`,
-  the id its inbox chose when it received it, which `accept` and
-  `dismissOffer` take, and says who offered it: `from`, the sender the inbox
-  recorded.
 
 ## Streams
 
@@ -138,7 +127,8 @@ Each stream is a one-way, asynchronous request to the manager. Sending an event
 finishes when the event is accepted, not when it takes effect, and returns no
 value. So every event carries a `requestId` its sender chooses, and the manager
 records the outcome under that id in `requests`: `pending`, then `done` or
-`refused`. A sender watches for it there.
+`refused`. A sender watches for it there. An event a stream does not admit, by
+the rules below, is not a request, and records no outcome.
 
 Each stream below is written as a call, with its event's keys as the parameters:
 `openDirect(requestId: string, counterpart: string)` sends
@@ -158,10 +148,9 @@ These rules hold for every stream:
 | --- | --- | --- |
 | [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
-| [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string-offer-string) | none | an entry for a room this user has been admitted to |
+| [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
-| [`dismissOffer`](#dismissofferrequestid-string-offer-string) | none | the offer removed from `offers`; the room is untouched |
 
 ### `openDirect(requestId: string, counterpart: string, profile?: Cell<ChatProfile>)`
 
@@ -172,7 +161,7 @@ These rules hold for every stream:
   own.
 - `profile?: Cell<ChatProfile>` — The other person's profile, whose
   `represents-principal` label must name `counterpart`. A new room is offered
-  to them through the private inbox it points at (see [offers](#offers)).
+  to them through the share inbox it points at (see [offers](#offers)).
 
 Finds the direct room this user shares with a person, or creates it. This is an
 outward act when it creates a room.
@@ -219,7 +208,7 @@ Creates a group room. This is an outward act: it grants other people access.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
   `members` is absent, or a member is not a principal's DID.
 
-### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, offer?: string)`
+### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
@@ -231,9 +220,7 @@ Creates a group room. This is an outward act: it grants other people access.
   client MUST have checked that before sending (see
   [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room) and
   [`clients.md`](clients.md#finding-conversations)); a notice's claim of who
-  sent it is only a hint. Ignored for a group room, except with `offer`.
-- `offer?: string` — The key of the offer in `offers` the room comes from,
-  with `counterpart` the offer's `from`.
+  sent it is only a hint. Ignored for a group room.
 
 Records a room this user has been admitted to.
 
@@ -245,13 +232,11 @@ Records a room this user has been admitted to.
   once the room's space has a member set, it also checks that the counterpart is
   a member. For a direct room, it also records the entry in `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
-  stays, as under [crossing creations](#crossing-creations). With `offer`, it
-  also records the offer as accepted, so it leaves `offers` for good.
-- **Outcome:** `done` with the entry, or `refused` if the request names no room
-  or this user can't read the room, or if the room is direct and its label names no creator, names this
+  stays, as under [crossing creations](#crossing-creations).
+- **Outcome:** `done` with the entry, or `refused` if the request names no
+  room or this user can't read the room, or if the room is direct and its label names no creator, names this
   user, or names someone other than a `counterpart` sent, or, once there are
-  member sets, the counterpart isn't a member. With `offer`, a room of either
-  kind is refused unless its label names the offer's sender as its creator.
+  member sets, the counterpart isn't a member.
 
 A client also sends `accept` when the user first opens the chat of an existing
 shared space, which is created with its space and not by a manager.
@@ -284,19 +269,6 @@ Reports that a notice in `outgoingNotices` has been delivered.
 - **Admitted:** without a reviewed gesture.
 - **Effect:** removes the notice from `outgoingNotices`. It records no outcome
   in `requests`, except `refused` when the request names no notice.
-
-### `dismissOffer(requestId: string, offer: string)`
-
-- `requestId: string` — Chosen by the sender, and unique among its requests.
-  Sending the same event again with it changes nothing further.
-- `offer: string` — The key of an offer in `offers`.
-
-Sets an offer aside without accepting it.
-
-- **Admitted:** without a reviewed gesture.
-- **Effect:** records the offer as dismissed, so it leaves `offers` for good.
-  The room, and this user's access to it, are untouched.
-- **Outcome:** `done`, or `refused` if the request names no offer.
 
 ## Creating a room: partial states
 
@@ -336,23 +308,29 @@ direct room's `counterpart` against that label before it sends `accept`.
 
 ## Offers
 
-A room is offered to a member through their private inbox
-([`private-inbox.md`](../../features/private-inbox.md)), which their profile's
-`inbox` points at, when a request names their profile. The offer is
-`{ kind: "fabrichat-room", entry: room }`, sent once, when the room is created.
-The inbox records who sent it, which nothing in the offer can choose, and only
-its owner reads it.
+When a request names a member's profile, as `openDirect`'s `profile` does, the
+manager offers the new room to that member through the share inbox the
+profile's `inbox` points at
+([`private-inbox.md`](../../features/private-inbox.md)), once, after the room is
+created. A profile that points at no inbox is offered nothing. The offer is the
+envelope a loom share inbox takes:
 
-An offer's `entry` is whatever its sender put there. So an offer is listed in
-`offers`, and `accept` takes it, only when the room's `about.record` is labeled
-`authored-by` the offer's sender (see
-[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)). A listing shows who
-sent an offer and a link to the room, and none of the offer's own text.
+- `kind` — `fabrichat-room`.
+- `id` — the request's `requestId`. The inbox keeps one offer per sender and
+  `id`.
+- `space` — the DID of the room's space.
+- `host` and `ownerOrigin` — the origin of the host serving the manager, which
+  serves the room's space too.
+- `title` — a group room's title, or empty for a direct room.
+- `from` — this user's DID. The inbox keeps the offer only when it names the
+  principal sending it.
+- `sharedAt` — when the offer was sent, in milliseconds since the epoch.
 
-Nothing tells the sender that an offer arrived, or that the recipient's inbox
-took it, and a member known only by their DID has no profile to reach an inbox
-through. So a notice is produced for every other member whether or not an offer
-was sent.
+Nothing reads these offers yet. A recipient learns of the room from its notice
+until Home has a share intake, which stages what is offered into its catalog of
+shared spaces. Nothing tells the sender that an offer arrived either, and a
+member known only by their DID has no profile to reach an inbox through, so a
+notice is produced for every other member whether or not an offer was sent.
 
 ## Crossing creations
 

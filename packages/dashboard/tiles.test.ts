@@ -789,7 +789,6 @@ Deno.test("recent runs: duration opens every successful run for the commit", asy
       href.replaceAll("&", "&amp;")
     }"`,
   );
-  assertStringIncludes(html, 'class="evtxt" data-focus-key="pr-title-41"');
   assertStringIncludes(
     html,
     '>3m 05s</a><a class="evarrow" data-focus-key="pr-arrow-41"',
@@ -851,6 +850,8 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
       repo,
       run_started_at: new Date(now - minsAgo * 60_000).toISOString(),
       head_commit: { message: msg },
+      id: minsAgo,
+      html_url: `https://github.com/${repo}/actions/runs/${minsAgo}`,
     });
   const byRepo = (repo: string) =>
     repo === LOOM_REPO
@@ -860,11 +861,21 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
   // Newest-first interleave across repos: labs 5m, loom 10m, labs 20m, loom 30m.
   const order = [
     ...(v.extra ?? "").matchAll(
-      /class="evtxt" data-focus-key="pr-title-\d+" href="[^"]*\/pull\/(\d+)/g,
+      /<a class="pr" data-focus-key="title-\d+-1" href="[^"]*\/pull\/(\d+)"/g,
     ),
   ]
     .map((match) => match[1]);
   assertEquals(order, ["3", "7", "2", "6"]);
+  // The row's text links to its run, its pull request number to the pull
+  // request, and its arrow to the pull request that landed the commit.
+  assertStringIncludes(
+    v.extra ?? "",
+    `<span class="evtxt"><a data-focus-key="title-5-0" href="https://github.com/${REPO}/actions/runs/5" target="_blank" rel="noopener">labs · green · labs c </a><a class="pr" data-focus-key="title-5-1" href="https://github.com/${REPO}/pull/3" target="_blank" rel="noopener">(#3)</a></span>`,
+  );
+  assertStringIncludes(
+    v.extra ?? "",
+    `href="https://github.com/${REPO}/pull/3" target="_blank" rel="noopener" aria-label="Open landed change on GitHub"`,
+  );
   assertStringIncludes(v.extra ?? "", "labs · ");
   assertStringIncludes(v.extra ?? "", "loom · ");
   assertStringIncludes(v.aside ?? "", ">4 in window</span>");

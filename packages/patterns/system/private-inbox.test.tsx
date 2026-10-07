@@ -6,19 +6,47 @@ import {
   equals,
   handler,
   pattern,
+  type Stream,
   TESTS,
   Writable,
 } from "commonfabric";
-import ProfileHome from "./profile-home.tsx";
+import { seedProfileName } from "./profile-create.tsx";
+import ProfileHome, {
+  type BackwardsCompatibleProfile,
+  type ProfileInbox,
+} from "./profile-home.tsx";
 import PrivateInbox, {
+  ensurePrivateInbox,
+  type EnsurePrivateInboxEvent,
+  isNonListAppendRefusal,
+  type Offer,
+  OFFER_ADDRESS_MAX_LENGTH,
+  OFFER_DEFAULT_KIND,
+  OFFER_ID_MAX_LENGTH,
+  OFFER_KIND_MAX_LENGTH,
   OFFER_TITLE_MAX_LENGTH,
   pointProfilesAtPrivateInbox,
+  type PointTarget,
   type PrivateInboxHolder,
   type PrivateInboxPiece,
 } from "./private-inbox.tsx";
 
 /** A well-formed space DID for an offer to name. */
 const ROOM_SPACE = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/** A well-formed DID of a principal other than the test's. */
+const SOMEONE_ELSE = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
+
+/** A well-formed host origin for an offer to name. */
+const HOST = "https://example.com";
+
+/** The offer in `offers` with `id`, if any. */
+function offerWithId(
+  offers: readonly (Offer | undefined)[],
+  id: string,
+): Offer | undefined {
+  return offers.find((each) => each?.id === id);
+}
 
 /** An inbox's result, as the link a holder keeps. */
 function linkOf(inbox: unknown): Cell<PrivateInboxPiece>;
@@ -28,13 +56,90 @@ function linkOf(inbox: unknown): unknown {
 
 /**
  * Creates an inbox and keeps it in `holder`, as `ensurePrivateInbox` does but
- * in the calling space, since a pattern test cannot create a space.
+ * in the calling space.
  */
 const holdNewInbox = handler<void, { holder: Writable<PrivateInboxHolder> }>(
   (_event, { holder }) => {
     holder.set({ piece: linkOf(PrivateInbox({ offers: [] })) });
   },
 );
+
+/** A pointer as a profile holds it. */
+type Pointer = { piece?: Cell<PrivateInboxPiece> };
+
+/** Points a stand-in profile's pointer where the event says. */
+const setStandInInbox = handler<
+  { inbox?: Cell<PrivateInboxPiece> },
+  { inbox: Writable<Pointer> }
+>((event, { inbox }) => {
+  inbox.set(event.inbox === undefined ? {} : { piece: event.inbox });
+});
+
+/**
+ * Stands in for a profile of an earlier vintage: a pointer and `setInbox`, and
+ * none of the current profile's other fields and streams.
+ */
+const EarlierVintageProfile = pattern<
+  Record<never, never>,
+  { inbox: Pointer; setInbox: Stream<{ inbox?: Cell<PrivateInboxPiece> }> }
+>(() => {
+  const inbox = new Writable<Pointer>({}).for("inbox");
+  return { inbox, setInbox: setStandInInbox({ inbox }) };
+});
+
+/** The string a malformed stored pointer holds instead of an object. */
+const MALFORMED_POINTER = "broken-pointer-container";
+
+/**
+ * Stands in for a profile whose stored pointer is not an object, as a writer
+ * bypassing `setInbox` can leave it. `stored` is the pointer as stored, which
+ * `inbox`'s type does not show.
+ */
+const MalformedPointerProfile = pattern<
+  Record<never, never>,
+  {
+    inbox: Pointer;
+    stored: Pointer | string;
+    setInbox: Stream<{ inbox?: Cell<PrivateInboxPiece> }>;
+  }
+>(() => {
+  const inbox = new Writable<Pointer | string>(MALFORMED_POINTER).for("inbox");
+  return {
+    // deno-lint-ignore no-explicit-any
+    inbox: inbox as any,
+    stored: inbox,
+    // deno-lint-ignore no-explicit-any
+    setInbox: setStandInInbox({ inbox: inbox as any }),
+  };
+});
+
+/**
+ * Stands in for the profile-create surface's seed step, the step that runs
+ * after each profile is created, with Home's inbox given or left out as an
+ * embedder gives it or leaves it out.
+ */
+const Seeder = pattern<
+  { profiles: BackwardsCompatibleProfile[]; privateInbox?: ProfileInbox },
+  { seed: Stream<{ name?: string; index?: number }> }
+>(({ profiles, privateInbox }) => ({
+  // deno-lint-ignore no-explicit-any
+  seed: seedProfileName({ profiles: profiles as any, privateInbox }),
+}));
+
+/**
+ * Stands in for Home's ensure step: Home's `ensurePrivateInbox` over a holder
+ * and a profile list, with its pointing step.
+ */
+const EnsuringHome = pattern<
+  { privateInbox: Writable<PrivateInboxHolder>; profiles: PointTarget[] },
+  { ensure: Stream<EnsurePrivateInboxEvent> }
+>(({ privateInbox, profiles }) => ({
+  ensure: ensurePrivateInbox({
+    privateInbox,
+    profiles,
+    pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
+  }),
+}));
 
 /** Records the actor's principal in `me`. */
 const introduce = handler<void, { me: Writable<string> }>((_event, { me }) => {
@@ -49,96 +154,230 @@ export default pattern(() => {
     introduceMe.send();
   });
 
-  const action_receive_room = action(() => {
+  // A loom-shaped offer, with all eight fields and one the envelope lacks.
+  const action_receive_loom_shaped = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
+      kind: "loom",
+      id: "loom-shaped",
       space: ROOM_SPACE,
-      host: "https://example.com",
+      host: HOST,
+      ownerOrigin: "https://owner.example.com",
       title: "Lunch",
+      from: me.get(),
+      sharedAt: 1_700_000_000_123,
+      extra: "dropped",
+    } as never);
+  });
+  const assert_loom_shaped_offer_kept_whole = assert(() => {
+    const offer = offerWithId(inbox.offers, "loom-shaped");
+    return me.get() !== "" && offer !== undefined &&
+      offer.kind === "loom" && offer.space === ROOM_SPACE &&
+      offer.host === HOST &&
+      offer.ownerOrigin === "https://owner.example.com" &&
+      offer.title === "Lunch" && offer.from === me.get() &&
+      offer.sharedAt === 1_700_000_000_123 &&
+      typeof offer.receivedAt === "number" && offer.receivedAt > 0 &&
+      !("extra" in offer);
+  });
+
+  // Strings are trimmed before they are checked and kept.
+  const action_receive_padded = action(() => {
+    inbox.receive.send({
+      kind: "  fabrichat-room  ",
+      id: "  padded  ",
+      space: `  ${ROOM_SPACE}  `,
+      host: `  ${HOST}  `,
+      ownerOrigin: `  ${HOST}  `,
+      title: "  Dinner  ",
+      from: `  ${me.get()}  `,
     });
   });
-  const assert_room_received_from_the_actor = assert(() =>
-    inbox.offers.length === 1 &&
-    inbox.offers[0]?.kind === "fabrichat-room" &&
-    inbox.offers[0]?.space === ROOM_SPACE &&
-    inbox.offers[0]?.host === "https://example.com" &&
-    inbox.offers[0]?.title === "Lunch" &&
-    me.get() !== "" &&
-    inbox.offers[0]?.from === me.get() &&
-    typeof inbox.offers[0]?.receivedAt === "number"
-  );
+  const assert_padded_offer_trimmed = assert(() => {
+    const offer = offerWithId(inbox.offers, "padded");
+    return offer !== undefined && offer.kind === "fabrichat-room" &&
+      offer.space === ROOM_SPACE && offer.host === HOST &&
+      offer.ownerOrigin === HOST && offer.title === "Dinner" &&
+      offer.from === me.get();
+  });
 
-  const action_receive_malformed = action(() => {
-    inbox.receive.send({ kind: "Fabri Chat", space: ROOM_SPACE });
-    inbox.receive.send({ kind: "", space: ROOM_SPACE });
-    inbox.receive.send({ kind: "x".repeat(65), space: ROOM_SPACE });
-    inbox.receive.send({ kind: "fabrichat-room", space: "not-a-did" });
+  // What an offer that leaves fields out is kept with.
+  const action_receive_bare = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
       space: ROOM_SPACE,
-      host: "ftp://example.com",
-    });
-    inbox.receive.send({
-      kind: "fabrichat-room",
-      space: ROOM_SPACE,
-      host: "https://example.com/path",
+      host: HOST,
+      ownerOrigin: "not an origin",
+      from: me.get(),
     });
   });
-  const assert_malformed_offers_dropped = assert(() =>
-    inbox.offers.length === 1
-  );
+  const assert_bare_offer_defaulted = assert(() => {
+    const offer = inbox.offers.find((each) =>
+      each?.id.startsWith(`${ROOM_SPACE}@`) === true
+    );
+    return offer !== undefined && offer.kind === OFFER_DEFAULT_KIND &&
+      offer.id === `${ROOM_SPACE}@${offer.sharedAt}` &&
+      offer.sharedAt === offer.receivedAt && offer.ownerOrigin === "" &&
+      offer.title === "";
+  });
 
-  const action_receive_long_title = action(() => {
+  // Over-long strings are cut, and a host is cut before it is checked.
+  const longHost = `https://${"h".repeat(OFFER_ADDRESS_MAX_LENGTH)}`;
+  const action_receive_long = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
+      kind: "k".repeat(OFFER_KIND_MAX_LENGTH * 2),
+      id: "i".repeat(OFFER_ID_MAX_LENGTH * 2),
       space: ROOM_SPACE,
+      host: longHost,
       title: "t".repeat(OFFER_TITLE_MAX_LENGTH * 2),
+      from: me.get(),
     });
   });
-  const assert_long_title_cut = assert(() =>
-    inbox.offers.length === 2 &&
-    inbox.offers[1]?.title === "t".repeat(OFFER_TITLE_MAX_LENGTH) &&
-    inbox.offers[1]?.host === undefined
-  );
+  const assert_long_offer_cut = assert(() => {
+    const offer = offerWithId(inbox.offers, "i".repeat(OFFER_ID_MAX_LENGTH));
+    return offer !== undefined &&
+      offer.kind === "k".repeat(OFFER_KIND_MAX_LENGTH) &&
+      offer.title === "t".repeat(OFFER_TITLE_MAX_LENGTH) &&
+      offer.host === longHost.slice(0, OFFER_ADDRESS_MAX_LENGTH);
+  });
 
-  // Two offers in one action land in the same second, and one names an `id`
-  // of its own.
-  const forged = {
-    kind: "fabrichat-room",
-    space: ROOM_SPACE,
-    title: "Second",
-    id: "forged-id",
-  };
-  const action_receive_two_in_one_second = action(() => {
-    inbox.receive.send({
-      kind: "fabrichat-room",
+  // Each refused, by the one rule it breaks.
+  const action_receive_refused = action(() => {
+    const valid = {
+      kind: "loom",
       space: ROOM_SPACE,
-      title: "First",
+      host: HOST,
+      from: me.get(),
+    };
+    inbox.receive.send({ ...valid, id: "bad-space", space: "not-a-did" });
+    inbox.receive.send({ ...valid, id: "no-space", space: undefined });
+    inbox.receive.send({ ...valid, id: "bad-from", from: "not-a-did" });
+    inbox.receive.send({ ...valid, id: "no-from", from: undefined });
+    inbox.receive.send({ ...valid, id: "ftp-host", host: "ftp://example.com" });
+    inbox.receive.send({ ...valid, id: "path-host", host: `${HOST}/path` });
+    inbox.receive.send({ ...valid, id: "no-host", host: undefined });
+    inbox.receive.send({
+      ...valid,
+      id: "userinfo-host",
+      host: "https://good.example@evil.example",
     });
-    inbox.receive.send(forged);
+    inbox.receive.send({
+      ...valid,
+      id: "fragment-host",
+      host: "https://good.example#@evil.example",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "query-host",
+      host: "https://good.example?evil.example",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "bad-port-host",
+      host: "https://example.com:99999",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "backslash-host",
+      host: "https://example.com\\evil",
+    });
+    inbox.receive.send({
+      ...valid,
+      id: "default-port-host",
+      host: "https://example.com:443",
+    });
+    inbox.receive.send({ ...valid, id: "query-space", space: "did:key:abc?" });
+    inbox.receive.send({ ...valid, id: "not-me", from: SOMEONE_ELSE });
   });
-  const assert_each_offer_has_its_own_id = assert(() =>
-    inbox.offers.length === 4 &&
-    inbox.offers[2]?.from === inbox.offers[3]?.from &&
-    typeof inbox.offers[2]?.id === "string" &&
-    inbox.offers[2]?.id !== "" &&
-    inbox.offers[2]?.id !== inbox.offers[3]?.id &&
-    inbox.offers[3]?.id !== "forged-id" &&
-    new Set(inbox.offers.map((each) => each?.id)).size === 4
+  const assert_refused_offers_dropped = assert(() =>
+    [
+      "bad-space",
+      "no-space",
+      "bad-from",
+      "no-from",
+      "ftp-host",
+      "path-host",
+      "no-host",
+      "userinfo-host",
+      "fragment-host",
+      "query-host",
+      "bad-port-host",
+      "backslash-host",
+      "default-port-host",
+      "query-space",
+      "not-me",
+    ].every((id) => offerWithId(inbox.offers, id) === undefined)
   );
 
-  // Pointing profiles at an inbox: one profile already points at another
-  // inbox, and one points at nothing.
+  // A second offer under an `id` the inbox holds is dropped.
+  const action_receive_duplicate = action(() => {
+    inbox.receive.send({
+      kind: "loom",
+      id: "loom-shaped",
+      space: ROOM_SPACE,
+      host: HOST,
+      title: "Second",
+      from: me.get(),
+    });
+  });
+  const assert_duplicate_dropped = assert(() =>
+    inbox.offers.filter((each) => each?.id === "loom-shaped").length === 1 &&
+    offerWithId(inbox.offers, "loom-shaped")?.title === "Lunch"
+  );
+
+  // An inbox whose `offers` a writer replaced with something other than a
+  // list keeps nothing, and leaves it as it is.
+  const corruptOffers = new Writable<string>("not a list");
+  // deno-lint-ignore no-explicit-any
+  const corrupt = PrivateInbox({ offers: corruptOffers as any });
+  const action_receive_into_corrupt = action(() => {
+    corrupt.receive.send({
+      kind: "loom",
+      id: "into-corrupt",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+    });
+  });
+  const assert_corrupt_offers_left_as_they_were = assert(() =>
+    corruptOffers.get() === "not a list"
+  );
+
+  // Only an append's refusal of a non-list is passed over; any other failure
+  // of the append propagates out of `receive`.
+  const assert_only_a_non_list_refusal_is_passed_over = assert(() =>
+    isNonListAppendRefusal(
+      new Error(
+        "Cell.push() or Cell.pushAll() requires transaction and array value\nhelp: use in handlers only, ensure cell is typed as array",
+      ),
+    ) &&
+    !isNonListAppendRefusal(
+      new TypeError("Cell.pushAll() requires an array of values, not `1`"),
+    ) &&
+    !isNonListAppendRefusal(new Error("writer-fit confidentiality misfit")) &&
+    !isNonListAppendRefusal(undefined)
+  );
+
+  // Pointing profiles at an inbox: of the current vintage and of an earlier
+  // one, one profile already points at another inbox, and one points at
+  // nothing.
   const pointed = ProfileHome({ initialName: "Pointed" });
   const unpointed = ProfileHome({ initialName: "Unpointed" });
+  const earlierPointed = EarlierVintageProfile({});
+  const earlierUnpointed = EarlierVintageProfile({});
+  const malformedPointer = MalformedPointerProfile({});
   const home = new Writable<PrivateInboxHolder>({});
   const elsewhere = new Writable<PrivateInboxHolder>({});
   const holdHomeInbox = holdNewInbox({ holder: home });
   const holdElsewhereInbox = holdNewInbox({ holder: elsewhere });
   const pointProfiles = pointProfilesAtPrivateInbox({
     privateInbox: home,
-    // deno-lint-ignore no-explicit-any
-    profiles: [pointed, unpointed] as any,
+    profiles: [
+      pointed,
+      earlierPointed,
+      earlierUnpointed,
+      unpointed,
+      malformedPointer,
+      // deno-lint-ignore no-explicit-any
+    ] as any,
   });
 
   const action_create_inboxes = action(() => {
@@ -147,6 +386,9 @@ export default pattern(() => {
   });
   const action_point_one_elsewhere = action(() => {
     pointed.setInbox.send({ inbox: elsewhere.get().piece?.resolveAsCell() });
+    earlierPointed.setInbox.send({
+      inbox: elsewhere.get().piece?.resolveAsCell(),
+    });
   });
   const action_point_profiles = action(() => {
     pointProfiles.send();
@@ -155,50 +397,254 @@ export default pattern(() => {
     home.get().piece !== undefined && elsewhere.get().piece !== undefined &&
     !equals(home.get().piece, elsewhere.get().piece)
   );
-  // An offer naming its piece by link alone, and one naming nothing.
-  const action_receive_entry_only = action(() => {
-    inbox.receive.send({
-      kind: "fabrichat-room",
-      entry: elsewhere.get().piece?.resolveAsCell(),
-    });
-  });
-  const action_receive_neither_space_nor_entry = action(() => {
-    inbox.receive.send({ kind: "fabrichat-room", title: "Nowhere" });
-  });
-  const assert_entry_only_offer_kept_without_space = assert(() =>
-    inbox.offers.length === 5 &&
-    inbox.offers[4]?.space === undefined &&
-    equals(inbox.offers[4]?.entry, elsewhere.get().piece) &&
-    !inbox.offers.some((each) => each?.title === "Nowhere")
+  // Home repairs a stored pointer that is not an object: the pointer type
+  // reads it as no pointer, so the owner's Home points the owner's profile.
+  const assert_the_malformed_pointer_is_stored = assert(() =>
+    malformedPointer.stored === MALFORMED_POINTER
   );
-
+  const assert_the_malformed_pointer_is_repaired = assert(() =>
+    equals(malformedPointer.inbox?.piece, home.get().piece)
+  );
   const assert_only_the_unpointed_profile_points_at_home_inbox = assert(() =>
     equals(pointed.inbox?.piece, elsewhere.get().piece) &&
-    equals(unpointed.inbox?.piece, home.get().piece)
+    equals(earlierPointed.inbox?.piece, elsewhere.get().piece) &&
+    equals(unpointed.inbox?.piece, home.get().piece) &&
+    equals(earlierUnpointed.inbox?.piece, home.get().piece)
+  );
+
+  // A profile created after Home pointed its profiles is pointed by the seed
+  // step that follows its creation: when Home's inbox is given and the profile
+  // points at nothing, and not otherwise.
+  const freshForInbox = ProfileHome({ initialName: "" });
+  const freshWithoutInbox = ProfileHome({ initialName: "" });
+  const freshPointedElsewhere = ProfileHome({ initialName: "" });
+  // deno-lint-ignore no-explicit-any
+  const seederWithInbox = Seeder({
+    profiles: [freshForInbox] as any,
+    privateInbox: home,
+  });
+  // deno-lint-ignore no-explicit-any
+  const seederWithoutInbox = Seeder({ profiles: [freshWithoutInbox] as any });
+  const seederOverPointed = Seeder({
+    // deno-lint-ignore no-explicit-any
+    profiles: [freshPointedElsewhere] as any,
+    privateInbox: home,
+  });
+  // An existing, named profile at the index the seed step is handed, as when
+  // the create read its index from a list it had not loaded: left alone.
+  const namedAtIndex = ProfileHome({ initialName: "" });
+  const seederOverNamed = Seeder({
+    // deno-lint-ignore no-explicit-any
+    profiles: [namedAtIndex] as any,
+    privateInbox: home,
+  });
+  const action_name_the_existing_profile = action(() => {
+    namedAtIndex.setName.send({ name: "Ada" });
+  });
+  const action_point_fresh_elsewhere = action(() => {
+    freshPointedElsewhere.setInbox.send({
+      inbox: elsewhere.get().piece?.resolveAsCell(),
+    });
+  });
+  const action_seed_fresh_profiles = action(() => {
+    seederWithInbox.seed.send({ name: "Fresh", index: 0 });
+    seederWithoutInbox.seed.send({ name: "Fresh", index: 0 });
+    seederOverPointed.seed.send({ name: "Fresh", index: 0 });
+    seederOverNamed.seed.send({ name: "Fresh", index: 0 });
+  });
+  const assert_only_the_unpointed_fresh_profile_is_pointed = assert(() =>
+    equals(freshForInbox.inbox?.piece, home.get().piece) &&
+    freshForInbox.name === "Fresh" &&
+    freshWithoutInbox.inbox?.piece === undefined &&
+    freshWithoutInbox.name === "Fresh" &&
+    equals(freshPointedElsewhere.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_existing_named_profile_left_alone = assert(() =>
+    namedAtIndex.inbox?.piece === undefined && namedAtIndex.name === "Ada"
+  );
+
+  // Ensuring Home's inbox: Home adopts the inbox the host names, when the first
+  // profile that points at an inbox points at it, keeps an inbox it holds, and
+  // holds none when profiles advertise an inbox but the host names none, as
+  // when the advertised inbox failed the host's vetting, or names another
+  // (`packages/piece/test/ops/pieces-controller-spaces.test.ts`). A profile
+  // pointing at another inbox keeps its pointer, and the seed step points a
+  // new profile at the adopted inbox. Creating an inbox when no profile points
+  // at one is covered by `integration/private-inbox-multi-runtime.test.ts`.
+  const third = new Writable<PrivateInboxHolder>({});
+  const holdThirdInbox = holdNewInbox({ holder: third });
+  const loneUnpointed = ProfileHome({ initialName: "Lone unpointed" });
+  const loneAdvertising = EarlierVintageProfile({});
+  const adoptingOne = new Writable<PrivateInboxHolder>({});
+  const ensureAdoptingOne = EnsuringHome({
+    privateInbox: adoptingOne,
+    // deno-lint-ignore no-explicit-any
+    profiles: [loneUnpointed, loneAdvertising] as any,
+  });
+  const firstUnpointed = ProfileHome({ initialName: "First unpointed" });
+  const adoptedAdvertising = ProfileHome({
+    initialName: "Adopted advertising",
+  });
+  const otherAdvertising = ProfileHome({ initialName: "Other advertising" });
+  const lastUnpointed = EarlierVintageProfile({});
+  const adoptingAmongOthers = new Writable<PrivateInboxHolder>({});
+  const ensureAdoptingAmongOthers = EnsuringHome({
+    privateInbox: adoptingAmongOthers,
+    profiles: [
+      firstUnpointed,
+      adoptedAdvertising,
+      otherAdvertising,
+      lastUnpointed,
+      // deno-lint-ignore no-explicit-any
+    ] as any,
+  });
+  const keepingAdvertising = ProfileHome({
+    initialName: "Keeping advertising",
+  });
+  const keepingUnpointed = ProfileHome({ initialName: "Keeping unpointed" });
+  const keeping = new Writable<PrivateInboxHolder>({});
+  const ensureKeeping = EnsuringHome({
+    privateInbox: keeping,
+    // deno-lint-ignore no-explicit-any
+    profiles: [keepingAdvertising, keepingUnpointed] as any,
+  });
+  const unvettedUnpointed = ProfileHome({ initialName: "Unvetted unpointed" });
+  const unvettedAdvertising = ProfileHome({
+    initialName: "Unvetted advertising",
+  });
+  const unvetted = new Writable<PrivateInboxHolder>({});
+  const ensureUnvetted = EnsuringHome({
+    privateInbox: unvetted,
+    // deno-lint-ignore no-explicit-any
+    profiles: [unvettedUnpointed, unvettedAdvertising] as any,
+  });
+  const mismatchedAdvertising = ProfileHome({
+    initialName: "Mismatched advertising",
+  });
+  const mismatched = new Writable<PrivateInboxHolder>({});
+  const ensureMismatched = EnsuringHome({
+    privateInbox: mismatched,
+    // deno-lint-ignore no-explicit-any
+    profiles: [mismatchedAdvertising] as any,
+  });
+  const freshAfterAdoption = ProfileHome({ initialName: "" });
+  const seederAfterAdoption = Seeder({
+    // deno-lint-ignore no-explicit-any
+    profiles: [freshAfterAdoption] as any,
+    privateInbox: adoptingOne,
+  });
+  const action_advertise_inboxes = action(() => {
+    holdThirdInbox.send();
+    const advertised = elsewhere.get().piece?.resolveAsCell();
+    loneAdvertising.setInbox.send({ inbox: advertised });
+    adoptedAdvertising.setInbox.send({ inbox: advertised });
+    keepingAdvertising.setInbox.send({ inbox: advertised });
+    unvettedAdvertising.setInbox.send({ inbox: advertised });
+    mismatchedAdvertising.setInbox.send({ inbox: advertised });
+    keeping.set({ piece: home.get().piece?.resolveAsCell() });
+  });
+  const action_advertise_a_second_inbox = action(() => {
+    otherAdvertising.setInbox.send({
+      inbox: third.get().piece?.resolveAsCell(),
+    });
+  });
+  const action_ensure_inboxes = action(() => {
+    const vetted = elsewhere.get().piece?.resolveAsCell();
+    ensureAdoptingOne.ensure.send({ adopt: vetted });
+    ensureAdoptingAmongOthers.ensure.send({ adopt: vetted });
+    ensureKeeping.ensure.send({ adopt: vetted });
+    ensureUnvetted.ensure.send({});
+    ensureMismatched.ensure.send({ adopt: third.get().piece?.resolveAsCell() });
+  });
+  const assert_the_named_inbox_is_adopted = assert(() =>
+    equals(adoptingOne.get().piece, elsewhere.get().piece) &&
+    equals(loneUnpointed.inbox?.piece, elsewhere.get().piece) &&
+    equals(loneAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_another_advertised_inbox_is_left_as_it_was = assert(() =>
+    equals(adoptingAmongOthers.get().piece, elsewhere.get().piece) &&
+    equals(firstUnpointed.inbox?.piece, elsewhere.get().piece) &&
+    equals(lastUnpointed.inbox?.piece, elsewhere.get().piece) &&
+    equals(otherAdvertising.inbox?.piece, third.get().piece)
+  );
+  const assert_a_held_inbox_is_kept = assert(() =>
+    equals(keeping.get().piece, home.get().piece) &&
+    equals(keepingUnpointed.inbox?.piece, home.get().piece) &&
+    equals(keepingAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const assert_an_unvetted_advertisement_leaves_home_without_an_inbox = assert(
+    () =>
+      unvetted.get().piece === undefined &&
+      unvettedUnpointed.inbox?.piece === undefined &&
+      equals(unvettedAdvertising.inbox?.piece, elsewhere.get().piece),
+  );
+  const assert_an_inbox_no_profile_advertises_is_not_adopted = assert(() =>
+    mismatched.get().piece === undefined &&
+    equals(mismatchedAdvertising.inbox?.piece, elsewhere.get().piece)
+  );
+  const action_seed_after_adoption = action(() => {
+    seederAfterAdoption.seed.send({ name: "Fresh", index: 0 });
+  });
+  const assert_a_new_profile_is_pointed_at_the_adopted_inbox = assert(() =>
+    equals(freshAfterAdoption.inbox?.piece, elsewhere.get().piece)
   );
 
   return {
     [TESTS]: [
       { action: action_introduce },
-      { action: action_receive_room },
-      { assertion: assert_room_received_from_the_actor },
-      { action: action_receive_malformed },
-      { assertion: assert_malformed_offers_dropped },
-      { action: action_receive_long_title },
-      { assertion: assert_long_title_cut },
-      { action: action_receive_two_in_one_second },
-      { assertion: assert_each_offer_has_its_own_id },
+      { action: action_receive_loom_shaped },
+      { assertion: assert_loom_shaped_offer_kept_whole },
+      { action: action_receive_padded },
+      { assertion: assert_padded_offer_trimmed },
+      { action: action_receive_bare },
+      { assertion: assert_bare_offer_defaulted },
+      { action: action_receive_long },
+      { assertion: assert_long_offer_cut },
+      { action: action_receive_refused },
+      { assertion: assert_refused_offers_dropped },
+      { action: action_receive_duplicate },
+      { assertion: assert_duplicate_dropped },
+      { action: action_receive_into_corrupt },
+      { assertion: assert_corrupt_offers_left_as_they_were },
+      { assertion: assert_only_a_non_list_refusal_is_passed_over },
       { action: action_create_inboxes },
       { assertion: assert_inboxes_created },
       { action: action_point_one_elsewhere },
+      { assertion: assert_the_malformed_pointer_is_stored },
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
+      { assertion: assert_the_malformed_pointer_is_repaired },
       // Pointing again changes nothing.
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
-      { action: action_receive_entry_only },
-      { action: action_receive_neither_space_nor_entry },
-      { assertion: assert_entry_only_offer_kept_without_space },
+      { action: action_point_fresh_elsewhere },
+      { action: action_name_the_existing_profile },
+      { action: action_seed_fresh_profiles },
+      { assertion: assert_only_the_unpointed_fresh_profile_is_pointed },
+      { assertion: assert_existing_named_profile_left_alone },
+      { action: action_advertise_inboxes },
+      { action: action_advertise_a_second_inbox },
+      { action: action_ensure_inboxes },
+      { assertion: assert_the_named_inbox_is_adopted },
+      { assertion: assert_another_advertised_inbox_is_left_as_it_was },
+      { assertion: assert_a_held_inbox_is_kept },
+      {
+        assertion:
+          assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
+      },
+      { assertion: assert_an_inbox_no_profile_advertises_is_not_adopted },
+      // Ensuring again changes nothing.
+      { action: action_ensure_inboxes },
+      { assertion: assert_the_named_inbox_is_adopted },
+      { assertion: assert_another_advertised_inbox_is_left_as_it_was },
+      { assertion: assert_a_held_inbox_is_kept },
+      {
+        assertion:
+          assert_an_unvetted_advertisement_leaves_home_without_an_inbox,
+      },
+      { assertion: assert_an_inbox_no_profile_advertises_is_not_adopted },
+      { action: action_seed_after_adoption },
+      { assertion: assert_a_new_profile_is_pointed_at_the_adopted_inbox },
     ],
   };
 });

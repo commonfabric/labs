@@ -18,6 +18,7 @@ import {
   githubOperationsInProgress,
   memo,
   performanceGithub,
+  RUN_LIST_ACCESS,
   runArtifactId,
 } from "./lib.ts";
 import { performanceGitHubRateLimit } from "./github-rate-limit.ts";
@@ -86,6 +87,40 @@ Deno.test("github: no token -> a 'set GH_TOKEN' error, and no request is attempt
       // out with "set GH_TOKEN" rather than "temporarily unavailable".
       assertEquals(friendlyError(e.message), "set GH_TOKEN");
     });
+  });
+});
+
+Deno.test("github: a workflow run list asked for without run list access is refused before any request", async () => {
+  const credential = staticGitHubCredential("t");
+  await withFetch(() => Response.json({ workflow_runs: [] }), async (calls) => {
+    for (
+      const path of [
+        "repos/o/r/actions/runs?branch=main",
+        "repos/o/r/actions/workflows/ci.yml/runs?per_page=100",
+        "/repos/o/r/actions/workflows/7/runs",
+        "repos/o/r/actions/./runs?branch=main",
+        "repos/o/r/actions/workflows/x/../7/runs/",
+        "repos/o/r/Actions/Runs",
+        "repos/o/r/actions/%72uns",
+        "repos/o/r/actions/workflows/%E0%A4%A/runs",
+      ]
+    ) {
+      const e = await assertRejects(() => github(path, credential), Error);
+      assertStringIncludes(e.message, "github-runs.ts");
+      await assertRejects(() => performanceGithub(path, credential), Error);
+      await assertRejects(() => githubDownload(path, credential), Error);
+    }
+    assertEquals(calls.length, 0);
+
+    const listed = await github(
+      "repos/o/r/actions/workflows/ci.yml/runs?per_page=100",
+      credential,
+      { runListAccess: RUN_LIST_ACCESS },
+    );
+    // A run read by its id is not a list.
+    await github("repos/o/r/actions/runs/7", credential);
+    assertEquals(listed, { workflow_runs: [] });
+    assertEquals(calls.length, 2);
   });
 });
 

@@ -141,13 +141,25 @@ sees their own profile.
 ## Private Inbox
 
 The home default pattern holds the user's private inbox in
-`defaultPattern.privateInbox.piece`: a piece of
-`packages/patterns/system/private-inbox.tsx`, in a space of its own, where
-other people deliver offers to the user. Home's `ensurePrivateInbox` stream
-creates it and points each profile that points at no inbox at it, through the
-profile's `inbox` field, which is how a sender finds it. The host sends that
-stream when it brings up Home. [The private inbox](../../features/private-inbox.md)
-describes the whole arrangement.
+`defaultPattern.privateInbox.piece`: a share inbox piece, in a space of its
+own, where other people deliver offers to the user. The user has one inbox,
+whichever side creates it. The host sends Home's `ensurePrivateInbox` stream
+once per runtime worker, the first time the worker brings up Home. Home keeps
+an inbox it holds. Otherwise the host takes the first inbox a profile in the
+`profiles` list points at, in list order, such as a loom daemon's, and vets it
+as a loom daemon vets one; Home adopts it if it passes. Home creates an inbox from
+`packages/patterns/system/private-inbox.tsx` only when no profile points at
+one. An advertised inbox that fails vetting is neither adopted nor replaced,
+and Home holds none. While Home holds an inbox, it points each profile that
+points at no inbox at it, through the profile's `inbox` field, which is how a
+sender finds it, and leaves a profile pointing at another inbox as it is. While
+it holds none, as after a failed vetting, a profile that points at no inbox
+stays unpointed. A profile created once Home holds the inbox is pointed at it
+as it is created; one created earlier is pointed by the next ensure. A loom
+daemon does the same in the other direction, adopting the inbox a profile
+advertises and never replacing a pointer to a different one.
+[The private inbox](../../features/private-inbox.md) describes the whole
+arrangement.
 
 ## Spaces
 
@@ -228,8 +240,9 @@ requests produced for a client to deliver. It creates each room in
 a space of its own. Everything it holds is private to the user, as the home
 space is.
 
-Home's **Chats** tab renders it: the user's rooms, the room chosen among them,
-and the controls that start a direct or a group chat.
+Home's **Chats** tab renders it: the user's rooms, each a link that opens the
+room as a page of its own, and the controls that start a direct or a group
+chat. A page can also show it at its path in home's result, `chatManager`.
 
 A home space whose system home pattern was set up before it held a chat manager
 holds none until the home space is next opened, since nothing updates a piece

@@ -51,6 +51,11 @@ export interface Tile {
   // latest-view state on the server and its markup in the browser.
   label: string;
 
+  // The repository the tile reports on, as "owner/name", when it reports on
+  // one alone. That repository's page shows the tile's view among its
+  // measures (repo-page.ts).
+  repo?: string;
+
   intervalMs: number; // how often collect() runs, per source when runSources is set
   wide?: boolean; // render full-width below the grid, including before collection
   // Keep the last completed status and values while ignoring intermediate views.
@@ -87,8 +92,21 @@ export interface Ctx {
   env(key: string): string | undefined;
 }
 
+/**
+ * That a repository's green branch is at a run's commit, or was at it: the
+ * branch CI moves to the newest commit of main whose tests passed.
+ */
+export interface GreenMark {
+  /** The branch's name, such as `main-green`. */
+  readonly branch: string;
+
+  /** Whether the branch is at the commit now. */
+  readonly current: boolean;
+}
+
 export interface Run {
   repo?: string; // the "owner/name" the run was fetched for (tagged by the fetcher)
+  green?: GreenMark; // set by the fetcher when the repo's green branch is or was at the commit
   id: number;
   status: string;
   conclusion: string | null;

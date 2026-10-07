@@ -44,7 +44,7 @@ import {
   popFrame,
   pushFrameFromCause,
 } from "./builder/pattern.ts";
-import { commitSpaceAccessChanges } from "./builder/space-access-change.ts";
+import { settleSpaceAccessChanges } from "./builder/space-access-change.ts";
 import {
   type CellScope,
   type FabricExecValue,
@@ -11363,10 +11363,11 @@ export class Runner {
               );
             };
             // Access-list changes commit on their own, ahead of the handler's
-            // transaction: the memory server admits an access-list change
-            // only as a commit's single operation.
+            // writes: the memory server admits an access-list change only as
+            // a commit's single operation.
             if ((frame.pendingSpaceAccessChanges?.size ?? 0) > 0) {
-              return commitSpaceAccessChanges(frame).then(handleResult);
+              const settling = settleSpaceAccessChanges(frame);
+              if (settling !== undefined) return settling.then(handleResult);
             }
             return handleResult();
           } finally {

@@ -7,9 +7,15 @@ import type {
   HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
-import { type HarnessJobSpec, runHarnessJob } from "../src/harness-job.ts";
+import {
+  type HarnessJobSpec,
+  runHarnessJob,
+  selectHarnessJobSandboxRuntime,
+} from "../src/harness-job.ts";
+import { LocalJobBrowserHost } from "../src/local-jobs/browser-host.ts";
 
 /** The space a fabric job names. */
 const SPACE = "did:key:z6MkgUiiZvP3qYQqr1NWyS2uCpny8dejAvyuBZh2PAVACs97";
@@ -89,6 +95,7 @@ describe("runHarnessJob()", () => {
       signal?: AbortSignal;
       onEvent?: (event: HarnessTranscriptEvent) => void;
       report?: (message: string) => void;
+      browserHost?: LocalJobBrowserHost;
     } = {},
   ) => {
     const seen: Seen = {};
@@ -97,10 +104,16 @@ describe("runHarnessJob()", () => {
       signal: options.signal ?? new AbortController().signal,
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.report !== undefined ? { report: options.report } : {}),
+      ...(options.browserHost !== undefined
+        ? { browserHost: options.browserHost }
+        : {}),
       harnessDeps: {
         env: {
           CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
           CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+          // Named, so a job selects the same sandbox on every machine: a Mac
+          // otherwise takes the native runtime, from a store this has none of.
+          CF_HARNESS_SANDBOX_RUNTIME: "docker",
         },
         fabricSessionFactory: () =>
           Promise.reject(new Error("this job opens no fabric session")),
@@ -167,6 +180,32 @@ describe("runHarnessJob()", () => {
       jobIdEnvVar: "HOST_JOB_ID",
       jobId: "job-own-id",
     });
+  });
+
+  it("hands a browser host to the run's engine, with the subagent profiles the spec allows", async () => {
+    const host = new LocalJobBrowserHost();
+    const { result, seen } = await runScripted(
+      plainSpec({
+        tools: ["web_fetch", "delegate_task"],
+        subagentProfiles: ["browser"],
+      }),
+      answering("Titan"),
+      { browserHost: host },
+    );
+    expect(result.outcome).toBe("completed");
+    expect(seen.loopOptions?.engine?.browserHost).toBe(host);
+    expect(seen.loopOptions?.allowedSubagentProfiles).toEqual(["browser"]);
+    expect(seen.loopOptions?.allowedToolIds).toEqual([
+      "web_fetch",
+      "delegate_task",
+      "submit_result",
+    ]);
+  });
+
+  it("allows no subagent profile and hands no host when the spec names none", async () => {
+    const { seen } = await runScripted(plainSpec(), answering("Titan"));
+    expect(seen.loopOptions?.engine?.browserHost).toBeUndefined();
+    expect(seen.loopOptions?.allowedSubagentProfiles).toEqual([]);
   });
 
   describe("with plain inputs and no fabric", () => {
@@ -384,6 +423,57 @@ describe("runHarnessJob()", () => {
       });
     });
 
+    for (
+      const [given, flags] of [
+        ["", {}],
+        [", even where its caller's deps say flags can be passed", {
+          sandboxSelectionFlags: true,
+        }],
+      ] as const
+    ) {
+      it(`ends \`failed\` as \`PROVIDER_FAILURE\`, reporting the harness's refusal naming the variable alone, where the harness refuses its sandbox${given}`, async () => {
+        // A Mac with no native runtime set up, and no runtime named. By the
+        // path the file system has for it: a home reached through a link is
+        // refused for that before its store is looked at.
+        const home = await Deno.realPath(runRoot);
+        const reported: string[] = [];
+        let looped = false;
+
+        const result = await runHarnessJob(plainSpec(), {
+          runRoot,
+          signal: new AbortController().signal,
+          report: (message) => reported.push(message),
+          harnessDeps: {
+            ...flags,
+            env: {
+              CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+              HOME: home,
+            },
+            platform: "darwin",
+            createPromptLoop: () => {
+              looped = true;
+              throw new Error("no loop is built for a refused job");
+            },
+          },
+        });
+
+        expect([result, looped]).toEqual([
+          { outcome: "failed", errorCode: "PROVIDER_FAILURE" },
+          false,
+        ]);
+        const refusal = reported.find((message) =>
+          message.includes("No sandbox runtime is named")
+        );
+        // The job's argument list is written for it, so the way to Docker it
+        // is told is the variable, and no flag.
+        expect(refusal).toContain(
+          "select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+        );
+        expect(refusal).not.toContain("--sandbox-runtime");
+      });
+    }
+
     it("ends `failed` as `INVALID_RESULT`, with its report, when the model submitted no result", async () => {
       const reported: string[] = [];
       const { result } = await runScripted(
@@ -413,5 +503,53 @@ describe("runHarnessJob()", () => {
 
       expect(result.outcome).toBe("failed");
     });
+  });
+});
+
+describe("selectHarnessJobSandboxRuntime()", () => {
+  it("takes the runtime the environment names, on any platform", async () => {
+    const selection = await selectHarnessJobSandboxRuntime({
+      platform: "darwin",
+      env: { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+    });
+
+    expect(selection.sandboxRuntimeChoice).toEqual({
+      runtime: "docker",
+      source: "environment",
+    });
+  });
+
+  it("takes Docker by default off macOS", async () => {
+    const selection = await selectHarnessJobSandboxRuntime({
+      platform: "linux",
+      env: {},
+    });
+
+    expect(selection.sandboxRuntimeChoice).toEqual({
+      runtime: "docker",
+      source: "default",
+      platform: "linux",
+    });
+  });
+
+  it("refuses, as every job would be refused, on a Mac whose native runtime is not set up", async () => {
+    // By its real path: a store reached through a link is refused for that
+    // before what it lacks is looked at.
+    const home = await Deno.realPath(
+      await Deno.makeTempDir({ prefix: "harness-job-home-" }),
+    );
+    try {
+      const refusal = await selectHarnessJobSandboxRuntime({
+        platform: "darwin",
+        env: { HOME: home },
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(HarnessControlError);
+      expect(String(refusal)).toMatch(
+        /the native `runsc` runtime, and it is not set up at /,
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
   });
 });

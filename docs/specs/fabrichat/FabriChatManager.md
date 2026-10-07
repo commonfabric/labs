@@ -22,8 +22,8 @@ each, and a row in the built-in targets table of
 
 ## State
 
-The manager keeps `rooms`, `direct`, `requests`, `outgoingNotices`, and what
-its user did with each offer they acted on (`handledOffers`) in the home space. `direct` is maintained alongside `rooms` by the same handlers, which
+The manager keeps `rooms`, `direct`, `requests`, and `outgoingNotices` in the
+home space. `direct` is maintained alongside `rooms` by the same handlers, which
 keep the two consistent: `direct` holds one entry per counterpart, including
 forgotten rooms, and `rooms` can also hold a second direct room with the same
 counterpart after crossing creations.
@@ -39,7 +39,7 @@ create a space for the conversation, with the room as its chat, in four steps:
 2. Grant each other member WRITE on the room's space, by principal.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver, and offer the room to each member whose profile the request names,
-   through the private inbox the profile points at.
+   through the share inbox the profile points at.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
    request `done`.
 
@@ -66,25 +66,25 @@ is what labels it `authored-by` this user.
 
 ### First contact
 
-A room has to reach a principal who may share no space with the sender. Its
-route is the recipient's private inbox
-([`private-inbox.md`](../../features/private-inbox.md)), which Home creates for
-each identity and each of the identity's profiles points at through its `inbox`
-field. Any principal may append an offer to it through its `receive` stream,
-which records who sent it, and only its owner reads what it holds. When a
-request names a member's profile, as `openDirect` does when it is started from
-a participant's chip, step 3 offers the room there. The recipient's manager
-lists the offers in the inbox its own profile points at, and its user adds a
-room to their chats with `accept`, or sets the offer aside with `dismissOffer`
-(see [`ChatManagerOutput`](ChatManagerOutput.md#offers)). Which runtime makes a
-sender's write, and what each server-execution setting protects, is the
-inbox's to say.
+A notice has to reach a principal who may share no space with the sender. Its
+route is the recipient's profile share inbox: a profile's `inbox` field
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
+piece in a space of its own. That is either the private inbox the recipient's
+Home creates ([the private inbox](../../features/private-inbox.md)) or one a
+loom daemon created, and both take the same offer envelope. Any principal may
+write to the inbox's space, and its offers are labeled readable by the owner
+alone, a label that binds only an honest runtime. When a request names a
+member's profile, as `openDirect` does with its `profile`, step 3 offers the
+room there, in that envelope, from an event of its own that follows the
+room's creation, since the offer names the room's space (see
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)). Nothing reads those offers
+yet: that waits on a share intake in Home, which stages what is offered into
+its catalog of shared spaces, and the recipient's manager then accepts the
+room. A space's access list can admit any writer, but that is the `"*"` grant
+a room has only when its creator makes a group joinable by its link, and then
+its address, sent some other way, is the notice.
 
-Step 3 still hands a notice for every other member to a client through
-`outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A member known
-only by their DID has no profile to reach an inbox through, and nothing tells
-the sender that an offer arrived. A space's access list can admit any writer,
-but that is the `"*"` grant a room has only when its creator makes a group
-joinable by its link, and then its address, sent some other way, is the
-notice.
+That is why step 3 also hands a notice for every other member to a client
+through `outgoingNotices` (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
+are read, the manager can deliver notices itself.

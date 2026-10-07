@@ -15,12 +15,14 @@ import {
   type CiJobs,
   CI_JOBS_PATH,
   ciJobsPage,
+  ciJobsStatus,
   type Job,
   followSorting,
   sortTable,
 } from "./ci-jobs-page.ts";
 import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
 import { livePage, livePageResponse } from "./live-page.ts";
+import { faviconHref } from "./favicon.ts";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -46,7 +48,7 @@ function job(over: Partial<Job> = {}): Job {
 function collection(over: Partial<CiJobs> = {}): CiJobs {
   return {
     jobs: [job()],
-    repoCount: 1,
+    repos: ["labs"],
     unreadableRepos: [],
     collectedAt: NOW - 2 * MINUTE,
       ...over,
@@ -94,7 +96,7 @@ Deno.test("ci jobs page: the summary counts each state of a job", () => {
         job({ repo: "raia", status: "warn", result: "rate limit hit" }),
         job({ repo: "pond", status: "unknown", result: "no completed run" }),
       ],
-      repoCount: 5,
+      repos: ["labs", "loom", "amp", "raia", "gvisor"],
       unreadableRepos: ["commonfabric/gvisor"],
     }),
     NOW,
@@ -131,7 +133,7 @@ Deno.test("ci jobs page: a job with a run in progress has a running dot after it
           runningHref: "https://github.com/commonfabric/pond/actions/runs/8",
         }),
       ],
-      repoCount: 3,
+      repos: ["labs", "loom", "pond"],
     }),
     NOW,
   );
@@ -160,7 +162,7 @@ Deno.test("ci jobs page: jobs are ordered worst first, then by name", () => {
         job({ repo: "bay", status: "warn", result: "auth failed" }),
         job({ repo: "amp", status: "bad", result: "timed_out" }),
       ],
-      repoCount: 6,
+      repos: ["zed", "pond", "loom", "arc", "bay", "amp"],
     }),
     NOW,
   );
@@ -405,6 +407,32 @@ Deno.test("ci jobs page: nothing collected yet says so rather than showing an em
 
   assertStringIncludes(html, "has not finished a collection yet");
   assert(!html.includes("<table>"));
+});
+
+Deno.test("ci jobs page: the tab's favicon wears the ci tile's color", () => {
+  const iconOf = (collected: CiJobs | undefined) =>
+    pageHtml(collected, NOW).match(/<link rel="icon"[^>]*href="([^"]*)"/)
+      ?.[1];
+  const failing = job({ workflow: "Lint", status: "bad", failing: true });
+
+  assertEquals(ciJobsStatus(collection()), "good");
+  assertEquals(iconOf(collection()), faviconHref("good"));
+  assertEquals(
+    ciJobsStatus(collection({ unreadableRepos: ["commonfabric/loom"] })),
+    "warn",
+  );
+  assertEquals(ciJobsStatus(collection({ jobs: [job(), failing] })), "bad");
+  assertEquals(
+    iconOf(collection({ jobs: [job(), failing] })),
+    faviconHref("bad"),
+  );
+  // A job with no verdict leaves the color to the others, and with no others
+  // the favicon is empty.
+  const silent = job({ status: "unknown" });
+  assertEquals(ciJobsStatus(collection({ jobs: [silent, failing] })), "bad");
+  assertEquals(ciJobsStatus(collection({ jobs: [silent] })), "unknown");
+  assertEquals(iconOf(collection({ jobs: [silent] })), "data:,");
+  assertEquals(iconOf(undefined), "data:,");
 });
 
 Deno.test("ci jobs page: the response is the page as HTML", async () => {

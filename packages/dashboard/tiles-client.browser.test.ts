@@ -25,12 +25,12 @@ function withBoard(
   }
 }
 
-// Each row has a title link and an arrow link with the same href, as the
-// recent-runs tile renders them.
+// Rows as the recent-runs tile renders them, each titled with the same pull
+// request number, which its title and arrow both link to.
 function runRows(titles: string[]): string {
   return `<div class="evscroll" data-focus-key="runs" style="height:40px;overflow:auto">${
     titles.map((title) =>
-      `<div class="ev" style="height:30px"><a class="evtxt" data-focus-key="pr-title-${title}" href="https://example.com/${title}">${title}</a><a class="evarrow" data-focus-key="pr-arrow-${title}" href="https://example.com/${title}">↗</a></div>`
+      `<div class="ev" style="height:30px"><span class="evtxt"><a data-focus-key="title-${title}-0" href="https://example.com/${title}">${title} </a><a class="pr" data-focus-key="title-${title}-1" href="https://github.com/o/r/pull/1">(#1)</a></span><a class="evarrow" data-focus-key="pr-arrow-${title}" href="https://github.com/o/r/pull/1">↗</a></div>`
     ).join("")
   }</div>`;
 }
@@ -142,6 +142,26 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
     const arrow = container.querySelector('[data-focus-key="pr-arrow-a"]');
     expect(arrow).not.toBeNull();
     expect(document.activeElement).toBe(arrow);
+  });
+});
+
+Deno.test("an update keeps focus on a row's pull request number when other rows link the same pull request", () => {
+  withBoard([[
+    "recent main runs",
+    { status: "good", extra: runRows(["b", "a"]) },
+  ]], (container) => {
+    container.querySelector<HTMLElement>('[data-focus-key="title-a-1"]')
+      ?.focus();
+    reconcileTiles(
+      container,
+      rendering([
+        "recent main runs",
+        { status: "warn", extra: runRows(["c", "b", "a"]) },
+      ]),
+    );
+    const number = container.querySelector('[data-focus-key="title-a-1"]');
+    expect(number?.textContent).toBe("(#1)");
+    expect(document.activeElement).toBe(number);
   });
 });
 

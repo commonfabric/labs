@@ -122,6 +122,9 @@ describe("agent-connections", () => {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
             CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+            // Named, so the run does not take the default of the machine the
+            // suite runs on, which on macOS is that machine's native runtime.
+            CF_HARNESS_SANDBOX_RUNTIME: "docker",
           },
           createPromptLoop: (options) => ({
             runPrompt: async () => {

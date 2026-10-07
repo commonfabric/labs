@@ -2,10 +2,11 @@
 
 Every identity has one private inbox: a piece, in a space of its own, where
 other principals deliver offers to the identity, such as a chat room to join.
-Only the owner reads what is in it. Anyone can append to it, but only through
-its `receive` stream, which records who sent each offer. This document says
-where the inbox lives, who creates it and when, what access its space grants,
-what `receive` accepts, and the limits on what it keeps private.
+Its offers are labeled readable by the owner alone. Anyone can append to it,
+through its `receive` stream, which keeps an offer only when the offer names
+the principal sending it as its sender. This document says where the inbox
+lives, how Home comes to hold it, what access its space grants, what `receive`
+accepts, and the limits on what it keeps private.
 
 The pattern is `packages/patterns/system/private-inbox.tsx`.
 
@@ -13,9 +14,11 @@ The pattern is `packages/patterns/system/private-inbox.tsx`.
 
 - **The inbox piece** runs `private-inbox.tsx`, in a space created for it. The
   space is named `private-inbox` in the owner's Home space, so it is one space
-  per identity, whichever device creates it and however many times.
+  per identity, whichever device creates it and however many times. Home may
+  instead hold an inbox it adopted, such as one a loom daemon created, which
+  lives wherever its creator put it.
 - **Home** holds a link to the piece in its `privateInbox` field, under the key
-  `piece`. The field is empty until the inbox exists.
+  `piece`. The field is empty until Home first ensures the inbox.
 - **Each of the owner's profiles** points at an inbox through its `inbox`
   field, which `profile-home.tsx` describes. A profile space is readable by
   anyone, so the pointer is how a sender finds the inbox.
@@ -23,47 +26,165 @@ The pattern is `packages/patterns/system/private-inbox.tsx`.
 A profile may point at an inbox other than Home's, set by something else. That
 pointer is left as it is.
 
-## Creating it
+## Creating or adopting it
 
-Home's `ensurePrivateInbox` stream creates the inbox when Home holds none, and
-then has every profile in Home's `profiles` list that points at no inbox point
-at Home's, through the profile's own `setInbox`. Sending it again creates
-nothing and re-points nothing.
+An identity has one inbox, whichever side creates it: Home, or a loom daemon,
+which creates a share inbox of its own and points a profile at it. Whichever
+side arrives second adopts the inbox the first one advertises, if the inbox is
+usable, and never replaces a pointer that names a different inbox. A loom
+daemon does its half as loom #7300 describes; the loom release that carries
+it is what the two halves wait on.
 
-The host sends it once per runtime worker, when it first brings up the user's
-Home pattern: `PiecesController.ensurePrivateInbox()` in `packages/piece`,
-called from `RuntimeProcessor` in `packages/runtime-client`. A Home pattern
-without the stream is left alone. A failure is logged, and the next time the
-host brings up Home it sends the event again. A profile created after that
-point gets its pointer the next time the stream runs.
+The host gives Home its inbox, once per runtime worker, when it first brings up
+the user's Home pattern: `PiecesController.ensurePrivateInbox()` in
+`packages/piece`, called from `RuntimeProcessor` in `packages/runtime-client`,
+which does it through `ensurePrivateInboxOf()` in
+`packages/piece/src/ops/private-inbox.ts`. When Home holds no inbox, the host
+finds the inbox the first profile in Home's `profiles` list that points at one
+points at, and vets it as a loom daemon vets an inbox before adopting it. Which
+profile decides differs: Home vets the first advertising profile in its list,
+while a loom daemon adopts the pointer on its active (`@`) profile, so the two
+can adopt different inboxes only when those profiles already advertise
+different ones, after an earlier split. The inbox is usable when:
 
-The pointing runs as a second event, queued behind the one that creates the
-inbox, because the inbox piece exists only once that event's transaction has
-committed. It reads the profile list as a value, so the runner holds the event
-until every profile has loaded, and an unloaded profile is never taken for one
-without an inbox. The link a profile receives names the inbox's own result
-document rather than the cell Home's link reaches it through: a link written
-into a profile's labeled `inbox` takes its label from the document it names,
-and the result document is the one with a schema to take it from.
+- its space is neither the Home space nor the advertising profile's own space;
+- that space grants the identity `OWNER` and every principal, `"*"`, `WRITE`,
+  as the host reads its access list; a list that is malformed or names no
+  concrete owner grants neither;
+- the piece holds a list of `offers` and a `receive` stream.
+
+A failure to read the inbox's space that is not a refusal of access, such as
+a lost connection, rejects the ensure, and the next bring-up tries again.
+
+The host then sends Home's `ensurePrivateInbox` stream, naming the inbox to
+adopt when it is usable, and no inbox otherwise. A Home pattern without the
+stream is left alone. Home's handler gives Home its inbox:
+
+- When Home holds an inbox already, Home keeps it.
+- Otherwise, when the event names an inbox, Home adopts it if the first profile
+  in the list that points at an inbox still points at that one, a comparison
+  of the two links that reads nothing in the inbox's space; if not, as when the
+  pointer moved after the host vetted it, Home is left as it is.
+- Otherwise, when no profile in the list points at an inbox, Home creates one,
+  as "Where it lives" says.
+- Otherwise a profile advertises an inbox that failed vetting, and Home neither
+  adopts it nor creates one, so it holds none. The host logs a warning naming
+  the reason, under `piece.private-inbox`. A loom daemon likewise leaves an
+  unusable pointer alone and creates no inbox of its own.
+
+It then has every profile in the list that points at no inbox point at Home's,
+through the profile's own `setInbox`. A profile pointing at another inbox keeps
+its pointer, so after adopting one of several inboxes, the profiles pointing at
+the others still advertise them. While Home holds no inbox, as after a
+refusal, a profile that points at none stays unpointed, until a later ensure
+finds a usable advertisement or none. Sending the stream again creates nothing
+and re-points nothing. Creation is tested by
+`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with
+server execution on and off; keeping, adopting and refusing are tested there,
+by `packages/patterns/system/private-inbox.test.tsx` and, vetting rule by rule,
+by `packages/piece/test/ops/private-inbox.test.ts`.
+
+Home's adoption is one-shot and permanent. Home never decides again once it
+holds an inbox: it keeps no earlier inbox, and nothing replaces or clears
+`privateInbox`. A loom daemon instead reads its profile's pointer again at
+intervals, adopts a pointer that moved, and keeps reading the inbox it held
+before. So when a pointer moves after Home has adopted, as when a daemon creates
+a new inbox or the owner points a profile elsewhere, Home goes on holding the
+earlier inbox while senders deliver to the new one. The follow-up, before
+Home's intake reads the inbox, is an owner-only way to adopt again or replace
+Home's inbox, or an ensure that adopts again when no profile advertises the
+inbox Home holds.
+
+The host learns only whether the event was sent, not whether Home's handler
+committed: a stream's `send` returns before the handler runs. So an exception
+raised while sending it, such as Home failing to come up, is logged, and the
+next time that worker brings up Home it sends the event again; a failure inside
+the handler is not seen, and the event is not sent again until another worker
+brings Home up.
+
+A profile is pointed in one of two ways:
+
+- **When Home ensures the inbox**, as above: every profile in Home's list that
+  points at no inbox.
+- **When the profile is created.** Every way of creating one goes through
+  `submitProfileCreation` in `profile-create.tsx`, whose queued
+  `seedProfileName` step runs once the new profile's create has committed and
+  points it at Home's inbox, if Home holds one and the profile points at none.
+  That covers Home's own `createProfile` stream and the profile picker's create
+  section, which Home hands its `privateInbox`, and the create surface a
+  `#profile` wish opens, which the runtime hands the `privateInbox` of the
+  demanding user's own Home, beside its `profiles`
+  (`packages/runner/src/builtins/wish.ts`). An embedder that hands no inbox
+  leaves the profile to the next ensure.
+
+So a profile created before Home holds an inbox is pointed by the next ensure
+after the inbox exists, and a profile created after Home adopted an inbox is
+pointed at the adopted one. Both ways go through `pointAtInboxIfUnset()` in
+`profile-home.tsx`, which reads the pointer as a typed link, as the next
+paragraphs require.
+
+The handler reads the profile list as a value, as `advertisedInbox()` in
+`private-inbox.tsx` requires, so the runner holds the event until every profile
+has loaded, and an unloaded profile is never taken for one that advertises no
+inbox. Vetting reads the inbox's access list and two of its members in the
+inbox's own space, which is why the host does it rather than Home's handler: an
+access list is the host's to read, and a handler's read of a labeled inbox in
+another space is the hazard the next paragraph describes. The pointing runs as a
+second event, queued behind the one that gives Home its inbox, because a created
+inbox piece exists only once that event's transaction has committed. It reads
+the list as a value too, for the same reason. A profile of any vintage with a
+`setInbox` is pointed this way; one predating `setInbox` drops the event, and
+the runtime logs a warning that no handler took it.
+
+The host, the handler, the pointing step and the seed step read each profile's
+pointer, and the handler reads the inbox the event names, as a typed link,
+`Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema` in
+`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. The link
+carries the label of what it reaches, and the inbox labels its offers
+confidential to its owner. Read as an untyped link, `Cell<unknown>`, the pointer
+joins that label, from another space, into the reading run. Writer-fit then
+refuses the run's own sends, whichever path delivered it. When the event drain,
+rather than the wave that queued it, delivered the run, it also refuses the
+run's record that it handled the event, and the event is lost. Read as the typed
+link, the pointer joins no confidentiality. `private-inbox.pointer-type.test.ts`
+fails to compile if any reader's pointer type, the host's, the ensure's and the
+pointing step's, the seed step's or the profile's own, becomes unconstrained, or
+names a member of the inbox's result other than its name.
+
+The read and the `setInbox` it leads to are two transactions, in Home's space
+and then in the profile's, so a pointer that something else sets between them
+is replaced by Home's inbox.
+
+A profile whose stored `inbox` is not an object holding a link, as a writer
+bypassing `setInbox` can leave it, is repaired: the typed read takes it for no
+pointer, so the owner's Home points the owner's profile at its own inbox, and
+the host's vetting takes it for no advertisement. A loom daemon never writes
+over such a pointer, and reports it instead, so the two converge on Home's
+repair. The pattern test pins it with a profile whose stored `inbox` is a
+string.
+
+The link a profile receives names the inbox's own result document rather than
+the cell Home's link reaches it through: a link written into a profile's
+labeled `inbox` takes its label from the document it names, and the result
+document is the one with a schema to take it from. Home's own link to an
+adopted inbox names that document too, rather than the profile's pointer, so
+a later change to that pointer does not move Home's inbox.
+
+The inbox lives in a field of Home's root, as the shared-space catalog does,
+so replacing Home's root would replace it: a new root holds no inbox, and its
+first ensure gives it one by the rules above, from whatever profile list the
+new root holds. The supported commands refuse to replace an existing Home
+root, as `PiecesController.recreateDefaultPattern()` in `packages/piece`
+does, and update its source in place, which keeps both.
 
 ## The access its space grants
 
-A pattern cannot see whether server execution is on, and the access the inbox
-needs depends on it. `PatternFactory.inSpace()` takes the choice instead: the
-`grantsWithoutServerExecution` option names access the created space grants,
-over `grants`, only when the runtime creating it does not have server execution
-on. The builder chooses the grants where it resolves the `inSpace()` target
-(`packages/runner/src/builder/pattern.ts`). The inbox asks for `"*": WRITE`
-there.
-
-| Server execution | Access list of the inbox space | Who makes a sender's write |
-| --- | --- | --- |
-| On | the owner, `OWNER` | the serving loop, in the inbox space's server |
-| Off | the owner, `OWNER`; `"*"`, `WRITE` | the sender's own runtime |
-
-The choice is made once, when the space is created. A deployment that turns
-server execution on later leaves an inbox created without it open to every
-principal's writes. Nothing narrows such a space yet.
+The inbox's space grants its owner `OWNER` and every principal, `"*"`,
+`WRITE`, whether server execution is on or off. The inbox asks for that
+through `PatternFactory.inSpace()`'s `grants` option. With server execution
+off, a sender's own runtime makes the sender's write; with it on, the inbox
+space's server does. `WRITE` also lets a sender read the offers back to
+confirm its own, past the label, as the next sections describe.
 
 ## What the offers carry
 
@@ -72,71 +193,98 @@ confidential to `User(CurrentPrincipal)`, bound to the owner who created the
 inbox. An offer a sender appends is a document of its own, created in the
 sender's transaction, and binds to the inbox's owner rather than to the sender;
 [`current-principal.md`](current-principal.md) describes that binding. A
-runtime holding the inbox refuses to let another principal's code read the
-offers, or copy them anywhere.
+runtime holding the inbox refuses to let another principal's code copy the
+offers anywhere. The label does not stop another principal's runtime reading
+them, as the access section says.
 
-An offer holds:
+An offer is the envelope a loom share inbox keeps, its eight fields, and one
+more:
 
-- `kind`: what is offered, as lowercase words joined by hyphens, such as
-  `fabrichat-room`. A reader acts only on the kinds it knows.
-- `space`: the DID of the space the offered thing lives in, when the sender
-  names it. A sender that holds only a link to the offered piece leaves it out,
-  since a pattern has no way to read a link's space.
-- `host`: the origin of the host serving that space, when the sender names
-  one.
-- `entry`: a link to the offered piece, when the sender names one. A link
-  names the space it reaches into, and `spaceAccess()` takes it as it stands.
-- `title`: what the sender calls the offered thing, when it names one.
-- `from`: the DID of the event's actor, from `currentPrincipal()`. Nothing in
-  the event's payload can choose it. With server execution on, the serving loop
-  stamps the actor; with it off, the sender's own runtime does.
-- `id`: the event key of the event that delivered the offer, from
-  `eventKey()`, which [`event-key.md`](event-key.md) describes. Like `from`, it
-  is stamped by `receive`, and an `id` in the event's payload is never read.
-  Every run of one delivery stamps the same id, and every other delivery gets
-  another, except one that re-admits the same event id, which a reader keying
-  its receipts by `id` takes for the offer it already handled.
-- `receivedAt`: when the inbox received the offer. A handler's clock reads to
-  the second, so two offers can share it, and `id` is what tells them apart.
+- `kind`: what is offered, such as `loom` or `fabrichat-room`. A reader acts
+  only on the kinds it knows.
+- `id`: the sender's key for the offer, the same on every resend of it. No two
+  offers in the inbox from one sender share one.
+- `space`: the DID of the space the offered thing lives in.
+- `host`: the origin of the host serving that space.
+- `ownerOrigin`: the origin of the sender's own host, or empty.
+- `title`: what the sender calls the offered thing, or empty.
+- `from`: the DID of the sender, which `receive` requires to be the event's
+  actor, from `currentPrincipal()`.
+- `sharedAt`: when the sender shared the offer, in milliseconds since the
+  epoch, by the sender's clock.
+- `receivedAt`: when the inbox received the offer, by its own clock. A
+  handler's clock reads to the second, so two offers can share it.
 
 ## Sending one
 
 A sender appends with the inbox's `receive` stream, reached through a
 profile's `inbox.piece`, from a handler of the sender's own. With server
-execution on, that handler is served, and the append reaches the closed inbox
-space as a stream event the space's server runs. A client sending to `receive`
-directly is then refused, since it holds no `WRITE` in the space.
+execution on, that handler is served, and the append reaches the inbox space
+as a stream event the space's server runs.
 
-`receive` appends nothing for an event that has no actor, whose `kind` is not
-as described above or is longer than `OFFER_KIND_MAX_LENGTH`, whose `space` is
-not a DID, that names neither a `space` nor an `entry`, or whose `host` is not
-an `http` or `https` origin of at most `OFFER_HOST_MAX_LENGTH` characters.
-`receive` cannot tell whether `entry` names a piece: a value sent there that is
-not a link arrives as a link to the event's own copy of the value. So a reader
-checks what `entry` reaches before acting on it, and does not take an answer
-from `spaceAccess(entry)` as a sign that the link names the offered thing. A
-`title` longer than `OFFER_TITLE_MAX_LENGTH` is cut to that length. The sender
-is not told: a refusal inside `receive` happens in the inbox, which the sender
-cannot read.
+The sender reads the pointer through `profile-home.tsx`'s own types, where
+`inbox.piece` is the typed link `Cell<ShareInboxPiece>`, for the reason the
+pointing step does: read as an untyped link, the pointer joins the offers'
+label into the sender's run, and the run's sends are refused.
+
+`receive` decides what it keeps from the event alone, as a loom share inbox
+does, and then checks the sender:
+
+- Every string is trimmed, then cut: `kind` to `OFFER_KIND_MAX_LENGTH` (32),
+  `id` to `OFFER_ID_MAX_LENGTH` (320), `title` to `OFFER_TITLE_MAX_LENGTH`
+  (200), and `space`, `host`, `from` and `ownerOrigin` to
+  `OFFER_ADDRESS_MAX_LENGTH` (256).
+- The event is dropped unless `space` and `from` are well-formed DIDs, as
+  `isWellFormedDID()` decides (DID Core syntax), and `host` is an `http` or
+  `https` origin written as its own canonical origin: it parses as a URL whose
+  origin is exactly the string, so it holds no user information (`@`), path,
+  query (`?`) or fragment (`#`), no backslash, no default or out-of-range
+  port, and is lowercase. A loom share inbox admits more on both counts, so
+  this inbox is the stricter. Each of the four addresses is cut before it is
+  checked, so one longer than the limit is kept cut, and a cut `space` is a
+  different DID.
+- What a sender leaves out is filled in: `kind` with `OFFER_DEFAULT_KIND`
+  (`loom`), `sharedAt`, unless it is a positive number, with the time the
+  inbox received the offer, and `id` with `<space>@<sharedAt>`, so a resend
+  with neither `id` nor `sharedAt` in a later second is kept again. An
+  `ownerOrigin` that is not an origin is kept empty. A field the envelope does
+  not name is not kept.
+- The event is dropped when its `from` is not the principal sending it, or
+  when an offer in the inbox already has its `from` and `id`. So a resend of
+  one offer is kept once, the first one kept stays as it was, and no sender
+  can take another sender's `id` first. A loom share inbox keys on `id` alone,
+  so this inbox is the stricter of the two.
+
+The sender is not told of a drop, but it can read the offers back and look
+for a row with its offer's `id`, `from` and `space`, as a loom sender does.
 
 ## Reading them
 
 The owner reads `offers`. Nothing marks an offer as read or removes it, so a
-reader keeps its own record of the offers it has handled, keyed by `id`,
-wherever it keeps its own state.
+reader keeps its own record of the offers it has handled, keyed by `from` and
+`id`, wherever it keeps its own state. Two senders may choose the same `id`,
+and the inbox keeps an offer from each.
+
+A row's `from` is the sender's claim, not a fact the inbox vouches for.
+`receive` keeps an offer only when `from` is the principal sending it, but
+`receive` binds only an honest runtime, and any principal may write `offers`
+without it, naming any `from`. So a reader checks `from` itself before
+trusting a row. A loom reader checks that `from` holds its own `WRITE` or
+`OWNER` entry on the offered `space`, and the intake that reads this inbox is
+to check the same.
 
 ## What it does not protect
 
-- **Delivery into the closed space rests on an owed check.** With server
-  execution on, a served append to another space's stream is admitted on the
-  presence of the actor's carriage alone; admission resolves no grant against
-  the stream. That is spec rule OW13 in
-  [`../specs/server-side-execution/verification-coverage.md`](../specs/server-side-execution/verification-coverage.md),
-  whose grant-resolution check is still owed. When that check lands, delivery
-  into a space that grants senders nothing needs a grant the stream opts into.
-- **Without server execution, the inbox is readable by anyone.** `WRITE`
-  implies `READ`, and the label binds only an honest runtime, so anyone holding
-  a memory client can read the offers, titles included, and can rewrite or
-  remove them.
-- **Nothing limits how many offers arrive.** A sender can append as many as it
-  likes.
+- **The inbox is readable by anyone.** `WRITE` implies `READ`, and the label
+  binds only an honest runtime, so anyone holding a memory client can read the
+  offers, titles included, and can rewrite or remove them.
+- **Anyone can flood it.** Nothing limits how many offers arrive, and
+  `receive` reads every offer before it appends, so a flood slows every later
+  delivery.
+- **Anyone can corrupt it.** A writer bypassing `receive` can add rows naming
+  any `from`, as "Reading them" says. It can replace `offers` with something
+  other than a list: while it is one, `receive` keeps nothing and leaves the
+  value as it is, so delivery stops until something puts a list back. It can
+  also add an entry `receive` cannot read, such as a link into a space no
+  sender may read, which can make every delivery fail. A loom share inbox,
+  granting the same access, accepts the same.

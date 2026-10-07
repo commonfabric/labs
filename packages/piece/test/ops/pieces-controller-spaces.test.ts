@@ -74,6 +74,15 @@ export default pattern<void>(() => {
 });
 `;
 
+// A Home of a vintage that holds no `ensurePrivateInbox` stream.
+const HOME_WITHOUT_INBOX_SOURCE = `
+import { pattern, Writable } from "commonfabric";
+
+export default pattern<void>(() => ({
+  spaces: new Writable<{ name: string }[]>([]).for("spaces"),
+}));
+`;
+
 const DEFAULT_APP_SOURCE = `
 import { pattern } from "commonfabric";
 export default pattern<{ items: string[] }>(({ items }) => ({ items }));
@@ -82,11 +91,11 @@ export default pattern<{ items: string[] }>(({ items }) => ({ items }));
 /**
  * Serves the two system patterns from memory, and nothing else, answering an
  * `identity` query with the identity the source compiles to, as a toolshed
- * does.
+ * does. Home is `homeSource`.
  */
-function installFetchStub(): () => void {
+function installFetchStub(homeSource = HOME_SOURCE): () => void {
   const sources: Record<string, string> = {
-    "/api/patterns/system/home.tsx": HOME_SOURCE,
+    "/api/patterns/system/home.tsx": homeSource,
     "/api/patterns/system/default-app.tsx": DEFAULT_APP_SOURCE,
   };
   const original = globalThis.fetch;
@@ -383,6 +392,18 @@ describe("pieces-controller", () => {
           await runtime.idle();
 
           expect(await ensured.pull()).toBe(1);
+        });
+
+        it("leaves a Home with no `ensurePrivateInbox` as it is", async () => {
+          restoreFetch();
+          restoreFetch = installFetchStub(HOME_WITHOUT_INBOX_SOURCE);
+          const home = await open(signer.did());
+          const root = (await home.ensureDefaultPattern()).getCell();
+
+          await home.ensurePrivateInbox();
+          await runtime.idle();
+
+          expect(await root.key("ensurePrivateInbox").pull()).toBeUndefined();
         });
 
         it("throws on a controller over a space other than the identity's Home", async () => {

@@ -4,14 +4,13 @@
  * holds the identity's inbox, and each of the identity's profiles points at it
  * through its `inbox` field, which is how a sender finds it.
  *
- * The offers are readable by the inbox's owner alone. The list and each offer
- * in it carry a confidentiality label for the principal who created the
- * inbox, so a runtime holding the inbox refuses to let another principal's
- * code read them or copy them out. The space's access list decides who may
- * write to it: the owner alone where server execution is on, since the
- * serving loop makes a sender's write, and every principal where it is not,
- * since a sender's own runtime makes the write. In the second case the space
- * is also readable by anyone holding a memory client, label or no label.
+ * The list and each offer in it carry a confidentiality label for the
+ * principal who created the inbox, so a runtime holding the inbox refuses to
+ * let another principal's code copy them out. It does not stop that code
+ * reading them: `receive` itself reads every offer, in the sender's runtime
+ * when server execution is off. The space grants every principal `WRITE`, so
+ * anyone holding a memory client can read, rewrite or remove the offers, label
+ * or no label, and a row's `from` is a claim a reader checks for itself.
  * `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
@@ -21,7 +20,7 @@ import {
   type CurrentPrincipal,
   currentPrincipal,
   Default,
-  eventKey,
+  equals,
   handler,
   isWellFormedDID,
   NAME,
@@ -31,16 +30,29 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import type { SetProfileInboxEvent } from "./profile-home.tsx";
+import {
+  type InboxPointable,
+  pointAtInboxIfUnset,
+  type ShareInboxPiece,
+} from "./profile-home.tsx";
 
-/** The longest `kind` an offer may name. */
-export const OFFER_KIND_MAX_LENGTH = 64;
+/** The longest `kind` an offer keeps; a longer one is cut to this length. */
+export const OFFER_KIND_MAX_LENGTH = 32;
+
+/** The longest `id` an offer keeps; a longer one is cut to this length. */
+export const OFFER_ID_MAX_LENGTH = 320;
 
 /** The longest `title` an offer keeps; a longer one is cut to this length. */
 export const OFFER_TITLE_MAX_LENGTH = 200;
 
-/** The longest `host` an offer may name. */
-export const OFFER_HOST_MAX_LENGTH = 256;
+/**
+ * The length `space`, `host`, `from` and `ownerOrigin` are cut to before they
+ * are checked.
+ */
+export const OFFER_ADDRESS_MAX_LENGTH = 256;
+
+/** The `kind` an offer that names none is kept with. */
+export const OFFER_DEFAULT_KIND = "loom";
 
 /** The name, in Home's space, of the space Home's private inbox lives in. */
 export const PRIVATE_INBOX_SPACE_NAME = "private-inbox";
@@ -54,87 +66,82 @@ export type OwnerPrivate<T> = Confidential<
   }]
 >;
 
-/** What an offer knows of the piece it offers: its name, at most. */
-export type OfferEntry = {
-  [NAME]?: string;
-};
-
-/** An offer as a sender sends it to `receive`. */
+/**
+ * An offer as a sender sends it to `receive`: the envelope a loom share inbox
+ * takes. Every field is optional here, and `receive` decides what it keeps.
+ */
 export interface OfferEvent {
   /**
-   * What is offered, as lowercase words joined by hyphens, such as
-   * `fabrichat-room`. A reader acts only on the kinds it knows.
+   * What is offered, such as `loom` or `fabrichat-room`. A reader acts only on
+   * the kinds it knows.
    */
-  kind: string;
+  kind?: string;
 
   /**
-   * The DID of the space the offered thing lives in. It may be left out when
-   * `entry` is given, since a link names the space it reaches into.
+   * The sender's key for the offer, the same on every resend of it. The inbox
+   * keeps one offer per sender and `id`.
    */
+  id?: string;
+
+  /** The DID of the space the offered thing lives in. */
   space?: string;
 
-  /**
-   * The origin of the host serving the offered thing's space, such as
-   * `https://example.com`; absent for the host the inbox is read from.
-   */
+  /** The origin of the host serving that space, such as `https://example.com`. */
   host?: string;
 
-  // `Cell<…>` is written out rather than reached through an alias: the
-  // handler's event schema marks a reference position only where the wrapper
-  // is written in the event type.
-  /**
-   * The piece offered. A value sent here that is not a link arrives as a link
-   * to the event's own copy of that value, so what it reaches is the sender's
-   * claim, to be checked like any other.
-   */
-  entry?: Cell<OfferEntry>;
+  /** The origin of the sender's own host, if it names one. */
+  ownerOrigin?: string;
 
-  /** What the sender calls the offered thing, cut to the longest kept. */
+  /** What the sender calls the offered thing. */
   title?: string;
+
+  /** The DID of the sender, which must be the principal sending the event. */
+  from?: string;
+
+  /** When the sender shared the offer, in milliseconds since the epoch. */
+  sharedAt?: number;
 }
 
-/** An offer as the inbox holds it. */
+/** An offer as the inbox holds it: every field of the envelope, and more. */
 export interface Offer {
-  /**
-   * What is offered, as lowercase words joined by hyphens, such as
-   * `fabrichat-room`. A reader acts only on the kinds it knows.
-   */
+  /** What is offered, such as `loom` or `fabrichat-room`. */
   kind: string;
 
-  /** The DID of the space the offered thing lives in, if the sender named it. */
-  space?: string;
-
   /**
-   * The origin of the host serving the offered thing's space, if the sender
-   * named one.
+   * The sender's key for the offer; no two offers in the inbox from one sender
+   * share one.
    */
-  host?: string;
+  id: string;
 
-  /** The piece offered, if the sender named one. */
-  entry?: Cell<OfferEntry>;
+  /** The DID of the space the offered thing lives in. */
+  space: string;
 
-  /** What the sender calls the offered thing, if anything. */
-  title?: string;
+  /** The origin of the host serving that space. */
+  host: string;
+
+  /** The origin of the sender's own host, or empty. */
+  ownerOrigin: string;
+
+  /** What the sender calls the offered thing, or empty. */
+  title: string;
 
   /**
-   * The DID of the principal who sent the offer: the actor of the event that
-   * delivered it, which nothing in the event's payload can choose. Where
-   * server execution is on, the serving loop stamps it; where it is not, the
-   * sender's own runtime does.
+   * The DID the offer names as its sender. `receive` keeps an offer only when
+   * this is the event's actor, but any principal may write the list without
+   * `receive`, so to a reader this is the sender's claim, which it checks for
+   * itself before trusting it.
    */
   from: string;
 
   /**
-   * The offer's id: the event key of the event that delivered it, which
-   * differs for every other delivery and which nothing in the event's payload
-   * can choose. Every run of one delivery stamps the same id.
+   * When the sender shared the offer, in milliseconds since the epoch, by the
+   * sender's clock, or by the inbox's when the sender named no time.
    */
-  id: string;
+  sharedAt: number;
 
   /**
    * When the inbox received the offer, in milliseconds since the epoch. A
-   * handler's clock reads to the second, so two offers can share it; `id`
-   * tells them apart.
+   * handler's clock reads to the second, so two offers can share it.
    */
   receivedAt: number;
 }
@@ -153,17 +160,19 @@ export interface PrivateInboxOutput {
   [NAME]: string;
   [UI]: VNode;
 
-  /** The offers received, readable by the inbox's owner alone. */
+  /** The offers received, labeled readable by the inbox's owner alone. */
   offers: Offers;
 
-  /** Appends an offer, whoever sends it, unless it is malformed. */
+  /** Appends an offer from the principal sending it, unless it is refused. */
   receive: Stream<OfferEvent>;
 }
 
-/** What Home and a profile know of the inbox piece: its name, at most. */
-export type PrivateInboxPiece = {
-  [NAME]?: string;
-};
+/**
+ * What Home and a profile know of the inbox piece: its name, at most. A
+ * profile types any inbox it points at this way, this one or a loom daemon's,
+ * so the type is the profile's own.
+ */
+export type PrivateInboxPiece = ShareInboxPiece;
 
 /**
  * Where Home keeps its private inbox: a link to the inbox piece, absent until
@@ -176,64 +185,117 @@ export type PrivateInboxHolder = {
 };
 
 /** What the pointing step needs of each profile in Home's list. */
-type PointTarget = {
-  // A profile of a vintage without the field or the stream is skipped.
-  inbox?: { piece?: Cell<unknown> };
-  setInbox?: Stream<SetProfileInboxEvent>;
-};
+export type PointTarget = InboxPointable;
 
 /**
- * Returns whether `kind` is a well-formed offer kind: lowercase letters and
- * digits in words joined by single hyphens, at most
- * {@link OFFER_KIND_MAX_LENGTH} characters.
+ * Whether `value` is an `http` or `https` origin written as its own canonical
+ * origin: it parses as a URL whose origin is `value` itself, so it holds no
+ * user information, path, query or fragment, names no default port, has a
+ * lowercase host and scheme, and no port out of range.
  */
-function isOfferKind(kind: unknown): kind is string {
-  return typeof kind === "string" && kind.length <= OFFER_KIND_MAX_LENGTH &&
-    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(kind);
+function isOrigin(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (url.protocol === "https:" || url.protocol === "http:") &&
+    url.origin === value;
 }
 
 /**
- * Returns whether `host` is absent or a well-formed origin: `http` or `https`
- * and an authority, with no path, at most {@link OFFER_HOST_MAX_LENGTH}
- * characters.
+ * The message an append to a cell starts with when what the cell holds is not
+ * a list.
  */
-function isOfferHost(host: unknown): boolean {
-  return host === undefined ||
-    (typeof host === "string" && host.length <= OFFER_HOST_MAX_LENGTH &&
-      /^https?:\/\/[^\s/?#@]+$/.test(host));
+const NON_LIST_APPEND_MESSAGE =
+  "Cell.push() or Cell.pushAll() requires transaction and array value";
+
+/**
+ * Whether `error` is an append's refusal of a cell that holds something other
+ * than a list. The runtime gives that refusal no type of its own, so its
+ * message is the signal; the same message also covers an append made outside
+ * a transaction, which cannot happen in a handler.
+ */
+export function isNonListAppendRefusal(error: unknown): boolean {
+  const message = (error as { message?: unknown } | undefined)?.message;
+  return typeof message === "string" &&
+    message.startsWith(NON_LIST_APPEND_MESSAGE);
+}
+
+/** `value` trimmed and cut to `max` characters, or empty if not a string. */
+function trimmedText(value: unknown, max: number): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 /**
- * Appends the offer `event` describes, stamped with the event's actor, its
- * event key as the offer's id, and the time. An event with no actor, with a malformed `kind` or `host`, with a
- * `space` that is not a DID, or with neither a `space` nor an `entry`, appends
- * nothing.
+ * Returns the offer the inbox keeps for `event`, received at `now` by its
+ * clock, or `undefined` when the event is refused. Every string is trimmed and
+ * cut to its length. The event is refused unless `space` and `from` are
+ * well-formed DIDs, by `isWellFormedDID()`, and `host` is an origin, by
+ * {@link isOrigin}. An event with no `kind` is kept as
+ * {@link OFFER_DEFAULT_KIND}, one with no `id` as `<space>@<sharedAt>`, one
+ * with no positive `sharedAt` as shared at `now`, and an `ownerOrigin` that is
+ * not an origin is kept empty.
+ */
+function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
+  const space = trimmedText(event?.space, OFFER_ADDRESS_MAX_LENGTH);
+  const host = trimmedText(event?.host, OFFER_ADDRESS_MAX_LENGTH);
+  const from = trimmedText(event?.from, OFFER_ADDRESS_MAX_LENGTH);
+  if (
+    !isWellFormedDID(space) || !isOrigin(host) || !isWellFormedDID(from)
+  ) {
+    return undefined;
+  }
+  const claimed = Number(event?.sharedAt);
+  const sharedAt = Number.isFinite(claimed) && claimed > 0
+    ? Math.floor(claimed)
+    : Math.floor(now);
+  const ownerOrigin = trimmedText(event?.ownerOrigin, OFFER_ADDRESS_MAX_LENGTH);
+  return {
+    kind: trimmedText(event?.kind, OFFER_KIND_MAX_LENGTH) || OFFER_DEFAULT_KIND,
+    id: trimmedText(event?.id, OFFER_ID_MAX_LENGTH) || `${space}@${sharedAt}`,
+    space,
+    host,
+    ownerOrigin: isOrigin(ownerOrigin) ? ownerOrigin : "",
+    title: trimmedText(event?.title, OFFER_TITLE_MAX_LENGTH),
+    from,
+    sharedAt,
+    receivedAt: Math.floor(now),
+  };
+}
+
+/**
+ * Appends the offer `event` describes, as {@link admissibleOffer} keeps it.
+ * Nothing is appended for a refused event, for one whose `from` is not the
+ * event's actor, or for one whose sender already has an offer in the inbox
+ * under its `id`. Keying on the sender too means no writer can take another
+ * sender's `id` first. Nothing is appended either while `offers` holds
+ * something other than a list, which is left as it is.
  */
 const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
   (event, { offers }) => {
-    const from = currentPrincipal();
+    const offer = admissibleOffer(event, Date.now());
+    if (offer === undefined || offer.from !== currentPrincipal()) return;
+    // The explicit read keeps the append in the conflict set, so two
+    // deliveries of one offer racing to append conflict, and the second sees
+    // the first.
     if (
-      from === undefined || !isOfferKind(event?.kind) ||
-      !isOfferHost(event.host) ||
-      (event.space === undefined
-        ? event.entry === undefined
-        : !isWellFormedDID(event.space))
+      (offers.get() ?? []).some((held) =>
+        held?.from === offer.from && held?.id === offer.id
+      )
     ) {
       return;
     }
-    const title = typeof event.title === "string"
-      ? event.title.slice(0, OFFER_TITLE_MAX_LENGTH)
-      : undefined;
-    offers.push({
-      kind: event.kind,
-      ...(event.space !== undefined ? { space: event.space } : {}),
-      ...(event.host !== undefined ? { host: event.host } : {}),
-      ...(event.entry !== undefined ? { entry: event.entry } : {}),
-      ...(title !== undefined ? { title } : {}),
-      from,
-      id: eventKey(),
-      receivedAt: Date.now(),
-    });
+    // A writer bypassing `receive` can replace `offers` with something other
+    // than a list. The typed read above presents that as an empty list, and
+    // the append refuses it by throwing; the value is left as it is, and
+    // nothing is kept. Any other failure of the append propagates.
+    try {
+      offers.push(offer);
+    } catch (error) {
+      if (!isNonListAppendRefusal(error)) throw error;
+    }
   },
 );
 
@@ -246,7 +308,7 @@ const PrivateInbox = pattern<PrivateInboxInput, PrivateInboxOutput>((
     <cf-vstack gap="2" style={{ padding: "1rem" }}>
       <h2 style={{ margin: 0, fontSize: "16px" }}>Private inbox</h2>
       <span style={{ fontSize: "13px", color: "#666" }}>
-        What others have offered you arrives here. Only you can read it.
+        What others have offered you arrives here.
       </span>
     </cf-vstack>
   ),
@@ -264,42 +326,84 @@ function inboxLinkOf(inbox: unknown): unknown {
 }
 
 /**
- * Creates Home's private inbox if Home holds none, then has each profile in
- * Home's list that points at no inbox point at Home's. Running it again
+ * The link the first profile in `profiles` that points at an inbox holds, or
+ * `undefined` when none does. Call it from a handler, with `profiles` bound as
+ * a value of type {@link PointTarget}, so that each pointer is read as a typed
+ * link. A profile whose stored pointer is not an object holding a link points
+ * at none, as the pointer type reads it.
+ */
+export function advertisedInbox(
+  profiles: readonly (PointTarget | undefined)[] | undefined,
+): Cell<PrivateInboxPiece> | undefined {
+  return (profiles ?? []).find((profile) => profile?.inbox?.piece !== undefined)
+    ?.inbox?.piece;
+}
+
+/** What the host sends Home's `ensurePrivateInbox`. */
+export type EnsurePrivateInboxEvent = {
+  /**
+   * An inbox a profile advertises, which the host has vetted for Home to
+   * adopt; absent when the host vetted none.
+   */
+  adopt?: Cell<PrivateInboxPiece>;
+};
+
+/**
+ * Gives Home a private inbox if it holds none, then has each profile in Home's
+ * list that points at no inbox point at Home's. An inbox Home holds is kept.
+ * Otherwise Home adopts the inbox the event names, when it is the one the
+ * first profile in the list that points at an inbox points at, and creates one
+ * only when no profile points at an inbox. So when profiles advertise an inbox
+ * but the event names none, or names another, Home holds none: the host names
+ * an inbox only once it has vetted it, and leaves one that fails vetting where
+ * it is (`PiecesController.ensurePrivateInbox()` in `packages/piece`). A
+ * profile pointing at another inbox keeps its pointer. Running it again
  * creates nothing and re-points nothing.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.
- * The space admits its owner alone where server execution is on, and every
- * principal's writes as well where it is not; see
- * `InSpaceOptions.grantsWithoutServerExecution`.
+ * The space grants every principal `WRITE`, so a sender's write is admitted
+ * whether the sender's own runtime makes it or the space's server does.
+ *
+ * The list is bound as a value: the runner resolves it before the body runs,
+ * and withdraws the dispatch until every profile it names has loaded, so an
+ * unloaded profile is never taken for one that advertises no inbox.
  *
  * The pointing is a second step, queued behind this one. A profile is given
- * the inbox's own result document, which this handler's run creates, so the
+ * the inbox's own result document, which this handler's run may create, so the
  * profiles are pointed in an event of its own, once this run has committed.
  */
 export const ensurePrivateInbox = handler<
-  void,
+  EnsurePrivateInboxEvent,
   {
     privateInbox: Writable<PrivateInboxHolder>;
+    profiles: PointTarget[];
     pointProfiles: Stream<void>;
   }
->((_event, { privateInbox, pointProfiles }) => {
+>((event, { privateInbox, profiles, pointProfiles }) => {
   if (privateInbox.get()?.piece === undefined) {
-    const piece = inboxLinkOf(
-      PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
-        grantsWithoutServerExecution: { "*": "WRITE" },
-      })({ offers: [] }),
-    );
-    privateInbox.set({ piece });
+    const advertised = advertisedInbox(profiles);
+    if (event?.adopt !== undefined) {
+      // A comparison of links, which reads nothing in the inbox's space.
+      if (advertised !== undefined && equals(event.adopt, advertised)) {
+        privateInbox.set({ piece: event.adopt });
+      }
+    } else if (advertised === undefined) {
+      privateInbox.set({
+        piece: inboxLinkOf(
+          PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
+            grants: { "*": "WRITE" },
+          })({ offers: [] }),
+        ),
+      });
+    }
   }
   pointProfiles.send();
 });
 
 /**
- * Has each profile in `profiles` whose `inbox` points at nothing point at
- * Home's private inbox, through the profile's own `setInbox`. A profile that
- * points at an inbox already, whichever inbox it is, is left as it is.
+ * Points each profile in `profiles` that points at no inbox at Home's private
+ * inbox, as `pointAtInboxIfUnset()` does.
  *
  * The list is bound as a value: the runner resolves it before the body runs,
  * and withdraws the dispatch until every profile it names has loaded, so an
@@ -312,16 +416,8 @@ export const pointProfilesAtPrivateInbox = handler<
     profiles: PointTarget[];
   }
 >((_event, { privateInbox, profiles }) => {
-  // The holder's link reaches the inbox through the cell the creating handler
-  // wrote. A link written into a profile's labeled `inbox` takes its label from
-  // the document it names, and only the inbox's own result document carries
-  // the schema that label comes from, so the profile is given that document.
-  const inbox = privateInbox?.piece?.resolveAsCell();
-  if (inbox === undefined) return;
   for (const profile of profiles ?? []) {
-    if (profile?.setInbox === undefined) continue;
-    if (profile.inbox?.piece !== undefined) continue;
-    profile.setInbox.send({ inbox });
+    pointAtInboxIfUnset(profile, privateInbox);
   }
 });
 

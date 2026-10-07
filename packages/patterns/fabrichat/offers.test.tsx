@@ -1,35 +1,27 @@
 /**
- * Offering a FabriChat room through a person's private inbox. Bob starts a
- * direct chat from Alice's chip, which hands his manager her profile; the new
- * room is offered through the inbox her profile points at, and a notice is
- * queued for her all the same. Alice's manager lists the offer, from Bob as
- * her inbox recorded him, and adding it to her chats accepts the room. An
- * offer of another kind is not listed, nor is one whose `entry` isn't a room
- * its sender created, and a dismissed offer is listed no more, though another
- * that arrived with it is. Each person writes their own profile here, so its label names them,
- * as a Fabric profile's does.
+ * Offering a new FabriChat room through a member's share inbox. Bob starts a
+ * direct chat with Alice naming her profile, which points at her private
+ * inbox; the room is offered there, in the envelope a loom share inbox takes,
+ * and a notice is queued for her all the same. A request naming a profile
+ * other than the counterpart's is refused. Each person writes their own
+ * profile here, so its label names them, as a Fabric profile's does.
  */
 import {
   action,
   assert,
   type Cell,
   currentPrincipal,
-  equals,
   handler,
+  isWellFormedDID,
   multiUserTest,
   pattern,
   type RepresentsCurrentUser,
   TESTS,
   type TrustedActionWrite,
-  UI,
   Writable,
 } from "commonfabric";
-import PrivateInbox, { type OfferEntry } from "../system/private-inbox.tsx";
-import {
-  clickButton,
-  findNodeById,
-  textContent,
-} from "../test/vnode-helpers.ts";
+import PrivateInbox, { type Offer } from "../system/private-inbox.tsx";
+import type { ShareInboxPiece } from "../system/profile-home.tsx";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
   type ActivityCounters,
@@ -39,22 +31,21 @@ import {
   type SentActivity,
   type UsedTime,
 } from "./room-records.tsx";
-import { FabriChatRoomCore, ParticipantChip } from "./room.tsx";
+import { FabriChatRoomCore } from "./room.tsx";
 import {
+  CHAT_ROOM_OFFER_KIND,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
-  type ChatInbox,
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerProfile,
-  type ChatOfferHandling,
   type ChatRequestOutcome,
-  type ChatRoomLink,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
-type ChipArg = Parameters<typeof ParticipantChip>[0];
 
 /** The reviewed surface and action a person writes their own profile from. */
 const PROFILE_SURFACE = "FabriChatTestProfileSurface";
@@ -64,6 +55,7 @@ const PROFILE_ACTION = "FabriChatTestWriteProfile";
 const profileGesture = { surface: PROFILE_SURFACE, action: PROFILE_ACTION };
 
 const sendGesture = { surface: CHAT_SEND_SURFACE, action: CHAT_SEND_ACTION };
+const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
 const typed = (text: string) => ({ type: "click", target: { value: text } });
 
@@ -89,7 +81,7 @@ interface ProfileWriteState {
   name: string;
 
   /** The inbox the profile points at, if any. */
-  inbox?: Cell<ChatInbox>;
+  inbox?: Cell<ShareInboxPiece>;
 }
 
 /** Writes the acting person's own profile, under `name`. */
@@ -105,15 +97,9 @@ const writeOwnProfile = handler<unknown, ProfileWriteState>((
 });
 
 /** An inbox's result, as the link a profile holds. */
-function inboxLinkOf(inbox: unknown): Cell<ChatInbox>;
+function inboxLinkOf(inbox: unknown): Cell<ShareInboxPiece>;
 function inboxLinkOf(inbox: unknown): unknown {
   return inbox;
-}
-
-/** A link, as an offer's `entry`, which names a piece of any kind. */
-function entryOf(link: unknown): Cell<OfferEntry>;
-function entryOf(link: unknown): unknown {
-  return link;
 }
 
 /** A person's own profile, as the profile an event names. */
@@ -122,30 +108,14 @@ function profileOf(profile: unknown): unknown {
   return profile;
 }
 
-/** Where a piece that isn't a room is kept, once created. */
-interface PieceHolder {
-  piece?: Cell<OfferEntry>;
-}
-
-/**
- * Creates a piece that isn't a room, a second inbox, and keeps it in
- * `holder`: an offer links its result document, which exists only once the
- * piece's creation has committed.
- */
-const holdNotARoom = handler<void, { holder: Writable<PieceHolder> }>(
-  (_event, { holder }) => {
-    holder.set({ piece: entryOf(PrivateInbox({ offers: [] })) });
-  },
-);
-
-/** A room held apart from the index, which forgetting it changes. */
-interface HeldRoom {
-  room?: Writable<ChatRoomLink>;
-}
-
-/** What a manager's offer rows say. */
-const offersShown = (root: unknown): string =>
-  textContent(findNodeById(root, "fabrichat-offers"));
+/** Whether `value` is an origin written as its own canonical origin. */
+const isOrigin = (value: string): boolean => {
+  try {
+    return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+};
 
 /** The room's records, which every participant's room shares. */
 interface Records {
@@ -182,8 +152,8 @@ export const setup = pattern(() => ({
 }));
 
 // Points her profile at her private inbox, and sends a message, which makes
-// her one of the room's participants. Then finds Bob's room offered, and
-// adds it to her chats.
+// her one of the room's participants and hands Bob her profile. Then finds
+// Bob's room offered in her inbox.
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const inbox = PrivateInbox({ offers: [] });
   const profile = Writable.of<OwnProfile>();
@@ -205,47 +175,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     activity: setup.records.activity,
     counters: setup.records.counters,
   } as RoomArg);
-  const rooms = Writable.of<ChatIndexEntry[]>([]);
-  const handledOffers = Writable.of<Record<string, ChatOfferHandling>>({});
-  const manager = FabriChatManagerCore({
-    myProfile: profile,
-    rooms,
-    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
-    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
-    handledOffers,
-  } as ManagerArg);
-  // A room of her own, which she forgets and is then offered.
-  const held = Writable.of<HeldRoom>({});
-  const action_create_own = action(() =>
-    manager.createGroup.send({ requestId: "own", title: "Mine", members: [] })
-  );
-  // Held as the room's own result document, which a link into her labeled
-  // inbox has to name.
-  const action_hold_own = action(() =>
-    held.key("room").set(rooms.get()[1]?.room.resolveAsCell())
-  );
-  const action_forget_own = action(() =>
-    manager.forget.send({
-      requestId: "forget-own",
-      room: held.key("room").resolveAsCell(),
-    })
-  );
-  // A piece that isn't a room, offered as one.
-  const notARoom = Writable.of<PieceHolder>({});
-  const createNotARoom = holdNotARoom({ holder: notARoom });
-  const action_create_not_a_room = action(() => createNotARoom.send());
-  const action_receive_others = action(() => {
-    const own = held.get().room?.resolveAsCell();
-    inbox.receive.send({ kind: "another-thing", entry: entryOf(own) });
-    inbox.receive.send({
-      kind: "fabrichat-room",
-      entry: notARoom.get().piece?.resolveAsCell(),
-    });
-    // The same room twice, in the same second: two offers all the same.
-    inbox.receive.send({ kind: "fabrichat-room", entry: entryOf(own) });
-    inbox.receive.send({ kind: "fabrichat-room", entry: entryOf(own) });
-  });
 
   return {
     [TESTS]: [
@@ -257,63 +186,28 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: sendGesture,
       },
       // Nothing is offered yet.
-      { assertion: assert(() => manager.offers.length === 0) },
+      { assertion: assert(() => inbox.offers.length === 0) },
       { label: "alice-sent" },
       { await: "bob-done" },
-      // Bob's room is offered, from Bob as her inbox recorded him.
+      // Bob's room is offered once, keyed by his request, from him, naming
+      // the room's space and the host serving it.
       {
-        assertion: assert(() =>
-          setup.bobDid.get() !== "" && manager.offers.length === 1 &&
-          manager.offers[0]?.from === setup.bobDid.get() &&
-          offersShown(manager[UI]).includes(
-            `${setup.bobDid.get()} offered you a chat`,
-          )
-        ),
+        assertion: assert(() => {
+          const offers = inbox.offers as readonly (Offer | undefined)[];
+          const offer = offers[0];
+          return offers.length === 1 && offer !== undefined &&
+            offer.kind === CHAT_ROOM_OFFER_KIND && offer.id === "d-alice" &&
+            setup.bobDid.get() !== "" && offer.from === setup.bobDid.get() &&
+            isWellFormedDID(offer.space) && isOrigin(offer.host) &&
+            offer.ownerOrigin === offer.host && offer.title === "";
+        }),
       },
-      { action: action(() => clickButton(manager[UI], "Add to my chats")) },
-      {
-        assertion: assert(() =>
-          rooms.get().length === 1 && rooms.get()[0]?.kind === "direct" &&
-          rooms.get()[0]?.counterpart === setup.bobDid.get() &&
-          manager.offers.length === 0 &&
-          Object.values(handledOffers.get()).join() === "accepted"
-        ),
-      },
-      { action: action_create_own },
-      { action: action_hold_own },
-      { action: action_forget_own },
-      { assertion: assert(() => rooms.get().length === 1) },
-      { action: action_create_not_a_room },
-      // Of the four offers, the room's two are listed, each until it is
-      // dismissed, though they arrived together from one sender.
-      { action: action_receive_others },
-      {
-        assertion: assert(() =>
-          manager.offers.length === 2 &&
-          manager.offers.every((offer) =>
-            offer?.from === setup.aliceDid.get() &&
-            equals(offer?.room, held.get().room)
-          ) &&
-          manager.offers[0]?.key !== manager.offers[1]?.key
-        ),
-      },
-      { action: action(() => clickButton(manager[UI], "Dismiss")) },
-      { assertion: assert(() => manager.offers.length === 1) },
-      { action: action(() => clickButton(manager[UI], "Dismiss")) },
-      {
-        assertion: assert(() =>
-          manager.offers.length === 0 && rooms.get().length === 1 &&
-          Object.values(handledOffers.get()).sort().join() ===
-            "accepted,dismissed,dismissed"
-        ),
-      },
-      { label: "alice-done" },
     ],
   };
 });
 
-// Starts a chat from Alice's chip, which offers her the room, after a request
-// naming a profile other than the counterpart's is refused.
+// Starts a direct chat with Alice naming her profile, after a request naming
+// a profile other than hers is refused.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
@@ -329,29 +223,27 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: notices,
-    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
-  // Alice's profile, reached as the room reaches it: through her message.
-  const aliceChip = ParticipantChip({
-    participant: setup.records.messages.key(0).key("authorProfile"),
-    myProfile: profile,
-    startsDirect: true,
-    startDirect: manager.openDirect,
-  } as ChipArg);
-  const action_open_with_own_profile = action(() =>
-    manager.openDirect.send({
-      requestId: "not-hers",
-      counterpart: setup.aliceDid.get(),
-      profile: profileOf(profile),
-    })
+  // Alice's profile, reached as a room reaches it: through her message.
+  const aliceProfile = profileOf(
+    setup.records.messages.key(0).key("authorProfile"),
   );
+  const ownProfile = profileOf(profile);
 
   return {
     [TESTS]: [
       { action: writeProfile, event: {}, trustedUi: profileGesture },
       { action: action_note_principal },
       { await: "alice-sent" },
-      { action: action_open_with_own_profile },
+      {
+        action: manager.openDirect,
+        event: {
+          requestId: "not-hers",
+          counterpart: setup.aliceDid,
+          profile: ownProfile,
+        },
+        trustedUi: startGesture,
+      },
       {
         assertion: assert(() => {
           const outcome = requests.get()["not-hers"];
@@ -360,7 +252,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             rooms.get().length === 0;
         }),
       },
-      { action: aliceChip.chat, event: {} },
+      {
+        action: manager.openDirect,
+        event: {
+          requestId: "d-alice",
+          counterpart: setup.aliceDid,
+          profile: aliceProfile,
+        },
+        trustedUi: startGesture,
+      },
       // The room is created, and a notice is queued for Alice as well.
       {
         assertion: assert(() =>
@@ -371,7 +271,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       { label: "bob-done" },
-      { await: "alice-done" },
     ],
   };
 });

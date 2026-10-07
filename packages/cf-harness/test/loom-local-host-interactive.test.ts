@@ -10,10 +10,11 @@ import {
   type HarnessChatEventEnvelope,
   type HarnessChatResponse,
 } from "../src/contracts/interactive-chat.ts";
+import { runLoomLocalInteractiveFailureStdio } from "../src/loom-local-host.ts";
 import {
   createLoomLocalCfHarnessHost,
-  runLoomLocalInteractiveFailureStdio,
-} from "../src/loom-local-host.ts";
+  NAMES_DOCKER,
+} from "./support/on-linux.ts";
 import {
   runHarnessInteractiveChatStdio,
   type RunHarnessInteractiveChatStdioOptions,
@@ -562,6 +563,7 @@ Deno.test("local Loom interactive entrypoint returns disconnected Codex on stdou
       "interactive",
     ],
     env: {
+      ...NAMES_DOCKER,
       CF_HARNESS_HOME: home,
       CF_HARNESS_MODEL_PROVIDER: "",
     },
@@ -665,11 +667,15 @@ Deno.test("local Loom interactive host selects the sandbox runtime its environme
   // docker's network vocabulary maps onto runsc's, as it does for a batch run.
   assertEquals(native?.sandboxRunscNetworkMode, "sandbox");
 
-  // Nothing named: the docker runtime, exactly as before.
-  const unset = (await runWith({})).basePromptLoopOptions;
-  assertEquals(unset?.sandboxRuntimeKind, undefined);
-  assertEquals(unset?.sandboxRootfs, undefined);
-  assertEquals(unset?.sandboxRunscNetworkMode, undefined);
+  // Docker named: the docker runtime, with none of the settings of `runsc`.
+  const docker = (await runWith({
+    CF_HARNESS_SANDBOX_RUNTIME: "docker",
+    CF_HARNESS_SANDBOX_ROOTFS: "/images/kitchensink",
+    CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+  })).basePromptLoopOptions;
+  assertEquals(docker?.sandboxRuntimeKind, "docker");
+  assertEquals(docker?.sandboxRootfs, undefined);
+  assertEquals(docker?.sandboxRunscNetworkMode, undefined);
 
   // A runtime nobody has is refused up front, not read as docker.
   await assertRejects(

@@ -143,6 +143,24 @@ describe("spend", () => {
     expect(secondTint[0][0]).toBe(firstTint[0][0]);
   });
 
+  it("scales to the highlighted days, so an older spike leaves the chart", () => {
+    // A $50 day on the 2nd, then $1 and $2 days; the highlight is the last
+    // five settled days, the 14th to the 18th.
+    const github = source(
+      [["2026-01-02", 50], ...run("2026-01-03", 11, 1), ...run("2026-01-14", 5, 2)],
+      2,
+      "#58a6ff",
+    );
+    const { chart } = spendChart([github], NOW, 5);
+    const [base, tint] = polylines(chart);
+    // The highlighted days are all $2, so their line runs across the middle.
+    expect(tint.map(([, y]) => y)).toEqual([17, 17, 17, 17, 17]);
+    // The earlier $1 days fall below the bottom edge, and the spike rises
+    // above the top edge.
+    expect(base[1][1]).toBeGreaterThan(34);
+    expect(base[0][1]).toBeLessThan(0);
+  });
+
   // A 45-day window opened on 5 January reaches back to 20 November, so a
   // December nobody could read sits between two months that were read. The
   // grid is 45 columns 5px apart: 20-30 November at columns 0-10, December at

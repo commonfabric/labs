@@ -6,11 +6,14 @@ import type { CfHarnessCliIO } from "../src/cli.ts";
 import type { HarnessModelProviderId } from "../src/config.ts";
 import type { HarnessRunArtifacts } from "../src/artifacts.ts";
 import {
-  createLoomLocalCfHarnessHost,
   LOOM_LOCAL_AUTH_SOURCE,
   LOOM_LOCAL_CREDENTIAL_OWNER,
   runLoomLocalInteractiveFailureStdio,
 } from "../src/loom-local-host.ts";
+import {
+  createLoomLocalCfHarnessHost,
+  NAMES_DOCKER,
+} from "./support/on-linux.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import type {
   CreateHarnessPromptLoopOptions,
@@ -1358,6 +1361,7 @@ Deno.test("local Loom interactive entrypoint returns missing config on stdout pr
       "interactive",
     ],
     env: {
+      ...NAMES_DOCKER,
       CF_HARNESS_HOME: home,
       CF_HARNESS_MODEL_PROVIDER: "",
     },

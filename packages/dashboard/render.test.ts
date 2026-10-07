@@ -210,6 +210,18 @@ Deno.test("renderTile: the body order is label, headline, sub, chart", () => {
   assert(at(`class="sub"`) < at("<svg>"), "the chart is last");
 });
 
+Deno.test("shell: the foot of the page links to the repository pages, before the theme switch", () => {
+  const html = shell("", "", 0, 30_000, TEST_VERSION, "good");
+  assertStringIncludes(
+    html,
+    `<div class="foot"><a class="pill" href="/repos">▤ Repositories</a><button class="theme-toggle"`,
+  );
+  assert(
+    html.indexOf(`id="dashboard-wide"`) < html.indexOf(`class="foot"`),
+    "the foot comes after the tiles",
+  );
+});
+
 Deno.test("shell: the grid and the wide tiles land in their own slots", () => {
   const html = shell(
     `<div class="tile good">g</div>`,

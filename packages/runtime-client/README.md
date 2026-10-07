@@ -119,6 +119,32 @@ the handle, and the room once its last handle is gone.
 A server that does not advertise `presenceV1` makes the join reject; nothing is
 sent to it.
 
+## Sending events
+
+`CellHandle.send()` sends an event to the stream a handle names and logs a
+refusal; `sendStrict()` rejects with it. Either resolves once the runtime has
+taken the event, which says nothing of its handling: a write the stream's
+handler makes that the runtime refuses, such as one whose UI contract the event
+does not satisfy, resolves `sendStrict()` all the same.
+`sendStrict(event, { awaitHandling: true })` waits for the handler's run as
+well, and rejects with the reason when that run's commit is refused, when it
+throws, and when the event is dropped or refused admission. Under server
+execution the run it waits for is the served one, whose outcome reaches the
+worker as the consequence the serving loop recorded for the event.
+
+`CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
+from a control the host draws itself, bound to one trusted surface and one
+action. The worker stamps the event with `native` provenance for them, replacing
+any `provenance` the payload carries, and marks it renderer-trusted, so a write
+gated on that surface and action commits as it would for a reviewed gesture on
+the pattern's rendered surface. It always waits for the handler's run, as
+`sendStrict()` does with `awaitHandling`, and rejects with the reason on the
+same refusals. The event is renderer-trusted but is not a trusted gesture, so it
+confirms no snapshot share, custody seal, reviewed intent, or change to an
+access list. It mints trusted events, so it is for the host's own code alone;
+[host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
+says what it owes in exchange.
+
 ## Refused event admission
 
 The `eventintentoutcome` event reports a refused event admission to every

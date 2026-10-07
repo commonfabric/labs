@@ -4,6 +4,7 @@
  * removed by deleting its line.
  */
 
+import type { CiJobs } from "./ci-jobs-page.ts";
 import type { Tile } from "./types.ts";
 
 import { benchmark, keyBenchmarks } from "./tiles/benchmark.ts";
@@ -56,3 +57,9 @@ export const TILES: Tile[] = [
 
   recentRuns,
 ];
+
+/**
+ * The ci tile's latest collection, which the repository pages list each
+ * repository's jobs from.
+ */
+export const latestCiJobs = (): CiJobs | undefined => ciHealth.jobs();

@@ -16,8 +16,8 @@ import {
   equals,
   FabricDurationNsec,
   FabricEpochNsec,
-  type Stream,
 } from "commonfabric";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -124,10 +124,14 @@ export type ProfileCell = Cell<ChatProfile>;
  */
 export interface ChatManagerProfile extends ChatProfile {
   /**
-   * Where the person's offers are delivered: a link to their private inbox,
+   * Where the person's offers are delivered: a link to their share inbox,
    * absent while they have none.
    */
-  inbox?: { piece?: Cell<ChatInbox> };
+  // The profile's own type for the pointer, a link naming nothing of the
+  // inbox but its name: an inbox labels its offers confidential to its
+  // owner, and a run reading the pointer untyped takes that label on, which
+  // then refuses its sends.
+  inbox?: ProfileInbox;
 }
 
 /** A live link to a person's profile, as a manager reads it. */
@@ -438,68 +442,8 @@ export type ChatRequestOutcome =
     reason: string;
   };
 
-/** The kind of offer that offers a FabriChat room. */
+/** The `kind` of the offer a manager sends a member of a new room. */
 export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
-
-/** An offer of a room, as a manager sends it to a person's private inbox. */
-export interface ChatRoomOfferEvent {
-  /** What is offered; a room's offer is `fabrichat-room`. */
-  kind: string;
-
-  // `Cell<…>` is written out rather than reached through an alias: the
-  // event's schema marks a reference position only where the wrapper is
-  // written in the event type.
-  /** The room offered. */
-  entry: Cell<ChatRoomLink>;
-}
-
-/**
- * An offer as a person's private inbox holds it: the fields a manager reads.
- * Every offer of another kind is ignored.
- */
-export interface ChatInboxOffer {
-  /** What is offered; a room's offer is `fabrichat-room`. */
-  kind: string;
-
-  /** The piece offered, if the sender named one. */
-  entry?: Cell<ChatRoomLink>;
-
-  /**
-   * The offer's id, unique in its inbox, which the inbox chose when it
-   * received the offer.
-   */
-  id: string;
-
-  /** The DID of the principal who sent the offer, as the inbox recorded it. */
-  from: string;
-}
-
-/**
- * The part of a person's private inbox FabriChat uses: the offers its owner
- * reads, and the stream others send them to.
- */
-export interface ChatInbox {
-  /** The offers received, readable by the inbox's owner alone. */
-  offers?: ChatInboxOffer[];
-
-  /** Appends an offer. */
-  receive?: Stream<ChatRoomOfferEvent>;
-}
-
-/** A room offered to a manager's user that they haven't acted on. */
-export interface ChatManagerOffer {
-  /** The offer's key, which `accept` and `dismissOffer` name it by. */
-  key: string;
-
-  /** The room offered. */
-  room: Cell<ChatRoomLink>;
-
-  /** The DID of the principal who offered it. */
-  from: string;
-}
-
-/** What a manager's user did with an offer. */
-export type ChatOfferHandling = "accepted" | "dismissed";
 
 /** A notice a manager's request produced, for a client to deliver. */
 export interface ChatManagerNotice {
