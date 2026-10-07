@@ -36,6 +36,8 @@ import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
 import {
   darwinCfcVmRootfs,
   defaultDarwinCfcVmStore,
+  linuxRunscRootfs,
+  linuxRunscStore,
 } from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
@@ -878,9 +880,10 @@ describe("console/server", () => {
     it("observes the driver's own default rootfs for a runsc console that names none", async () => {
       // On macOS the driver finds the rootfs in the store under the `HOME` of
       // the environment the console runs in, where no `CFC_VM_HOME` names
-      // another; on any other platform a rootfs must be named, and the turn
-      // is refused. `/Users/console` has no link on the way, as macOS's
-      // `/home` does, so its spelling is the path the driver resolves.
+      // another, and on Linux in the Linux store under that `HOME`; on any
+      // other platform a rootfs must be named, and the turn is refused.
+      // `/Users/console` has no link on the way, as macOS's `/home` does, so
+      // its spelling is the path the driver resolves.
       const [, runtime, rootfs] = await (async () => {
         const health = createConsoleHealth(
           await resolveConsoleConfig(ARGS, {
@@ -900,10 +903,12 @@ describe("console/server", () => {
         );
       })();
 
-      if (Deno.build.os === "darwin") {
-        const expected = darwinCfcVmRootfs(
-          defaultDarwinCfcVmStore("/Users/console"),
-        );
+      const expected = Deno.build.os === "darwin"
+        ? darwinCfcVmRootfs(defaultDarwinCfcVmStore("/Users/console"))
+        : Deno.build.os === "linux"
+        ? linuxRunscRootfs(linuxRunscStore("/Users/console"))
+        : undefined;
+      if (expected !== undefined) {
         expect(rootfs.detail).toBe(expected);
         expect(runtime.detail).toContain(`rootfs ${expected}`);
       } else {
