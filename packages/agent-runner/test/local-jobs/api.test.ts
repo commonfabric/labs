@@ -537,6 +537,26 @@ describe("local-jobs/api", () => {
         .toEqual([]);
     });
 
+    it("does not replay job events to a request that was already cancelled", async () => {
+      const { store, post, call } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.requestCancel(job.id);
+        const cancellation = new AbortController();
+        cancellation.abort();
+        expect(
+          await frames(
+            await call(`/jobs/${job.id}/events`, {
+              signal: cancellation.signal,
+            }),
+          ),
+        ).toEqual([]);
+        expect(store.get(job.id)?.state).toBe("cancelled");
+      } finally {
+        store.close();
+      }
+    });
+
     it("returns 400 for an `after` that is not a whole number", async () => {
       const { post, call } = apiWith();
       const { job } = await (await post("/jobs", BODY)).json();

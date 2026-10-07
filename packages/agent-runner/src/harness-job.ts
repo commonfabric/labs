@@ -23,7 +23,10 @@ import {
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
-import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
+import type {
+  HarnessModelLimits,
+  HarnessModelUsage,
+} from "@commonfabric/cf-harness/model/client";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { createHarnessImageAttachmentFromBase64 } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
@@ -34,6 +37,7 @@ import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
   type HarnessPromptLoopResult,
+  promptLoopModelTurnsFromError,
 } from "@commonfabric/cf-harness/prompt-loop";
 import {
   type AgentRunErrorCode,
@@ -302,6 +306,10 @@ export const runHarnessJob = async (
   // harness persists, and hands back the loop's full result.
   let loopResult: HarnessPromptLoopResult | undefined;
   let loopError: unknown;
+  let reportedUsage: HarnessModelUsage | undefined;
+  let readRunState:
+    | (() => HarnessPromptLoopResult["runState"] | undefined)
+    | undefined;
   let resultValidation: CfHarnessStructuredResultValidation | undefined;
   const createInnerLoop = options.harnessDeps?.createPromptLoop ??
     ((loopOptions: CreateHarnessPromptLoopOptions) =>
@@ -327,8 +335,10 @@ export const runHarnessJob = async (
       options.harnessDeps?.onStructuredResultValidation?.(validation);
     },
     createPromptLoop: (loopOptions) => {
+      readRunState = () => loopOptions.engine?.getRunState();
       const loop = createInnerLoop({
         ...loopOptions,
+        stopOnStructuredResult: true,
         ...(spec.maxInputBytes !== undefined
           ? { maxInputBytes: spec.maxInputBytes }
           : {}),
@@ -342,6 +352,10 @@ export const runHarnessJob = async (
             loopResult = await loop.runPrompt({
               ...promptOptions,
               signal: options.signal,
+              onModelUsage: async (update) => {
+                reportedUsage = update.totalUsage;
+                await promptOptions.onModelUsage?.(update);
+              },
               onTranscriptEvent: async (event) => {
                 await options.onEvent?.(event);
                 await promptOptions.onTranscriptEvent?.(event);
@@ -359,13 +373,41 @@ export const runHarnessJob = async (
   };
 
   const exitCode = await runCfHarnessCli(argv, deps);
-  if (options.signal.aborted) return { outcome: "cancelled" };
+  const failedTurns = promptLoopModelTurnsFromError(loopError);
+  const failedState = readRunState?.();
+  // These are partial measurements, not a completeness claim. A failed
+  // provider call may have spent tokens it never reported.
+  const failedReport: AgentRunReport | undefined =
+    failedTurns !== undefined || reportedUsage !== undefined
+      ? {
+        ...(reportedUsage !== undefined
+          ? {
+            usage: { ...reportedUsage },
+            usageCoverage: "including-descendants",
+          }
+          : {}),
+        ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
+        ...(failedState !== undefined
+          ? { toolCalls: failedState.toolOutputs.length }
+          : {}),
+        ...(failedState?.artifactRoot !== undefined
+          ? { runRef: failedState.artifactRoot }
+          : {}),
+      }
+      : undefined;
+  if (options.signal.aborted) {
+    return {
+      outcome: "cancelled",
+      ...(failedReport !== undefined ? { report: failedReport } : {}),
+    };
+  }
   if (loopResult === undefined) {
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
     return {
       outcome: "failed",
       errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
+      ...(failedReport !== undefined ? { report: failedReport } : {}),
     };
   }
   const report = reportOf(loopResult);

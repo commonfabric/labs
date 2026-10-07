@@ -598,15 +598,20 @@ The current package provides:
   scoped broker, which decides what is listed and what runs. `run_command`
   carries write authority; `run_read_command` requires a fresh read effect and
   explicit broker grant, and sends a separate read-only demand for execution
-  revalidation. Each answer is measured against the run's observation ceiling.
-  See [Host commands](LOOM_COMMANDS.md);
+  revalidation. Explicitly context-bound broker reads work under both enforcing
+  modes; strict mode still refuses quoted or absent authority. Each answer is
+  measured against the run's observation ceiling. See
+  [Host commands](LOOM_COMMANDS.md);
 - durable local jobs with a 1 MiB enqueue body bound, SQLite FULL
-  acknowledgment, and inline image bytes snapshotted into their job workspace.
-  Optional host input-byte and output-token ceilings can only narrow through
-  callers and follow the shared model client into children. Bounded Codex calls
-  check final request bytes, send the output ceiling including reasoning, and
-  make one provider attempt; unverified gateway limits refuse before dispatch.
-  Native search context and image token expansion need separate accounting. See
+  acknowledgment, and inline image bytes snapshotted into their job workspace. A
+  valid structured submission completes an agent job on that turn, including the
+  last allowed turn. Failed jobs retain partial measured usage and attempted
+  turns when known, without claiming complete usage. Optional host input-byte
+  and output-token ceilings can only narrow through callers and follow the
+  shared model client into children. Bounded Codex calls check final request
+  bytes, send the output ceiling including reasoning, and make one provider
+  attempt; unverified gateway limits refuse before dispatch. Native search
+  context and image token expansion need separate accounting. See
   [Local jobs](../../cli/README.md#local-jobs);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;

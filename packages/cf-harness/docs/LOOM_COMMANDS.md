@@ -130,6 +130,13 @@ broker's literal `readOnlyGranted: true`. A missing command, changed or unknown
 effect, or absent read-only grant returns `not_granted` with `landed: "no"`
 without issuing a command.
 
+At `enforce-strict`, `list_commands` and `run_read_command` are the narrow
+host-broker read exception for an explicitly `context`-bound task. Quoted or
+absent task authority still cannot invoke them, other strict read tools keep
+their existing gate, and `run_command` remains a write. The policy trace names
+this admission `cfc_enforce_strict_host_command_read`; invocation still checks
+the current broker grant rather than treating the policy admission as one.
+
 The invocation appends `--read-only`, outside the model's JSON arguments. A host
 that supports this tool must propagate that demand to its broker and refuse the
 call unless the command's current effect is `read` and the current job's grant

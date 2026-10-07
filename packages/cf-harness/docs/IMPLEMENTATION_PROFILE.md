@@ -147,6 +147,12 @@ advertised capability as dependency readiness.
 - CFC authority: Common Fabric runner/runtime evidence and trusted sandbox
   sidecars. Harness-local policy logic is conservative transport/enforcement,
   not the source of label meaning.
+- Host-broker context reads: at strict enforcement, an explicitly context-bound
+  task may discover the host's command catalog and invoke `run_read_command`.
+  The invocation requires a fresh host read-effect declaration and per-job
+  read-only grant, then the host revalidates both at execution. This narrow
+  authority path changes no other strict read or write gate; quoted and absent
+  task authority remain refused. See [Host commands](LOOM_COMMANDS.md).
 - Host execution: no parent-run shell reaches the host. Bounded host-side
   surfaces exist beside the sandbox: the browser child profile's typed `browser`
   tool, which a browser host attached to the run carries out when there is one

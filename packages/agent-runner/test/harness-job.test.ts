@@ -2,10 +2,12 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
-import type {
-  CreateHarnessPromptLoopOptions,
-  HarnessPromptLoopResult,
+import {
+  CfHarnessPromptLoop,
+  type CreateHarnessPromptLoopOptions,
+  type HarnessPromptLoopResult,
 } from "@commonfabric/cf-harness/prompt-loop";
+import type { HarnessModelUsage } from "@commonfabric/cf-harness/model/client";
 import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
@@ -93,6 +95,7 @@ describe("runHarnessJob()", () => {
     script: (context: {
       resultPath: string;
       emit: () => Promise<void>;
+      emitUsage: (usage: HarnessModelUsage) => Promise<void>;
     }) => Promise<HarnessPromptLoopResult>,
     options: {
       signal?: AbortSignal;
@@ -133,6 +136,9 @@ describe("runHarnessJob()", () => {
               seen.signal = prompt.signal;
               return script({
                 resultPath: join(runRoot, "workspace", "agent-result.json"),
+                emitUsage: async (usage) => {
+                  await prompt.onModelUsage?.({ usage, totalUsage: usage });
+                },
                 emit: async () => {
                   const message = {
                     role: "assistant",
@@ -159,6 +165,72 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
+
+  for (const valid of [true, false]) {
+    it(`keeps the real loop's final-turn ${valid ? "submission" : "failure report"}`, async () => {
+      let calls = 0;
+      const reported: string[] = [];
+      const result = await runHarnessJob(
+        plainSpec({ tools: [], maxModelTurns: 1 }),
+        {
+          runRoot,
+          report: (line) => reported.push(line),
+          signal: new AbortController().signal,
+          harnessDeps: {
+            env: {
+              CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+              CF_HARNESS_SANDBOX_RUNTIME: "docker",
+              CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: join(
+                runRoot,
+                "contexts",
+              ),
+              CF_HARNESS_RUNSC_CFC_RESULT_DIR: join(runRoot, "results"),
+            },
+            createPromptLoop: (options) =>
+              new CfHarnessPromptLoop({
+                ...options,
+                modelClient: {
+                  providerId: "fixture",
+                  complete: () => {
+                    calls++;
+                    return Promise.resolve({
+                      assistant: {
+                        role: "assistant",
+                        content: "",
+                        toolCalls: [{
+                          id: "submit-one",
+                          type: "function",
+                          function: {
+                            name: "submit_result",
+                            arguments: JSON.stringify({
+                              result: valid
+                                ? { answer: "Titan" }
+                                : { wrong: true },
+                            }),
+                          },
+                        }],
+                      },
+                      usage: { totalTokens: 17 },
+                    });
+                  },
+                },
+              }),
+          },
+        },
+      );
+      if (calls === 0) throw new Error(reported.join("\n"));
+      expect(calls).toBe(1);
+      expect(result.outcome).toBe(valid ? "completed" : "failed");
+      if (!valid) expect(result).toMatchObject({ errorCode: "LIMIT_REACHED" });
+      expect(result.report).toMatchObject({
+        modelTurns: 1,
+        toolCalls: 1,
+        usage: { totalTokens: 17 },
+        usageCoverage: "including-descendants",
+      });
+    });
+  }
 
   it("snapshots inline image bytes inside the job workspace and sends the image to the model", async () => {
     const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" } as const;
@@ -189,6 +261,7 @@ describe("runHarnessJob()", () => {
     expect(seen.loopOptions).toMatchObject({
       maxInputBytes: 65536,
       maxOutputTokens: 8192,
+      stopOnStructuredResult: true,
     });
   });
 
@@ -437,6 +510,28 @@ describe("runHarnessJob()", () => {
 
       expect(result).toEqual({ outcome: "cancelled" });
     });
+
+    for (const cancelled of [false, true]) {
+      it(`retains partial usage when a paid loop ${cancelled ? "is cancelled" : "fails"}`, async () => {
+        const controller = new AbortController();
+        const { result } = await runScripted(
+          plainSpec(),
+          async ({ emitUsage }) => {
+            await emitUsage({ totalTokens: 123 });
+            if (cancelled) controller.abort();
+            throw new Error("provider disconnected after usage");
+          },
+          { signal: controller.signal },
+        );
+        expect(result.outcome).toBe(cancelled ? "cancelled" : "failed");
+        expect(result.report).toMatchObject({
+          usage: { totalTokens: 123 },
+          usageCoverage: "including-descendants",
+          toolCalls: 0,
+        });
+        expect(result.report).not.toHaveProperty("modelTurns");
+      });
+    }
 
     it("ends `failed` as `LIMIT_REACHED` when the turn limit stopped the loop", async () => {
       const { result } = await runScripted(

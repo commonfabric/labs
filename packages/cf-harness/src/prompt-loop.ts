@@ -278,6 +278,9 @@ export interface CreateHarnessPromptLoopOptions
   /** Reserves the last root model turn for a partial answer without tools. */
   finalizeOnTurnLimit?: boolean;
 
+  /** Ends a host job after an accepted structured result, without a prose turn. */
+  stopOnStructuredResult?: boolean;
+
   /**
    * Requires a library parent to name a UI piece before completing.
    * Ordinary configured or recorded Fabric sessions require it automatically,
@@ -557,7 +560,8 @@ const annotatePromptLoopError = (
   }
 };
 
-const promptLoopModelTurnsFromError = (
+/** Turns attempted before a loop failed; absent on errors without that evidence. */
+export const promptLoopModelTurnsFromError = (
   error: unknown,
 ): number | undefined => {
   if (!isObjectOrArray(error)) {
@@ -3019,6 +3023,18 @@ const evaluateToolPolicy = (
         }),
       };
     case "enforce-strict":
+      if (
+        promptSlotBinding?.role === "context" && effectClass === "read" &&
+        (descriptor.toolId === "list_commands" ||
+          descriptor.toolId === "run_read_command")
+      ) {
+        // The host owns the catalog. Execution additionally requires its
+        // fresh read-effect declaration and per-job read-only grant.
+        return {
+          allowed: true,
+          reasonCodes: ["cfc_enforce_strict_host_command_read"],
+        };
+      }
       if (directCommand) {
         return {
           allowed: true,
@@ -3042,6 +3058,7 @@ export class CfHarnessPromptLoop {
   readonly #gatewayClient?: OpenAICompatibleGatewayClient;
   readonly #maxModelTurns: number;
   readonly #finalizeOnTurnLimit: boolean;
+  readonly #stopOnStructuredResult: boolean;
   readonly #requirePieceOutput: boolean;
 
   /**
@@ -3155,6 +3172,7 @@ export class CfHarnessPromptLoop {
     }
     this.#maxModelTurns = options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
     this.#finalizeOnTurnLimit = options.finalizeOnTurnLimit ?? false;
+    this.#stopOnStructuredResult = options.stopOnStructuredResult ?? false;
     this.#parentToolAllowanceMode = options.allowedToolIds === undefined
       ? "all-builtins"
       : "restricted";
@@ -5285,11 +5303,15 @@ export class CfHarnessPromptLoop {
         ...labeled,
       };
     }
-    const taskOutcome = toolId === "finish_task" &&
-        isObjectNotArray(result.output) && result.output.status === "ok" &&
-        "taskOutcome" in result.output
-      ? readHarnessTaskOutcome(result.output.taskOutcome)
-      : undefined;
+    const taskOutcome: HarnessTaskOutcome | undefined =
+      this.#stopOnStructuredResult && toolId === "submit_result" &&
+        isObjectNotArray(result.output) && result.output.status === "ok"
+        ? { outcome: "completed", answer: "Structured result submitted." }
+        : toolId === "finish_task" &&
+            isObjectNotArray(result.output) && result.output.status === "ok" &&
+            "taskOutcome" in result.output
+        ? readHarnessTaskOutcome(result.output.taskOutcome)
+        : undefined;
     return {
       toolMessage,
       ...(taskOutcome !== undefined ? { taskOutcome } : {}),
