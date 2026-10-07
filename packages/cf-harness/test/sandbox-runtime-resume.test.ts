@@ -682,7 +682,9 @@ describe("sandbox-runtime-resume", () => {
           arch: "aarch64",
           uid: () => 0,
           which: (name: string) =>
-            name === "pasta" ? "/usr/bin/pasta" : undefined,
+            name === "pasta" || name === "unshare"
+              ? `/usr/bin/${name}`
+              : undefined,
           cwd: root,
           env: { HOME: join(root, "home"), ...extra.env },
           ...(extra.sandboxSelectionFlags !== undefined

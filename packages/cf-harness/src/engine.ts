@@ -455,6 +455,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscRootless?: boolean;
   /** runsc runtime: the `pasta` that gives the `sandbox` network on Linux. */
   sandboxRunscNetworkHelper?: string;
+  /** runsc runtime: the `unshare` root's pasta runs under. */
+  sandboxRunscUnshare?: string;
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -1076,6 +1078,9 @@ export class CfHarnessEngine {
         ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
         ...(options.sandboxRunscNetworkHelper !== undefined
           ? { networkHelper: options.sandboxRunscNetworkHelper }
+          : {}),
+        ...(options.sandboxRunscUnshare !== undefined
+          ? { unshare: options.sandboxRunscUnshare }
           : {}),
         additionalMounts: options.additionalMounts,
         runId,

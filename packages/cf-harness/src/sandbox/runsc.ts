@@ -196,13 +196,23 @@ export const PASTA_ARGS: readonly string[] = [
 /**
  * What pasta is given beside {@link PASTA_ARGS} for root: no user namespace
  * of its own, and root kept rather than dropped to `nobody`, since runsc then
- * runs as root inside it. A process that is not root has pasta make a user
- * namespace, in which runsc's `--rootless` makes its own.
+ * runs as root inside it. Without a user namespace pasta mounts its own
+ * `/proc` in the mount namespace it runs in, which would hide every process
+ * of the host's from the host, so for root it runs in a mount namespace of
+ * its own, which {@link UNSHARE_ARGS} makes. A process that is not root has
+ * pasta make a user namespace, in which runsc's `--rootless` makes its own.
  */
 export const PASTA_ROOT_ARGS: readonly string[] = [
   "--netns-only",
   "--runas",
   "0",
+];
+
+/** How `unshare` (util-linux) gives root's pasta a mount namespace of its own. */
+export const UNSHARE_ARGS: readonly string[] = [
+  "--mount",
+  "--propagation",
+  "private",
 ];
 
 /** The address a container under pasta reaches the host at. */
@@ -248,6 +258,12 @@ export interface RunscSandboxConfig {
    */
   networkHelper?: string;
   /**
+   * The `unshare` that gives pasta a mount namespace of its own where this
+   * process is root; read only where `networkHelper` is, and required there
+   * for root.
+   */
+  unshare?: string;
+  /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
    */
@@ -286,6 +302,8 @@ export interface ResolveRunscSandboxConfigOptions {
   rootless?: boolean;
   /** The `pasta` binary; see {@link RunscSandboxConfig}. */
   networkHelper?: string;
+  /** The `unshare` binary; see {@link RunscSandboxConfig}. */
+  unshare?: string;
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -871,6 +889,15 @@ export const resolveRunscSandboxConfig = (
         ),
       }
       : {}),
+    ...(options.unshare !== undefined
+      ? {
+        unshare: trusted(
+          "unshare binary",
+          options.unshare,
+          canonicalHostPath("unshare binary", options.unshare),
+        ),
+      }
+      : {}),
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
     scratchDir,
     ...(options.scratchDir === undefined
@@ -1359,17 +1386,26 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     args: readonly string[],
   ): { command: string; args: string[] } {
     const pasta = this.#pasta();
-    return pasta === undefined ? { command, args: [...args] } : {
-      command: pasta,
-      args: [
-        ...PASTA_ARGS,
-        ...(this.config.rootless ? [] : PASTA_ROOT_ARGS),
-        "--log-file",
-        joinHostPath(this.config.scratchDir, "pasta.log"),
-        "--",
-        command,
-        ...args,
-      ],
+    if (pasta === undefined) return { command, args: [...args] };
+    const underPasta = [
+      ...PASTA_ARGS,
+      ...(this.config.rootless ? [] : PASTA_ROOT_ARGS),
+      "--log-file",
+      joinHostPath(this.config.scratchDir, "pasta.log"),
+      "--",
+      command,
+      ...args,
+    ];
+    if (this.config.rootless) return { command: pasta, args: underPasta };
+    if (this.config.unshare === undefined) {
+      throw new Error(
+        "runsc runs as root under pasta, and pasta then needs a mount " +
+          "namespace of its own, which no `unshare` was given to make",
+      );
+    }
+    return {
+      command: this.config.unshare,
+      args: [...UNSHARE_ARGS, "--", pasta, ...underPasta],
     };
   }
 

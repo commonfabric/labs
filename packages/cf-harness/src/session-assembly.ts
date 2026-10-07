@@ -113,6 +113,8 @@ export interface HarnessSessionConfig {
   sandboxRunscRootless?: boolean;
   /** The `pasta` that gives the direct driver's `sandbox` network on Linux. */
   sandboxRunscNetworkHelper?: string;
+  /** The `unshare` root's pasta runs under. */
+  sandboxRunscUnshare?: string;
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -330,6 +332,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscNetworkHelper !== undefined
       ? { sandboxRunscNetworkHelper: config.sandboxRunscNetworkHelper }
+      : {}),
+    ...(config.sandboxRunscUnshare !== undefined
+      ? { sandboxRunscUnshare: config.sandboxRunscUnshare }
       : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }

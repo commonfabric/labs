@@ -182,7 +182,10 @@ The Linux default's `sandbox` network, unless `CF_HARNESS_DOCKER_NETWORK_MODE`
 names another, is `pasta`'s, from passt, found on `PATH` as the selection runs;
 with none there the default is refused, naming passt and the two networks that
 need none. The driver starts each container, a session's included, inside
-`pasta --config-net -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port forward off,
+`pasta --config-net -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port forward off
+(for root with `--netns-only --runas 0`, inside
+`unshare --mount --propagation private`, since pasta then mounts its own `/proc`
+in the mount namespace it runs in, and refused where no `unshare` is on `PATH`),
 runs runsc there with `--network=host` and a bundle with no network namespace of
 its own, and binds a hosts file over `/etc/hosts` that names the gateway, which
 pasta maps to the host's loopback, `host.docker.internal`. The container has

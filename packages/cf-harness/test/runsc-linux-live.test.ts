@@ -55,6 +55,10 @@ describe("runsc-linux-live", () => {
       });
       expect(selection.sandboxRunscRootless === true).toBe(Deno.uid() !== 0);
       expect(selection.sandboxRunscNetworkHelper).toBeDefined();
+      // Root's pasta runs in a mount namespace of its own.
+      expect(selection.sandboxRunscUnshare === undefined).toBe(
+        Deno.uid() !== 0,
+      );
 
       const workspace = await Deno.makeTempDir({ prefix: "runsc-live-" });
       const host = Deno.serve(
@@ -68,6 +72,7 @@ describe("runsc-linux-live", () => {
         cfcPolicyPath: selection.sandboxCfcPolicy,
         rootless: selection.sandboxRunscRootless === true,
         networkHelper: selection.sandboxRunscNetworkHelper,
+        unshare: selection.sandboxRunscUnshare,
         platform: "linux",
         homeDir: home,
       }));

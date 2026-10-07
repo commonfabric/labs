@@ -1747,6 +1747,7 @@ const linuxDefault = (): SandboxRuntimeSelection => {
     sandboxCfcPolicy: join(store, "cfc-policy.json"),
     sandboxRunscBinary: join(store, "bin", "runsc"),
     sandboxRunscNetworkHelper: join(LINUX_HOME, "bin", "pasta"),
+    sandboxRunscUnshare: join(LINUX_HOME, "bin", "unshare"),
     sandboxRuntimeChoice: {
       runtime: "runsc",
       source: "default",

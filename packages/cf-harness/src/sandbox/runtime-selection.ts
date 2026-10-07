@@ -78,6 +78,12 @@ export interface SandboxRuntimeSelection {
    */
   sandboxRunscNetworkHelper?: string;
 
+  /**
+   * The `unshare` that gives root's pasta a mount namespace of its own, beside
+   * `sandboxRunscNetworkHelper` for a Linux default that runs as root.
+   */
+  sandboxRunscUnshare?: string;
+
   /** How the runtime was selected, which the run records beside it. */
   sandboxRuntimeChoice: SandboxRuntimeChoice;
 }
@@ -1128,14 +1134,14 @@ export const resolveSandboxRuntimeSelection = async (
   // Linux's runsc gives a container of its own `sandbox` network loopback
   // alone; pasta is what gives it egress and the host, as Docker's bridge did.
   let networkHelper: string | undefined;
+  let unshare: string | undefined;
   if (
     nativePlatform === "linux" &&
     (sandboxRunscNetworkMode === undefined ||
       sandboxRunscNetworkMode === "sandbox")
   ) {
-    networkHelper = options.which !== undefined
-      ? options.which("pasta")
-      : executableOnPath("pasta");
+    const which = options.which ?? ((name: string) => executableOnPath(name));
+    networkHelper = which("pasta");
     if (networkHelper === undefined) {
       throw nativeDefaultRefusal(
         nativePlatform,
@@ -1146,6 +1152,21 @@ export const resolveSandboxRuntimeSelection = async (
           `\`${SANDBOX_NETWORK_MODE_ENV}=none\` or \`${SANDBOX_NETWORK_MODE_ENV}=host\``,
         options.flags,
       );
+    }
+    if (!rootless) {
+      unshare = which("unshare");
+      if (unshare === undefined) {
+        throw nativeDefaultRefusal(
+          nativePlatform,
+          "its network is `pasta`'s, which for root runs in a mount " +
+            "namespace of its own that `unshare` (util-linux) makes, and no " +
+            "`unshare` is on `PATH`",
+          "Install util-linux, run as a user that is not root, or name a " +
+            `network with \`${SANDBOX_NETWORK_MODE_ENV}=none\` or ` +
+            `\`${SANDBOX_NETWORK_MODE_ENV}=host\``,
+          options.flags,
+        );
+      }
     }
   }
   return {
@@ -1160,6 +1181,7 @@ export const resolveSandboxRuntimeSelection = async (
     ...(networkHelper !== undefined
       ? { sandboxRunscNetworkHelper: networkHelper }
       : {}),
+    ...(unshare !== undefined ? { sandboxRunscUnshare: unshare } : {}),
     sandboxRuntimeChoice: nativePlatform !== undefined &&
         nativeStore !== undefined
       ? {

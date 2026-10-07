@@ -1078,10 +1078,13 @@ inside a user and network namespace of pasta's, which runsc takes as its host
 network, so the container sees one interface of pasta's (10.0.2.15, gateway
 10.0.2.2) and none of the host's. Pasta translates its traffic to the host's
 sockets, and a connection to the gateway reaches the host's own loopback, which
-a hosts file the driver binds over `/etc/hosts` names `host.docker.internal`. No
-port is forwarded into the container, or from the container's loopback to the
-host's. Where no `pasta` is on `PATH` the default is refused, saying to install
-passt (`sudo apt install passt`) or to name a network:
+a hosts file the driver binds over `/etc/hosts` names `host.docker.internal`.
+For root, pasta makes no user namespace and keeps root, and runs in a mount
+namespace of its own that `unshare` (util-linux) makes, since it then mounts its
+own `/proc` in the mount namespace it runs in. No port is forwarded into the
+container, or from the container's loopback to the host's. Where no `pasta` is
+on `PATH` the default is refused, saying to install passt
+(`sudo apt install passt`) or to name a network:
 `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
 `host` the host's own network, interfaces and all.
 

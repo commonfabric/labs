@@ -1403,6 +1403,9 @@ const resolveConsoleRunscConfig = (
     ...(options.sandboxRunscNetworkHelper !== undefined
       ? { networkHelper: options.sandboxRunscNetworkHelper }
       : {}),
+    ...(options.sandboxRunscUnshare !== undefined
+      ? { unshare: options.sandboxRunscUnshare }
+      : {}),
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,

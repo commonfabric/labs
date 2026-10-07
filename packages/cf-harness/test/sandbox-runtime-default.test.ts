@@ -116,13 +116,19 @@ const installLinuxStore = async (home: string): Promise<string> => {
 /** The `pasta` a case's Linux process finds on its `PATH`. */
 const PASTA = "/usr/bin/pasta";
 
-/** Finds `pasta`, and nothing else, as a Linux host with passt does. */
-const withPasta = (name: string): string | undefined =>
-  name === "pasta" ? PASTA : undefined;
+/** The `unshare` a case's Linux process finds on its `PATH`. */
+const UNSHARE = "/usr/bin/unshare";
 
 /**
- * The selection of a defaulted Linux runtime, taken whole from `store`, with
- * pasta giving it the default network.
+ * Finds `pasta` and `unshare`, and nothing else, as a Linux host with passt
+ * and util-linux does.
+ */
+const withPasta = (name: string): string | undefined =>
+  name === "pasta" ? PASTA : name === "unshare" ? UNSHARE : undefined;
+
+/**
+ * The selection of a defaulted Linux runtime for root, taken whole from
+ * `store`, with pasta giving it the default network under `unshare`.
  */
 const fromLinuxStore = (store: string): SandboxRuntimeSelection => ({
   sandboxRuntimeKind: "runsc",
@@ -130,6 +136,7 @@ const fromLinuxStore = (store: string): SandboxRuntimeSelection => ({
   sandboxCfcPolicy: join(store, LINUX_POLICY),
   sandboxRunscBinary: join(store, LINUX_RUNSC),
   sandboxRunscNetworkHelper: PASTA,
+  sandboxRunscUnshare: UNSHARE,
   sandboxRuntimeChoice: {
     runtime: "runsc",
     source: "default",
@@ -137,6 +144,14 @@ const fromLinuxStore = (store: string): SandboxRuntimeSelection => ({
     nativeStore: store,
   },
 });
+
+/** `selection` as a process that is not root gets it, with no `unshare`. */
+const withoutUnshare = (
+  selection: SandboxRuntimeSelection,
+): SandboxRuntimeSelection => {
+  const { sandboxRunscUnshare: _, ...rest } = selection;
+  return rest;
+};
 
 /** The refusal of a Linux default whose store has `problem` in its way. */
 const linuxNotSetUp = (
@@ -844,7 +859,10 @@ describe("sandbox-runtime-default", () => {
               );
             },
           }),
-        ).toEqual({ ...fromLinuxStore(store), sandboxRunscRootless: true });
+        ).toEqual({
+          ...withoutUnshare(fromLinuxStore(store)),
+          sandboxRunscRootless: true,
+        });
         expect(read).toEqual([
           "user.max_user_namespaces",
           "kernel.unprivileged_userns_clone",
@@ -1077,10 +1095,31 @@ describe("sandbox-runtime-default", () => {
         }
       });
 
+      it("throws for root where no `unshare` gives pasta a mount namespace of its own", async () => {
+        await installLinuxStore(home);
+
+        const refusal = await rejection(
+          select({ HOME: home }, {}, {
+            which: (name) => name === "pasta" ? PASTA : undefined,
+          }),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toContain(
+          "its network is `pasta`'s, which for root runs in a mount namespace " +
+            "of its own that `unshare` (util-linux) makes, and no `unshare` " +
+            "is on `PATH`. Install util-linux, run as a user that is not " +
+            "root, or name a network with",
+        );
+      });
+
       it("returns the native runtime with no `pasta` where a network that needs none is named", async () => {
         const store = await installLinuxStore(home);
-        const { sandboxRunscNetworkHelper: _, ...withoutPasta } =
-          fromLinuxStore(store);
+        const {
+          sandboxRunscNetworkHelper: _,
+          sandboxRunscUnshare: __,
+          ...withoutPasta
+        } = fromLinuxStore(store);
 
         for (const named of ["none", "host"] as const) {
           expect(
@@ -1103,8 +1142,11 @@ describe("sandbox-runtime-default", () => {
             ["host", "host"],
           ] as const
         ) {
-          const { sandboxRunscNetworkHelper: _, ...withoutPasta } =
-            fromLinuxStore(store);
+          const {
+            sandboxRunscNetworkHelper: _,
+            sandboxRunscUnshare: __,
+            ...withoutPasta
+          } = fromLinuxStore(store);
           expect(
             await select({
               HOME: home,
@@ -2700,6 +2742,9 @@ describe("sandbox-runtime-default", () => {
       : {}),
     ...(options?.sandboxRunscNetworkHelper !== undefined
       ? { sandboxRunscNetworkHelper: options.sandboxRunscNetworkHelper }
+      : {}),
+    ...(options?.sandboxRunscUnshare !== undefined
+      ? { sandboxRunscUnshare: options.sandboxRunscUnshare }
       : {}),
     ...(options?.sandboxRunscRootless === true
       ? { sandboxRunscRootless: true as const }
