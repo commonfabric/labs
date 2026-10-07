@@ -4,8 +4,8 @@
  * own that reach the inbox through a profile. Two more stand-ins,
  * `adoptingHome` and `refusingHome`, are Homes whose profiles already point at
  * inboxes when the host first ensures their own, and a third,
- * `readoptingHome`, is one whose profile is pointed elsewhere after it holds
- * an inbox. Fixture for `private-inbox-multi-runtime.test.ts`.
+ * `readoptingHome`, is one whose default profile is pointed elsewhere after it
+ * holds an inbox. Fixture for `private-inbox-multi-runtime.test.ts`.
  */
 
 import {
@@ -170,12 +170,33 @@ const pointProfileAt = handler<
   });
 });
 
+/** A Home's default profile, held under `profile` as Home's slot holds it. */
+export interface DefaultProfileSlot {
+  /** The default profile, absent while none is chosen. */
+  profile?: Cell<ProfileHomeOutput>;
+}
+
+/** Makes one of `profiles` the default, as Home's picker does. */
+const setDefaultProfile = handler<
+  PointElsewhereRequest,
+  {
+    profiles: Writable<ProfileHomeOutput[]>;
+    defaultProfile: Writable<DefaultProfileSlot>;
+  }
+>((event, { profiles, defaultProfile }) => {
+  defaultProfile.set({ profile: profiles.key(event.index).resolveAsCell() });
+});
+
 /** What the host reads of a Home, and sends it, and what a test drives. */
 export interface HomeStandInOutput {
   [NAME]: string;
   privateInbox: PrivateInboxHolder;
   retainedPrivateInboxes: RetainedPrivateInboxes;
   profiles: ProfileHomeOutput[];
+  defaultProfile: DefaultProfileSlot;
+
+  /** Makes one of the Home's profiles its default. */
+  setDefaultProfile: Stream<PointElsewhereRequest>;
 
   /** Gives the Home a private inbox, as Home's own stream does. */
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
@@ -199,11 +220,16 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
     const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
       .for("retainedPrivateInboxes");
     const profiles = new Writable<ProfileHomeOutput[]>([]).for("profiles");
+    const defaultProfile = new Writable<DefaultProfileSlot>({}).for(
+      "defaultProfileSlot",
+    );
     return {
       [NAME]: label,
       privateInbox,
       retainedPrivateInboxes,
       profiles,
+      defaultProfile,
+      setDefaultProfile: setDefaultProfile({ profiles, defaultProfile }),
       ensurePrivateInbox: ensurePrivateInbox({
         privateInbox,
         retainedPrivateInboxes,
@@ -365,6 +391,9 @@ export interface MainOutput {
   /** Sends an offer through `readoptingHome`'s first profile. */
   offerToReadopting: Stream<OfferRequest>;
 
+  /** Makes one of `readoptingHome`'s profiles its default. */
+  setReadoptingDefault: Stream<PointElsewhereRequest>;
+
   /** Sends an offer through the owner's first profile. */
   offer: Stream<OfferRequest>;
 
@@ -453,6 +482,7 @@ export default pattern<MainInput, MainOutput>((
       inbox: readoptLoomInbox,
     }),
     offerToReadopting: offer({ profiles: readoptingHome.profiles }),
+    setReadoptingDefault: readoptingHome.setDefaultProfile,
     offer: offer({ profiles }),
     queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
     copyOffers: copyOffers({ privateInbox, copiedOffers }),

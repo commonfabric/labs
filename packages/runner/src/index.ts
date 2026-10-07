@@ -217,6 +217,11 @@ export {
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
 export {
+  orderProfileCandidates,
+  profileCellIsValid,
+  type ProfileOrder,
+} from "./profile-order.ts";
+export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
 } from "./piece-origin-kind.ts";

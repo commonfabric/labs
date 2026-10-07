@@ -6,9 +6,11 @@
  * profiles already point at inboxes, are given their inboxes by the host: one
  * adopts an inbox shaped as a loom daemon's rather than creating one, and the
  * other is refused another principal's inbox, and holds none. A fourth Home
- * creates its inbox, and once its only profile is pointed at an inbox shaped
- * as a loom daemon's, as when the daemon writes the pointer last, adopts that
- * one and retains the one it held, whose offers stay readable.
+ * creates its inbox and points both its profiles at it; once its default
+ * profile is pointed at an inbox shaped as a loom daemon's, as when the daemon
+ * writes the pointer last, it adopts that one, though its other profile still
+ * points at the first, and retains the one it held, whose offers stay
+ * readable.
  *
  * The inbox's space grants every principal `WRITE` in both server-execution
  * postures: the serving loop makes a sender's write where server execution is
@@ -53,6 +55,7 @@ type HostEnsure = {
   outcome: string;
   reason?: string;
   inbox?: { id: string; space: string };
+  profile?: { id: string; space: string };
 };
 
 /** An offer as the owner reads it. */
@@ -229,17 +232,19 @@ describe("private inbox across runtimes", () => {
     refusal = await ensureThroughHost(["refusingHome"]);
     await harness.settle();
 
-    // `readoptingHome`: one profile. Home creates its inbox and points the
-    // profile at it, and a sender delivers an offer there. The profile is
-    // then pointed at another inbox of the owner's, shaped as a loom
-    // daemon's, as when the daemon writes the pointer last, and Home is
-    // ensured again.
+    // `readoptingHome`: two profiles. Home creates its inbox and points both
+    // at it, and a sender delivers an offer there. The second is made the
+    // default and then pointed at another inbox of the owner's, shaped as a
+    // loom daemon's, as when the daemon writes the pointer last, and Home is
+    // ensured again; the first still points at the inbox Home created.
+    await owner.send("createReadoptingProfile");
     await owner.send("createReadoptingProfile");
     await owner.send("createReadoptLoomInbox");
     await harness.settle();
     readoptCreated = await ensureThroughHost(["readoptingHome"]);
     await harness.settleUntil(async () =>
-      await pointed(["readoptingHome", "profiles", 0])
+      await pointed(["readoptingHome", "profiles", 0]) &&
+      await pointed(["readoptingHome", "profiles", 1])
     );
     readoptOriginal = await owner.link([
       "readoptingHome",
@@ -254,10 +259,13 @@ describe("private inbox across runtimes", () => {
       readoptOriginal,
     );
     const readoptLoom = await owner.link(["readoptLoomInbox", "piece"]);
-    await owner.send("pointReadoptingProfileAtLoom", { index: 0 });
+    await owner.send("setReadoptingDefault", { index: 1 });
+    await owner.send("pointReadoptingProfileAtLoom", { index: 1 });
     await harness.settleUntil(async () =>
-      (await owner.link(["readoptingHome", "profiles", 0, "inbox", "piece"]))
-        .id === readoptLoom.id
+      (await owner.link(["readoptingHome", "profiles", 1, "inbox", "piece"]))
+          .id === readoptLoom.id &&
+      (await owner.read(["readoptingHome", "defaultProfile", "profile"])) !==
+        undefined
     );
     readoption = await ensureThroughHost(["readoptingHome"]);
     await harness.settleUntil(async () =>
@@ -358,13 +366,19 @@ describe("private inbox across runtimes", () => {
     expect(await pointed(["refusingHome", "profiles", 0])).toBe(false);
   });
 
-  it("adopts the inbox its profile is pointed at once no profile advertises the inbox it holds, and retains that one", async () => {
+  it("adopts the inbox its default profile is pointed at, though another profile still points at the one it holds, and retains that one", async () => {
     const loom = await owner.link(["readoptLoomInbox", "piece"]);
+    const deciding = await owner.link(["readoptingHome", "profiles", 1]);
 
     expect(readoptCreated.outcome).toBe("none-advertised");
     expect(readoptOriginal.id).not.toBe(loom.id);
     expect(readoption.outcome).toBe("adopt");
     expect(readoption.inbox).toEqual({ id: loom.id, space: loom.space });
+    expect(readoption.profile?.space).toBe(deciding.space);
+    expect(
+      (await owner.link(["readoptingHome", "profiles", 0, "inbox", "piece"]))
+        .id,
+    ).toBe(readoptOriginal.id);
     const held = await owner.link(["readoptingHome", "privateInbox", "piece"]);
     expect(held.id).toBe(loom.id);
     expect(held.space).toBe(loom.space);
@@ -407,7 +421,7 @@ describe("private inbox across runtimes", () => {
 
     const again = await ensureThroughHost(["readoptingHome"]);
     await harness.settleUntil(async () =>
-      await pointed(["readoptingHome", "profiles", 1])
+      await pointed(["readoptingHome", "profiles", 2])
     );
 
     expect(again.outcome).toBe("held");
@@ -415,7 +429,7 @@ describe("private inbox across runtimes", () => {
       (await owner.link(["readoptingHome", "privateInbox", "piece"])).id,
     ).toBe(loom.id);
     expect(
-      (await owner.link(["readoptingHome", "profiles", 1, "inbox", "piece"]))
+      (await owner.link(["readoptingHome", "profiles", 2, "inbox", "piece"]))
         .id,
     ).toBe(loom.id);
     expect(

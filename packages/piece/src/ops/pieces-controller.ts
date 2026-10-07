@@ -2235,9 +2235,10 @@ export class PiecesController<T = unknown> {
    * Gives the identity's Home the private inbox its profiles advertise, and has
    * it point each of the identity's profiles that points at no inbox at it, by
    * sending Home's `ensurePrivateInbox` as `ensurePrivateInboxOf()` does: Home
-   * keeps an inbox it holds while a profile advertises it or none advertises
-   * any, and otherwise adopts the inbox a profile advertises when it passes
-   * vetting, retaining the one it held. It creates one when it holds none and
+   * keeps an inbox it holds while the deciding profile, the first in `#profile`
+   * order that points at an inbox, advertises it or no profile advertises any,
+   * and otherwise adopts the deciding profile's inbox when it passes vetting,
+   * retaining the one it held. It creates one when it holds none and
    * no profile advertises one, and otherwise keeps what it holds or holds
    * none, with the refusal logged. Sending it again creates, re-points and
    * retains nothing. A Home pattern without that stream is left as it is. This
@@ -2245,9 +2246,10 @@ export class PiecesController<T = unknown> {
    *
    * Resolves once the event is sent, which is before Home's handler runs, so
    * it rejects only when Home cannot be brought up, when reading Home's or its
-   * profiles' pointers or loading the inbox documents they name fails, or when
-   * vetting or the send itself throws; a failure inside the handler is not
-   * reported here.
+   * profiles' pointers or loading the inbox documents they name fails, when a
+   * profile ordered ahead of the deciding one cannot be read, or when vetting
+   * or the send itself throws; a failure inside the handler is not reported
+   * here.
    */
   async ensurePrivateInbox(): Promise<void> {
     this.#assertHomeSpace("ensure a private inbox");

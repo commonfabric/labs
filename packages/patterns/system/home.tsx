@@ -117,11 +117,12 @@ export type HomeOutput = {
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
   // The user's private inbox, where others deliver offers to them: the one the
-  // first of their profiles that points at an inbox points at, if the host
-  // vetted it, or, when no profile advertises an inbox, one it created. Home
-  // keeps the inbox it holds while a profile points at it, and while no
-  // profile points at an inbox. Each of their profiles that points at no inbox
-  // is pointed here; one that points at another inbox keeps it. Absent until
+  // deciding profile points at, if the host vetted it, or, when no profile
+  // advertises an inbox, one it created. The deciding profile is the first, in
+  // the order `#profile` answers in, that points at an inbox. Home keeps the
+  // inbox it holds while that profile points at it, and while no profile
+  // points at an inbox. Each of their profiles that points at no inbox is
+  // pointed here; one that points at another inbox keeps it. Absent until
   // `ensurePrivateInbox` runs, and while Home holds none and the advertised
   // inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
@@ -138,10 +139,11 @@ export type HomeOutput = {
     SharedSpaceMembershipResult
   >;
   createProfile: Stream<CreateProfileEvent>;
-  // Gives Home the private inbox its profiles advertise: it adopts the one the
-  // host vetted from a profile's pointer when Home holds none or holds one no
-  // profile points at, or creates one when it holds none and no profile points
-  // at an inbox, and points every profile that points at no inbox at Home's.
+  // Gives Home the private inbox the deciding profile advertises: it adopts the
+  // one the host vetted and names, with that profile, when the profile is in
+  // Home's list and still points at it, or creates one when Home holds none
+  // and no profile points at an inbox, and points every profile that points at
+  // no inbox at Home's.
   // The host sends it once per runtime worker, the first time the worker
   // brings up Home, so Home adopts again only at a worker's first bring-up.
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;

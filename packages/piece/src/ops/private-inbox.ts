@@ -14,6 +14,8 @@ import {
   type Cell,
   isCell,
   isStream,
+  orderProfileCandidates,
+  profileCellIsValid,
   type Runtime,
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -32,17 +34,23 @@ export type InboxAdoptionRefusal =
 
 /**
  * What {@link ensurePrivateInboxOf} found, and so what it sent: `held` when
- * Home keeps the inbox it holds, a profile advertising it or none advertising
- * any; `none-advertised` when Home holds none and no profile advertises one;
- * `adopt` when the advertised inbox passed vetting; `refused` when it failed,
- * for `reason`.
+ * Home keeps the inbox it holds, the deciding profile advertising it or no
+ * profile advertising any; `none-advertised` when Home holds none and no
+ * profile advertises one; `adopt` when the deciding profile's inbox passed
+ * vetting; `refused` when it failed, for `reason`. `profile` is the deciding
+ * profile.
  */
 export type PrivateInboxEnsure =
   | { outcome: "unavailable" }
   | { outcome: "held" }
   | { outcome: "none-advertised" }
-  | { outcome: "adopt"; inbox: Cell<unknown> }
-  | { outcome: "refused"; reason: InboxAdoptionRefusal; inbox: Cell<unknown> };
+  | { outcome: "adopt"; inbox: Cell<unknown>; profile: Cell<unknown> }
+  | {
+    outcome: "refused";
+    reason: InboxAdoptionRefusal;
+    inbox: Cell<unknown>;
+    profile: Cell<unknown>;
+  };
 
 const profilesSchema = {
   type: "array",
@@ -68,19 +76,23 @@ const pointerSchema = {
 } as const satisfies JSONSchema;
 
 /**
- * Sends `home`'s `ensurePrivateInbox`, after vetting the inbox the first of
- * `home`'s profiles that points at one points at. `home` is a Home result:
- * its `privateInbox`, `profiles` and `ensurePrivateInbox` are read and sent as
- * Home's are, and `identity` is the identity it belongs to.
+ * Sends `home`'s `ensurePrivateInbox`, after vetting the inbox the deciding
+ * profile points at. `home` is a Home result: its `privateInbox`, `profiles`,
+ * `defaultProfile`, `legacyDefaultProfile`, `mru` and `ensurePrivateInbox` are
+ * read and sent as Home's are, and `identity` is the identity it belongs to.
+ * The deciding profile is the first, in the order `#profile` answers in
+ * (`orderProfileCandidates()`), that points at an inbox.
  *
- * The event names the inbox to adopt when the advertised inbox passes every
- * check and Home holds none, or holds one that no profile advertises; it names
- * none otherwise. Given none, Home creates an inbox only when it holds none and
- * no profile advertises one, so an advertised inbox that fails a check is
+ * The event names the deciding profile's inbox to adopt, and that profile,
+ * when the inbox passes every check and Home holds none, or holds another; it
+ * names none otherwise. Given none, Home creates an inbox only when it holds
+ * none and no profile advertises one, so an inbox that fails a check is
  * neither adopted nor replaced; that refusal is logged as a warning. A Home
  * without the stream is left as it is.
  *
  * Resolves once the event is sent, which is before Home's handler runs.
+ * Rejects, sending nothing, when a profile ordered ahead of the deciding one
+ * cannot be loaded, since which profile decides is then unknown.
  */
 export async function ensurePrivateInboxOf(
   runtime: Runtime,
@@ -96,17 +108,20 @@ export async function ensurePrivateInboxOf(
       found.inbox.getAsNormalizedFullLink(),
     ]);
   }
-  await ensure.send(found.outcome === "adopt" ? { adopt: found.inbox } : {});
+  await ensure.send(
+    found.outcome === "adopt"
+      ? { adopt: found.inbox, from: found.profile }
+      : {},
+  );
   return found;
 }
 
 /**
  * Decides which inbox, if any, `home` adopts. Home keeps an inbox it holds
- * while some profile in its list advertises that inbox, or while no profile
- * advertises one. Otherwise the inbox to vet is the one the first profile in
- * the list that points at an inbox points at, adopted if it passes every
- * check. A profile whose stored pointer is not an object holding a link
- * advertises nothing.
+ * while the deciding profile advertises it, or while no profile advertises
+ * one. Otherwise the inbox to vet is the deciding profile's, adopted if it
+ * passes every check. A profile whose stored pointer is not an object holding
+ * a link advertises nothing.
  */
 async function vetAdvertisedInbox(
   runtime: Runtime,
@@ -114,32 +129,79 @@ async function vetAdvertisedInbox(
   identity: DID,
 ): Promise<Exclude<PrivateInboxEnsure, { outcome: "unavailable" }>> {
   const held = await storedPointer(home.key("privateInbox"));
-  const profiles = await home.key("profiles").asSchema(profilesSchema).pull();
-  let first: { piece: Cell<unknown>; profile: Cell<unknown> } | undefined;
-  for (const profile of Array.isArray(profiles) ? profiles : []) {
-    if (!isCell(profile)) continue;
-    const piece = await storedPointer(profile.key("inbox"));
-    if (piece === undefined) continue;
-    if (held !== undefined && await isSameDocument(piece, held)) {
-      return { outcome: "held" };
-    }
-    first ??= { piece, profile };
-    // Only a held inbox needs every profile read, to learn whether any of
-    // them advertises it.
-    if (held === undefined) break;
-  }
-  if (first === undefined) {
+  const deciding = await decidingProfile(runtime, home);
+  if (deciding === undefined) {
     return { outcome: held === undefined ? "none-advertised" : "held" };
   }
-  const inbox = first.piece.resolveAsCell();
+  const { profile, piece } = deciding;
+  if (held !== undefined && await isSameDocument(piece, held)) {
+    return { outcome: "held" };
+  }
+  const inbox = piece.resolveAsCell();
   const reason = await refusalOf(runtime, inbox, {
     home: home.space,
-    profile: first.profile.resolveAsCell().space,
+    profile: profile.space,
     identity,
   });
   return reason === undefined
-    ? { outcome: "adopt", inbox }
-    : { outcome: "refused", reason, inbox };
+    ? { outcome: "adopt", inbox, profile }
+    : { outcome: "refused", reason, inbox, profile };
+}
+
+/**
+ * The first of `home`'s profiles, in the order `#profile` answers in, that
+ * points at an inbox, with the link it holds; `undefined` when none does.
+ * Loads what `orderProfileCandidates()` reads first. A profile whose document
+ * is absent is left out, as `#profile` leaves it out.
+ *
+ * @throws When a profile ordered ahead of the one found cannot be read, since
+ *   whether it advertises an inbox is then unknown.
+ */
+async function decidingProfile(
+  runtime: Runtime,
+  home: Cell<unknown>,
+): Promise<{ profile: Cell<unknown>; piece: Cell<unknown> } | undefined> {
+  const list = await home.key("profiles").asSchema(profilesSchema).pull();
+  const length = Array.isArray(list) ? list.length : 0;
+  const profilesCell = home.key("profiles").resolveAsCell();
+  const candidates: Cell<unknown>[] = [];
+  const unreadable = new Set<Cell<unknown>>();
+  await Promise.all(
+    Array.from({ length }, async (_, index) => {
+      const entry = profilesCell.key(index);
+      const profile = entry.resolveAsCell();
+      if (
+        !profileCellIsValid(profile, entry.getRaw() !== undefined, home.space)
+      ) {
+        return;
+      }
+      await profile.sync();
+      if (accessRefused(runtime, profile.space)) unreadable.add(profile);
+      else if (profile.getRaw() === undefined) return;
+      candidates[index] = profile;
+    }),
+  );
+  await Promise.all(
+    ["defaultProfile", "legacyDefaultProfile", "mru"].map((key) =>
+      home.key(key).resolveAsCell().sync()
+    ),
+  );
+  const { ordered } = orderProfileCandidates(
+    runtime,
+    home,
+    home.space,
+    candidates.filter((each) => each !== undefined),
+  );
+  for (const profile of ordered) {
+    if (unreadable.has(profile)) {
+      throw new Error(
+        `Cannot read the profile that decides Home's private inbox: ${profile.space}`,
+      );
+    }
+    const piece = await storedPointer(profile.key("inbox"));
+    if (piece !== undefined) return { profile, piece };
+  }
+  return undefined;
 }
 
 /**

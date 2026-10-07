@@ -349,18 +349,17 @@ export function advertisedInbox(
 }
 
 /**
- * Whether some profile in `profiles` points at `inbox`, comparing links as
- * `equals()` does, which reads only link shape in the inbox's space. Call it as
+ * The link the profile in `profiles` that `profile` names holds, or `undefined`
+ * when no profile in the list is that one or it points at no inbox. Call it as
  * {@link advertisedInbox} is called.
  */
-function isAdvertised(
+function pointerOfListed(
   profiles: readonly (PointTarget | undefined)[] | undefined,
-  inbox: Cell<PrivateInboxPiece>,
-): boolean {
-  return (profiles ?? []).some((profile) => {
-    const piece = profile?.inbox?.piece;
-    return piece !== undefined && equals(piece, inbox);
-  });
+  profile: Cell<PointTarget>,
+): Cell<PrivateInboxPiece> | undefined {
+  return (profiles ?? []).find((each) =>
+    each !== undefined && equals(each, profile)
+  )?.inbox?.piece;
 }
 
 /**
@@ -382,25 +381,31 @@ function retainInbox(
 /** What the host sends Home's `ensurePrivateInbox`. */
 export type EnsurePrivateInboxEvent = {
   /**
-   * An inbox a profile advertises, which the host has vetted for Home to
-   * adopt; absent when the host vetted none.
+   * The inbox the deciding profile advertises, which the host has vetted for
+   * Home to adopt; absent when the host vetted none.
    */
   adopt?: Cell<PrivateInboxPiece>;
+
+  /**
+   * The deciding profile: the first, in the order `#profile` answers in, that
+   * points at an inbox. Absent from a host that names none, which Home takes
+   * as the first profile in its list that points at an inbox.
+   */
+  from?: Cell<PointTarget>;
 };
 
 /**
- * Gives Home the private inbox its profiles advertise, or one of its own when
- * they advertise none, then has each profile in Home's list that points at no
- * inbox point at Home's. Home keeps an inbox it holds while some profile in
- * the list points at it, or while no profile points at an inbox. Otherwise
- * Home adopts the inbox the event names, when it is the one the first profile
- * in the list that points at an inbox points at; an inbox Home held until then
- * goes into `retainedPrivateInboxes`. Home creates an inbox only when it holds
- * none and no profile points at an inbox. So when profiles advertise an inbox
- * but the event names none, or names another, Home keeps what it holds, or
- * holds none: the host names an inbox only once it has vetted it, and leaves
- * one that fails vetting where it is (`PiecesController.ensurePrivateInbox()`
- * in `packages/piece`). A profile pointing at another inbox keeps its pointer.
+ * Gives Home the private inbox the host names, or one of its own when no
+ * profile advertises one, then has each profile in Home's list that points at
+ * no inbox point at Home's. Which inbox Home should hold is the host's
+ * decision (`ensurePrivateInboxOf()` in `packages/piece`), which this handler
+ * checks rather than repeats. Home adopts the inbox the event names only when
+ * the profile the event names is in Home's list and still points at that
+ * inbox; an inbox Home held until then goes into `retainedPrivateInboxes`.
+ * An event naming no inbox leaves Home with what it holds, and Home creates an
+ * inbox only when it holds none and no profile points at an inbox. So when the
+ * host vetted none, or names a profile that has since moved, Home keeps what it
+ * holds, or holds none. A profile pointing at another inbox keeps its pointer.
  * Running it again creates, re-points and retains nothing.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
@@ -430,24 +435,29 @@ export const ensurePrivateInbox = handler<
 ) => {
   const held = privateInbox.get()?.piece;
   const advertised = advertisedInbox(profiles);
-  if (advertised === undefined) {
-    if (held === undefined) {
-      privateInbox.set({
-        piece: inboxLinkOf(
-          PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
-            grants: { "*": "WRITE" },
-          })({ offers: [] }),
-        ),
-      });
+  const adopt = event?.adopt;
+  if (adopt !== undefined) {
+    // Comparisons of links, which read only link shape in the inbox's space.
+    const pointer = event?.from !== undefined
+      ? pointerOfListed(profiles, event.from)
+      : held === undefined
+      ? advertised
+      : undefined;
+    if (
+      pointer !== undefined && equals(adopt, pointer) &&
+      (held === undefined || !equals(held, adopt))
+    ) {
+      if (held !== undefined) retainInbox(retainedPrivateInboxes, held, adopt);
+      privateInbox.set({ piece: adopt });
     }
-  } else if (held === undefined || !isAdvertised(profiles, held)) {
-    // A comparison of links, which reads only link shape in the inbox's space.
-    if (event?.adopt !== undefined && equals(event.adopt, advertised)) {
-      if (held !== undefined) {
-        retainInbox(retainedPrivateInboxes, held, event.adopt);
-      }
-      privateInbox.set({ piece: event.adopt });
-    }
+  } else if (held === undefined && advertised === undefined) {
+    privateInbox.set({
+      piece: inboxLinkOf(
+        PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
+          grants: { "*": "WRITE" },
+        })({ offers: [] }),
+      ),
+    });
   }
   pointProfiles.send();
 });

@@ -994,7 +994,7 @@ const handlers: Record<
    * Has the host give the Home stand-in reached from the piece result by
    * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
    * the identity's Home its own, and answers what the host found, naming an
-   * adopted or refused inbox by its link.
+   * adopted or refused inbox, and the profile that decided it, by its link.
    */
   async ensurePrivateInbox({ path, piece }) {
     const target = await resultAt(piece);
@@ -1014,12 +1014,18 @@ const handlers: Record<
     const inbox = "inbox" in found
       ? found.inbox.getAsNormalizedFullLink()
       : undefined;
+    const profile = "profile" in found
+      ? found.profile.getAsNormalizedFullLink()
+      : undefined;
     return {
       outcome: found.outcome,
       ...("reason" in found ? { reason: found.reason } : {}),
       ...(inbox === undefined
         ? {}
         : { inbox: { id: inbox.id, space: inbox.space } }),
+      ...(profile === undefined
+        ? {}
+        : { profile: { id: profile.id, space: profile.space } }),
     };
   },
 
