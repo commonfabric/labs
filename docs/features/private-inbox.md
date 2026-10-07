@@ -252,11 +252,11 @@ refused inbox, whether its pointers moved to another inbox or to none, the next
 ensure clears the record, or records in its place a refusal it names. Like
 every other ensure, that runs only at a runtime worker's bring-up of Home.
 
-The record is part of Home's result, and so is read wherever Home is: by Home's
-own UI, by `cf` and by an agent, through Home's root, which the `#default` wish
-answers with in the Home space, at `privateInboxRefusal`, for instance
-`cf wish '#default' -s "$(cf id did ./my.key)" --select privateInboxRefusal`.
-Nothing shows it in Home's UI yet. Being a field of Home, it lives in the
+The record is a field of Home's result, `privateInboxRefusal`, so Home's own
+UI, `cf` and an agent each read it as they read any other field of Home, at
+Home's root, the link the `#default` wish answers with in the Home space
+(`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern"). Nothing shows
+it in Home's UI yet. Being a field of Home, it lives in the
 owner's Home space.
 
 A notice alone can only say that shares may not reach the owner. The record is
