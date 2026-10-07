@@ -131,12 +131,13 @@ export type HomeOutput = {
   // that what senders delivered to them stays readable.
   retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
   // The host's refusal of the inbox the deciding profile points at, under
-  // `refusal`: why, by the host's code, the inbox refused, and when Home
-  // recorded it. `ensurePrivateInbox` records one only while that profile is
-  // in Home's list and still points at the refused inbox, and clears it when
-  // Home adopts or creates an inbox, when the deciding profile points at the
-  // inbox Home holds, and when no profile points at the refused inbox any
-  // longer. No `refusal` while there is none to report.
+  // `refusal`: why the host refused it, by the host's code; the refused inbox;
+  // and when Home recorded it. `ensurePrivateInbox` records one only while that
+  // profile is in Home's list and still points at the refused inbox, which is
+  // not the one Home holds. The next ensure clears it when Home adopts or
+  // creates an inbox, when the deciding profile points at the inbox Home
+  // holds, or when no profile points at the refused inbox any longer; nothing
+  // clears it between ensures. No `refusal` while there is none to report.
   privateInboxRefusal: Writable<
     PrivateInboxRefusalHolder | Default<Record<PropertyKey, never>>
   >;

@@ -1,13 +1,12 @@
 /**
  * Stands in for Home around the system private inbox: it holds the inbox and
- * the owner's profiles, and gives a sender and a stranger handlers of their
- * own that reach the inbox through a profile. Four more stand-ins,
- * `adoptingHome`, `refusingHome`, `curedHome` and `creatingHome`, are Homes
- * whose profiles already point at inboxes when the host first ensures their
- * own, and a fifth, `readoptingHome`, is one whose default profile is pointed
- * elsewhere after it holds an inbox. `olderHome` stands in for a Home of the vintage
- * whose ensure takes no refusal. Fixture for
- * `private-inbox-multi-runtime.test.ts`.
+ * the owner's profiles, and gives a sender and a stranger handlers of their own
+ * that reach the inbox through a profile. Four more stand-ins, `adoptingHome`,
+ * `refusingHome`, `curedHome` and `creatingHome`, are Homes whose profiles
+ * already point at inboxes when the host first ensures their own, and a fifth,
+ * `readoptingHome`, is one whose default profile is pointed elsewhere after it
+ * holds an inbox. `olderHome` stands in for a Home of the vintage whose ensure
+ * takes no refusal. Fixture for `private-inbox-multi-runtime.test.ts`.
  */
 
 import {

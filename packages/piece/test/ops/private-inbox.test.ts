@@ -26,8 +26,8 @@ const someoneElse = (await Identity.fromPassphrase("someone else")).did();
 
 // A Home pattern reduced to the fields the host reads and the stream it sends,
 // whose handler records what it is sent: the inbox to adopt, the deciding
-// profile, and the refusal, its reason and inbox. `defaultProfile` is a slot holding the
-// default under `profile`, as Home's is.
+// profile, and the refusal, its reason and inbox. `defaultProfile` is a slot
+// holding the default under `profile`, as Home's is.
 const program: RuntimeProgram = {
   main: "/home.tsx",
   files: [{

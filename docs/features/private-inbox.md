@@ -180,11 +180,10 @@ the list as a value too, for the same reason. A profile of any vintage with a
 the runtime logs a warning that no handler took it.
 
 The host, the handler, the pointing step and the seed step read each profile's
-pointer, and the handler reads the inbox the event names to adopt or as
-refused, the inbox Home holds, the ones it retains and the one its refusal
-record names, as a typed link, `Cell<ShareInboxPiece>`; the host
-reads it through `inboxPieceLinkSchema` in
-`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
+pointer, and the handler reads the inbox the event names to adopt, the inbox
+Home holds, the ones it retains and the one its refusal record names, as a typed
+link, `Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema`
+in `packages/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
 that names the inbox's own result document, as `setInbox` and an adoption write
 it, carries the label of what it reaches, and the inbox labels its offers
 confidential to its owner; a profile's pointer, and Home's holder once Home has
@@ -194,11 +193,21 @@ Writer-fit then refuses the run's own sends, whichever path delivered it. When
 the event drain, rather than the wave that queued it, delivered the run, it also
 refuses the run's record that it handled the event, and the event is lost. Read
 as the typed link, the pointer joins no confidentiality.
+
+The handler reads the inbox an event names as refused through the same typed
+link, for a narrower reason. That link travels in the event, which carries no
+label of its own, so read untyped it joins nothing; with server execution on
+and the event drain delivering the run, a handler reading it as
+`Cell<unknown>` keeps its event. What the type bars is naming a labeled member
+of the inbox's result through it, such as `offers`: read that way, the run
+joins the inbox's label and the event is lost.
+
 `private-inbox.pointer-type.test.ts` fails to compile if any reader's pointer
 type, the host's, the ensure's and the pointing step's, the seed step's, the
 profile's own, the event's refused inbox or Home's holder, retained list and
 refusal record, becomes unconstrained, or names a member of the inbox's result
-other than its name.
+other than its name. For the event's refused inbox, the second of those is the
+one the measurement above bears out.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them
@@ -232,18 +241,23 @@ absent or present, and a Home's source is changed in place, which keeps both
 
 Home's `privateInboxRefusal` holds, under `refusal`, the host's refusal of the
 inbox the deciding profile points at: `reason`, the host's code for why the
-inbox failed vetting, one of `InboxAdoptionRefusal` in
-`packages/piece/src/ops/private-inbox.ts`, such as
+inbox failed vetting, as the event named it, trimmed and cut to
+`REFUSAL_REASON_MAX_LENGTH` (64), which today is one of `InboxAdoptionRefusal`'s
+codes in `packages/piece/src/ops/private-inbox.ts`, such as
 `inbox-adoption-acl-mismatch`; `inbox`, a link to the inbox refused; and
 `refusedAt`, when Home recorded it, by the handler's clock, which reads to the
-second. With no `refusal`, there is no refusal to report. It is there so that
-the owner, and what acts for them, can learn that shares may not reach them:
-senders deliver to the inbox the profile advertises, which Home does not read.
+second. Home stores the code as given rather than checking it against the
+host's list, so a newer host's code needs no change to Home. With no
+`refusal`, there is no refusal to report. It is there so that the owner, and
+what acts for them, can learn that shares may not reach them: senders deliver
+to the inbox the profile advertises, which Home does not read.
 
 Home's handler records the refusal an event names, in place of one recorded
 before, under the check it makes of an adoption: the profile the event names is
-in Home's list and still points at the refused inbox. So an event that a moved
-pointer has left behind, or one naming no profile, records nothing. The record
+in Home's list and still points at the refused inbox, and that inbox is not the
+one Home holds. So an event that a moved pointer has left behind, one naming no
+profile, and one refusing the inbox Home holds, as a refusal that lost a race to
+an adoption of the same inbox does, record nothing. The record
 is cleared when Home adopts or creates an inbox, when the profile an event names
 is in Home's list and points at the inbox Home holds, and, on any event that
 records no refusal, when no profile in Home's list points at the refused inbox
@@ -252,12 +266,15 @@ refused inbox, whether its pointers moved to another inbox or to none, the next
 ensure clears the record, or records in its place a refusal it names. Like
 every other ensure, that runs only at a runtime worker's bring-up of Home.
 
-The record is a field of Home's result, `privateInboxRefusal`, so Home's own
-UI, `cf` and an agent each read it as they read any other field of Home, at
-Home's root, the link the `#default` wish answers with in the Home space
-(`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern"). Nothing shows
-it in Home's UI yet. Being a field of Home, it lives in the
-owner's Home space.
+The record is a field of Home's result, `privateInboxRefusal`, so `cf` and an
+agent each read it as they read any other field of Home, at Home's root, the
+link the `#default` wish answers with in the Home space
+(`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern"). Nothing in
+Home's UI shows it yet. Being a field of Home, it lives in the owner's Home
+space. Home's `ensurePrivateInbox` is a stream on its result, and its handler
+does not ask who sent an event, so the owner's own code can record a refusal of
+any listed profile's inbox, with any code, or clear the record, as it can move
+Home between two inboxes its profiles advertise.
 
 A notice alone can only say that shares may not reach the owner. The record is
 shaped so that a remedy can sit beside it in Home's result as an owner-only

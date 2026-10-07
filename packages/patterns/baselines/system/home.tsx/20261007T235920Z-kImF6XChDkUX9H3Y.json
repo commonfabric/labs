@@ -1311,7 +1311,7 @@
             "description": "The inbox refused, which the deciding profile points at."
           },
           "reason": {
-            "description": "Why the host refused the inbox, by its code, such as\n`inbox-adoption-acl-mismatch`; `InboxAdoptionRefusal` in\n`packages/piece/src/ops/private-inbox.ts` lists the codes.",
+            "description": "The host's code for why it refused the inbox, as the event named it,\ntrimmed and cut to `REFUSAL_REASON_MAX_LENGTH`. Today the host sends one\nof `InboxAdoptionRefusal`'s codes, from\n`packages/piece/src/ops/private-inbox.ts`, such as\n`inbox-adoption-acl-mismatch`.",
             "type": "string"
           },
           "refusedAt": {
