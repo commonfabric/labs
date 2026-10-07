@@ -247,9 +247,15 @@ It holds the user's index of chat rooms: `rooms`, every room they belong to and
 haven't forgotten; `direct`, the direct room shared with each counterpart, by
 principal; `requests`, the outcome of each request but a report that a notice
 was delivered, which records none; and `outgoingNotices`, the notices its
-requests produced for a client to deliver. It creates each room in
-a space of its own. Everything it holds is private to the user, as the home
-space is.
+requests produced for a client to deliver. It creates each room in a space of
+its own, as that space's root. Everything it holds is private to the user, as
+the home space is.
+
+Home hands the manager its shared-space catalog
+([Shared-space catalog](../../features/shared-space-catalog.md)), and `rooms`
+is a view over it: the saved entries of kind `fabrichat-room`. The manager
+registers each room it creates or accepts there, forgetting a room archives its
+entry, and a room offered to the user is registered there by the share intake.
 
 Home's **Chats** tab renders it: the user's rooms, each a link that opens the
 room as a page of its own, and the controls that start a direct or a group

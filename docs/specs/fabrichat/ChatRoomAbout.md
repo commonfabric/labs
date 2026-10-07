@@ -45,8 +45,8 @@ interface ChatRoomAbout {
   behaves where its implementation decides. An implementation MUST state it
   correctly.
 
-A chat created with an existing shared space, rather than by a manager (see
-[shared spaces](README.md#shared-spaces)), is a group room with no title, and a
+A chat created with an existing social space, rather than by a manager (see
+[social spaces](README.md#social-spaces)), is a group room with no title, and a
 client shows it by the space's own name.
 
 ## Who created the room

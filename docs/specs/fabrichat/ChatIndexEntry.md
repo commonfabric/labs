@@ -14,7 +14,7 @@ interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user created or accepted it. */
+  /** When this user's index admitted it. */
   since: FabricEpochNsec;
 }
 ```
@@ -40,8 +40,10 @@ interface ChatIndexEntry {
   member, which is the key `direct` is indexed by. It is a principal and not a
   profile, because a person can have several profiles, and one conversation with
   a person must not split along them.
-- **`since`** comes from the manager's handler clock, at whatever resolution the
-  system provides (see the [timing side-channel
+- **`since`** is when the room entered this user's index: when they created or
+  accepted it, or when the room offered to them was admitted. It comes from the
+  clock of the handler that admitted it, at whatever resolution the system
+  provides (see the [timing side-channel
   mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
 
 An entry is private to its user, like everything in the home space.

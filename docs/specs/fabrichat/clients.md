@@ -24,10 +24,10 @@ a room to anyone its space doesn't admit.
   way. It is what keeps one person's conversation from splitting.
 - **The conversations a container shows** are the adapters the container holds,
   each linking to a placement of one room, plus the container's own chat when it
-  is a shared space that has one.
-- **The people a client offers** when starting a conversation from a shared
+  is a social space that has one.
+- **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
-  (see [shared spaces](README.md#shared-spaces)).
+  (see [social spaces](README.md#social-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about.record` is labeled
@@ -65,8 +65,9 @@ A client that draws natively MUST:
 - **Identify people by their profile links**, compared with `equals()`, and
   never by display name.
 - **Show members from the room's space.** A room's `participants` are its
-  space's participants, as claims, plus its authors. None of them is proof that
-  someone can read the room.
+  space's participants, as claims, plus its authors: for a room that is its
+  space's root, those who joined the room. None of them is proof that someone
+  can read the room.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.

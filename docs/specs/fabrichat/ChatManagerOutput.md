@@ -241,7 +241,7 @@ Records a room this user has been admitted to.
   member.
 
 A client also sends `accept` when the user first opens the chat of an existing
-shared space, which is created with its space and not by a manager.
+social space, which is created with its space and not by a manager.
 
 ### `forget(requestId: string, room: Cell<ChatRoomOutput>)`
 
@@ -328,11 +328,13 @@ envelope a loom share inbox takes:
   principal sending it.
 - `sharedAt` — when the offer was sent, in milliseconds since the epoch.
 
-Nothing reads these offers yet. A recipient learns of the room from its notice
-until Home has a share intake, which stages what is offered into its catalog of
-shared spaces. Nothing tells the sender that an offer arrived either, and a
-member known only by their DID has no profile to reach an inbox through, so a
-notice is produced for every other member whether or not an offer was sent.
+The recipient's host reads each offer in the inboxes their Home holds, vets it,
+and registers the room's space in their Home's shared-space catalog
+([`private-inbox.md`](../../features/private-inbox.md#the-share-intake)),
+where their manager lists it. Nothing tells the sender that an offer arrived,
+and a member known only by their DID has no profile to reach an inbox through,
+so a notice is produced for every other member whether or not an offer was
+sent.
 
 ## Crossing creations
 

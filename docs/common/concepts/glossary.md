@@ -84,8 +84,10 @@ keeps no membership of its own: who is in the conversation is who is in the
 space ([FabriChat](../../specs/fabrichat/README.md)). A room can be the chat of
 any social space, such as a container that shows chats among other things. A
 standalone room, one that is not the chat of some other social space, has a
-space of its own: the chat manager creates each room it starts in a new space,
-whose access list admits the members named at its creation. That space is a
+space of its own, whose default pattern it is: the chat manager creates each
+room it starts in a new space, as that space's root, whose access list admits
+the members named at its creation, and the room lists the space's participants
+itself. That space is a
 social space in its own right once it has more than one member, as a direct
 room's space has from its creation; a group room can start with its creator
 alone.

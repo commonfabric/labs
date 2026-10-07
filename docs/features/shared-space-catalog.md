@@ -67,6 +67,14 @@ commit as its own writes, and gets back the outcome the handler would return. A
 new entry's revision names the calling handler's event, so only a handler can
 call it.
 
+Likewise, the whole of what `changeSharedSpaceMembership` does is
+`changeSharedSpaceMembershipIn()`, exported beside it, which applies a
+membership choice in the calling handler's transaction and returns the outcome
+the handler would. FabriChat's manager calls both from its own handlers:
+creating or accepting a room registers the room's space, and forgetting a room
+archives its entry, or finding a forgotten one again restores it, naming the
+revision the handler reads as the one observed.
+
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may
 supply a historical value. It is a handler-clock display hint, not a revision,

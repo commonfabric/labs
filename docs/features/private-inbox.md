@@ -365,9 +365,9 @@ the intake loads and runs none of the root's code to read it. A consumer of the
 catalog reads the live root when it opens the space.
 
 The intake admits a `fabrichat-room` offer only when the room is its space's
-root. FabriChat's specification and its manager do not make a room its space's
-root yet, so until they do, every room they offer is refused as
-`space-root-missing`, and stays in the inbox.
+root, as a FabriChat manager makes each room it creates. A room in a space
+whose root is something else is refused as `space-root-missing`, and stays in
+the inbox.
 
 The intake sends Home's `registerSharedSpace` the offer's `space`, its `host` as
 normalized, its `kind`, its `title` unless it is empty, and `{ from, id }`. It

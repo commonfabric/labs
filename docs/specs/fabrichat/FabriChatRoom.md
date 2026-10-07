@@ -21,12 +21,17 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 - The times the room has used, so it can make each new one unique, each kept
   as long as a request is remembered: no new time is chosen from before the
   proposed-time window, which that span covers.
+- Those who joined the room: profile links, in the order they were added, a
+  roster only `addParticipant` writes
+  (`packages/patterns/loom/participants.tsx`, the roster a loom's root keeps).
 
-`participants` is computed from the participants the space's default pattern
-lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
-profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
-computed from the messages, and `canSend` from the reader's access and profile,
-when they're read. Neither is stored.
+`participants` is computed from those who joined, the participants the space's
+root lists when the room is not that root (`wish({ query: "#default" })`), and
+the messages' authors, keyed by profile cell. A room with `about`, which only a
+manager creates, is its space's root, and reads only its own roster: its
+`#default` is itself. `messages` (its `count`, `oldestAt`, `newestAt`, and
+`latest`) is computed from the messages, and `canSend` from the reader's access
+and profile, when they're read. Neither is stored.
 
 The one `PerSession` value in the contract is `messages.windows`, the session's
 windows, kept as a `PerSession` keyed collection. It comes into being with the
@@ -51,6 +56,12 @@ Every write goes through one handler per stream:
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 
+Those who joined the room are the exception. The room's `addParticipant`
+stream is bound to the loom roster's one writer, also named `addParticipant`,
+which adds a profile with no gesture and no `requestId`: it is a set-add, so a
+profile already listed is not added again. The roster's write contract admits
+no other writer.
+
 `commitSend` and `commitSendReaction` store a value typed
 `AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
 its writer and refuses it without a trusted gesture from the named surface. The
@@ -58,7 +69,8 @@ room's own composer builds a send's `{ version: { body, sentAt }, replyTo? }`
 from the text the person submitted, which its handler reads as `target.value`,
 and the composer event's time as the proposed `sentAt`.
 
-Every handler first checks its event's sender and `requestId` against a keyed
+Every handler in the table first checks its event's sender and `requestId`
+against a keyed
 collection of the requests the room has acted on, and does nothing for one it
 finds. It records the request there in the same transaction as its effect, and
 the collection drops a request once it was recorded longer ago than the greater
@@ -151,9 +163,6 @@ the room is created from the same settings the handlers read.
   `FabriChatRoom.inSpace()` creates a space with a random DID whose genesis
   document names its creator an OWNER, plus the grants it names
   ([random space identities](../random-space-identities.md)).
-- **The space's participants.** The room reads them from its space's default
-  pattern, which a host creates the first time someone opens the space. Until
-  then, the room's participants are only its authors.
 - **Per-session state written by a handler.** `windows` is a `PerSession` cell
   linked from the room's `PerSpace` message list, a nesting the scoped-cell
   design provides across a `Cell` boundary (see [scoped cell
