@@ -20,6 +20,7 @@ import {
   collectObservedAvailabilityInputPaths,
   mapGuardCapturesToCallbackInput,
   mergeAvailabilityCaptureOverrides,
+  parseAvailabilityCaptureExpression,
   partitionGuardCapturesByCallbackInput,
   renameAvailabilityCapturePaths,
 } from "../src/availability/captures.ts";
@@ -28,6 +29,10 @@ import { getStableConstAliasInitializer } from "../src/ast/stable-const-alias.ts
 import { getLiftAppliedInputAndCallback } from "../src/ast/call-kind.ts";
 import { TransformationContext } from "../src/core/context.ts";
 import { CrossStageState } from "../src/core/cross-stage-state.ts";
+import {
+  planCaptureBindings,
+  registerCaptureBindingTypes,
+} from "../src/utils/capture-bindings.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 
 interface TestContext {
@@ -35,6 +40,134 @@ interface TestContext {
   sourceFile: ts.SourceFile;
   transformation: ts.TransformationContext;
 }
+
+Deno.test("opaque capture type registration preserves a same-named nested local", () => {
+  withContext(
+    `
+    import { type OpaqueCell } from "commonfabric";
+    interface Repo { name: string; }
+    declare const captured: OpaqueCell<Repo>;
+    const callback = () => {
+      const outer = captured;
+      const nested = () => { const captured = "local"; return captured; };
+      return { outer, nested: nested() };
+    };
+  `,
+    ({ context, sourceFile }) => {
+      const callback = initializer(sourceFile, "callback");
+      if (!ts.isArrowFunction(callback)) {
+        throw new Error("Expected the callback");
+      }
+      const outer = initializer(sourceFile, "outer");
+      const bindings = planCaptureBindings(
+        [outer],
+        callback.body,
+        new Map(),
+        context,
+      );
+      const binding = bindings.get("captured");
+      expect(binding?.opaque).toBe(true);
+      expect(binding?.bindingName).not.toBe("captured");
+      expect(binding?.type?.getProperties().map(({ name }) => name)).toEqual([
+        "name",
+      ]);
+      registerCaptureBindingTypes(callback.body, bindings, context);
+      expect(context.state.typeRegistry.get(outer)).toBe(binding!.type);
+      const nested = initializer(sourceFile, "nested");
+      if (!ts.isArrowFunction(nested)) {
+        throw new Error(
+          "Expected the nested callback",
+        );
+      }
+      const identifiers: ts.Identifier[] = [];
+      const visit = (node: ts.Node) => {
+        if (ts.isIdentifier(node) && node.text === "captured") {
+          identifiers
+            .push(node);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(nested.body);
+      expect(identifiers).toHaveLength(2);
+      for (const identifier of identifiers) {
+        expect(context.state.typeRegistry.get(identifier)).toBeUndefined();
+        expect(
+          context.checker.getTypeAtLocation(identifier).flags &
+            ts.TypeFlags.StringLiteral,
+        )
+          .not.toBe(0);
+      }
+    },
+  );
+});
+
+Deno.test("static element captures retain exact key-call paths and reject dynamic indices", () => {
+  withContext(
+    `
+    import { type AsyncResult, type Cell, hasError } from "commonfabric";
+    declare const input: Cell<{ requests: AsyncResult<{ name: string }>[] }>;
+    declare const index: number;
+    const first = input.key("requests")[0];
+    const named = input.key("requests")["01"];
+    const dynamic = input.key("requests")[index];
+    const guards = () => hasError(input.key("requests")[0]);
+  `,
+    ({ context, sourceFile }) => {
+      expect(
+        parseAvailabilityCaptureExpression(initializer(sourceFile, "first")),
+      )
+        .toMatchObject({ root: "input", path: ["requests", "0"] });
+      expect(
+        parseAvailabilityCaptureExpression(initializer(sourceFile, "named")),
+      )
+        .toMatchObject({ root: "input", path: ["requests", "01"] });
+      expect(
+        parseAvailabilityCaptureExpression(initializer(sourceFile, "dynamic")),
+      )
+        .toBeUndefined();
+      const guards = initializer(sourceFile, "guards");
+      if (!ts.isArrowFunction(guards) || !ts.isExpression(guards.body)) {
+        throw new Error(
+          "Expected the guard callback",
+        );
+      }
+      expect(collectAvailabilityGuardCaptures(guards.body, context))
+        .toMatchObject([{
+          path: ["input", "requests", "0"],
+          reasons: ["error"],
+        }]);
+    },
+  );
+});
+
+Deno.test("generic result fallbacks respect the successful type's nullability", () => {
+  for (
+    const { constraint, dead } of [
+      { constraint: "", dead: false },
+      { constraint: " extends Repo", dead: true },
+      { constraint: " extends Repo | null", dead: false },
+    ]
+  ) {
+    withContext(
+      `
+      import { AsyncResult, resultOf } from "commonfabric";
+      interface Repo { name: string; }
+      function fallback<T${constraint}>(request: AsyncResult<T>) {
+        return resultOf(request) ?? null;
+      }
+    `,
+      ({ context }) => {
+        new AvailabilityAnalysisTransformer({ state: context.options.state })
+          .transform(context);
+        expect(
+          context.diagnostics.filter((diagnostic) =>
+            diagnostic.type === "availability:dead-result-fallback"
+          ),
+        ).toHaveLength(dead ? 1 : 0);
+      },
+    );
+  }
+});
 
 function withContext(source: string, run: (test: TestContext) => void): void {
   const files: Record<string, string> = {

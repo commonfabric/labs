@@ -19,7 +19,7 @@ import { DomApplicator } from "../src/main/applicator.ts";
 import type { DomEventMessage } from "../src/main/events.ts";
 import { getPieceBoundary } from "../src/main/space-context.ts";
 import type { SetPropHandler } from "../src/render-utils.ts";
-import type { VDomBatch } from "../src/vdom-ops.ts";
+import type { VDomBatch, VDomOp } from "../src/vdom-ops.ts";
 
 // Mock RuntimeClient for testing
 const createMockRuntimeClient = () => {
@@ -342,6 +342,148 @@ describe("DomApplicator", () => {
         });
         expect(element.hasAttribute("aria-label")).toBe(false);
       });
+      describe("pending content", () => {
+        function setup() {
+          const doc = createMockDocument();
+          const applicator = new DomApplicator({
+            document: doc,
+            onEvent: () => {},
+            onError: (error) => {
+              throw error;
+            },
+          });
+          const apply = (...ops: VDomOp[]) =>
+            applicator.applyBatch({ batchId: 1, ops });
+          const pending = (nodeId: number, value: boolean) =>
+            apply({ op: "set-prop", nodeId, key: "data-cf-pending", value });
+          apply(
+            { op: "create-element", nodeId: 1, tagName: "button" },
+            { op: "create-element", nodeId: 4, tagName: "button" },
+            { op: "create-text", nodeId: 2, text: "Retained " },
+            { op: "create-text", nodeId: 3, text: "action" },
+          );
+          const first = applicator.getNode(1) as Element;
+          const second = applicator.getNode(4) as Element;
+          first.setAttribute("aria-busy", "false");
+          second.setAttribute("aria-busy", "false");
+          return { applicator, apply, pending, first, second, doc };
+        }
+
+        it("keeps a parent inert until all pending text children and the parent itself recover", () => {
+          const { applicator, apply, pending, first } = setup();
+          try {
+            apply(
+              { op: "insert-child", parentId: 1, childId: 2, beforeId: null },
+              { op: "insert-child", parentId: 1, childId: 3, beforeId: null },
+            );
+            pending(2, true);
+            pending(2, true);
+            pending(3, true);
+            expect(first.hasAttribute("inert")).toBe(true);
+            expect(first.getAttribute("aria-busy")).toBe("true");
+            expect(applicator.getNode(2)?.textContent).toBe("Retained ");
+            expect(applicator.getNode(3)?.textContent).toBe("action");
+            apply({ op: "remove-prop", nodeId: 2, key: "data-cf-pending" });
+            expect(first.hasAttribute("inert")).toBe(true);
+            pending(1, true);
+            pending(3, false);
+            expect(first.hasAttribute("inert")).toBe(true);
+            apply({
+              op: "set-prop",
+              nodeId: 1,
+              key: "aria-busy",
+              value: "authored",
+            });
+            expect(first.getAttribute("aria-busy")).toBe("true");
+            pending(1, false);
+            expect(first.hasAttribute("inert")).toBe(false);
+            expect(first.getAttribute("aria-busy")).toBe("authored");
+          } finally {
+            applicator.dispose();
+          }
+        });
+
+        it("moves pending text protection to its new parent and releases it on removal or disposal", () => {
+          const { applicator, apply, pending, first, second } = setup();
+          try {
+            pending(2, true);
+            pending(2, true);
+            expect(first.hasAttribute("inert")).toBe(false);
+            apply({
+              op: "insert-child",
+              parentId: 1,
+              childId: 2,
+              beforeId: null,
+            });
+            expect(first.hasAttribute("inert")).toBe(true);
+            apply({
+              op: "insert-child",
+              parentId: 1,
+              childId: 3,
+              beforeId: null,
+            });
+            pending(3, true);
+            apply({
+              op: "insert-child",
+              parentId: 4,
+              childId: 2,
+              beforeId: null,
+            });
+            expect(applicator.getNode(2)?.parentNode).toBe(second);
+            expect(first.hasAttribute("inert")).toBe(true);
+            expect(second.hasAttribute("inert")).toBe(true);
+            apply({ op: "remove-node", nodeId: 3 });
+            expect(first.hasAttribute("inert")).toBe(false);
+            expect(first.getAttribute("aria-busy")).toBe("false");
+            apply({ op: "remove-node", nodeId: 2 });
+            expect(second.hasAttribute("inert")).toBe(false);
+            apply(
+              { op: "create-text", nodeId: 5, text: "Removed subtree" },
+              { op: "insert-child", parentId: 1, childId: 5, beforeId: null },
+            );
+            pending(5, true);
+            expect(first.hasAttribute("inert")).toBe(true);
+            apply({ op: "remove-node", nodeId: 1 });
+            expect(first.hasAttribute("inert")).toBe(false);
+            expect(applicator.getNode(5)).toBeUndefined();
+            pending(4, true);
+            expect(second.hasAttribute("inert")).toBe(true);
+            applicator.dispose();
+            expect(second.hasAttribute("inert")).toBe(false);
+            expect(second.getAttribute("aria-busy")).toBe("false");
+          } finally {
+            applicator.dispose();
+          }
+        });
+
+        it("leaves an unrelated host surface usable when only root text is pending", () => {
+          const { applicator, apply, pending, doc } = setup();
+          const container = doc.createElement("div");
+          const external = doc.createElement("button");
+          container.appendChild(external);
+          applicator.setContainer(container);
+          try {
+            apply({
+              op: "insert-child",
+              parentId: 0,
+              childId: 2,
+              beforeId: null,
+            });
+            pending(2, true);
+            pending(99, true);
+            expect(container.hasAttribute("inert")).toBe(false);
+            expect(container.hasAttribute("data-cf-pending")).toBe(false);
+            expect(external.hasAttribute("inert")).toBe(false);
+            expect(external.parentNode).toBe(container);
+            expect(applicator.getNode(2)?.textContent).toBe("Retained ");
+            pending(2, false);
+            expect(container.hasAttribute("inert")).toBe(false);
+          } finally {
+            applicator.dispose();
+          }
+        });
+      });
+
       describe("property removal", () => {
         const observerDescriptor = Object.getOwnPropertyDescriptor(
           globalThis,

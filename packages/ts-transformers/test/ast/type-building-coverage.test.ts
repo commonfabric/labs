@@ -1,4 +1,5 @@
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import {
@@ -322,6 +323,57 @@ Deno.test("buildCaptureTypeElements: an intermediate node with neither expressio
       "Invariant violated",
     );
   });
+});
+
+Deno.test("buildCaptureTypeElements preserves the whole observed root beside its native marker arm", () => {
+  withContextEmit(
+    `
+    interface Repo { name: string; retained: number; }
+    declare const observed: Repo;
+    observed.name;
+  `,
+    (context, sourceFile) => {
+      const read = findPropertyAccess(sourceFile, "name");
+      const root = createCaptureTreeNode([]);
+      const leaf = createCaptureTreeNode(["name"]);
+      leaf.expression = read;
+      root.properties.set("name", leaf);
+
+      for (const source of [read.expression, undefined]) {
+        const override: AvailabilityCaptureOverride = {
+          path: ["observed"],
+          ...(source && { source }),
+          reasons: ["error"],
+          variants: [{ name: "HasError" }],
+        };
+        const elements = buildCaptureTypeElements(
+          new Map<string, CaptureTreeNode>([["observed", root]]),
+          context,
+          undefined,
+          new Map([[JSON.stringify(["observed"]), override]]),
+        );
+        const member = elements[0];
+        if (!member || !ts.isPropertySignature(member) || !member.type) {
+          throw new Error("Expected the observed capture property");
+        }
+        if (!ts.isUnionTypeNode(member.type)) {
+          throw new Error("Expected separate successful and unavailable arms");
+        }
+        expect(member.type.types).toHaveLength(2);
+        expect(
+          context.state.availabilityCapture(member.type)?.getProperties()
+            .map((property) => property.name).sort(),
+        ).toEqual(["name", "retained"]);
+        expect(
+          ts.createPrinter().printNode(
+            ts.EmitHint.Unspecified,
+            member.type.types[1]!,
+            sourceFile,
+          ),
+        ).toBe("__cfHelpers.HasError");
+      }
+    },
+  );
 });
 
 Deno.test("applyAvailabilityOverridesToTypeNode: recurses through parenthesized object and tuple paths", () => {

@@ -219,6 +219,52 @@ describe("isCommonFabricDeclaration", () => {
 });
 
 describe("isCommonFabricSymbol", () => {
+  it("emits synthesized helper-qualified availability references as native schemas without accepting lookalike references", () => {
+    const { checker } = createProgram({
+      "/author/main.ts": "type Value = any;",
+    });
+    const unavailableNames = [
+      "FabricUnavailable",
+      "IsPending",
+      "IsSyncing",
+      "HasError",
+      "HasSchemaMismatch",
+    ];
+    for (const name of unavailableNames) {
+      const reference = ts.factory.createTypeReferenceNode(
+        ts.factory.createQualifiedName(
+          ts.factory.createIdentifier("__cfHelpers"),
+          name,
+        ),
+      );
+      expect(isCommonFabricAvailabilityType(checker.getAnyType(), reference))
+        .toBe(true);
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          reference,
+          checker,
+        ),
+      ).toEqual({ type: "FabricUnavailable" });
+    }
+
+    for (
+      const [namespace, name] of [
+        ["User", "IsPending"],
+        ["__cfHelpersPending", "IsPending"],
+        ["__cfHelpers", "UserUnavailable"],
+      ] as const
+    ) {
+      const reference = ts.factory.createTypeReferenceNode(
+        ts.factory.createQualifiedName(
+          ts.factory.createIdentifier(namespace),
+          name,
+        ),
+      );
+      expect(isCommonFabricAvailabilityType(checker.getAnyType(), reference))
+        .toBe(false);
+    }
+  });
+
   it("emits native data-model availability aliases as unavailable primitives", () => {
     const fileName = "/repo/packages/data-model/src/api.ts";
     const { program, checker } = createProgram({
