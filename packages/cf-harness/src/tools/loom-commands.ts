@@ -843,9 +843,9 @@ const compactSkeleton = (
 /**
  * Helper for `run_command`, which fits a batch into one output bound for
  * the whole batch, so a batch shows the model no more than one call may.
- * Each call's summary is charged against the bound in the calls' order, and
- * an executed call's summary that no longer fits is compacted; every call
- * keeps a result. The answers are then measured in the same order against
+ * Every call's result is first reserved at its smallest, an executed call's
+ * summary compacted; the rest of the bound then restores summaries whole in
+ * the calls' order, so every call keeps a result. The answers are then measured in the same order against
  * what is left, and an answer that no longer fits is left out and its result
  * marked truncated, as a lone call's would be. A result that is not an
  * answer is small and bounded, and is kept whole.
@@ -859,23 +859,31 @@ const measureBatch = async (
     outputId,
     status: "batch",
     results: [],
-    truncated: true,
+    truncated: false,
   }).length + LABEL_JOIN_ALLOWANCE;
-  // Each result also costs the comma that separates it from the next.
+  // Each result also costs the comma that separates it from the next, and an
+  // answered one its `truncated` turning from `true` to `false`.
   const charge = (result: object) => JSON.stringify(result).length + 1;
-  const fitted = sent.map((call) => {
-    if (!isAnswered(call)) {
-      reserved += charge(call);
+  const answeredCharge = (skeleton: object) => charge(skeleton) + 1;
+  // Every call's smallest result is reserved first, so no later call can be
+  // left without room; what remains upgrades summaries to whole in the
+  // calls' order, and then holds the answers.
+  const compacted = sent.map((call) =>
+    isAnswered(call) ? compactSkeleton(call.skeleton) : undefined
+  );
+  sent.forEach((call, index) => {
+    const small = compacted[index];
+    reserved += small === undefined ? charge(call) : answeredCharge(small);
+  });
+  const fitted = sent.map((call, index) => {
+    const small = compacted[index];
+    if (!isAnswered(call) || small === undefined) return call;
+    const upgrade = answeredCharge(call.skeleton) - answeredCharge(small);
+    if (reserved + upgrade <= LOOM_RETRIEVAL_MAX_OUTPUT_CHARS) {
+      reserved += upgrade;
       return call;
     }
-    const whole = charge(call.skeleton);
-    if (reserved + whole <= LOOM_RETRIEVAL_MAX_OUTPUT_CHARS) {
-      reserved += whole;
-      return call;
-    }
-    const skeleton = compactSkeleton(call.skeleton);
-    reserved += charge(skeleton);
-    return { ...call, skeleton };
+    return { ...call, skeleton: small };
   });
   const results: RunCommandCallOutput[] = [];
   for (const call of fitted) {

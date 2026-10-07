@@ -314,6 +314,63 @@ describe("loom-command-signature", () => {
         ).toMatchObject({ path: "args.label", problem: "value is not string" });
       });
 
+      it("compares an enum's members as Python's `==` does, keys in any order and `1` equal to `true`", () => {
+        expect(
+          findCommandArgsProblem(
+            {
+              type: "object",
+              properties: { o: { type: "object", enum: [{ a: 1, b: 2 }] } },
+            },
+            { o: { b: 2, a: 1 } },
+          ),
+        ).toBeUndefined();
+        expect(
+          findCommandArgsProblem(
+            {
+              type: "object",
+              properties: { l: { type: "array", enum: [[1]] } },
+            },
+            { l: [true] },
+          ),
+        ).toBeUndefined();
+        expect(
+          findCommandArgsProblem(
+            {
+              type: "object",
+              properties: { o: { type: "object", enum: [{ a: 1 }] } },
+            },
+            { o: { a: 1, b: 2 } },
+          ),
+        ).toMatchObject({ path: "args.o", problem: "value is not in enum" });
+      });
+
+      it("checks neither the type nor the enum of array elements whose type the host does not check", () => {
+        for (
+          const [items, value] of [
+            [{ type: "array", enum: [[1]] }, [[2]]],
+            [{ type: "custom", enum: ["a"] }, ["b"]],
+          ] as const
+        ) {
+          expect(
+            findCommandArgsProblem(
+              { type: "object", properties: { l: { type: "array", items } } },
+              { l: value },
+            ),
+          ).toBeUndefined();
+        }
+        expect(
+          findCommandArgsProblem(
+            {
+              type: "object",
+              properties: {
+                l: { type: "array", items: { type: "string", enum: ["a"] } },
+              },
+            },
+            { l: ["b"] },
+          ),
+        ).toMatchObject({ path: "args.l[0]", problem: "value is not in enum" });
+      });
+
       it("returns an unknown input only where the schema closes its properties", () => {
         expect(
           findCommandArgsProblem(

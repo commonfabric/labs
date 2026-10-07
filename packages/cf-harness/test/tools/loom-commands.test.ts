@@ -862,6 +862,32 @@ describe("loom-commands tools", () => {
         }
       });
 
+      it("reserves every call's compacted summary before restoring any whole, so summaries of the bound's size still fit", async () => {
+        const { context } = contextWith({
+          answer: JSON.stringify({
+            ok: false,
+            id: "i".repeat(120),
+            code: "c".repeat(120),
+            completed: Array.from({ length: 32 }, () => "x".repeat(110)),
+          }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: Array.from(
+              { length: RUN_COMMAND_BATCH_LIMIT },
+              () => ({ command: "loom.compose", args: {} }),
+            ),
+          }),
+        );
+        expect(
+          JSON.stringify(runCommandModelView({ ...output }).output).length,
+        ).toBeLessThanOrEqual(LOOM_RETRIEVAL_MAX_OUTPUT_CHARS);
+        const results = output.results.map(executed);
+        expect(results).toHaveLength(RUN_COMMAND_BATCH_LIMIT);
+        expect(results[0].outcome.completed).toHaveLength(32);
+        expect(results.at(-1)?.outcome.completedOmitted).toBe(32);
+      });
+
       it("withholds a call's answer above the ceiling and leaves its label out of the batch's", async () => {
         const { context } = contextWith({
           ceiling: [OWNER],

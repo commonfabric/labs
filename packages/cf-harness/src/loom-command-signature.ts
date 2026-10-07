@@ -319,12 +319,41 @@ const hostTypeAccepts = (
   }
 };
 
-/** Helper for checking, which compares values as Python's `==` does. */
-const hostEquals = (left: JSONValue, right: JSONValue): boolean =>
-  (typeof left === "number" || typeof left === "boolean") &&
+/**
+ * Helper for checking, which compares values as Python's `==` does: a number
+ * and a boolean by value (`1 == True`), lists element by element, and dicts
+ * by their keys in any order, at every depth.
+ */
+const hostEquals = (left: JSONValue, right: JSONValue): boolean => {
+  if (
+    (typeof left === "number" || typeof left === "boolean") &&
     (typeof right === "number" || typeof right === "boolean")
-    ? Number(left) === Number(right)
-    : JSON.stringify(left) === JSON.stringify(right);
+  ) {
+    return Number(left) === Number(right);
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((element, index) => hostEquals(element, right[index]));
+  }
+  if (isObjectNotArray(left) && isObjectNotArray(right)) {
+    const keys = Object.keys(left);
+    return keys.length === Object.keys(right).length &&
+      keys.every((key) =>
+        Object.hasOwn(right, key) && hostEquals(left[key], right[key])
+      );
+  }
+  return left === right;
+};
+
+/** The type names the host checks an array's elements by. */
+const HOST_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "string",
+  "integer",
+  "number",
+  "boolean",
+  "object",
+]);
 
 /** Helper for checking, which reads an input's value against its schema. */
 const valueProblem = (
@@ -351,7 +380,7 @@ const valueProblem = (
       ? undefined
       : mismatch(path, property, value, "value matches no oneOf branch");
   }
-  const type = property.type ?? "string";
+  const type = property.type || "string";
   if (hostTypeAccepts(type, value) === false) {
     return mismatch(path, property, value, `value is not ${String(type)}`);
   }
@@ -360,11 +389,13 @@ const valueProblem = (
     type === "array" && Array.isArray(value) && isObjectNotArray(items) &&
     (items.type !== undefined || items.enum !== undefined)
   ) {
-    const itemType = items.type ?? "string";
-    for (const [index, element] of value.entries()) {
-      if (
-        itemType !== "array" && hostTypeAccepts(itemType, element) === false
-      ) {
+    // The host checks neither the type nor the enum of elements whose type
+    // it does not know, or that are arrays themselves.
+    const itemType = items.type || "string";
+    const checked = typeof itemType === "string" &&
+      HOST_ITEM_TYPES.has(itemType);
+    for (const [index, element] of checked ? value.entries() : []) {
+      if (hostTypeAccepts(itemType, element) === false) {
         return mismatch(
           [...path, index],
           items,
