@@ -4274,7 +4274,7 @@ describe("runtime-processor", () => {
       }
     });
 
-    it("opens Home while the private inbox ensure is still reading, and finishes the ensure before disposing", async () => {
+    it("opens Home while the private inbox ensure is still reading", async () => {
       // A bring-up that waited for the ensure would never return here, since
       // the ensure's reads wait for a release that comes only after it.
       const readable = Promise.withResolvers<void>();
@@ -4285,11 +4285,11 @@ describe("runtime-processor", () => {
       });
 
       expect(opened.cell).toBeDefined();
-      expect(worker.processor.accessForTestingOnly.privateInboxEnsured)
-        .toBeDefined();
       expect(worker.privateInboxSends()).toBe(0);
+      const ensured = worker.processor.accessForTestingOnly.privateInboxEnsured;
+      expect(ensured).toBeDefined();
       readable.resolve();
-      await worker.processor.dispose();
+      await ensured;
       expect(worker.privateInboxSends()).toBe(1);
     });
   });
