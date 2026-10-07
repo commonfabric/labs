@@ -152,12 +152,6 @@ function createCollectionIndexInstance(
   const confirmed = new Set<string>();
   const pending = new Set<string>();
   let requiredConfirmations = new Set<string>();
-  // The occurrences a resume finds are the ones whose members' documents the
-  // server holds, and the ones its setup must wait for. A member a later
-  // reconcile adds is new, and its setup waits on nothing, even while the
-  // resume's own confirmations are still outstanding.
-  let resumedOccurrences: ReadonlySet<string> | undefined;
-  let resuming = !!awaitSync;
   addCancel(() => {
     active = false;
     releaseRemovedElements(runtime, runs, new Set());
@@ -322,22 +316,18 @@ function createCollectionIndexInstance(
       // Setup staged against an unsynced replica reads each at sequence zero,
       // the commit is rejected as a stale read, and every member's first
       // commit falls with it. Confirm the documents the setup below writes,
-      // as the inputs above are confirmed.
-      if (resuming) {
-        resumedOccurrences ??= new Set(occurrences.values());
-        const found = resumedOccurrences;
-        if (
-          !isConfirmed([
-            ...enumerations.map(({ entry }) => entry.resultCell),
-            ...members
-              .filter(({ entry, occurrence }) =>
-                entry.needsSetup && found.has(occurrence)
-              )
-              .map(({ entry }) => entry.resultCell),
-          ])
-        ) return;
-        resuming = false;
-      }
+      // as the inputs above are confirmed. That holds for a member set up
+      // later as well: it may be new, and its confirmation finds nothing, or
+      // it may have been a member before, removed ahead of the resume and
+      // added back since, and its document is on the server unsynced.
+      if (
+        !isConfirmed([
+          ...enumerations.map(({ entry }) => entry.resultCell),
+          ...members.filter(({ entry }) => entry.needsSetup).map(({ entry }) =>
+            entry.resultCell
+          ),
+        ])
+      ) return;
       const neededAssignments = new Set(
         [...neededOccurrences].map(hashStringOf),
       );

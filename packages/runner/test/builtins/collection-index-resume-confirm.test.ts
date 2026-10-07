@@ -130,11 +130,19 @@ describe("collection-index-resume-confirm", () => {
         [list, source, inputs].map((cell) => cell.getAsNormalizedFullLink().id),
       );
       let holdOthers = false;
+      /** Resolves once `expected` confirmations are held; set before each round. */
+      let round = { expected: 0, reached: Promise.withResolvers<void>() };
+      const expectRound = (expected: number) => {
+        round = { expected, reached: Promise.withResolvers<void>() };
+        if (heldCalls.length >= expected) round.reached.resolve();
+        return round.reached.promise;
+      };
       using _sync = stub(storage, "syncCell", (cell, options) => {
         const id = cell.getAsNormalizedFullLink().id;
         if (!holdOthers || inputIds.has(id)) return sync(cell, options);
         const gate = Promise.withResolvers<void>();
         heldCalls.push({ id, release: () => gate.resolve() });
+        if (heldCalls.length >= round.expected) round.reached.resolve();
         return gate.promise.then(() => sync(cell, options));
       });
       const runsBefore = new Map(
@@ -142,18 +150,22 @@ describe("collection-index-resume-confirm", () => {
       );
       holdOthers = true;
       using starts = spy(runtime.runner, "run");
+      const firstRound = expectRound(2);
       start(true, addCancelSecond);
-      // Scheduler actions finish while the storage confirmations remain held.
+      // The first round confirms the index and its state. Scheduler actions
+      // finish while those confirmations remain held.
+      await firstRound;
       await runtime.scheduler.idle();
-      // The first round confirms the index and its state.
       expect(heldCalls).toHaveLength(2);
       expect(starts.calls).toHaveLength(0);
-      releaseHeld();
-      await storage.synced();
-      await runtime.scheduler.idle();
       // The second round confirms the two enumerations and the three members'
       // result documents, and no setup has been staged while it is
-      // outstanding.
+      // outstanding. A global storage wait would wait on the held round too,
+      // so the round announces itself.
+      const secondRound = expectRound(5);
+      releaseHeld();
+      await secondRound;
+      await runtime.scheduler.idle();
       expect(heldCalls.length).toBeGreaterThanOrEqual(5);
       expect(starts.calls).toHaveLength(0);
 
@@ -172,6 +184,40 @@ describe("collection-index-resume-confirm", () => {
           (runsBefore.get(node.id) ?? 0) + 1,
         ]);
       }
+
+      // A member removed and added back keeps its result document, which
+      // the server may hold unsynced, so its setup waits on a confirmation
+      // too; a member that is genuinely new pays the same one round trip.
+      const [first, second, third] = elements;
+      holdOthers = false;
+      const remove = runtime.edit();
+      list.withTx(remove).set([
+        { isCell: false, value: "a" },
+        { isCell: false, value: "a" },
+      ]);
+      source.withTx(remove).set([first, third]);
+      expect((await remove.commit().settled).error).toBeUndefined();
+      await storage.synced();
+      await runtime.idle();
+      const startsBeforeReadd = starts.calls.length;
+      holdOthers = true;
+      const readdRound = expectRound(heldCalls.length + 1);
+      const readd = runtime.edit();
+      list.withTx(readd).set([
+        { isCell: false, value: "a" },
+        { isCell: false, value: "b" },
+        { isCell: false, value: "a" },
+      ]);
+      source.withTx(readd).set([first, second, third]);
+      expect((await readd.commit().settled).error).toBeUndefined();
+      await readdRound;
+      await runtime.scheduler.idle();
+      // Its confirmation is held, and its setup has not been staged.
+      expect(starts.calls).toHaveLength(startsBeforeReadd);
+      releaseHeld();
+      await storage.synced();
+      await runtime.idle();
+      expect(starts.calls.length).toBeGreaterThan(startsBeforeReadd);
     } finally {
       releaseHeld();
       cancelSecond();
