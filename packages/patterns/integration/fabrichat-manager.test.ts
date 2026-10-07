@@ -167,7 +167,8 @@ describe("fabrichat-manager", () => {
     expect(spaces).not.toContain(home);
     expect(spaces[0]).not.toBe(spaces[1]);
 
-    // This user holds OWNER, each other member WRITE, and no one else.
+    // This user and each other member hold OWNER, and no one else holds
+    // anything.
     const aclOf = async (space: string) =>
       (await server.readDocument(
         space as Parameters<typeof server.readDocument>[0],
@@ -178,11 +179,11 @@ describe("fabrichat-manager", () => {
         .getAsNormalizedFullLink().space;
     expect(await aclOf(spaceOf("direct"))).toEqual({
       [home]: "OWNER",
-      [BOB]: "WRITE",
+      [BOB]: "OWNER",
     });
     expect(await aclOf(spaceOf("group"))).toEqual({
       [home]: "OWNER",
-      [CAROL]: "WRITE",
+      [CAROL]: "OWNER",
     });
   });
 
@@ -203,7 +204,7 @@ describe("fabrichat-manager", () => {
       ))?.value,
     ).toEqual({
       [home]: "OWNER",
-      [CAROL]: "WRITE",
+      [CAROL]: "OWNER",
       "*": "WRITE",
     });
   });

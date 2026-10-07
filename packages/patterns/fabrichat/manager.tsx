@@ -5,10 +5,10 @@
  * is private to its user.
  *
  * It creates each room in a space of its own with `inSpace()`, which grants its
- * creator OWNER and each other member named at creation WRITE, and no one
- * else, except that a group made joinable by its link grants everyone WRITE
- * as well. After that, who is in the space is the space's business, changed
- * through the space's own tools and never through the manager or the room.
+ * creator and each other member named at creation OWNER, and no one else,
+ * except that a group made joinable by its link grants everyone WRITE as well.
+ * After that, who is in the space is the space's business: any OWNER may add
+ * someone from the room's own rendering, and the manager never changes it.
  *
  * A new room is offered to each other member whose profile the request names,
  * through the share inbox the profile points at, in the envelope a loom share
@@ -58,6 +58,7 @@ import {
   type ChatRoomLink,
   type ChatRoomOffer,
   epochNsecFromMsec,
+  isPrincipalDID,
   type ManagerProfileCell,
   nsecOf,
 } from "./schemas.tsx";
@@ -205,18 +206,6 @@ export interface ManagerActState {
   /** A rendered control's notice id. */
   id?: string;
 }
-
-/** A `did:key` whose key is base58btc multibase, as every principal's is. */
-const DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
-
-/**
- * Whether `value` is a DID a principal can have: well formed, and, for a
- * `did:key`, a base58btc key, so that a key a period or other punctuation
- * follows is refused.
- */
-const isPrincipalDID = (value: unknown): value is DID =>
-  isWellFormedDID(value) &&
-  (!value.startsWith("did:key:") || DID_KEY.test(value));
 
 /** The DIDs in `text`, separated by spaces, commas, or lines. */
 const principalsIn = (text: string): string[] =>
@@ -380,10 +369,11 @@ const createRoom = (
     {},
 ): ChatIndexEntry => {
   const createdAt = epochNsecFromMsec(Date.now());
-  // The room's space grants this user OWNER, each other member WRITE, and,
-  // for a room joinable by its link, everyone WRITE.
+  // The room's space grants this user and each other member OWNER, so any
+  // member can add others, and, for a room joinable by its link, everyone
+  // WRITE.
   const grants = Object.fromEntries([
-    ...members.map((member) => [member, "WRITE"]),
+    ...members.map((member) => [member, "OWNER"]),
     ...(joinableByLink ? [["*", "WRITE"]] : []),
   ]) as InSpaceGrants;
   const room = roomLinkOf(
