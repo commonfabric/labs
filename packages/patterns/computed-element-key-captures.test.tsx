@@ -5,9 +5,10 @@
  * name any member (a cell's value, a `string`) reads the whole cell; either
  * way the read cell has to arrive in the lift's or the handler's input, or the
  * body reads it as `undefined`. The same holds for such a chain inside a `||`
- * or `??`. The module-scope lift's input is shrunk to the path the key names,
- * so it also fails if that path is wrong. A lone capture read the same way is
- * the control.
+ * or `??`. The module-scope lift reads a fixed-key type, so its compiled
+ * input keeps only the member the key names, and a schema that kept a
+ * different member fails here. A lone capture read the same way is the
+ * control.
  *
  * Run: deno task cf test packages/patterns/computed-element-key-captures.test.tsx
  */
@@ -24,6 +25,10 @@ import {
 
 type Offers = Record<string, { space: string }>;
 type Catalog = { offers: Offers; meta: { x: number } };
+type FixedCatalog = {
+  offers: { k: { space: string }; other: { space: string } };
+  meta: { x: number };
+};
 
 const KEY = "k";
 const ANY_KEY: string = "k";
@@ -38,13 +43,17 @@ const countIfRoom = handler<
 });
 
 const typedConstKey = lift((
-  { catalog, n }: { catalog: Writable<Catalog>; n: Writable<number> },
-) => n.get() === 1 && catalog.get().offers[KEY]?.space === "room");
+  { fixed, n }: { fixed: Writable<FixedCatalog>; n: Writable<number> },
+) => n.get() === 1 && fixed.get().offers[KEY].space === "room");
 
 export default pattern(() => {
   const catalog = new Writable<Catalog>({ offers: {}, meta: { x: 1 } });
   const n = new Writable<number>(0);
   const a = new Writable<{ p?: string }>({});
+  const fixed = new Writable<FixedCatalog>({
+    offers: { k: { space: "" }, other: { space: "" } },
+    meta: { x: 1 },
+  });
   const key = new Writable<string>(KEY);
   const hits = new Writable<number>(0);
 
@@ -75,11 +84,15 @@ export default pattern(() => {
     const v = catalog.get().offers[ANY_KEY]?.space || a.get().p;
     return n.get() === 1 && v === "room";
   });
-  const moduleLift = typedConstKey({ catalog, n });
+  const moduleLift = typedConstKey({ fixed, n });
   const countHit = countIfRoom({ catalog, hits });
 
   const fillCatalog = action(() => {
     catalog.set({ offers: { [KEY]: { space: "room" } }, meta: { x: 1 } });
+    fixed.set({
+      offers: { k: { space: "room" }, other: { space: "" } },
+      meta: { x: 1 },
+    });
     n.set(1);
   });
 
