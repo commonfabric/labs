@@ -637,13 +637,17 @@ describe("share-intake", () => {
         home.withTx(tx).key("sharedSpaceCatalog" as never).key(
           "offers" as never,
         ).set({
-          [JSON.stringify([sender, "received"])]: {
+          // A key in a format of its own, which the intake does not read, and
+          // receipts storing no sender and `id`, which it passes over.
+          "a receipt filed under a key of its own": {
             from: sender,
             id: "received",
             space,
             host: HOST,
             kind: "fabrichat-room",
           },
+          "a receipt naming no sender": { id: "received", space },
+          "not a receipt": 7,
         } as never)
       );
       const intake = start();

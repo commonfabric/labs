@@ -375,8 +375,11 @@ export class ShareIntake {
   }
 
   /**
-   * The keys of the receipts Home's catalog holds, or none while the catalog
-   * cannot be read, since Home's handler refuses a duplicate in any case.
+   * The offers Home's catalog holds receipts for, by {@link offerIdentity}, or
+   * none while the catalog cannot be read, since Home's handler refuses a
+   * duplicate in any case. Each is read from the `from` and `id` its receipt
+   * stores, whatever the key the catalog files it under, and a receipt that
+   * stores no such pair is passed over.
    */
   async #receipts(): Promise<Set<string>> {
     let catalog;
@@ -393,9 +396,15 @@ export class ShareIntake {
       }
       return new Set();
     }
-    return new Set(
-      isObjectNotArray(catalog?.offers) ? Object.keys(catalog.offers) : [],
-    );
+    const received = new Set<string>();
+    if (!isObjectNotArray(catalog?.offers)) return received;
+    for (const receipt of Object.values(catalog.offers)) {
+      if (
+        isObjectNotArray(receipt) && typeof receipt.from === "string" &&
+        typeof receipt.id === "string"
+      ) received.add(offerIdentity(receipt.from, receipt.id));
+    }
+    return received;
   }
 
   /** Decides `raw`, a row of an inbox's offers, unless it is decided already. */
@@ -403,7 +412,7 @@ export class ShareIntake {
     if (!isObjectNotArray(raw) || raw.kind === LOOM_OFFER_KIND) return;
     const row = rowKey(raw);
     if (this.#settled.has(row)) return;
-    const receipt = JSON.stringify([raw.from ?? null, raw.id ?? null]);
+    const receipt = offerIdentity(raw.from, raw.id);
     if (receipts.has(receipt)) {
       this.#decide(row, raw, "received");
       return;
@@ -583,6 +592,15 @@ const STATE_REFUSALS: ReadonlySet<OfferDecision> = new Set([
   "space-root-missing",
   "space-root-wrong-kind",
 ]);
+
+/**
+ * The intake's own key for the offer a sender named `from` keyed `id`, by
+ * which a row is matched against the receipts in Home's catalog, and named in
+ * a log.
+ */
+function offerIdentity(from: unknown, id: unknown): string {
+  return JSON.stringify([from ?? null, id ?? null]);
+}
 
 /**
  * The key a row is decided by: its whole content, with its fields in a fixed
