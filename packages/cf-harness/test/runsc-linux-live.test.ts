@@ -77,7 +77,7 @@ describe("runsc-linux-live", () => {
         { hostname: "127.0.0.1", port: 0, onListen: () => {} },
         () => new Response("hello-from-host"),
       );
-      const runtime = new RunscSandboxRuntime(resolveRunscSandboxConfig({
+      const pastaConfig = resolveRunscSandboxConfig({
         workspaceHostPath: workspace,
         rootfs: selection.sandboxRootfs,
         runscBinary: selection.sandboxRunscBinary,
@@ -87,8 +87,9 @@ describe("runsc-linux-live", () => {
         unshare: selection.sandboxRunscUnshare,
         platform: "linux",
         homeDir: home,
-      }));
-      const sessions = new RunscSandboxRuntime(resolveRunscSandboxConfig({
+      });
+      const runtime = new RunscSandboxRuntime(pastaConfig);
+      const sessionsConfig = resolveRunscSandboxConfig({
         workspaceHostPath: workspace,
         rootfs: selection.sandboxRootfs,
         runscBinary: selection.sandboxRunscBinary,
@@ -97,7 +98,9 @@ describe("runsc-linux-live", () => {
         networkMode: "none",
         platform: "linux",
         homeDir: home,
-      }));
+      });
+      const sessions = new RunscSandboxRuntime(sessionsConfig);
+      let closed = false;
       try {
         await Deno.writeTextFile(join(workspace, "seen.txt"), "from-host\n");
 
@@ -113,6 +116,9 @@ describe("runsc-linux-live", () => {
         expect(await Deno.readTextFile(join(workspace, "out"))).toBe(
           "written\n",
         );
+        // The sandbox's root is whoever runs it: as root, root; rootless, the
+        // user its user namespace maps root to, so what it writes is theirs.
+        expect((await Deno.stat(join(workspace, "out"))).uid).toBe(Deno.uid());
         expect(read.cfcResult).toBeDefined();
 
         const failed = await runtime.runShell({ command: "exit 7" });
@@ -163,9 +169,23 @@ describe("runsc-linux-live", () => {
           session: "live",
         });
         expect([later.exitCode, later.stdout]).toEqual([0, "kept\n"]);
-      } finally {
+
+        // A finished `runsc run` destroys its own container, so nothing of a
+        // call under pasta, nor of the session, is left once both close:
+        // each scratch tree is taken down only where it is empty.
         await runtime.close();
         await sessions.close();
+        closed = true;
+        for (const config of [pastaConfig, sessionsConfig]) {
+          await expect(Deno.stat(config.scratchDir)).rejects.toBeInstanceOf(
+            Deno.errors.NotFound,
+          );
+        }
+      } finally {
+        if (!closed) {
+          await runtime.close();
+          await sessions.close();
+        }
         await host.shutdown();
         await Deno.remove(workspace, { recursive: true });
       }

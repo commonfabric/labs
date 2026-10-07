@@ -94,10 +94,13 @@ export const DEFAULT_RUNSC_WORKSPACE_MOUNT_PATH = "/workspace";
 export const DEFAULT_RUNSC_SHELL = "/bin/sh";
 /**
  * The docker runtime defaults to `--network bridge`; this is the runsc
- * spelling of the same posture (runsc's own netstack, which the darwin runsc
- * runs as the VM's network), so a run that names no network mode has the
- * same reach on either runtime. A lane that wants isolation says so, as the
- * docker lanes do, through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
+ * spelling of the same posture, so a run that names no network mode has the
+ * same reach on either runtime. On macOS it is runsc's own netstack, which the
+ * darwin runsc runs as the VM's network. On Linux it is `pasta`'s network
+ * (egress, and the host at `host.docker.internal`) where the configuration
+ * names a `networkHelper`, as the Linux default does; without one, runsc's own
+ * netstack gives a container loopback alone. A lane that wants isolation says
+ * so, as the docker lanes do, through `CF_HARNESS_DOCKER_NETWORK_MODE=none`.
  */
 export const DEFAULT_RUNSC_NETWORK_MODE: RunscNetworkMode = "sandbox";
 export const DEFAULT_RUNSC_FABRIC_MOUNT_PATH = "/fabric";
