@@ -670,8 +670,8 @@
     // The state of this repository the map describes. Bump both when the
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
-      date: "2026-10-06",
-      sha: "c5bec5b16d",
+      date: "2026-10-07",
+      sha: "a47d305b87",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -1812,7 +1812,7 @@
         kind: "Outside",
         band: "outside",
         body:
-          `<p>The model host. It sees every byte the harness puts in context and returns text that is, by construction, untrusted: a completion is a <em>proposal</em> for a tool call, never a command.</p><p>Because nothing can be gated at the provider, everything must be gated before it gets into context. That is the whole reason the model works in handles.</p>`,
+          `<p>The model host. It sees every byte the harness puts in context and returns text that is, by construction, untrusted: a completion is a <em>proposal</em> for a tool call, never a command.</p><p>Because nothing can be gated at the provider, everything must be gated before it gets into context. That is the whole reason the model works in handles.</p><p>A host can bound model calls with <code>maxInputBytes</code> and <code>maxOutputTokens</code>. These limits follow the shared model client into children. Bounded Codex calls check final request bytes, send an output ceiling including reasoning, and make one provider attempt; unsupported gateway calls fail before dispatch. The byte ceiling excludes provider-added native-search context and image token expansion, which need separate accounting.</p>`,
         threats: ["t3", "t9"],
         links: [[
           "provider outages surface as the provider's own words, with bounded retry",
