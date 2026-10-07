@@ -1,55 +1,59 @@
 # Policy secrets
 
-A module policy can have a secret: a random key the runtime mints once per
-space and policy, which no code reads, and under which the `policySecretHash`
-builtin computes keyed hashes that it hands to pattern code in the policy's
-custody. Pattern code has no other secret source. A lift gets no entropy at
-all, and a handler gets only the host's `Math.random`, one stream that every
-pattern compartment in a runtime shares
-(`packages/runner/src/builder/safe-builtins.ts`). The uses all have one shape:
-a decision that turns on a value its observers must not learn, such as a
-randomized per-item threshold for releasing an item once enough people
-contributed it, noise that cannot be averaged away, or a tie-break. In each,
-pattern code needs a value that looks random to everyone and is the same for
-every runtime that computes it, and the policy decides what leaves.
+A module policy can have a key: a random value the runtime mints once per space
+and policy, stores under that policy's clause, and lets no code read. The
+`policySecretHash` builtin computes keyed hashes under it and hands them to
+pattern code, still under the policy's clause, so that only the policy's own
+exchange rules release anything computed from them.
+
+Pattern code has no other secret source. A lift gets no entropy at all, and a
+handler gets only the host's `Math.random`, one stream that every pattern
+compartment in a runtime shares (`packages/runner/src/builder/safe-builtins.ts`).
+The uses all have one shape: a decision that turns on a value its observers must
+not learn, such as a randomized per-item threshold for releasing an item once
+enough people contributed it, noise that cannot be averaged away, or a
+tie-break. In each, pattern code needs a value that looks random to everyone and
+is the same for every runtime that computes it, and the policy decides what
+leaves.
 
 The key generalizes the space's SQLite row salt
 ([06-cfc.md](sqlite-builtin/06-cfc.md)). Both are runtime secrets
-(`packages/runner/src/runtime-secret.ts`): one document per space and name in
-a reserved namespace that no code writes or reads, labeled with the read-failed
-atom, which no ceiling admits, and read by the runtime through
-verifier-internal reads that join nothing. The salt's builtin hashes it into
-row document ids. The policy secret's builtin hashes it with a pattern's input
-and declares the result in the policy's custody, so that the policy's own
-exchange rules, rather than the builtin, decide what leaves.
+(`packages/runner/src/runtime-secret.ts`): one document per space and name in a
+reserved namespace no code writes or reads, minted by the runtime, trusted only
+under the runtime's writer claim. They differ in what the runtime derives from
+them. The salt is stored under the read-failed atom and read verifier-
+internally, so the row ids the SQLite builtin hashes it into carry none of its
+label. A policy's key is stored under the policy's clause and read into the flow
+of the transaction that hashes with it, so every hash carries the clause.
 
 ## What the specification decides, and what it does not
 
-The specification has no runtime secret. Everything a hash does once written
-is the existing calculus applied to a value whose label holds the policy's
-clause:
+Everything a hash does once written is the existing calculus applied to a value
+whose label holds the policy's clause:
 
 - **The clause.** A module-policy reference binds its manifest and its subject
   at label creation, and the transaction that persists it installs the
-  manifest in the destination (§4.4.1, §4.4.2). The hash's clause is the
-  policy's reference with its subject bound to the space the hash is stored
-  in.
+  manifest in the destination (§4.4.1, §4.4.2). The key's clause is the
+  policy's reference with its subject bound to the space it is stored in.
 - **Who reads.** A policy principal is interpreted only at trusted boundary
-  points (§3.2), and no access context equals one (§3.1.4), so a clause
-  holding only the reference admits no reader until a rule of that policy
-  rewrites it. A rule rewrites only its home clause (§4.4.5), so another
-  policy's rules never reach it.
+  points (§3.2), and no access context equals one (§3.1.4), so a clause holding
+  only the reference admits no reader until a rule of that policy rewrites it.
+  A rule rewrites only its home clause (§4.4.5), so another policy's rules
+  never reach it.
+- **The derivation.** A hash joins the labels of both its inputs, the key's and
+  the hashed value's (§2.4), and carries `TransformedBy` of the builtin that
+  computed it (§8.9.3).
 - **What releases.** An authored rule needs a non-empty integrity or durable
-  policy-state guard (§4.3.6), and every rule of the policy applies to its
-  hashes as to anything else under its clause.
+  policy-state guard (§4.3.6). A value that decides whether a release fires is
+  a parameter that release must find integrity on (§3.8.4).
 
-What the specification does not decide is the step from the key to the hash.
-§2.4 has a derived identifier join the labels of every input it is derived
-from; the key's label is not joined, because the key is not data any code
-reads, and the builtin declares the policy's clause in its place. That is the
-same step the SQLite builtin takes when it hashes the salt into row ids. specs#NN
-proposes it as a ruling, together with the reserved store and its lifetime
-rules, and this runtime's arrangement waits on that ruling.
+The specification has no runtime secret, and so nothing on minting one: the
+reserved store, the runtime's write authority over it, that a stored key never
+changes, that a value planted there without that authority is replaced, and
+that the mint attributes the value to no principal (§8.15.4 lists the
+initializations a runtime performs, and this is not one of them). specs#NN
+proposes these as a ruling. This runtime's arrangement stores something new,
+so it waits on that ruling.
 
 ## The key
 
@@ -57,24 +61,27 @@ A policy is named by its manifest digest, `policyDigest` (§4.3.6). The digest
 is computed over the manifest body, which holds the defining module's identity,
 the rule set's export name and the lowered rules, so it identifies all three.
 The key for a policy in space `S` is the runtime secret named
-`policy:<policyDigest>`, stored in `S` at
+`policy:<policyDigest>` (`modulePolicySecret()`), stored in `S` at
 `of:runtime-secret:policy:<policyDigest>`.
 
 `IExtendedStorageTransaction.ensureRuntimeSecret()` mints it as it mints the
 salt: with the runtime's in-package authorization, 32 bytes from the platform's
-CSPRNG, written only when no trusted value is stored, under the schema
-`{ type: "string", ifc: { confidentiality: [<read-failed>],
-writeAuthorizedBy: ["runtime-secret"] } }`. The runtime mints it under its own
-authority, which attributes the value to no principal (§8.15.4, "Attribution
-is separate from initialization authority").
+CSPRNG, written only when no trusted value is stored, under the builtin identity
+`runtime-secret`. Its schema is `{ type: "string", ifc: { confidentiality:
+[<the policy's PolicyOf marker>], writeAuthorizedBy: ["runtime-secret"] } }`,
+whose subject placeholder commit preparation binds to `S`, installing the
+policy's manifest in `S` in the same transaction; a runtime that cannot supply
+the manifest refuses the commit, and nothing is stored.
 
 The namespace is the runtime's:
 
 - The write chokepoint refuses every write into it but the mint's.
-- The read chokepoint refuses every read of it but the runtime's own
-  verifier-internal reads. A pattern, a handler, a host read and the CLI read a
-  runtime secret through ordinary transaction reads, and each is refused,
-  whatever link or id names the document.
+- The read chokepoint refuses every transaction read of it but three: a
+  verifier-internal read, which joins nothing; the ordinary read
+  `readRuntimeSecretIntoFlow()` makes, whose marker is private to
+  `runtime-secret.ts`; and a read inside the runtime's own privileged write.
+  A pattern, a handler, and a host read through a cell are refused, whatever
+  link or id names the document.
 
 A key never changes once a trusted one is stored:
 
@@ -83,12 +90,12 @@ A key never changes once a trusted one is stored:
   claim. A value with no stored schema, or whose stored schema carries no
   claim, is untrusted: it was planted through a runtime without the
   chokepoint, and the mint replaces it.
-- A value whose stored schema is named but cannot be resolved, neither in the
-  replica nor in the schema registry, is neither trusted nor untrusted, and
-  the mint refuses rather than writing over it. A replica can hold a document
-  before the schema document its metadata names, and nothing in the commit
-  would catch an overwrite: the schema read is not a commit precondition, and
-  the value read is of the current version.
+- A value whose stored schema is named but resolves neither in the replica nor
+  in the schema registry is neither trusted nor untrusted, and the mint refuses
+  rather than writing over it. A replica can hold a document before the schema
+  document its metadata names, and nothing in the commit would catch an
+  overwrite: the schema read is not a commit precondition, and the value read
+  is of the current version.
 - Two runtimes that mint concurrently both read the absence, and the commit
   that lands second conflicts on that read. Its retry finds the stored key and
   writes nothing.
@@ -96,80 +103,30 @@ A key never changes once a trusted one is stored:
 A new policy digest is a new policy and gets a new key. The module identity in
 the digest is the content identity of the whole file that defines the rules,
 so any edit to that file, a rule or not, draws a new key; so does a change to
-how this runtime lowers rules. Hashes computed under the old key keep their old
-clause, and the old policy's rules keep governing them. An observer who saw
-what the old policy released and then sees what the new one releases has seen
-two independent draws over the same data. A policy whose releases must not be
+how this runtime lowers rules. Hashes computed under the old key keep the old
+clause, and the old policy's rules keep governing them. An observer who saw what
+the old policy released and then sees what the new one releases has seen two
+independent draws over the same data. A policy whose releases must not be
 redrawn belongs in a module of its own that holds the rules and the code they
 endorse and nothing else, and its rules have to carry forward the outcomes the
 old draw already released rather than recompute them.
 
 ## `policySecretHash`
 
-A pattern names the policy through the type of the hash it wants:
+A pattern names the policy through the type of the hash it wants. Here a policy
+draws a winner between two candidates by the order of their hashes, and releases
+the winner:
 
 ```ts
-// Shown for illustration only.
-import { type Confidential, policySecretHash } from "commonfabric";
-import { exchangeRules, type PolicyOf } from "commonfabric/cfc";
+// Shown at module scope.
+import { type Confidential, lift, pattern, policySecretHash } from "commonfabric";
+import {
+  exchangeRule,
+  exchangeRules,
+  type PolicyOf,
+  THIS_POLICY,
+} from "commonfabric/cfc";
 
-export const drawRules = exchangeRules([releaseDraw]);
-export type DrawHash = Confidential<
-  string,
-  readonly [PolicyOf<typeof drawRules>]
->;
-
-const hash = policySecretHash<DrawHash>({ input: itemId });
-```
-
-The transformer lowers the type argument to the schema it injects into the
-call, as it does for `fetchJson<T>()`, and refuses the call without one.
-`PolicyOf<typeof drawRules>` lowers to the compiled marker that names the rule
-set's module, export name and digest. The builtin refuses, and leaves its result
-unset, unless:
-
-- the schema describes a string whose confidentiality is exactly one clause
-  holding exactly one compiled module-policy marker;
-- the runtime can resolve that policy's manifest, registered or installed in
-  the space, under the marker's module and export name;
-- the runtime enforces CFC (`enforce-explicit` or `enforce-strict`) and
-  persists flow labels. Below either, a declared label is not stored, and the
-  hash would be written as public data.
-
-The result is the lowercase hex of the general content hash (`hashOf()` in
-`@commonfabric/data-model`, SHA-256 over the canonical encoding) of
-`{ policySecretHash: { key, input } }`, with the input as stored. It is the same
-for every runtime and every run given the same input, so the lifts that consume
-it stay deterministic. Until the key is available the result is `undefined`,
-and code consuming it has to decide nothing then.
-
-The builtin writes the result into a store of its own, under the schema
-`{ type: "string", ifc: { confidentiality: [<the policy's marker>],
-writeAuthorizedBy: ["policySecretHash"] } }`. The store therefore holds the
-policy's clause, joined with whatever labels the input carried, since the
-builtin reads the input with an ordinary read; and no code other than the
-builtin writes it.
-
-When no trusted key is readable, the builtin obtains one before it writes:
-
-1. it syncs the key's document, which brings the schema document its metadata
-   names, so that a key another runtime minted is the one found;
-2. it mints in a transaction of its own and waits for that commit to settle,
-   so that the key the next step reads is confirmed, not a local draw a
-   concurrent mint could still reject. Every instance of the builtin on a
-   runtime that needs the same key while a mint is in flight waits for that
-   mint, and none computes a hash from it before it settles;
-3. it computes and writes its result in a further transaction, under its own
-   builtin identity.
-
-## How a policy uses it
-
-The policy's endorsed function reads hashes like any other input and computes
-its decision. A rule releases the decision because the endorsed function
-computed it:
-
-```ts
-// Shown for illustration only.
 export const releaseDraw = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: {
@@ -180,57 +137,150 @@ export const releaseDraw = exchangeRule({
         moduleIdentity: THIS_POLICY.moduleIdentity,
         symbol: "drawWinner",
       },
+      inputWitness: {
+        type: "https://commonfabric.org/cfc/atom/TransformedBy",
+        identity: { kind: "builtin", builtinId: "policySecretHash" },
+      },
     }],
   },
   post: { dropClause: true },
 });
+
+export const drawRules = exchangeRules([releaseDraw]);
+
+export type DrawHash = Confidential<
+  string,
+  readonly [PolicyOf<typeof drawRules>]
+>;
+
+/** The candidate whose hash sorts first, once every hash is in. */
+export const drawWinner = lift(
+  (draw: { candidates: string[]; hashes: (string | undefined)[] }): string => {
+    const { candidates, hashes } = draw;
+    if (hashes.some((hash) => hash === undefined)) return "";
+    let first = 0;
+    hashes.forEach((hash, index) => {
+      if (hash! < hashes[first]!) first = index;
+    });
+    return candidates[first];
+  },
+);
+
+export default pattern(() => ({
+  winner: drawWinner({
+    candidates: ["alice", "bob"],
+    hashes: [
+      policySecretHash<DrawHash>({ input: "alice" }),
+      policySecretHash<DrawHash>({ input: "bob" }),
+    ],
+  }),
+}));
 ```
 
-`dropClause` makes the decision public. A rule that should keep it among the
-space's readers adds them as alternatives instead, as `direct-release.tsx` does
-for its readers. A guard on the endorsed function's identity
-releases whatever that function computes over any input a caller chooses, which
-bounds how much a policy can claim; see the next section.
+The transformer lowers the type argument to the schema it injects into the
+call, as it does for `fetchJson<T>()`, and refuses the call without one.
+`PolicyOf<typeof drawRules>` lowers to the compiled marker that names the rule
+set's module, export name and digest. The builtin refuses, and leaves its result
+unset, unless:
+
+- the schema describes a string whose confidentiality is exactly one clause
+  holding exactly one compiled module-policy marker;
+- the input is a string;
+- the runtime enforces CFC (`enforce-explicit` or `enforce-strict`) and
+  persists flow labels. Below either, nothing would refuse a hash written
+  where its label does not fit, or the hash would be written without the
+  flow that carries the clause.
+
+The manifest is not checked up front: the commit that first carries the
+policy's clause installs it or refuses.
+
+The result is the lowercase hex of HMAC-SHA-256, keyed with the key's 32 bytes,
+over the input's UTF-8 bytes (`policySecretHashOf()`). It is the same for every
+runtime and every run given the same input, so the lifts that consume it stay
+deterministic, and it depends on nothing but the key and the input. Until the
+key is available, and while the input is unset, the result is `undefined`, and
+code consuming it has to decide nothing then.
+
+The builtin writes the hash as its result, under its own builtin identity, in a
+transaction that read the key with `readRuntimeSecretIntoFlow()` and the input
+with an ordinary read. The result therefore carries what that transaction's flow
+carries: the policy's clause, every label the input carried, and
+`TransformedBy{builtin policySecretHash}`. A hash of an input another policy
+governs carries both clauses, and each policy's rules can drop only their own.
+
+When no trusted key is readable, the builtin obtains one before it computes:
+
+1. it syncs the key's document, which brings the schema document its metadata
+   names, so that a key another runtime minted is the one found;
+2. it mints in a transaction of its own and waits for that commit to settle,
+   so that the key it computes from is confirmed, not a local draw a
+   concurrent mint could still reject. Every instance of the builtin on a
+   runtime that needs the same key while a mint is in flight waits for that
+   mint, and none computes from it before it settles;
+3. it runs again, and computes.
+
+## How a policy uses it
+
+The policy's endorsed function, `drawWinner` above, reads hashes like any other
+input and computes its decision. The rule releases the decision because the
+endorsed function computed it, and requires, through its input witness, that
+every confidential input the function read was a hash the builtin wrote.
+
+The witness is what refuses a stand-in. Code can derive from a hash a value that
+selects one of two outcomes by one bit of the hash, and feed it to the endorsed
+function in the hash's place; under a rule guarded on the endorsed function's
+identity alone, whether the release fired reads out the bit, one run at a time.
+The stand-in carries its own code's `TransformedBy`, not the builtin's, so a
+rule requiring the builtin as a witness refuses it
+(`cfc-transformed-by-input-witnesses.md`). `dropClause` makes the decision
+public; a rule that should keep it among the space's readers adds them as
+alternatives instead, as `direct-release.tsx` does for its readers.
 
 ## What this does not cover
 
-The key is outside every gap below but the first: no code reads it, and what
-the builtin derives from it is a keyed hash of an input the caller chose. Each
-hash is protected as any value under the policy's clause is, and no better.
+No code reads the key, so the gaps below reach a hash, not the key, except
+where the first says otherwise. A hash is protected as any value under its
+policy's clause is, and no better.
 
 - **Storage and replicas.** The key is stored in plaintext in the space, as
-  every value is: the space's service, every replica of the space, and a
-  modified runtime of any member can read it, and a modified runtime can also
-  write a key of its choosing under a forged writer claim. The protection is
-  the honest runtime's.
+  every value is. The space's service, every replica of the space, a modified
+  runtime of any member, and tooling that reads the store below the
+  transaction layer (`cf inspect` reads the space's SQLite file) can read it,
+  and a modified runtime can write a key of its choosing under a forged writer
+  claim. The protection is the honest runtime's.
 - **Chosen inputs.** The builtin hashes any input any code passes it, so any
   code holds the hash of any input it can name, under the policy's clause. An
   endorsed function that compares a hash against a caller-chosen number is an
-  oracle for that hash, which is chapter 10's boundary-probing attack; a hash
-  of a low-entropy value is a dictionary oracle for the value wherever a rule
-  releases hashes themselves. Such a rule needs integrity on its other inputs
-  (§3.8.4).
-- **Stand-ins.** Code can derive from a hash a value that selects one of two
-  outcomes by one bit of the hash, and feed it to the endorsed function in the
-  hash's place, which reads the bit from whether the release fired. A rule
-  refuses a stand-in only by requiring the provenance of its inputs. This
-  runtime's input witness (`cfc-transformed-by-input-witnesses.md`) holds only
-  when every confidential input carried the same witness, so a release reading a
-  hash and a confidential count written by different code cannot require one;
-  the specification's per-input witnesses (§8.7.1, §8.9.3) and per-field input
-  requirements (§8.10.3) can, and this runtime does not implement them for lift
-  arguments. Until it does, a randomized threshold over a confidential count,
-  and noise over a confidential aggregate, are open to stand-ins. The hash
-  carries no `TransformedBy` of the builtin for such a requirement to name yet;
-  the stamp belongs on the builtin's output, which is recomputed on every run,
-  so adding it redraws nothing.
+  oracle for that hash, the boundary-probing attack among chapter 10's attack
+  examples; a hash of a low-entropy value is a dictionary oracle for the value
+  wherever a rule releases hashes themselves. Such a rule needs integrity on
+  its other inputs (§3.8.4).
+- **A second confidential input.** This runtime's input witness holds only
+  when every confidential input the endorsed function read carried it. A
+  release that compares a secret threshold with a confidential count written
+  by the policy's own code reads two confidential inputs with two different
+  writers, so no witness holds, and a rule requiring one never fires. The
+  specification's per-input witnesses (§8.7.1, §8.9.3) and per-field input
+  requirements (§8.10.3) express what such a rule needs, and this runtime does
+  not implement them for lift arguments. Until it does, a randomized threshold
+  over a confidential count, and noise over a confidential aggregate, can
+  require only the endorsed function's identity, and are open to stand-ins.
 - **Which value a consumer reads.** Pattern wiring decides which hash an
   endorsed function reads, and a public value put in a hash's place is no
   confidential input at all, so no witness refuses it.
+- **A runtime that does not enforce.** The builtin's mode gate binds only the
+  runtime that computes a hash. A runtime of the same space that runs below an
+  enforcing mode, as a host may configure a browser or remote client, refuses
+  nothing its patterns do with a hash they read.
+- **A pattern updated onto an edited policy.** A hash computed under the old
+  policy stays at its result location with the old clause until the builtin
+  writes there again; where the store-label monotonicity check is enforced, a
+  location may refuse the new clause, and the new policy's releases then stall.
 - **What every confidential value leaks.** Code that reads a hash can end its
   transaction early, run longer, fail, or write a runtime-owned store whose
   label then rises, depending on the hash; it can log it to the host's console;
-  and where the deployment declares no sink ceilings, it can send it. These
-  are the gaps every label leaves open in this runtime, and the hashes add
-  none.
+  it can derive a document id from it, and use it where no render ceiling, LLM
+  observation ceiling or sink ceiling is declared, as this runtime's default
+  posture declares none for the network. These are the gaps every label leaves
+  open here, and the hashes add none.
 - **A handler's `Math.random`.** It is unchanged.
