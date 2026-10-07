@@ -173,7 +173,7 @@ injection point that lets a lib function reuse a held controller:
   rest of the list follows. A supplied connection is the caller's to close,
   so `withAcl` disposes only a runtime it opened itself.
 - **Hardcode `loadPieces`:** `setPieceSlug`, `savePiecePattern`,
-  `applyPieceInput`, `linkSqliteDiskSource`, `resetHomePattern`, and
+  `applyPieceInput`, `linkSqliteDiskSource`, and
   `commands/deps.ts`. Each opens a fresh runtime and WebSocket per call. No
   shuttle-v1 verb reaches one, so each is a conversion for the milestone
   that first calls it.

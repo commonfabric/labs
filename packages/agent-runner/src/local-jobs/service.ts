@@ -12,6 +12,12 @@ import type { HarnessJobOptions } from "../harness-job.ts";
 import { createLocalJobApi } from "./api.ts";
 import { LocalJobLane, type LocalJobLaneOptions } from "./lane.ts";
 import { readLocalJobProfiles } from "./profiles.ts";
+import {
+  type LaneReadiness,
+  type LaneTransition,
+  LOCAL_JOB_ROUTES,
+  transitionLane,
+} from "./readiness.ts";
 import { LocalJobStore } from "./store.ts";
 
 /** Where and how the runner serves local jobs. */
@@ -36,6 +42,9 @@ export interface LocalJobsConfig {
 
   /** The runner's own model, for a profile that names none. */
   model?: string;
+
+  /** Labs revision captured when this runner starts; null when unknown. */
+  labsCommit?: string | null;
 }
 
 /** The running service. */
@@ -45,6 +54,9 @@ export interface LocalJobsService {
 
   /** Records whether the Fabric lane is running, for `/health`. */
   setFabricLane(running: boolean): void;
+
+  /** Records a Fabric lifecycle change with its reason. */
+  setFabricReadiness(next: LaneTransition): void;
 
   /** Stops serving and the lane, then closes the store. */
   stop(): Promise<void>;
@@ -105,7 +117,16 @@ export const startLocalJobs = async (
   let tokenOwned = false;
   let socketOwned = false;
   let ready = false;
-  let fabricLane = false;
+  let fabricReadiness: LaneReadiness = {
+    state: "starting",
+    since: new Date().toISOString(),
+    reason: "Connecting and subscribing to the Fabric queue",
+  };
+  let localReadiness: LaneReadiness = {
+    state: "starting",
+    since: new Date().toISOString(),
+    reason: "Initializing the private socket and local job lane",
+  };
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = (): Promise<void> =>
     cleanupPromise ??= (async () => {
@@ -193,15 +214,35 @@ export const startLocalJobs = async (
       kick: () => lane!.kick(),
       cancel: (id) => lane!.cancel(id),
       browserHost: (id) => lane!.browserHost(id),
-      fabricLane: () => fabricLane,
+      health: () => ({
+        ok: true,
+        lanes: { local: ready, fabric: fabricReadiness.state === "up" },
+        readiness: { local: localReadiness, fabric: fabricReadiness },
+        routes: LOCAL_JOB_ROUTES,
+        profileFile: config.profilesPath,
+        storePath,
+        labsCommit: config.labsCommit ?? null,
+      }),
       stopping: stopping.signal,
     });
     server = Deno.serve(
       { path: config.socketPath, transport: "unix", onListen: () => {} },
-      (request) =>
-        ready
-          ? api(request)
-          : Response.json({ ok: false, code: "starting" }, { status: 503 }),
+      async (request) => {
+        if (ready) return await api(request);
+        if (
+          request.method === "GET" &&
+          new URL(request.url).pathname === "/health"
+        ) {
+          const response = await api(request);
+          return response.status === 200
+            ? new Response(response.body, {
+              status: 503,
+              headers: response.headers,
+            })
+            : response;
+        }
+        return Response.json({ ok: false, code: "starting" }, { status: 503 });
+      },
     );
     socketOwned = true;
     await (deps.chmod ?? Deno.chmod)(config.socketPath, 0o600);
@@ -211,11 +252,21 @@ export const startLocalJobs = async (
         [...profiles.keys()].join(", ")
       }; at most ${config.maxConcurrent} at once)`,
     );
+    localReadiness = transitionLane(localReadiness, {
+      state: "up",
+      reason: null,
+    });
     ready = true;
     return {
       tokenPath,
       setFabricLane(running) {
-        fabricLane = running;
+        fabricReadiness = transitionLane(fabricReadiness, {
+          state: running ? "up" : "down",
+          reason: running ? null : "The Fabric lane stopped",
+        });
+      },
+      setFabricReadiness(next) {
+        fabricReadiness = transitionLane(fabricReadiness, next);
       },
       stop: cleanup,
     };

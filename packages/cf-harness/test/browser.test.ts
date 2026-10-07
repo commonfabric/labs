@@ -37,7 +37,9 @@ import {
   type BrowserToolErrorOutput,
   type BrowserToolInput,
   type BrowserToolSuccessOutput,
-  planBrowserAction,
+  type LeaseActionPlan,
+  parseBrowserCall,
+  planLeaseAction,
 } from "../src/tools/browser.ts";
 
 const signer = await Identity.fromPassphrase("cf-harness browser tool");
@@ -115,24 +117,32 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
+/** The lease's plan for `input`, or the refusal of the input. */
+const planOf = (input: BrowserToolInput): LeaseActionPlan => {
+  const parsed = parseBrowserCall(input);
+  return parsed.error !== undefined
+    ? { error: parsed.error }
+    : planLeaseAction(parsed.call);
+};
+
 const argvOf = (input: BrowserToolInput): readonly string[] => {
-  const plan = planBrowserAction(input);
-  if (plan.error !== undefined) {
-    throw new Error(`expected a plan, got error: ${plan.error}`);
+  const plan = planOf(input);
+  if (plan.argv === undefined) {
+    throw new Error(`expected an argument list, got ${JSON.stringify(plan)}`);
   }
   return plan.argv;
 };
 
 const errorOf = (input: BrowserToolInput): string => {
-  const plan = planBrowserAction(input);
+  const plan = planOf(input);
   if (plan.error === undefined) {
-    throw new Error(`expected an error, got argv: ${plan.argv.join(" ")}`);
+    throw new Error(`expected an error, got ${JSON.stringify(plan)}`);
   }
   return plan.error;
 };
 
 describe("browser", () => {
-  describe("planBrowserAction", () => {
+  describe("parseBrowserCall and planLeaseAction", () => {
     it("refuses an action outside the vocabulary", () => {
       expect(errorOf({ action: "eval" })).toContain("action must be one of");
       expect(errorOf({})).toContain("action must be one of");
@@ -191,6 +201,22 @@ describe("browser", () => {
         .toBe("open only allows http(s) URLs");
       expect(errorOf({ action: "open", url: "javascript:alert(1)" }))
         .toBe("open only allows http(s) URLs");
+      // A URL parser drops these characters, so the URL it would judge is
+      // not the string agent-browser would be handed.
+      for (
+        const url of [
+          " https://example.com/",
+          "https://example.com/ ",
+          "https://exa\tmple.com/",
+          "https://example.com/\npath",
+          "https://example.com/\x00",
+          "https:example.com/",
+        ]
+      ) {
+        expect(errorOf({ action: "open", url })).toBe(
+          "open only allows http(s) URLs",
+        );
+      }
     });
 
     it("plans snapshot with and without interactive refs", () => {
@@ -199,6 +225,13 @@ describe("browser", () => {
         .toEqual(["snapshot", "-i"]);
       expect(argvOf({ action: "snapshot", interactive: false }))
         .toEqual(["snapshot"]);
+      expect(
+        errorOf({
+          action: "snapshot",
+          interactive: "yes" as unknown as boolean,
+        }),
+      )
+        .toBe("snapshot interactive must be true or false");
     });
 
     it("plans get for title, url, and targeted text", () => {
@@ -281,7 +314,11 @@ describe("browser", () => {
       expect(argvOf({ action: "select", ref: "@e4", value: "option-2" }))
         .toEqual(["select", "@e4", "option-2"]);
       expect(errorOf({ action: "fill", ref: "@e2" }))
-        .toBe("fill requires a string value");
+        .toBe("fill requires a value or a valueHandle");
+      expect(
+        errorOf({ action: "type", ref: "@e2", value: 7 as unknown as string }),
+      )
+        .toBe("type requires a value or a valueHandle");
       expect(errorOf({ action: "select", value: "option-2" }))
         .toBe("select requires a ref starting with @, taken from a snapshot");
     });
@@ -295,8 +332,7 @@ describe("browser", () => {
         "press",
         "Control+a",
       ]);
-      expect(errorOf({ action: "press" }))
-        .toBe("press requires one key of letters, digits, _, +, ., or -");
+      expect(errorOf({ action: "press" })).toBe("press requires a key");
       expect(errorOf({ action: "press", key: "Enter; rm -rf /" }))
         .toBe("press requires one key of letters, digits, _, +, ., or -");
     });
@@ -337,6 +373,29 @@ describe("browser", () => {
     it("refuses a wait urlPattern that is not a string", () => {
       expect(errorOf({ action: "wait", urlPattern: 7 as unknown as string }))
         .toBe("wait urlPattern requires a non-file pattern");
+    });
+
+    it("plans a call that gives a handle as a binding its value completes", () => {
+      const fill = planOf({
+        action: "fill",
+        ref: "@e1",
+        valueHandle: " cfh:a:22222 ",
+      });
+      const open = planOf({ action: "open", urlHandle: "cfh:a:33333" });
+
+      expect(fill).toMatchObject({
+        binding: { field: "value", handle: "cfh:a:22222" },
+      });
+      expect(fill.binding?.complete("Ada")).toEqual(["fill", "@e1", "Ada"]);
+      expect(open).toMatchObject({
+        binding: { field: "url", handle: "cfh:a:33333" },
+      });
+      expect(open.binding?.complete("https://example.com/")).toEqual([
+        "open",
+        "https://example.com/",
+      ]);
+      expect(planOf({ action: "fill", ref: "@e1", value: "Ada" }).binding)
+        .toBeUndefined();
     });
 
     it("refuses a handle field outside its action's row", () => {
@@ -610,6 +669,34 @@ describe("browser", () => {
       expect(runner.calls).toEqual([]);
     });
 
+    it("refuses what only a browser host offers without running anything", async () => {
+      const runner = new FakeProcessRunner();
+      const engine = createEngine(runner);
+
+      const back = await engine.invokeBuiltinTool("browser", {
+        action: "back",
+      });
+      const point = await engine.invokeBuiltinTool("browser", {
+        action: "click",
+        x: 10,
+        y: 20,
+      });
+
+      expect(back.output).toMatchObject({
+        status: "error",
+        code: "invalid_input",
+        message:
+          "the back action needs a browser host, such as the Weaver; this run's browser is a Browser Access lease",
+      });
+      expect(point.output).toMatchObject({
+        status: "error",
+        code: "invalid_input",
+        message:
+          "a click at a point needs a browser host, such as the Weaver; this run's browser is a Browser Access lease",
+      });
+      expect(runner.calls).toEqual([]);
+    });
+
     it("refuses a valueHandle when the run has no fabric session", async () => {
       const ref = await seedRef("passphrase", "hunter2");
       const runner = new FakeProcessRunner([pageAt(`${ALLOWED_ORIGIN}/login`)]);
@@ -819,10 +906,9 @@ describe("browser", () => {
       }
     });
 
-    it("refuses a resolved URL the action plan rejects, even from an allowed origin", async () => {
-      // The plan is the authority on what agent-browser is asked to do, and
-      // it runs again over the resolved input: a URL whose origin the operator
-      // allowed still has to be one the open action accepts.
+    it("refuses a resolved URL that is not an http(s) URL as written, even from an allowed origin", async () => {
+      // A URL parser drops the leading space, so the origin is one the
+      // operator allowed; agent-browser would be handed the string as written.
       const ref = await seedRef("target-url", " https://example.com/inbox");
       const runner = new FakeProcessRunner();
       const engine = createEngine(runner);

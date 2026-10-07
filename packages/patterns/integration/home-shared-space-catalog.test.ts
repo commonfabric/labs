@@ -824,7 +824,7 @@ describe("Home shared-space catalog", () => {
           runtime,
         );
         await expect(controller.recreateDefaultPattern()).rejects.toThrow(
-          "Cannot replace an existing Home root",
+          "Cannot recreate an identity Home root",
         );
         expect((await controller.getDefaultPattern(false))?.equals(home)).toBe(
           true,

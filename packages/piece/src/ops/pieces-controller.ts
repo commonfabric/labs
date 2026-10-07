@@ -496,6 +496,10 @@ export class PiecesController<T = unknown> {
   /**
    * Link the default pattern cell to the space cell.
    * This should be called after the default pattern is created.
+   *
+   * Refuses to replace an identity Home's root: a Home that already holds one
+   * is changed only in place, as {@link #refuseHomeRoot} says. Linking the
+   * first root of a Home that holds none is what first open does.
    * @param defaultPatternCell - The cell representing the default pattern
    */
   async linkDefaultPattern(
@@ -503,6 +507,11 @@ export class PiecesController<T = unknown> {
   ): Promise<void> {
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
+      // Read in the transaction, as the stored pointer: a retry reruns this
+      // against fresh state, and a target that cannot load is still a root.
+      if (spaceCellWithTx.key("defaultPattern").getRaw() !== undefined) {
+        this.#refuseHomeRoot("replace");
+      }
       spaceCellWithTx.key("defaultPattern").set(defaultPatternCell.withTx(tx));
     });
     if (error) {
@@ -517,8 +526,12 @@ export class PiecesController<T = unknown> {
   /**
    * Clears the defaultPattern link from the space cell.
    * Used when the default pattern is being deleted.
+   *
+   * Refuses an identity Home: its root is the record of the account data it
+   * owns, and nothing that drops that pointer is an account operation.
    */
   async unlinkDefaultPattern(): Promise<void> {
+    this.#refuseHomeRoot("unlink");
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
       spaceCellWithTx.key("defaultPattern").set(undefined);
@@ -1455,6 +1468,9 @@ export class PiecesController<T = unknown> {
         .key("defaultPattern");
       const linked = defaultPatternCell.get();
       if (linked && piece.resolveAsCell().equals(linked.resolveAsCell())) {
+        // Removing a Home's own root from its registry would drop the root
+        // pointer with it; that is the unlink the Home refuses.
+        this.#refuseHomeRoot("unlink");
         defaultPatternCell.set(undefined);
       }
       return true;
@@ -2034,8 +2050,33 @@ export class PiecesController<T = unknown> {
   }
 
   /**
+   * The refusal every root-replacing operation on an identity Home shares.
+   *
+   * A Home is created once, on its user's first open
+   * ({@link ensureDefaultPattern}), and changes only by an in-place source
+   * update, which retains the account data its root owns: profiles,
+   * favorites, navigation, the shared-space catalog and the inbox pointer.
+   * There is no path that drops or replaces that root, absent or present,
+   * loadable or not. A Home that will not load is repaired in place; a
+   * destructive recovery, should one ever be needed, is a separate contract
+   * (docs/common/conventions/HOME_SPACE.md, "A Home that will not load").
+   * `linkDefaultPattern` shares it once a Home holds a root; before that it is
+   * the creation step itself. `remove` shares it for a Home's own root, which
+   * a registry may list, since dropping the registry entry drops the pointer.
+   */
+  #refuseHomeRoot(verb: "recreate" | "replace" | "unlink"): void {
+    if (this.getSpace() !== this.runtime.userIdentityDID) return;
+    throw new Error(
+      `Cannot ${verb} an identity Home root. A Home is created on its ` +
+        "user's first open and changed only by an in-place source update, " +
+        "which preserves the account data it owns.",
+    );
+  }
+
+  /**
    * Creates a fresh default pattern, replacing a non-Home space's root.
-   * An existing identity Home must be updated in place to retain account data.
+   *
+   * Never an identity Home, absent or present: see {@link #refuseHomeRoot}.
    *
    * @param options.customProgram - A pre-compiled program to use instead of the default URL-based pattern
    * @returns The newly created default pattern piece
@@ -2051,63 +2092,39 @@ export class PiecesController<T = unknown> {
       );
     }
 
-    // Determine which pattern to use based on space type
-    const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
-
-    // A Home space comes into being on its user's first open. Any other space
-    // is created on purpose, and one that was not is not conjured by opening,
-    // so this is settled before anything touches the space.
-    if (!isHomeSpace && !(await this.runtime.spaceExists(this.getSpace()))) {
+    // Settled before anything touches the space: a Home is never recreated,
+    // and a space that was not created on purpose is not conjured here.
+    this.#refuseHomeRoot("recreate");
+    if (!(await this.runtime.spaceExists(this.getSpace()))) {
       throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
     }
 
     const spaceCellContents = this.getSpaceCellContents();
     await spaceCellContents.sync();
-    const protectHome = (cell: Cell<SpaceCellContents>) => {
-      if (isHomeSpace && cell.key("defaultPattern").getRaw() !== undefined) {
-        throw new Error(
-          "Cannot replace an existing Home root. Update its source in place " +
-            "to preserve account data.",
-        );
-      }
-    };
-    protectHome(spaceCellContents);
-    if (!isHomeSpace) {
-      const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
-      if (defaultPatternRef) this.runtime.runner.stop(defaultPatternRef);
-      await this.unlinkDefaultPattern();
-    }
+    const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
+    if (defaultPatternRef) this.runtime.runner.stop(defaultPatternRef);
+    await this.unlinkDefaultPattern();
 
     let patternConfig: { name: string; source: string; cause: string };
     let pattern;
 
     if (options?.customProgram) {
       patternConfig = {
-        name: isHomeSpace ? "Home" : "DefaultPieceList",
+        name: "DefaultPieceList",
         source: "custom",
-        cause: isHomeSpace
-          ? `home-pattern-${Date.now()}`
-          : `space-root-${Date.now()}`,
+        cause: `space-root-${Date.now()}`,
       };
       pattern = await this.runtime.patternManager.compilePattern(
         options.customProgram,
         { space: this.getSpace() },
       );
     } else {
-      if (isHomeSpace) {
-        patternConfig = {
-          name: "Home",
-          source: HOME_PATTERN_SOURCE,
-          cause: `home-pattern-${Date.now()}`,
-        };
-      } else {
-        const customUrl = await this.#getDefaultAppUrlFromHome();
-        patternConfig = {
-          name: "DefaultPieceList",
-          source: customUrl || DEFAULT_APP_PATTERN_SOURCE,
-          cause: `space-root-${Date.now()}`,
-        };
-      }
+      const customUrl = await this.#getDefaultAppUrlFromHome();
+      patternConfig = {
+        name: "DefaultPieceList",
+        source: customUrl || DEFAULT_APP_PATTERN_SOURCE,
+        cause: `space-root-${Date.now()}`,
+      };
 
       const patternUrl = patternSourceUrl(
         patternConfig.source,
@@ -2128,8 +2145,6 @@ export class PiecesController<T = unknown> {
     let pieceCell: Cell<NameSchema>;
 
     const { error } = await this.runtime.editWithRetry((tx) => {
-      // First-open initializers may have installed Home during compilation.
-      protectHome(spaceCellContents.withTx(tx));
       // Create piece cell within this transaction
       pieceCell = this.runtime.getCell<NameSchema>(
         this.getSpace(),

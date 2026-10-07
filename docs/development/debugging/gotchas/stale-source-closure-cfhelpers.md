@@ -24,7 +24,7 @@ stored bytes match their key), not *pristineness* (the bytes are valid
 transformer input). A poisoned closure is self-consistent and verifies clean.
 
 Default patterns are disproportionately affected because they are seeded once
-(`cf space set-home`) and rarely redeployed, while dev patterns mint fresh
+(on the space's first open) and rarely redeployed, while dev patterns mint fresh
 closures on every deploy.
 
 **Fix:** Update the piece in place with `cf piece setsrc`, supplying pristine

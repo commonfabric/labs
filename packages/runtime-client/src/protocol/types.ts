@@ -449,9 +449,6 @@ export enum RequestType {
    */
   GetSpaceRootPattern = "pattern:getSpaceRoot",
 
-  /** Replaces a space's root pattern with a freshly created one. */
-  RecreateSpaceRootPattern = "pattern:recreateSpaceRoot",
-
   /**
    * Creates a piece in a space from a URL or a program, optionally running it
    * once created.
@@ -2592,16 +2589,6 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
   start?: boolean;
 };
 
-/** The {@link RequestType.RecreateSpaceRootPattern} request. */
-export type RecreateSpaceRootPatternRequest = BaseRequest & {
-  type: RequestType.RecreateSpaceRootPattern;
-
-  /**
-   * The space whose root pattern to replace.
-   */
-  space: DID;
-};
-
 /**
  * Which document a request means by a piece: an id, and the scope that id is
  * resolved in within whichever space the request names. A piece reached
@@ -3360,7 +3347,6 @@ export type IPCClientRequest =
   | FlushCompileCacheWritesRequest
   | PieceCreateRequest
   | GetSpaceRootPatternRequest
-  | RecreateSpaceRootPatternRequest
   | PieceGetRequest
   | PieceGetSlugRequest
   | SlugResolveRequest
@@ -4488,10 +4474,6 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse;
-  };
-  [RequestType.RecreateSpaceRootPattern]: {
-    request: RecreateSpaceRootPatternRequest;
     response: PieceResponse;
   };
   // Diagnosis requests

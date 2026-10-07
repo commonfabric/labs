@@ -2945,19 +2945,23 @@ page.
 
 No operation names this device, its network, or an address written as an IP
 literal: `open`, a `urlHandle`'s value, and a `urlPattern` naming a host are
-refused here, and the host refuses such a load whatever starts it. Once a
-hand-off is sent, the page may hold the owner's sign-in, however the hand-off
-ends: finished, declined, refused, withheld by the run's read ceiling, or never
-answered because the run withdrew it. From then on the session can only be read
-and opened on the web origin of the last page the run saw before it first handed
-the page off: `click`, `check`, `press`, `fill`, `type`, and `select` change the
-page, `back` and `forward` leave it for an address nobody checked, and `reload`
-may send it again, so all of them are refused. The origin is checked against the
-address the host committed for each result, not only the one an `open` asked
-for, so a result the owner, the page, or a redirect took to another origin is
-withheld; a hand-off the owner ends elsewhere tells the run only how it ended
-and where. A page handed off on no web origin the run knows leaves no site to
-open.
+refused here, and the host refuses such a load whatever starts it. A host is
+judged as a URL parser reads it, so `http://0x7f.1/` names 127.0.0.1, and a
+`urlPattern` may put a glob in its host only as the labels leading a name on the
+open web, as in `https://*.shop.example/**`. A pattern that names no host, such
+as `**/checkout`, may match any page, which the host keeps off this device and
+its network. Once a hand-off is sent, the page may hold the owner's sign-in,
+however the hand-off ends: finished, declined, refused, withheld by the run's
+read ceiling, or never answered because the run withdrew it. From then on the
+session can only be read and opened on the web origin of the last page the run
+saw before it first handed the page off: `click`, `check`, `press`, `fill`,
+`type`, and `select` change the page, `back` and `forward` leave it for an
+address nobody checked, and `reload` may send it again, so all of them are
+refused. The origin is checked against the address the host committed for each
+result, not only the one an `open` asked for, so a result the owner, the page,
+or a redirect took to another origin is withheld; a hand-off the owner ends
+elsewhere tells the run only how it ended and where. A page handed off on no web
+origin the run knows leaves no site to open.
 
 A value reaches a page in one of two ways, and the host is told which:
 

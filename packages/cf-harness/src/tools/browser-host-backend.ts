@@ -11,10 +11,7 @@
  */
 
 import {
-  BROWSER_HOST_HANDOFF_REASONS,
   BROWSER_HOST_KEYS,
-  BROWSER_HOST_LOAD_STATES,
-  BROWSER_HOST_SCROLL_DIRECTIONS,
   type BrowserHostOperation,
   type BrowserHostRefusal,
   type BrowserHostResult,
@@ -34,12 +31,16 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { REFERENT_HANDLE_TOKEN_PREFIX } from "../contracts/handle-table.ts";
 import { createHarnessImageAttachmentFromBase64 } from "../image-attachments.ts";
 import type {
+  BrowserCall,
   BrowserToolAction,
   BrowserToolErrorCode,
-  BrowserToolInput,
   BrowserToolOutput,
 } from "./browser.ts";
-import { httpOriginOf, resolveReturnReferent } from "./handle-values.ts";
+import {
+  httpOriginOf,
+  isHttpUrl,
+  resolveReturnReferent,
+} from "./handle-values.ts";
 import type { HarnessToolContext } from "./types.ts";
 
 const MAX_HOST_OUTPUT_CHARS = 20_000;
@@ -138,15 +139,29 @@ const LOCAL_NAME_SUFFIXES = [
 ];
 
 /**
- * Whether `hostname`, a parsed URL's, names this device, its network, or an
- * address written as an IP literal. A name is judged by its spelling; the
- * host refuses what it resolves to.
+ * Whether `host`, with or without a port, names this device, its network, or
+ * an address written as an IP literal, or is no host at all. It is judged as a
+ * URL parser reads it, so an address in any form the parser accepts, such as
+ * `0x7f.1`, `2130706433`, or `%31%32%37.0.0.1`, is the address it denotes. A
+ * name is judged by its spelling; the host refuses what it resolves to.
  */
-const isLocalHost = (hostname: string): boolean => {
-  const name = hostname.toLowerCase().replace(/\.$/, "");
-  return name === "localhost" || !name.includes(".") ||
-    name.startsWith("[") || /^[\d.]+$/.test(name) ||
-    LOCAL_NAME_SUFFIXES.some((suffix) => name.endsWith(suffix));
+const isLocalHost = (host: string): boolean => {
+  const name = URL.parse(`http://${host}/`)?.hostname.replace(/\.$/, "");
+  return name === undefined || !name.includes(".") || name.startsWith("[") ||
+    /^[\d.]+$/.test(name) ||
+    LOCAL_NAME_SUFFIXES.some((suffix) => `.${name}`.endsWith(suffix));
+};
+
+/**
+ * Whether `host`, the host and port a URL pattern names, may stand for this
+ * device, its network, or an IP address. A glob may only stand for the labels
+ * leading a name, as in `*.shop.example`, which is judged with one label in
+ * place of the glob; anywhere else, as in `127.0.0.*`, `*.*`, or a port of
+ * `*`, it may stand for a local address.
+ */
+const mayMatchLocalHost = (host: string): boolean => {
+  const name = host.replace(/^\*\./, "x.");
+  return /[*?[\]{}\\]/.test(name) || isLocalHost(name);
 };
 
 /**
@@ -158,15 +173,14 @@ const destinationError = (
   host: HarnessBrowserHost,
   url: string,
 ): string | undefined => {
-  const origin = httpOriginOf(url);
-  if (origin === undefined) {
+  if (!isHttpUrl(url)) {
     return "open only allows http(s) URLs";
   }
   if (isLocalHost(new URL(url).hostname)) {
     return "open only reaches the open web: not this device, its network, or an IP address";
   }
   const handedOff = sessionOf(host).handedOff;
-  if (handedOff !== undefined && origin !== handedOff.origin) {
+  if (handedOff !== undefined && httpOriginOf(url) !== handedOff.origin) {
     return `${handedOffOn(handedOff)}, so it ${
       handedOff.origin === undefined
         ? "may open no site"
@@ -198,33 +212,16 @@ type PlanResult =
   | { plan: PlannedOperation; error?: undefined }
   | { plan?: undefined; error: string };
 
-const isRef = (ref: unknown): ref is string =>
-  typeof ref === "string" && ref.startsWith("@");
-
-const refError = (action: string): string =>
-  `${action} requires a ref starting with @, taken from a snapshot`;
-
-/** The member of `values` that `value` is, or `undefined` when it is none. */
-const memberOf = <T extends string>(
-  values: readonly T[],
-  value: unknown,
-): T | undefined => values.find((member) => member === value);
-
-const isPoint = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0;
-
 /**
- * The host a URL pattern names, as `scheme://host/...` does, a glob for its
- * scheme included, or `undefined` for a pattern that names none. A bracketed
- * IPv6 literal is returned bracketed.
+ * The host and port a URL pattern names, as `scheme://host:port/...` does, a
+ * glob for its scheme included, or `undefined` for a pattern that names none.
+ * A pattern names a host when its first `/` begins a `//`, and everything from
+ * there to the next `/` is the authority, since a URL glob may treat `?` as a
+ * wildcard.
  */
 const patternHost = (pattern: string): string | undefined => {
-  const authority = /^[^/?#]*:\/\/([^/?#]*)/.exec(pattern)?.[1];
-  if (authority === undefined) {
-    return undefined;
-  }
-  const host = authority.slice(authority.lastIndexOf("@") + 1);
-  return host.startsWith("[") ? host : host.split(":")[0];
+  const authority = /^[^/]*\/\/([^/]*)/.exec(pattern)?.[1];
+  return authority?.slice(authority.lastIndexOf("@") + 1);
 };
 
 /**
@@ -234,59 +231,106 @@ const patternHost = (pattern: string): string | undefined => {
  * was meant for.
  */
 const handleError = (field: string, handle: string): string | undefined =>
-  handle.trim().startsWith(REFERENT_HANDLE_TOKEN_PREFIX)
+  handle.startsWith(REFERENT_HANDLE_TOKEN_PREFIX)
     ? undefined
-    : `${field} takes a return referent (cfh:v:) on this run's browser: a browser host enters no value from the owner's space`;
+    : `${field} takes a return referent (cfh:v:) on this run's browser: a browser host takes no handle to the owner's space`;
 
 /**
- * The operation `input` describes, or the handle it binds and how the value
- * completes the operation once resolved. `input` has already passed the
- * tool's field checks, so every field it carries is one its action reads.
+ * The operation `call` describes, or the handle it binds and how the value
+ * completes the operation once resolved, or why this run's host may not
+ * carry the call out.
  */
 const planHostOperation = (
   host: HarnessBrowserHost,
-  input: BrowserToolInput,
-  action: BrowserToolAction,
+  call: BrowserCall,
 ): PlanResult => {
   const done = (operation: BrowserHostOperation): PlanResult => ({
     plan: { operation },
   });
   const handedOff = sessionOf(host).handedOff;
-  if (ACTING_ACTIONS.has(action) && handedOff !== undefined) {
+  if (ACTING_ACTIONS.has(call.action) && handedOff !== undefined) {
     return {
       error: `${
         handedOffOn(handedOff)
-      }, so it may hold their sign-in, and only reading it and opening that site are allowed: ${action} is refused`,
+      }, so it may hold their sign-in, and only reading it and opening that site are allowed: ${call.action} is refused`,
     };
   }
-  switch (action) {
+  switch (call.action) {
     case "open": {
-      if (input.urlHandle !== undefined) {
-        const error = handleError("urlHandle", input.urlHandle);
-        if (error !== undefined) {
-          return { error };
-        }
-        return {
-          plan: {
-            binding: {
-              field: "url",
-              handle: input.urlHandle,
-              complete: ({ text, description }) =>
-                destinationError(host, text) ?? {
-                  action: "open",
-                  url: { kind: "handle-value", text, description },
-                },
-            },
+      const { url } = call;
+      if ("text" in url) {
+        const error = destinationError(host, url.text);
+        return error === undefined
+          ? done({ action: "open", url: url.text })
+          : { error };
+      }
+      const error = handleError("urlHandle", url.handle);
+      if (error !== undefined) {
+        return { error };
+      }
+      return {
+        plan: {
+          binding: {
+            field: "url",
+            handle: url.handle,
+            complete: ({ text, description }) =>
+              destinationError(host, text) ?? {
+                action: "open",
+                url: { kind: "handle-value", text, description },
+              },
           },
+        },
+      };
+    }
+    case "wait": {
+      if ("ms" in call) {
+        return {
+          error:
+            "this run's browser waits for something to happen rather than for a time: wait for a ref, a loadState, or a urlPattern",
         };
       }
-      if (typeof input.url !== "string" || input.url === "") {
-        return { error: "open requires a url" };
+      const named = "urlPattern" in call
+        ? patternHost(call.urlPattern)
+        : undefined;
+      return named !== undefined && mayMatchLocalHost(named)
+        ? {
+          error:
+            "wait urlPattern names the open web only: not this device, its network, or an IP address",
+        }
+        : done(call);
+    }
+    case "press": {
+      const key = BROWSER_HOST_KEYS.find((known) => known === call.key);
+      return key !== undefined ? done({ action: "press", key }) : {
+        error: `press requires one of the keys ${BROWSER_HOST_KEYS.join(", ")}`,
+      };
+    }
+    case "fill":
+    case "type":
+    case "select": {
+      const { action, ref, value } = call;
+      const withValue = (value: BrowserHostValue): BrowserHostOperation => ({
+        action,
+        ref,
+        value,
+      });
+      if ("text" in value) {
+        return done(withValue({ kind: "text", text: value.text }));
       }
-      const error = destinationError(host, input.url);
-      return error === undefined
-        ? done({ action: "open", url: input.url })
-        : { error };
+      const error = handleError("valueHandle", value.handle);
+      if (error !== undefined) {
+        return { error };
+      }
+      return {
+        plan: {
+          binding: {
+            field: "value",
+            handle: value.handle,
+            complete: ({ text, description }) =>
+              withValue({ kind: "handle-value", text, description }),
+          },
+        },
+      };
     }
     case "back":
     case "forward":
@@ -294,155 +338,13 @@ const planHostOperation = (
     case "console":
     case "errors":
     case "screenshot":
-      return done({ action });
-    case "scroll": {
-      const direction = memberOf(
-        BROWSER_HOST_SCROLL_DIRECTIONS,
-        input.direction,
-      );
-      if (direction === undefined) {
-        return {
-          error: `scroll requires a direction: ${
-            BROWSER_HOST_SCROLL_DIRECTIONS.join(", ")
-          }`,
-        };
-      }
-      if (input.ref !== undefined && !isRef(input.ref)) {
-        return { error: refError(action) };
-      }
-      return done({
-        action,
-        direction,
-        ...(input.ref !== undefined ? { ref: input.ref } : {}),
-      });
-    }
+    case "scroll":
     case "snapshot":
-      return done({ action, interactive: input.interactive === true });
-    case "get": {
-      if (input.kind === "title" || input.kind === "url") {
-        return input.target === undefined
-          ? done({ action, kind: input.kind })
-          : { error: `get ${input.kind} does not take a target` };
-      }
-      if (input.kind === "text") {
-        return typeof input.target === "string" && input.target !== ""
-          ? done({ action, kind: "text", target: input.target })
-          : {
-            error:
-              "get text requires a target: a CSS selector such as body, or an @ref from a snapshot",
-          };
-      }
-      return { error: "get requires kind title, url, or text" };
-    }
-    case "wait": {
-      if (input.ms !== undefined) {
-        return {
-          error:
-            "this run's browser waits for something to happen rather than for a time: wait for a ref, a loadState, or a urlPattern",
-        };
-      }
-      const forms = [input.ref, input.loadState, input.urlPattern]
-        .filter((form) => form !== undefined);
-      if (forms.length !== 1) {
-        return {
-          error: "wait requires exactly one of ref, loadState, or urlPattern",
-        };
-      }
-      if (input.ref !== undefined) {
-        return isRef(input.ref)
-          ? done({ action, ref: input.ref })
-          : { error: refError(action) };
-      }
-      if (input.loadState !== undefined) {
-        const state = memberOf(BROWSER_HOST_LOAD_STATES, input.loadState);
-        return state !== undefined ? done({ action, loadState: state }) : {
-          error:
-            "wait loadState must be domcontentloaded, load, or networkidle",
-        };
-      }
-      const urlPattern = input.urlPattern;
-      if (
-        typeof urlPattern !== "string" || urlPattern === "" ||
-        /^file:/i.test(urlPattern)
-      ) {
-        return { error: "wait urlPattern requires a non-file pattern" };
-      }
-      const named = patternHost(urlPattern);
-      return named !== undefined && isLocalHost(named)
-        ? {
-          error:
-            "wait urlPattern names the open web only: not this device, its network, or an IP address",
-        }
-        : done({ action, urlPattern });
-    }
-    case "click": {
-      if (input.x !== undefined || input.y !== undefined) {
-        if (input.ref !== undefined) {
-          return {
-            error: "click takes a ref or a point (x and y), never both",
-          };
-        }
-        return isPoint(input.x) && isPoint(input.y)
-          ? done({ action, x: input.x, y: input.y })
-          : {
-            error:
-              "click at a point requires both x and y, each a non-negative number of screenshot pixels",
-          };
-      }
-      return isRef(input.ref)
-        ? done({ action, ref: input.ref })
-        : { error: refError(action) };
-    }
+    case "get":
+    case "click":
     case "check":
-      return isRef(input.ref)
-        ? done({ action, ref: input.ref })
-        : { error: refError(action) };
-    case "press": {
-      const key = memberOf(BROWSER_HOST_KEYS, input.key);
-      return key !== undefined ? done({ action, key }) : {
-        error: `press requires one of the keys ${BROWSER_HOST_KEYS.join(", ")}`,
-      };
-    }
-    case "fill":
-    case "type":
-    case "select": {
-      const ref = input.ref;
-      if (!isRef(ref)) {
-        return { error: refError(action) };
-      }
-      const withValue = (value: BrowserHostValue): BrowserHostOperation => ({
-        action,
-        ref,
-        value,
-      });
-      if (input.valueHandle !== undefined) {
-        const error = handleError("valueHandle", input.valueHandle);
-        if (error !== undefined) {
-          return { error };
-        }
-        return {
-          plan: {
-            binding: {
-              field: "value",
-              handle: input.valueHandle,
-              complete: ({ text, description }) =>
-                withValue({ kind: "handle-value", text, description }),
-            },
-          },
-        };
-      }
-      return typeof input.value === "string"
-        ? done(withValue({ kind: "text", text: input.value }))
-        : { error: `${action} requires a value or a valueHandle` };
-    }
-    case "handoff": {
-      const reason = memberOf(BROWSER_HOST_HANDOFF_REASONS, input.reason);
-      return reason !== undefined ? done({ action, reason }) : {
-        error: `handoff requires a reason: ${
-          BROWSER_HOST_HANDOFF_REASONS.join(", ")
-        }`,
-      };
-    }
+    case "handoff":
+      return done(call);
   }
 };
 
@@ -517,9 +419,8 @@ const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 /**
- * Executes one validated `browser` call on `host` and returns the tool's
- * output. `action` is the call's action, already established by the tool's
- * field checks.
+ * Executes one parsed `browser` call on `host` and returns the tool's output.
+ * `timeoutMs` is the input's, which no action on a host takes.
  *
  * The call waits for the host however long it takes — a hand-off waits for
  * the owner — and ends early only when the run's signal aborts.
@@ -527,15 +428,15 @@ const errorMessage = (error: unknown): string =>
 export const invokeBrowserOnHost = async (
   context: HarnessToolContext,
   host: HarnessBrowserHost,
-  input: BrowserToolInput,
-  action: BrowserToolAction,
+  call: BrowserCall,
+  timeoutMs: number | undefined,
   outputId: string,
 ): Promise<BrowserToolOutput> => {
   const errorOutput = (
     code: BrowserToolErrorCode,
     message: string,
   ): BrowserToolOutput => ({ outputId, status: "error", code, message });
-  if (input.timeoutMs !== undefined) {
+  if (timeoutMs !== undefined) {
     return errorOutput(
       "invalid_input",
       "timeoutMs does not apply to this run's browser: an action ends when the page does what was asked, or the owner answers",
@@ -548,7 +449,7 @@ export const invokeBrowserOnHost = async (
   // nothing more of it.
   const session = sessionOf(host);
   if (
-    session.handedOff !== undefined && action !== "handoff" &&
+    session.handedOff !== undefined && call.action !== "handoff" &&
     enforcing(context)
   ) {
     return errorOutput(
@@ -560,7 +461,7 @@ export const invokeBrowserOnHost = async (
   }
   // The whole call is planned before anything is read, so a call that cannot
   // execute never reads a handle's value.
-  const planned = planHostOperation(host, input, action);
+  const planned = planHostOperation(host, call);
   if (planned.error !== undefined) {
     return errorOutput("invalid_input", planned.error);
   }
