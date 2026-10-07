@@ -184,6 +184,12 @@ export interface RunscSandboxConfig {
   /** Global runsc flags placed before the subcommand, verbatim. */
   extraRunscArgs: readonly string[];
   /**
+   * Whether every runsc command runs with `--rootless`: in a user namespace
+   * of its own, mapping this process's user to root there. Linux's runsc
+   * needs it where this process is not root.
+   */
+  rootless: boolean;
+  /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
    */
@@ -218,6 +224,8 @@ export interface ResolveRunscSandboxConfigOptions {
   networkMode?: RunscNetworkMode;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
   extraRunscArgs?: readonly string[];
+  /** Whether runsc runs with `--rootless`; see {@link RunscSandboxConfig}. */
+  rootless?: boolean;
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -780,6 +788,7 @@ export const resolveRunscSandboxConfig = (
       additionalMounts.map((mount) => Object.freeze(mount)),
     ),
     extraRunscArgs: Object.freeze([...(options.extraRunscArgs ?? [])]),
+    rootless: options.rootless ?? false,
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
     scratchDir,
     ...(options.scratchDir === undefined
@@ -1049,6 +1058,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       "--root",
       joinHostPath(this.config.scratchDir, "state"),
       "--ignore-cgroups",
+      ...(this.config.rootless ? ["--rootless"] : []),
       `--network=${this.config.networkMode}`,
       "--overlay2=root:memory",
       ...(this.config.cfcPolicyPath !== undefined
@@ -1163,9 +1173,12 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       hostname: "cf-harness",
       mounts,
       linux: {
+        // With the host's network, the container has no network namespace
+        // of its own: runsc would otherwise make an empty one and leave the
+        // container its loopback alone.
         namespaces: [
           { type: "pid" },
-          { type: "network" },
+          ...(this.config.networkMode === "host" ? [] : [{ type: "network" }]),
           { type: "ipc" },
           { type: "uts" },
           { type: "mount" },

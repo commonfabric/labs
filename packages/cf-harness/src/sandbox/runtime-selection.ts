@@ -65,6 +65,12 @@ export interface SandboxRuntimeSelection {
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
 
+  /**
+   * Whether runsc runs with `--rootless`: the Linux default for a process
+   * that is not root. Absent otherwise.
+   */
+  sandboxRunscRootless?: true;
+
   /** How the runtime was selected, which the run records beside it. */
   sandboxRuntimeChoice: SandboxRuntimeChoice;
 }
@@ -258,6 +264,15 @@ export interface SandboxProcess {
   uid?: () => number | null;
 
   /**
+   * Reads the Linux kernel parameter `name`, as `sysctl` names it, trimmed;
+   * `undefined` where the kernel has no such parameter. It throws where the
+   * parameter could not be read. `/proc/sys` is read when absent. A Linux
+   * default for a process that is not root reads whether the host allows it
+   * a user namespace.
+   */
+  readSysctl?: (name: string) => Promise<string | undefined>;
+
+  /**
    * The home the default CFC policy and the default stores are looked up
    * under. An entrypoint that clears `HOME` from the environment it hands on
    * (the Loom local host does) names the real one here; otherwise `env.HOME`
@@ -270,6 +285,9 @@ export interface SandboxProcess {
 export const sandboxProcessOf = (process: SandboxProcess): SandboxProcess => ({
   ...(process.arch !== undefined ? { arch: process.arch } : {}),
   ...(process.uid !== undefined ? { uid: process.uid } : {}),
+  ...(process.readSysctl !== undefined
+    ? { readSysctl: process.readSysctl }
+    : {}),
   ...(process.homeDir !== undefined ? { homeDir: process.homeDir } : {}),
 });
 
@@ -561,6 +579,83 @@ const readNativeStorePiece = async (
 };
 
 /**
+ * Reads the Linux kernel parameter `name` from `/proc/sys`, trimmed, or
+ * `undefined` where the kernel has no such parameter.
+ *
+ * @throws The error of any other failure to read it.
+ */
+const readProcSysctl = async (name: string): Promise<string | undefined> => {
+  try {
+    return (await Deno.readTextFile(`/proc/sys/${name.replaceAll(".", "/")}`))
+      .trim();
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw error;
+  }
+};
+
+/**
+ * The kernel parameters that keep a process that is not root from making a
+ * user namespace, each with the value that does so, what that value means,
+ * and the value that lifts it.
+ */
+const USER_NAMESPACE_BLOCKS: readonly {
+  name: string;
+  blocking: string;
+  means: string;
+  lift: string;
+}[] = [{
+  name: "user.max_user_namespaces",
+  blocking: "0",
+  means: "allows no user namespace at all",
+  lift: "15000",
+}, {
+  name: "kernel.unprivileged_userns_clone",
+  blocking: "0",
+  means: "allows none to a process that is not root",
+  lift: "1",
+}, {
+  name: "kernel.apparmor_restrict_unprivileged_userns",
+  blocking: "1",
+  means: "has AppArmor refuse one to a process that is not root",
+  lift: "0",
+}];
+
+/**
+ * Helper for `resolveSandboxRuntimeSelection()`, which returns what keeps
+ * this host from giving a process that is not root a user namespace, with
+ * the remedy, or `undefined` where nothing does. A parameter the kernel does
+ * not have keeps nothing from it; one that could not be read is not known
+ * to allow it, and is returned as what is in the way.
+ */
+const userNamespacesBlocked = async (
+  readSysctl: (name: string) => Promise<string | undefined>,
+): Promise<{ problem: string; remedy: string } | undefined> => {
+  for (const block of USER_NAMESPACE_BLOCKS) {
+    let value: string | undefined;
+    try {
+      value = await readSysctl(block.name);
+    } catch (error) {
+      return {
+        problem: "whether this host allows that could not be told: " +
+          `\`${block.name}\` could not be read (${error})`,
+        remedy: `Make \`/proc/sys/${block.name.replaceAll(".", "/")}\` ` +
+          "readable",
+      };
+    }
+    if (value === block.blocking) {
+      return {
+        problem: `\`${block.name}\` is ${value}, which ${block.means}`,
+        remedy: "Allow one with " +
+          `\`sudo sysctl -w ${block.name}=${block.lift}\` (and a file in ` +
+          "`/etc/sysctl.d` to keep it across boots)",
+      };
+    }
+  }
+  return undefined;
+};
+
+/**
  * Helper for `resolveSandboxRuntimeSelection()`, which builds the refusal of
  * a default that cannot be provided on `platform`. It says that the native
  * runtime is the default, what keeps it from being used, what to do about
@@ -780,6 +875,7 @@ export const resolveSandboxRuntimeSelection = async (
   const home = nonEmpty(options.homeDir) ?? nonEmpty(env.HOME);
   const namedBinary = nonEmpty(env[RUNSC_BINARY_ENV]);
   let nativeStore: string | undefined;
+  let rootless = false;
   if (nativePlatform !== undefined) {
     const arch = options.arch ?? Deno.build.arch;
     if (nativePlatform === "darwin" && arch !== "aarch64") {
@@ -812,33 +908,41 @@ export const resolveSandboxRuntimeSelection = async (
       );
     }
     if (nativePlatform === "linux" && namedBinary === undefined) {
-      // Before the store is looked for, since the store is the one under the
-      // home of whoever runs: root's, once this runs as root.
-      const remedy = "Run it as root, or name a `runsc` that runs as root " +
-        `with \`${RUNSC_BINARY_ENV}\``;
+      // Before the store is looked for: the store is the one under the home
+      // of whoever runs, and how its `runsc` runs depends on who that is.
       let uid: number | null;
       try {
         uid = (options.uid ?? Deno.uid)();
       } catch (error) {
-        // Not known to be root, so not taken to be.
+        // Not known to be root, nor known not to be, so neither way of
+        // running the store's `runsc` is taken.
         throw nativeDefaultRefusal(
           nativePlatform,
-          "the store's `runsc` runs containers only as root, and which user " +
-            `this process runs as could not be read (${error})`,
-          remedy,
+          `which user this process runs as could not be read (${error}), ` +
+            "so whether the store's `runsc` runs as root or rootless is not " +
+            "known",
+          "Grant it `--allow-sys=uid`",
           options.flags,
         );
       }
       if (uid !== 0) {
-        throw nativeDefaultRefusal(
-          nativePlatform,
-          "the store's `runsc` runs containers only as root, where this " +
-            `process runs as ${
-              uid === null ? "a user it cannot tell" : `uid ${uid}`
-            }`,
-          remedy,
-          options.flags,
+        // Not root, so rootless: runsc maps this user to root in a user
+        // namespace of its own, which the host has to allow.
+        rootless = true;
+        const blocked = await userNamespacesBlocked(
+          options.readSysctl ?? readProcSysctl,
         );
+        if (blocked !== undefined) {
+          throw nativeDefaultRefusal(
+            nativePlatform,
+            `this process is not root (${
+              uid === null ? "its user cannot be told" : `uid ${uid}`
+            }), so the store's \`runsc\` runs rootless, in a user namespace ` +
+              `of its own, and ${blocked.problem}`,
+            `${blocked.remedy}, or run as root`,
+            options.flags,
+          );
+        }
       }
     }
     nativeStore = nativePlatform === "darwin"
@@ -1013,6 +1117,7 @@ export const resolveSandboxRuntimeSelection = async (
     ...(sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode }
       : {}),
+    ...(rootless ? { sandboxRunscRootless: true as const } : {}),
     sandboxRuntimeChoice: nativePlatform !== undefined &&
         nativeStore !== undefined
       ? {

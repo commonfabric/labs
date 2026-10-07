@@ -1399,6 +1399,7 @@ const resolveConsoleRunscConfig = (
     runscBinary: options.sandboxRunscBinary,
     cfcPolicyPath: options.sandboxCfcPolicy,
     networkMode: options.sandboxRunscNetworkMode,
+    ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,

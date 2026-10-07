@@ -120,6 +120,7 @@ export const childSandboxOptions = (
   sandboxCfcPolicy?: string;
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+  sandboxRunscRootless?: boolean;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
 } => {
   if (parent.ownedRunscSandboxConfig !== undefined) {
@@ -148,6 +149,7 @@ export const childSandboxOptions = (
         : {}),
       sandboxRunscBinary: runsc.runscBinary,
       sandboxRunscNetworkMode: runsc.networkMode,
+      ...(runsc.rootless ? { sandboxRunscRootless: true } : {}),
       additionalMounts: mounts,
     };
   }

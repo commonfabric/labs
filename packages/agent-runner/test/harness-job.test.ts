@@ -533,17 +533,24 @@ describe("selectHarnessJobSandboxRuntime()", () => {
     });
   });
 
-  it("refuses, as every job would be refused, on Linux for a runner that is not root", async () => {
+  it("refuses, as every job would be refused, on Linux for a runner that is not root on a host that allows it no user namespace", async () => {
     const refusal = await selectHarnessJobSandboxRuntime({
       platform: "linux",
       uid: () => 1000,
+      readSysctl: (name) =>
+        Promise.resolve(
+          name === "kernel.apparmor_restrict_unprivileged_userns"
+            ? "1"
+            : undefined,
+        ),
       env: { HOME: "/home/runner" },
     }).then(() => undefined, (error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(HarnessControlError);
     expect(String(refusal)).toContain(
-      "the store's `runsc` runs containers only as root, where this process " +
-        "runs as uid 1000",
+      "this process is not root (uid 1000), so the store's `runsc` runs " +
+        "rootless, in a user namespace of its own, and " +
+        "`kernel.apparmor_restrict_unprivileged_userns` is 1",
     );
     // The runner writes the job's arguments itself, so it names no flag.
     expect(String(refusal)).not.toContain("--sandbox-runtime");

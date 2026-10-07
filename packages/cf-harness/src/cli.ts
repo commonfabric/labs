@@ -1921,6 +1921,7 @@ export const parseCfHarnessCliArgs = async (
     sandboxCfcPolicy,
     sandboxRunscBinary,
     sandboxRunscNetworkMode,
+    sandboxRunscRootless,
     sandboxRuntimeChoice,
   } = await cliSandboxRuntimeSelection(
     env,
@@ -2198,6 +2199,7 @@ export const parseCfHarnessCliArgs = async (
     ...(sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode }
       : {}),
+    ...(sandboxRunscRootless === true ? { sandboxRunscRootless } : {}),
     sandboxRuntimeChoice,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),

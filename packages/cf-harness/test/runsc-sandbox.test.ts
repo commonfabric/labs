@@ -1549,6 +1549,52 @@ Deno.test("the spec isolates every namespace and bounds the tmpfs it gives the c
   assert(tmp.options.some((o: string) => /^size=\d+[km]$/.test(o)));
 });
 
+Deno.test("the spec gives a container on the host's network no network namespace of its own", async () => {
+  // With one, runsc makes it empty and the container has its loopback alone,
+  // whatever `--network=host` asked for.
+  const specs: string[] = [];
+  const runner = new FakeRunscRunner();
+  const base = FakeRunscRunner.prototype.run;
+  runner.run = async function (this: FakeRunscRunner, request) {
+    if (request.command === "/bin/sh" && request.args.includes("run")) {
+      const bundle = request.args[request.args.indexOf("--bundle") + 1];
+      specs.push(await Deno.readTextFile(join(bundle, "config.json")));
+    }
+    return await base.call(this, request);
+  };
+  for (const networkMode of ["host", "none", "sandbox"] as const) {
+    await new RunscSandboxRuntime(config({ networkMode }), runner).run({
+      argv: ["/bin/true"],
+    });
+  }
+  assertEquals(
+    specs.map((text) =>
+      JSON.parse(text).linux.namespaces.map((n: { type: string }) => n.type)
+        .includes("network")
+    ),
+    [false, true, true],
+  );
+});
+
+Deno.test("a rootless runtime runs every runsc command, control commands included, with `--rootless`", async () => {
+  for (const rootless of [true, false]) {
+    const runner = new FakeRunscRunner();
+    const runtime = new RunscSandboxRuntime(config({ rootless }), runner);
+    await runtime.runShell({ command: "echo hi" });
+
+    // The call itself, run through the shell that opens its descriptors, and
+    // the control commands that take its container down after it.
+    const runscArgs = runner.requests.map((request) =>
+      request.command === "/bin/sh" ? request.args.slice(6) : request.args
+    );
+    assert(runscArgs.length > 1, "the call and the control commands after it");
+    assertEquals(
+      runscArgs.map((args) => args.includes("--rootless")),
+      runscArgs.map(() => rootless),
+    );
+  }
+});
+
 Deno.test("a working directory outside the mounts is refused for fresh and session calls", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(config(), runner);

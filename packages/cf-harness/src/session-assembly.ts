@@ -109,6 +109,8 @@ export interface HarnessSessionConfig {
   sandboxCfcPolicy?: string;
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+  /** Whether the direct driver's runsc runs with `--rootless`. */
+  sandboxRunscRootless?: boolean;
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -320,6 +322,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
+      : {}),
+    ...(config.sandboxRunscRootless === true
+      ? { sandboxRunscRootless: true }
       : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }

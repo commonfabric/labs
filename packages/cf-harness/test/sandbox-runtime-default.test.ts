@@ -665,6 +665,7 @@ describe("sandbox-runtime-default", () => {
         options: {
           flags?: boolean;
           uid?: () => number | null;
+          readSysctl?: (name: string) => Promise<string | undefined>;
           homeDir?: string;
         } = {},
       ) =>
@@ -672,6 +673,8 @@ describe("sandbox-runtime-default", () => {
           platform: "linux",
           flags: options.flags ?? true,
           uid: options.uid ?? (() => 0),
+          readSysctl: options.readSysctl ??
+            (() => Promise.reject(new Error("no parameter is read for root"))),
           ...(options.homeDir !== undefined
             ? { homeDir: options.homeDir }
             : {}),
@@ -809,31 +812,105 @@ describe("sandbox-runtime-default", () => {
         );
       });
 
-      it("throws for a process that is not root, before it looks at the store", async () => {
-        for (
-          const [uid, who] of [
-            [() => 1000, "uid 1000"],
-            [() => null, "a user it cannot tell"],
-          ] as const
-        ) {
+      it("returns the native runtime rootless for a process that is not root, where the host allows it a user namespace", async () => {
+        const store = await installLinuxStore(home);
+        const read: string[] = [];
+
+        expect(
+          await select({ HOME: home }, {}, {
+            uid: () => 1000,
+            readSysctl: (name) => {
+              read.push(name);
+              // A kernel with none of the parameters keeps nothing from it,
+              // and so does one with a parameter at a value that allows it.
+              return Promise.resolve(
+                name === "kernel.apparmor_restrict_unprivileged_userns"
+                  ? "0"
+                  : undefined,
+              );
+            },
+          }),
+        ).toEqual({ ...fromLinuxStore(store), sandboxRunscRootless: true });
+        expect(read).toEqual([
+          "user.max_user_namespaces",
+          "kernel.unprivileged_userns_clone",
+          "kernel.apparmor_restrict_unprivileged_userns",
+        ]);
+      });
+
+      it("returns the native runtime as root, reading nothing of user namespaces, for root", async () => {
+        const store = await installLinuxStore(home);
+
+        // The reader `select` gives root refuses to be asked anything.
+        expect(await select({ HOME: home })).toEqual(fromLinuxStore(store));
+      });
+
+      for (
+        const [name, value, means, lift] of [
+          [
+            "user.max_user_namespaces",
+            "0",
+            "allows no user namespace at all",
+            "15000",
+          ],
+          [
+            "kernel.unprivileged_userns_clone",
+            "0",
+            "allows none to a process that is not root",
+            "1",
+          ],
+          [
+            "kernel.apparmor_restrict_unprivileged_userns",
+            "1",
+            "has AppArmor refuse one to a process that is not root",
+            "0",
+          ],
+        ] as const
+      ) {
+        it(`throws for a process that is not root where \`${name}\` is ${value}, before it looks at the store`, async () => {
           const refusal = await rejection(
-            select({ HOME: home }, {}, { uid }),
+            select({ HOME: home }, {}, {
+              uid: () => 1000,
+              readSysctl: (asked) =>
+                Promise.resolve(asked === name ? value : undefined),
+            }),
           );
 
           expect(refusal).toBeInstanceOf(HarnessControlError);
           expect(refusal).toMatchObject({
             code: "invalid-request",
             message: "No sandbox runtime is named, so the default applies, " +
-              "which on Linux is the native `runsc` runtime, and the " +
-              "store's `runsc` runs containers only as root, where this " +
-              `process runs as ${who}. Run it as root, or name a \`runsc\` ` +
-              "that runs as root with `CF_HARNESS_RUNSC_BINARY`, or " +
+              "which on Linux is the native `runsc` runtime, and this " +
+              "process is not root (uid 1000), so the store's `runsc` runs " +
+              "rootless, in a user namespace of its own, and " +
+              `\`${name}\` is ${value}, which ${means}. Allow one with ` +
+              `\`sudo sysctl -w ${name}=${lift}\` (and a file in ` +
+              "`/etc/sysctl.d` to keep it across boots), or run as root, or " +
               DOCKER_BY_FLAG_OR_VARIABLE,
           });
-        }
+        });
+      }
+
+      it("throws where a kernel parameter could not be read, rather than take user namespaces for allowed", async () => {
+        await installLinuxStore(home);
+
+        const refusal = await rejection(
+          select({ HOME: home }, {}, {
+            uid: () => 1000,
+            readSysctl: () => Promise.reject(new Error("permission denied")),
+          }),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toContain(
+          "whether this host allows that could not be told: " +
+            "`user.max_user_namespaces` could not be read (Error: permission " +
+            "denied). Make `/proc/sys/user/max_user_namespaces` readable, or " +
+            "run as root",
+        );
       });
 
-      it("throws where which user the process runs as cannot be read, rather than take it for root", async () => {
+      it("throws where which user the process runs as cannot be read, rather than take it for root or not", async () => {
         await installLinuxStore(home);
 
         const refusal = await rejection(
@@ -846,9 +923,9 @@ describe("sandbox-runtime-default", () => {
 
         expect(refusal).toBeInstanceOf(HarnessControlError);
         expect(messageOf(refusal)).toContain(
-          "the store's `runsc` runs containers only as root, and which " +
-            "user this process runs as could not be read (Error: no sys " +
-            "access to uid). Run it as root",
+          "which user this process runs as could not be read (Error: no sys " +
+            "access to uid), so whether the store's `runsc` runs as root or " +
+            "rootless is not known. Grant it `--allow-sys=uid`, or select",
         );
       });
 
@@ -3704,7 +3781,7 @@ describe("sandbox-runtime-default", () => {
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBeUndefined();
     });
 
-    it("refuses to launch, reading nothing of Docker's, with no runtime named on Linux for a process that is not root", async () => {
+    it("refuses to launch, reading nothing of Docker's, with no runtime named on Linux for a process that is not root on a host that allows it no user namespace", async () => {
       await installLinuxStore(home);
       const launchIo = io();
 
@@ -3712,12 +3789,19 @@ describe("sandbox-runtime-default", () => {
         prepareConsoleLaunch(ARGS, { HOME: home }, launchIo, {
           platform: "linux",
           uid: () => 1000,
+          readSysctl: (name) =>
+            Promise.resolve(
+              name === "kernel.apparmor_restrict_unprivileged_userns"
+                ? "1"
+                : undefined,
+            ),
         }),
       );
 
       expect(refusal).toBeInstanceOf(HarnessControlError);
       expect(messageOf(refusal)).toContain(
-        "runs containers only as root, where this process runs as uid 1000",
+        "`kernel.apparmor_restrict_unprivileged_userns` is 1, which has " +
+          "AppArmor refuse one to a process that is not root",
       );
       expect(launchIo.dockerReads).toBe(0);
     });

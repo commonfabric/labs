@@ -451,6 +451,8 @@ export interface CreateHarnessEngineOptions
   /** runsc runtime: the binary, default `runsc` on PATH. */
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+  /** runsc runtime: whether runsc runs with `--rootless`. */
+  sandboxRunscRootless?: boolean;
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -1069,6 +1071,7 @@ export class CfHarnessEngine {
         runscBinary: options.sandboxRunscBinary,
         cfcPolicyPath: options.sandboxCfcPolicy,
         networkMode: options.sandboxRunscNetworkMode,
+        ...(options.sandboxRunscRootless === true ? { rootless: true } : {}),
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined
