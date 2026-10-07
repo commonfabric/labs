@@ -61,11 +61,11 @@ entry.
 
 The whole of what `registerSharedSpace` does is `registerSharedSpaceIn()`,
 exported beside it, which takes the catalog's writable cell and a registration
-and stages its writes in the transaction of the handler that calls it. A
-Home-space handler holding the catalog cell calls it to register a space in the
-same commit as its own writes, as a room's creator can register the room it
-creates; it returns the outcome the handler would. A new entry's revision names
-the calling handler's event, so only a handler can call it.
+and stages its writes in the transaction of the handler that calls it. So a
+Home-space handler holding the catalog cell can register a space in the same
+commit as its own writes, and gets back the outcome the handler would return. A
+new entry's revision names the calling handler's event, so only a handler can
+call it.
 
 New entries record `since`, the recipient's admission time in epoch
 milliseconds. Registration records it when admitting the entry; a migration may
