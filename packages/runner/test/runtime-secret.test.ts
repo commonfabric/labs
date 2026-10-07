@@ -6,7 +6,11 @@ import { Identity } from "@commonfabric/identity";
 
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { readRuntimeSecret, runtimeSecretLink } from "../src/runtime-secret.ts";
+import {
+  readRuntimeSecret,
+  runtimeSecretLink,
+  unusableRuntimeSecret,
+} from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -52,7 +56,11 @@ describe("runtime-secret", () => {
   /** Mints the secret in a transaction of its own. */
   const mint = () =>
     commit((tx) =>
-      tx.ensureRuntimeSecret(space, NAME, runtimeWritePolicyAuthorization)
+      tx.ensureRuntimeSecret(
+        space,
+        unusableRuntimeSecret(NAME),
+        runtimeWritePolicyAuthorization,
+      )
     );
 
   /** The value stored for the secret, read as the runtime reads it. */

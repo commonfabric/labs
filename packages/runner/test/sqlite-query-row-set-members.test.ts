@@ -43,7 +43,10 @@ import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { createRef } from "../src/create-ref.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
-import { runtimeSecretLink } from "../src/runtime-secret.ts";
+import {
+  runtimeSecretLink,
+  unusableRuntimeSecret,
+} from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -823,7 +826,7 @@ describe("sqlite-query-row-set-members", () => {
         expect(() =>
           tx.ensureRuntimeSecret(
             space,
-            SQLITE_ROW_SALT,
+            unusableRuntimeSecret(SQLITE_ROW_SALT),
             {} as Parameters<typeof tx.ensureRuntimeSecret>[2],
           )
         ).toThrow(/runtime's authorization/);

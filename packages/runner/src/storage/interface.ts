@@ -88,6 +88,7 @@ import type {
 import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
+import type { RuntimeSecret } from "../runtime-secret.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
@@ -1893,20 +1894,21 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   stageContentAddressedDocument(space: MemorySpace, value: FabricValue): URI;
 
   /**
-   * Mints the runtime secret called `name` in `space` when no trusted value
-   * is stored: a random value, written under the secret's label and writer
-   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
-   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
-   * one writer of the reserved namespace, which refuses every unprivileged
-   * write, and callable only with the runtime's authorization, since code
-   * that minted a secret in its own transaction could read it back there
-   * before its label is stored.
+   * Mints the runtime secret `secret` in `space` when no trusted value is
+   * stored: a random value, written under the secret's confidentiality and
+   * the runtime's writer claim (`runtime-secret.ts`), replacing any untrusted
+   * value. Returns nothing; the runtime reads a secret back with
+   * `readRuntimeSecret()`. The one writer of the reserved namespace, which
+   * refuses every unprivileged write, and callable only with the runtime's
+   * authorization, since code that minted a secret in its own transaction
+   * could read it back there before its label is stored.
    *
-   * @throws Error without the runtime's authorization.
+   * @throws Error without the runtime's authorization, or when the stored
+   * value's schema cannot be resolved.
    */
   ensureRuntimeSecret(
     space: MemorySpace,
-    name: string,
+    secret: RuntimeSecret,
     authorization: RuntimeWritePolicyAuthorization,
   ): void;
 

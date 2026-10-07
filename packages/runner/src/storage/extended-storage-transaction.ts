@@ -119,11 +119,13 @@ import {
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
 import {
+  isRuntimeSecretFlowRead,
   isRuntimeSecretId,
   readRuntimeSecret,
-  RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,
+  type RuntimeSecret,
   runtimeSecretLink,
+  runtimeSecretSchema,
 } from "../runtime-secret.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import { CooperativeYield } from "../scheduler/cooperative-yield.ts";
@@ -1686,8 +1688,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * The read chokepoint of the runtime-secret namespace: no executed code
    * reads a runtime secret, whatever link or id names it. The runtime's own
-   * reads pass, which are verifier-internal or made inside a privileged
-   * system write; the marker the first carries is private to the runtime.
+   * reads pass: verifier-internal ones, the ordinary read
+   * `readRuntimeSecretIntoFlow()` makes, and reads inside a privileged system
+   * write. The markers of the first two are private to the runtime.
    */
   #assertRuntimeSecretUnread(
     address: Pick<IMemorySpaceAddress, "id">,
@@ -1695,7 +1698,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): void {
     if (
       !isRuntimeSecretId(address.id) || this.#privilegedSystemWriteDepth > 0 ||
-      isInternalVerifierRead(options?.meta)
+      isInternalVerifierRead(options?.meta) ||
+      isRuntimeSecretFlowRead(options?.meta)
     ) {
       return;
     }
@@ -2793,7 +2797,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   ensureRuntimeSecret(
     space: MemorySpace,
-    name: string,
+    secret: RuntimeSecret,
     authorization: RuntimeWritePolicyAuthorization,
   ): void {
     if (!runtimeWritePolicyAuthorized(authorization)) {
@@ -2802,8 +2806,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       );
     }
     this.#assertWritable("ensureRuntimeSecret()");
-    if (readRuntimeSecret(this, space, name) !== undefined) return;
-    const link = runtimeSecretLink(space, name);
+    if (readRuntimeSecret(this, space, secret.name) !== undefined) return;
+    const link = runtimeSecretLink(space, secret.name);
     this.#runPrivilegedSystemWrite(() => {
       this.writeValueOrThrow(
         link,
@@ -2825,7 +2829,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.recordCfcWritePolicyInput({
         kind: "schema",
         target: { space, id: link.id, scope: link.scope, path: [] },
-        schema: RUNTIME_SECRET_SCHEMA,
+        schema: runtimeSecretSchema(secret),
       });
     } finally {
       assignCfcImplementationIdentity(this, identity);
@@ -4147,10 +4151,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   ensureRuntimeSecret(
     space: MemorySpace,
-    name: string,
+    secret: RuntimeSecret,
     authorization: RuntimeWritePolicyAuthorization,
   ): void {
-    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
+    this.#wrapped.ensureRuntimeSecret(space, secret, authorization);
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {
