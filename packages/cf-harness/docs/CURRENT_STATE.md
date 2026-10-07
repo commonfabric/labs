@@ -128,8 +128,10 @@ from one driver to the other:
   lacks keeps nothing from it; one that cannot be read refuses the default, and
   so does a user id that cannot be read. A binary named by
   `CF_HARNESS_RUNSC_BINARY` is run as it is, without `--rootless` and without
-  the check. It is refused where there is no home, or the home is not an
-  absolute path.
+  that check for its sake; under pasta's default network a process that is not
+  root still has pasta make a user namespace, and is checked and refused the
+  same way for that, unless it names a `none` or `host` network. It is refused
+  where there is no home, or the home is not an absolute path.
 - Each refusal of a default says it is the default of its platform, `macOS` or
   `Linux`, what is in the way, and how Docker is selected.
 - On every other platform that default is Docker. No other platform has a native
