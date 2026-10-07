@@ -13,9 +13,11 @@
  */
 import {
   type Cell,
+  type DID,
   equals,
   FabricDurationNsec,
   FabricEpochNsec,
+  isWellFormedDID,
 } from "commonfabric";
 
 //
@@ -63,6 +65,28 @@ export const CHAT_START_SURFACE = "ChatStartSurface";
 
 /** The reviewed action starting a conversation is, on `CHAT_START_SURFACE`. */
 export const CHAT_START_ACTION = "ChatStart";
+
+/** The reviewed surface a member is added to a room from. */
+export const CHAT_ADD_MEMBER_SURFACE = "ChatAddMemberSurface";
+
+/** The reviewed action adding a member is, on `CHAT_ADD_MEMBER_SURFACE`. */
+export const CHAT_ADD_MEMBER_ACTION = "ChatAddMember";
+
+//
+// Principals
+//
+
+/** A `did:key` whose key is base58btc multibase, as every principal's is. */
+const DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
+
+/**
+ * Whether `value` is a DID a principal can have: well formed, and, for a
+ * `did:key`, a base58btc key, so that a key a period or other punctuation
+ * follows is refused.
+ */
+export const isPrincipalDID = (value: unknown): value is DID =>
+  isWellFormedDID(value) &&
+  (!value.startsWith("did:key:") || DID_KEY.test(value));
 
 //
 // Times
