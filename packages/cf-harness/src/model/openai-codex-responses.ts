@@ -584,9 +584,9 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
   }
 
   /**
-   * Issues the exchange once and records the attempt, however it ends. A
-   * transient failure comes back with the kind that makes it one when the
-   * schedule has an attempt left; abort and protocol failures are thrown.
+   * Issues and records one exchange. An unbounded transient failure carries
+   * a retry kind when its schedule has an attempt left. Bounded calls, aborts
+   * and protocol failures end without another provider attempt.
    */
   async #attempt(
     exchange: CodexExchange,
@@ -616,10 +616,9 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         serializedBytes: textBytes(body),
       },
     };
-    // Records the attempt as failed and settles whether another follows. An
-    // aborted attempt is followed by nothing, so its record claims no retry;
-    // the abort itself is thrown after the record so an abort landing during
-    // it is not reported as a provider failure.
+    // Bounded and aborted calls record no retry. The abort itself is thrown
+    // after the failure record, so one arriving during the write is reported
+    // as cancellation rather than a provider failure.
     const failed = async (
       kind: HarnessTransientFailureKind | undefined,
       record: Omit<HarnessModelAttemptDiagnostic, keyof typeof attemptBase>,

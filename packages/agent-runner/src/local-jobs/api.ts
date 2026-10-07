@@ -106,7 +106,7 @@ const imagesOf = (
   }
   return value.map((image: unknown) => {
     if (
-      image === null || typeof image !== "object" || Array.isArray(image) ||
+      !isObjectNotArray(image) ||
       !("base64" in image) || typeof image.base64 !== "string" ||
       !("mediaType" in image) ||
       (image.mediaType !== "image/png" && image.mediaType !== "image/jpeg" &&
