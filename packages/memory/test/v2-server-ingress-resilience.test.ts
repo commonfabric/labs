@@ -5,6 +5,7 @@ import type { FabricValue } from "@commonfabric/api";
 import { connect, loopback, type Transport } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
+  decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -171,13 +172,20 @@ Deno.test("memory v2 client commit past the slot limit fails, and the session st
 /**
  * A transport onto `server` that behaves as the memory websocket host does:
  * it hands each frame to the connection without waiting for its handling, and
- * a frame whose handling rejects closes the connection.
+ * a frame whose handling rejects closes the connection. With
+ * `failFirstCommitVerdict`, the host's send fails once, for the response to the
+ * first commit, before that response is delivered.
  */
-function hostLikeTransport(server: Server) {
+function hostLikeTransport(
+  server: Server,
+  options: { failFirstCommitVerdict?: boolean } = {},
+) {
   let connection: ReturnType<Server["connect"]> | undefined;
   let receiver = (_payload: string) => {};
   let closeReceiver = (_error?: Error) => {};
   let connections = 0;
+  const commitRequestIds = new Set<string>();
+  let verdictFailed = false;
   const reset = () => {
     connection?.close();
     connection = undefined;
@@ -187,9 +195,24 @@ function hostLikeTransport(server: Server) {
       if (!connection) {
         connections++;
         const opened = server.connect((message) => {
+          if (
+            options.failFirstCommitVerdict && !verdictFailed &&
+            message.type === "response" &&
+            commitRequestIds.has(message.requestId)
+          ) {
+            verdictFailed = true;
+            throw new Error("temporary response publication failure");
+          }
           if (connection === opened) receiver(encodeMemoryBoundary(message));
         });
         connection = opened;
+      }
+      const frame = decodeMemoryBoundary(payload) as {
+        type?: string;
+        requestId?: string;
+      };
+      if (frame.type === "transact" && typeof frame.requestId === "string") {
+        commitRequestIds.add(frame.requestId);
       }
       const current = connection;
       current.receive(payload).catch(() => {
@@ -330,6 +353,69 @@ Deno.test("memory v2 server answers a request whose handling throws a `ProtocolE
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).name).toBe("ProtocolError");
     expect((failure as Error).message).toBe("query refused by the engine");
+    expect(wire.connections).toBe(1);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+Deno.test("memory v2 server keeps a commit it accepted when delivering the verdict fails, so the client's replay resolves from its record", async () => {
+  // A failure to deliver a response is a failure of the connection, not a
+  // verdict: the commit is already applied. The host closes the connection,
+  // and the client's replay is answered from the server's record.
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://memory-v2-verdict-delivery-fails"),
+  });
+  const wire = hostLikeTransport(server, { failFirstCommitVerdict: true });
+  const client = await connect({ transport: wire.transport });
+  const session = await client.mount(
+    "did:key:z6Mk-memory-v2-verdict-delivery-fails",
+    {},
+    testSessionOpenAuthFactory,
+  );
+
+  try {
+    const applied = await session.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set", id: "of:accepted", value: { value: 1 } }],
+    });
+    expect(applied).toMatchObject({ seq: 1, replayed: true });
+    expect(wire.connections).toBe(2);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+Deno.test("memory v2 server answers a presence request whose handling throws with a `QueryError`, and keeps the connection", async () => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://memory-v2-presence-handler-throws"),
+  });
+  const wire = hostLikeTransport(server);
+  const client = await connect({ transport: wire.transport });
+  const session = await client.mount(
+    "did:key:z6Mk-memory-v2-presence-handler-throws",
+    {},
+    testSessionOpenAuthFactory,
+  );
+  using _receivePresence = stub(server, "receivePresence", () => {
+    throw new Error("unexpected failure handling the presence request");
+  });
+
+  try {
+    const failure = await session.joinPresenceRoom(
+      "room-0123456789abcdefghijklmnop",
+      () => {},
+    ).then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).name).toBe("QueryError");
+    expect((failure as Error).message).toBe(
+      "unexpected failure handling the presence request",
+    );
     expect(wire.connections).toBe(1);
   } finally {
     await client.close();

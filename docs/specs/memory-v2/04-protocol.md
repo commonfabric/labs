@@ -1397,7 +1397,10 @@ not anticipate while handling a request: the request is answered on its own
 `requestId` with a `TransactionError` for a commit and a `QueryError` for any
 other request, unless the failure is a protocol error with a name of its own.
 The connection carries on, so a commit the server cannot handle fails alone,
-without taking the connection or the client's other commits with it.
+without taking the connection or the client's other commits with it. A failure
+to deliver a response is a failure of the connection instead, and closes it:
+the request may already have taken effect, a commit whose verdict was lost
+among them, so the client replays it and the server answers from its record.
 
 ```typescript
 // Shown at module scope.

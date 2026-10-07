@@ -934,6 +934,23 @@ const graphWatchRootQueries = (watches: readonly WatchSpec[]) =>
       }))
     );
 
+/**
+ * A failure to hand a message to the host's send, carrying what failed as its
+ * cause. It is a failure of the connection, not of whatever request the message
+ * answers: a commit whose verdict could not be delivered is already applied, so
+ * the connection closes and the client's replay is answered from the record.
+ */
+class DeliveryError extends Error {
+  /** Constructs an instance for the delivery failure `cause`. */
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error ? cause.message : "Memory message delivery failed",
+      { cause },
+    );
+    this.name = "DeliveryError";
+  }
+}
+
 class Connection {
   #ready = false;
   #closed = false;
@@ -984,14 +1001,18 @@ class Connection {
   }
 
   #send(message: ServerMessage): void {
-    const schemaStart = performance.now();
-    const prepared = this.#syncSchemaTable
-      ? compressServerMessageSchemas(message)
-      : message;
-    timing.time(schemaStart, "memory", "response", "prepareSchemas");
-    const sendStart = performance.now();
-    this.#sendRaw(prepared);
-    timing.time(sendStart, "memory", "response", "sendRaw");
+    try {
+      const schemaStart = performance.now();
+      const prepared = this.#syncSchemaTable
+        ? compressServerMessageSchemas(message)
+        : message;
+      timing.time(schemaStart, "memory", "response", "prepareSchemas");
+      const sendStart = performance.now();
+      this.#sendRaw(prepared);
+      timing.time(sendStart, "memory", "response", "sendRaw");
+    } catch (cause) {
+      throw new DeliveryError(cause);
+    }
   }
 
   /** Whether the peer declared the expression result identity contract. */
@@ -1331,7 +1352,11 @@ class Connection {
     // behind them (04-protocol.md §4.13.4). Everything else keeps the
     // connection's order.
     if (parsed !== null && isPresenceClientMessage(parsed)) {
-      this.#receivePresence(parsed);
+      try {
+        this.#receivePresence(parsed);
+      } catch (error) {
+        if (!this.#answerFailedRequest(parsed, error)) throw error;
+      }
       return;
     }
     this.#pendingReceives += 1;
@@ -1444,15 +1469,22 @@ class Connection {
    * `QueryError`, while an engine `ProtocolError` keeps its own name, as the
    * handlers name the failures they classify themselves.
    *
-   * Returns whether it answered. A frame naming no request is left to the
-   * caller, and the host then closes the connection.
+   * Returns whether it answered. A failure to deliver a response, an accepted
+   * commit's verdict among them, is a `DeliveryError` and is left to the
+   * caller, as is a frame naming no request; the host then closes the
+   * connection, and the client replays what it was waiting for.
    */
   #answerFailedRequest(
     parsed: ClientMessage | OversizedClientMessage | null,
     error: unknown,
   ): boolean {
     const requestId = (parsed as { requestId?: unknown } | null)?.requestId;
-    if (parsed === null || typeof requestId !== "string") return false;
+    if (
+      error instanceof DeliveryError || parsed === null ||
+      typeof requestId !== "string"
+    ) {
+      return false;
+    }
     console.error(
       `memory v2: handling a ${parsed.type} request failed; answering it with an error response`,
       error,
