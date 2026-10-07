@@ -153,8 +153,9 @@ Environment:
   CF_HARNESS_SANDBOX_RUNTIME           docker | runsc. Unset, macOS (Apple silicon only)
                                        runs runsc from the native cfc-vm store
                                        (CFC_VM_HOME, or ~/Library/Application
-                                       Support/cfc-vm), Linux runs it as root from the
-                                       store under ~/.local/share/runsc-cfc, and each
+                                       Support/cfc-vm), Linux runs it from the store
+                                       under ~/.local/share/runsc-cfc for a process
+                                       that is root already, and each
                                        refuses to start where its store is not set up;
                                        every other platform runs docker. The local Loom
                                        host refuses to start with it unset

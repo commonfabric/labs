@@ -647,9 +647,10 @@ Options:
                                 calls may then name a sandbox session. With no runtime
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
-                                Support/cfc-vm), Linux runs it as root from the store under
-                                ~/.local/share/runsc-cfc, and each refuses to start where
-                                its store is not set up; every other platform runs docker
+                                Support/cfc-vm), Linux runs it from the store under
+                                ~/.local/share/runsc-cfc for a process that is root already,
+                                and each refuses to start where its store is not set up;
+                                every other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
                                 on Linux, default images/kitchensink in the Linux store;
                                 on macOS the cfc-vm image marker, default

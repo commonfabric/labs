@@ -46,13 +46,16 @@ shared host, a tailnet with an access policy — and not behind a public address
   sandbox. On macOS that is, unless the environment names another, the native
   runtime: the direct `runsc` driver over the cfc-vm store gVisor's macOS
   installer writes, with no Docker, and the console refuses to start where that
-  store is not set up. On Linux it is the direct driver too, over the store
-  gVisor's Linux installer writes under `~/.local/share/runsc-cfc`, for a
-  console running as root, and the console refuses to start where it is not root
-  or that store is not set up. On every other platform it is, by default, a
-  Docker container under the `runsc-cfc` runtime, and a stopped Docker daemon is
-  a run that fails on its first `bash` call. `CF_HARNESS_SANDBOX_RUNTIME` names
-  either on any platform; see [Sandbox runtime](#sandbox-runtime).
+  store is not set up, and on a Mac that is not Apple silicon at all. On Linux
+  it is the direct driver too, over the store gVisor's Linux installer writes
+  under `~/.local/share/runsc-cfc`; the store's `runsc` runs containers only as
+  root, so the console refuses to start where it is not root, unless
+  `CF_HARNESS_RUNSC_BINARY` names a `runsc` that runs as root, and where a piece
+  of that store that no setting replaces is missing. On every other platform it
+  is, by default, a Docker container under the `runsc-cfc` runtime, and a
+  stopped Docker daemon is a run that fails on its first `bash` call.
+  `CF_HARNESS_SANDBOX_RUNTIME` names either on any platform; see
+  [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
@@ -240,14 +243,14 @@ one environment execute on the same driver. The package's
 [CURRENT_STATE](../docs/CURRENT_STATE.md#sandbox-runtimes) describes both
 drivers.
 
-| Environment                      | Selects                                                                                                                                                                                                                                                |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, Linux from the store under `~/.local/share/runsc-cfc`, and every other platform takes `docker`; a launch with `--instance` refuses |
-| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset on macOS, `images/kitchensink` in the store `CFC_VM_HOME` names, else in the one under the home, whether `runsc` is named or the default                                                               |
-| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`, or under the macOS default it is the store's `bin/runsc`                                                                                                                    |
-| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, and under the macOS default the store's `policy.json` next                                                                                              |
-| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                                                                                                             |
-| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                                                                                                            |
+| Environment                      | Selects                                                                                                                                                                                                                                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, Linux from the store under `~/.local/share/runsc-cfc`, and every other platform takes `docker`; a launch with `--instance` refuses                                                              |
+| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset on macOS, `images/kitchensink` in the store `CFC_VM_HOME` names, else in the one under the home, and unset on Linux, `images/kitchensink` in `~/.local/share/runsc-cfc`, whether `runsc` is named or the default                                                    |
+| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, a named `runsc` is looked for on `PATH`, and the macOS or Linux default takes its store's `bin/runsc` (on Linux, `~/.local/share/runsc-cfc/bin/runsc`). On Linux, naming one lets a console that is not root take the default, so it has to run containers as root itself |
+| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, which is the Linux store's own, and under the macOS default the store's `policy.json` next                                                                                                                           |
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                                                                                                                                                                          |
+| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                                                                                                                                                                         |
 
 A console launched for a Loom instance takes no default at all. `console:launch`
 given `--instance`, which is how `scripts/start-local-dev.sh` launches it where

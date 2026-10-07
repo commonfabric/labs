@@ -1155,15 +1155,23 @@ bound to the runtime of its next resume or turn, as the
 [current-state reference](docs/CURRENT_STATE.md#selection) sets out.
 
 A run on the native default is a run on the direct driver, with everything the
-rest of this section says of that driver. Two of its differences stop or change
-a run that works on Docker. A workspace or a writable host mount that holds the
-store or the policy, or that lies inside the store, is refused, since the
-sandbox could rewrite them. This holds for any `runsc` run on macOS, whatever
-binary, rootfs and policy it names, because the macOS `runsc` runs from the
-store. So a run whose workspace is the home directory names Docker or another
-workspace; the refusal says that the runtime was the default and how Docker is
-selected. And `host.docker.internal` reaches only the host ports the launch
-forwards into the VM.
+rest of this section says of that driver. Its differences stop or change a run
+that works on Docker:
+
+- **On either platform**, a workspace or a writable host mount that holds the
+  `runsc` binary, the rootfs or the policy is refused, since the sandbox could
+  rewrite them. On Linux those are the store's own pieces under
+  `~/.local/share/runsc-cfc`, so a run whose workspace is the home directory
+  names Docker or another workspace; the refusal says that the runtime was the
+  default and how Docker is selected.
+- **On macOS**, a writable mount that lies inside the cfc-vm store, or that
+  holds it, is refused too, for any `runsc` run, whatever binary, rootfs and
+  policy it names, because the macOS `runsc` runs from the store. And
+  `host.docker.internal` reaches only the host ports the launch forwards into
+  the VM.
+- **On Linux** there is no VM, and with the default `sandbox` network the
+  container reaches neither the host nor the internet, `host.docker.internal`
+  included.
 
 The two sidecar directory flags are the Docker driver's: the console's launcher,
 `console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on
