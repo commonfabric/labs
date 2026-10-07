@@ -557,14 +557,16 @@ const findOnSearchPath = (
 
 /**
  * Returns the canonical path of the executable file a bare `name` leads to
- * on this process's `PATH`, or `undefined` where no entry holds one.
+ * on `searchPath`, this process's `PATH` by default, or `undefined` where no
+ * entry holds one.
  */
-export const executableOnPath = (name: string): string | undefined => {
-  const searchPath = Deno.env.get("PATH");
-  return searchPath === undefined
+export const executableOnPath = (
+  name: string,
+  searchPath: string | undefined = Deno.env.get("PATH"),
+): string | undefined =>
+  searchPath === undefined
     ? undefined
     : findOnSearchPath(name, searchPath, () => Deno.cwd());
-};
 
 /**
  * Returns the canonical path of the runsc binary `given` names, resolved the

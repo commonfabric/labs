@@ -12,6 +12,7 @@ import {
   canonicalHostPath,
   darwinCfcVmRootfs,
   defaultDarwinCfcVmStore,
+  executableOnPath,
   PASTA_ARGS,
   PASTA_HOSTS_FILE,
   PASTA_ROOT_ARGS,
@@ -330,6 +331,14 @@ Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolu
       );
     }
   }
+});
+
+Deno.test("resolveRunscSandboxConfig refuses an empty runsc binary, which names none", () => {
+  assertThrows(
+    () => config({ runscBinary: "" }),
+    Error,
+    "runsc binary must not be empty: give an absolute path",
+  );
 });
 
 Deno.test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () => {
@@ -1723,6 +1732,30 @@ Deno.test("a network other than runsc's own takes no pasta, whatever is configur
 
     assertEquals(runner.given[0].command, "/bin/sh");
     assert(runner.given[0].args.includes(`--network=${networkMode}`));
+  }
+});
+
+Deno.test("executableOnPath finds an executable file in the first entry holding one, and nothing elsewhere", async () => {
+  const dir = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-path-" }),
+  );
+  try {
+    for (const entry of ["a", "b", "c"]) await Deno.mkdir(join(dir, entry));
+    // Not executable in the first entry, so passed over, as running it would.
+    await Deno.writeTextFile(join(dir, "a", "pasta"), "");
+    await Deno.writeTextFile(join(dir, "b", "pasta"), "#!/bin/sh\n", {
+      mode: 0o755,
+    });
+    await Deno.writeTextFile(join(dir, "c", "pasta"), "#!/bin/sh\n", {
+      mode: 0o755,
+    });
+    const path = ["a", "b", "c"].map((entry) => join(dir, entry)).join(":");
+
+    assertEquals(executableOnPath("pasta", path), join(dir, "b", "pasta"));
+    assertEquals(executableOnPath("slirp4netns", path), undefined);
+    assertEquals(executableOnPath("pasta", undefined), undefined);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
   }
 });
 

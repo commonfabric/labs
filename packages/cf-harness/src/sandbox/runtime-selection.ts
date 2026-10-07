@@ -1133,7 +1133,9 @@ export const resolveSandboxRuntimeSelection = async (
     (sandboxRunscNetworkMode === undefined ||
       sandboxRunscNetworkMode === "sandbox")
   ) {
-    networkHelper = (options.which ?? executableOnPath)("pasta");
+    networkHelper = options.which !== undefined
+      ? options.which("pasta")
+      : executableOnPath("pasta");
     if (networkHelper === undefined) {
       throw nativeDefaultRefusal(
         nativePlatform,
