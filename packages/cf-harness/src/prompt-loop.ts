@@ -4804,14 +4804,18 @@ export class CfHarnessPromptLoop {
         recordActivity,
       });
     }
-    if (toolId === "finish_task" && toolCallCount !== 1) {
+    if (
+      toolCallCount !== 1 &&
+      (toolId === "finish_task" ||
+        (this.#stopOnStructuredResult && toolId === "submit_result"))
+    ) {
       return await this.#rejectInvalidToolCall({
         toolCall,
         invalid: {
           reason: "invalid-argument",
           toolId,
           field: "toolCalls",
-          expected: "finish_task as the only tool call in this model turn",
+          expected: `${toolId} as the only tool call in this model turn`,
         },
         sequence,
         startedAt: activityStartedAt,

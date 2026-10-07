@@ -396,9 +396,12 @@ export const runHarnessJob = async (
       }
       : undefined;
   if (options.signal.aborted) {
+    const report = loopResult !== undefined
+      ? reportOf(loopResult)
+      : failedReport;
     return {
       outcome: "cancelled",
-      ...(failedReport !== undefined ? { report: failedReport } : {}),
+      ...(report !== undefined ? { report } : {}),
     };
   }
   if (loopResult === undefined) {

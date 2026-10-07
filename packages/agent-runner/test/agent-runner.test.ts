@@ -867,13 +867,20 @@ describe("agent runner", () => {
   });
 
   it("writes nothing over a record another runner took while its run was out", async () => {
+    const runnerSide = connect(CLOUD);
     const held = defer<AgentRunExecution>();
+    const started = defer<ClaimedAgentRun>();
     const reports: string[] = [];
-    await startRunner(() => held.promise, {
+    await startRunner((run) => {
+      started.resolve(run);
+      return held.promise;
+    }, {
       report: (message) => reports.push(message),
+      runtimeForHost: () => Promise.resolve(runnerSide),
     });
     const result = await submit();
     await waitForState(result, "running");
+    const oldRun = await started.promise;
 
     // The lease passed and another runner recovered and claimed the record.
     await patternSide.editWithRetry((tx) => {
@@ -896,6 +903,21 @@ describe("agent runner", () => {
     expect(recordOf(result).get()?.claim?.runner).toBe("did:key:other#1");
     expect(reports.some((line) => line.includes("was no longer held"))).toBe(
       true,
+    );
+    const beforeLateRenewal = [...reports];
+    const editWithRetry = runnerSide.editWithRetry;
+    runnerSide.editWithRetry = () => {
+      throw new Error("a retired executor must not open a lease transaction");
+    };
+    try {
+      await oldRun.renewLease();
+    } finally {
+      runnerSide.editWithRetry = editWithRetry;
+    }
+    await runners[0].idle();
+    expect(reports).toEqual(beforeLateRenewal);
+    expect(recordOf(result).get()?.claim?.leaseUntil).toBe(
+      "2026-09-18T13:00:00.000Z",
     );
   });
 

@@ -255,6 +255,51 @@ describe("submit_result", () => {
     await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
   });
 
+  for (const stopOnStructuredResult of [false, true]) {
+    it(`requires a standalone submission only for a job that stops on its result (${stopOnStructuredResult})`, async () => {
+      const mixed = submit("call-1", { answer: "Premature" });
+      mixed.choices[0].message.tool_calls.push({
+        id: "call-other",
+        type: "function",
+        function: { name: "describe_handle", arguments: "{}" },
+      });
+      const { result } = await run("mixed-submit", [
+        mixed,
+        submit("call-2", { answer: "Complete" }),
+        finalTurn("Done."),
+      ], { stopOnStructuredResult });
+      expect(result.modelTurns).toBe(stopOnStructuredResult ? 2 : 3);
+      expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+        answer: "Complete",
+      });
+      const first = toolOutputs(result.transcript)[0];
+      if (stopOnStructuredResult) {
+        expect(first).toMatchObject({
+          reason: "invalid-argument",
+          toolId: "submit_result",
+          field: "toolCalls",
+          expected: "submit_result as the only tool call in this model turn",
+        });
+      } else {
+        expect(first).toMatchObject({ status: "ok", replaced: false });
+      }
+    });
+  }
+
+  it("does not persist a final-turn result that shares its turn with another tool", async () => {
+    const mixed = submit("call-1", { answer: "Premature" });
+    mixed.choices[0].message.tool_calls.push({
+      id: "call-other",
+      type: "function",
+      function: { name: "describe_handle", arguments: "{}" },
+    });
+    await expect(run("mixed-last-turn", [mixed], {
+      stopOnStructuredResult: true,
+      maxModelTurns: 1,
+    })).rejects.toThrow("exceeded max model turns");
+    await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
+  });
+
   it("is withheld from a run that configures no structured-result schema", async () => {
     expect(withheldToolIds(NO_BACKING).has("submit_result")).toBe(true);
     expect(parentToolIdsForBacking(NO_BACKING)).not.toContain("submit_result");

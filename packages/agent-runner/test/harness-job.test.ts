@@ -497,7 +497,7 @@ describe("runHarnessJob()", () => {
       expect(seen.signal).toBe(controller.signal);
     });
 
-    it("ends `cancelled` when its signal aborted", async () => {
+    it("retains the completed loop report when cancellation wins before the job returns", async () => {
       const controller = new AbortController();
       const { result } = await runScripted(
         plainSpec(),
@@ -508,7 +508,16 @@ describe("runHarnessJob()", () => {
         { signal: controller.signal },
       );
 
-      expect(result).toEqual({ outcome: "cancelled" });
+      expect(result).toEqual({
+        outcome: "cancelled",
+        report: {
+          modelTurns: 2,
+          toolCalls: 1,
+          usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+          usageCoverage: "direct",
+          runRef: join(runRoot, "artifacts"),
+        },
+      });
     });
 
     for (const cancelled of [false, true]) {
@@ -532,6 +541,19 @@ describe("runHarnessJob()", () => {
         expect(result.report).not.toHaveProperty("modelTurns");
       });
     }
+
+    it("keeps cancellation accounting absent when the loop supplied no measurements", async () => {
+      const controller = new AbortController();
+      const { result } = await runScripted(
+        plainSpec(),
+        () => {
+          controller.abort();
+          return Promise.reject(new Error("cancelled before a measured turn"));
+        },
+        { signal: controller.signal },
+      );
+      expect(result).toEqual({ outcome: "cancelled" });
+    });
 
     it("ends `failed` as `LIMIT_REACHED` when the turn limit stopped the loop", async () => {
       const { result } = await runScripted(
