@@ -53,7 +53,11 @@ import {
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import { Identity } from "@commonfabric/identity";
-import { ensurePrivateInboxOf } from "@commonfabric/piece/ops";
+import {
+  ensurePrivateInboxOf,
+  type ShareIntake,
+  startShareIntakeOf,
+} from "@commonfabric/piece/ops";
 import {
   commitSnapshotShare,
   prepareSnapshotShare,
@@ -91,6 +95,9 @@ let watchPaths: readonly (readonly (string | number)[])[] = [[]];
  * opened afresh by the next command naming it.
  */
 const addressedResults = new Map<string, Cell<any>>();
+
+/** The share intakes `startShareIntake` started, which `dispose` stops. */
+const shareIntakes: ShareIntake[] = [];
 
 /**
  * Every commit this runtime had refused since the last `clearRejections`,
@@ -1029,6 +1036,30 @@ const handlers: Record<
     };
   },
 
+  /**
+   * Starts the host's share intake over the Home stand-in reached from the
+   * piece result by `path`, as `PiecesController.startShareIntake()` starts
+   * the identity's own Home's, following it until the session is disposed.
+   * Answers whether it started.
+   */
+  async startShareIntake({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const intake = startShareIntakeOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    if (intake !== undefined) shareIntakes.push(intake);
+    return { started: intake !== undefined };
+  },
+
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
   async readAddress({ link }) {
     const cell = controller().runtime.getCellFromLink(link as never);
@@ -1179,6 +1210,7 @@ const handlers: Record<
   },
 
   async dispose() {
+    for (const intake of shareIntakes.splice(0)) intake.stop();
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;

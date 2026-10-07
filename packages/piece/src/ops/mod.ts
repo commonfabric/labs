@@ -84,6 +84,12 @@ export {
   type PrivateInboxEnsure,
 } from "./private-inbox.ts";
 export {
+  LOOM_OFFER_KIND,
+  type OfferRefusal,
+  ShareIntake,
+  startShareIntakeOf,
+} from "./share-intake.ts";
+export {
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
   PieceController,

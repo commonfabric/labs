@@ -49,6 +49,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   experimentalOptionsFromEnv,
   type PatternCoverageData,
+  setPatternEnvironment,
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
 import {
@@ -737,6 +738,14 @@ export class MultiRuntimeHarness {
       });
     const targetUrl = options.apiUrl ?? server!.url;
     const apiUrl = targetUrl.href;
+    // A served handler reads the pattern environment of the process its
+    // serving loop runs in, which a toolshed sets to its own address. The
+    // serving loop hosted here runs in this process, so this process's is set
+    // to the address the harness hosts, as a handler run by a session's own
+    // runtime sees it.
+    if (serverExecutionOn && server !== undefined) {
+      setPatternEnvironment({ apiUrl: targetUrl });
+    }
 
     const sessions: MultiRuntimeSession[] = [];
     let bootstrap: WorkerClient | undefined;

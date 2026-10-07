@@ -114,6 +114,7 @@ import {
 } from "./piece-input-path.ts";
 import { reconcilePieceSource } from "./piece-origin.ts";
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
+import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
 import { compileProgram } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
@@ -2256,6 +2257,30 @@ export class PiecesController<T = unknown> {
     this.#assertHomeSpace("ensure a private inbox");
     const home = (await this.ensureDefaultPattern()).getCell();
     await ensurePrivateInboxOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+      signal,
+    );
+  }
+
+  /**
+   * Starts the identity's share intake: it follows the offers in the private
+   * inboxes Home holds and retains, and registers each offer that passes
+   * vetting in Home's shared-space catalog, as `ShareIntake` describes, until
+   * it is stopped or `signal` aborts. Returns `undefined`, starting nothing,
+   * for a Home pattern without a `registerSharedSpace` stream. This controller
+   * must be over the identity's Home space.
+   *
+   * Resolves once the intake is following Home, which is before it has taken
+   * up any offer. Rejects when Home cannot be brought up.
+   */
+  async startShareIntake(
+    signal?: AbortSignal,
+  ): Promise<ShareIntake | undefined> {
+    this.#assertHomeSpace("start a share intake");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    return startShareIntakeOf(
       this.runtime,
       home,
       this.runtime.userIdentityDID,

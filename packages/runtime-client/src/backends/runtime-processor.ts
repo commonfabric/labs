@@ -53,6 +53,7 @@ import {
   readPieceSourceMetadata,
   readPieceSourceRevision,
   readPieceSourceState,
+  type ShareIntake,
 } from "@commonfabric/piece/ops";
 import type { RuntimeOptions } from "@commonfabric/runner";
 import {
@@ -943,8 +944,9 @@ export class RuntimeProcessor {
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
   #privateInboxEnsured: Promise<void> | undefined;
+  #shareIntake: Promise<ShareIntake | undefined> | undefined;
   // Aborted as disposal begins, so an inbox ensure still in flight sends
-  // nothing after it.
+  // nothing after it, and the share intake stops.
   #disposal = new AbortController();
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
@@ -1112,6 +1114,7 @@ export class RuntimeProcessor {
     readonly health: Promise<boolean>;
     readonly awaitedHealth: boolean;
     readonly privateInboxEnsured: Promise<void> | undefined;
+    readonly shareIntake: Promise<ShareIntake | undefined> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -1131,6 +1134,9 @@ export class RuntimeProcessor {
       },
       get privateInboxEnsured() {
         return outerThis.#privateInboxEnsured;
+      },
+      get shareIntake() {
+        return outerThis.#shareIntake;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -2713,7 +2719,9 @@ export class RuntimeProcessor {
    * The first time in this worker, it also adopts the Home space list's
    * name-only entries (see `PiecesController.adoptLegacySpaces`), and starts
    * Home's ensure of the user's private inbox (see
-   * `PiecesController.ensurePrivateInbox`) without waiting for it.
+   * `PiecesController.ensurePrivateInbox`) and the share intake over Home's
+   * inboxes (see `PiecesController.startShareIntake`) without waiting for
+   * either.
    */
   async #ensureHomePattern(): Promise<Cell<unknown>> {
     const homeCC = this.#homeController();
@@ -2738,6 +2746,18 @@ export class RuntimeProcessor {
         this.#privateInboxEnsured = undefined;
         if (this.#isDisposed) return;
         console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
+      },
+    );
+    // The intake follows Home's inboxes until disposal aborts its signal. A
+    // failure to start it is reported unless the processor has been disposed,
+    // and the next ensure of Home in this worker starts it again.
+    this.#shareIntake ??= homeCC.startShareIntake(this.#disposal.signal).catch(
+      (error) => {
+        this.#shareIntake = undefined;
+        if (!this.#isDisposed) {
+          console.warn("[RuntimeProcessor] Starting the share intake:", error);
+        }
+        return undefined;
       },
     );
     return home;
