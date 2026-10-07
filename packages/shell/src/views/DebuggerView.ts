@@ -843,7 +843,6 @@ export class XDebuggerView extends LitElement {
   private accessor openDropdowns = new Set<TopicKey>();
 
   @state()
-  @state()
   private accessor searchText = "";
 
   @state()

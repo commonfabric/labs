@@ -95,6 +95,19 @@ describe("Home root recreation", () => {
     expect(root.getRaw()).toEqual(before);
   });
 
+  it("refuses to link another root over a Home's", async () => {
+    // Linking is how a root comes to be, so it is refused only once a Home
+    // holds one: the low-level replace is the same drop as recreation.
+    const home = await installCustomRoot(runtime, controller, program);
+    const other = runtime.getCell(identity.did(), "another-home");
+    await expect(controller.linkDefaultPattern(other)).rejects.toThrow(
+      "Cannot replace an identity Home root",
+    );
+    expect((await controller.getDefaultPattern(false))?.equals(home)).toBe(
+      true,
+    );
+  });
+
   it("refuses to unlink a Home root", async () => {
     // The low-level unlink is the one public door left that could drop the
     // pointer without replacing it, so it carries the same refusal.

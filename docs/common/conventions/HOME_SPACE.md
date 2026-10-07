@@ -258,10 +258,11 @@ The home space's default pattern is the home experience itself — by default,
 open, and from then on it owns account data: profiles, favorites, navigation,
 the shared-space catalog and the private inbox pointer. It is changed only in
 place, with `cf piece setsrc` on its root, which retains that data. Nothing
-creates, replaces or unlinks the root of an identity Home: root recreation
-refuses it before stopping, unlinking or compiling anything, whether the Home
-is absent, installed, or pointing at a target that cannot currently be loaded,
-and the low-level unlink refuses it too. (`cf space set-home` is retired; see [Retired: `cf space
+but that first open creates the root of an identity Home, and nothing replaces
+or unlinks it: root recreation refuses a Home before stopping, unlinking or
+compiling anything, whether the Home is absent, installed, or pointing at a
+target that cannot currently be loaded, and the low-level link and unlink
+refuse to replace or drop a root a Home holds. (`cf space set-home` is retired; see [Retired: `cf space
 set-home`](../../../packages/cli/README.md#retired-cf-space-set-home).)
 
 To run custom Home source, open the Home once so it exists, find its root, and

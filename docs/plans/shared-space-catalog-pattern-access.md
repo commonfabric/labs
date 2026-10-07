@@ -138,9 +138,9 @@ Ordinary source updates and automatic roll-forward repair retain the Home root
 identity. Explicit recreation refuses an identity Home, absent or present,
 before stopping, unlinking, fetching, or compiling, and so does the low-level
 unlink; an unavailable root target is still a root to preserve. No user-facing
-path reaches that refusal for a Home: `cf space set-home` is retired and the
-shell debugger has no recreate action. `cf space recreate-root` remains for
-spaces that are not a Home.
+path replaces or unlinks a Home: `cf space set-home` is retired, the shell
+debugger has no recreate action, and `cf space recreate-root`, which remains
+for spaces that are not a Home, refuses one.
 
 Changing the Home application uses an in-place source update. Preserving account
 data by default covers profiles, favorites, navigation, and the catalog

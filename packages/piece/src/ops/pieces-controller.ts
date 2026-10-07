@@ -495,11 +495,19 @@ export class PiecesController<T = unknown> {
   /**
    * Link the default pattern cell to the space cell.
    * This should be called after the default pattern is created.
+   *
+   * Refuses to replace an identity Home's root: a Home that already holds one
+   * is changed only in place, as {@link #refuseHomeRoot} says. Linking the
+   * first root of a Home that holds none is what first open does.
    * @param defaultPatternCell - The cell representing the default pattern
    */
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
   ): Promise<void> {
+    await this.#spaceCell.key("defaultPattern").sync();
+    if (this.#spaceCell.key("defaultPattern").getRaw() !== undefined) {
+      this.#refuseHomeRoot("replace");
+    }
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
       spaceCellWithTx.key("defaultPattern").set(defaultPatternCell.withTx(tx));
@@ -2047,8 +2055,10 @@ export class PiecesController<T = unknown> {
    * loadable or not. A Home that will not load is repaired in place; a
    * destructive recovery, should one ever be needed, is a separate contract
    * (docs/common/conventions/HOME_SPACE.md, "A Home that will not load").
+   * `linkDefaultPattern` shares it once a Home holds a root; before that it is
+   * the creation step itself.
    */
-  #refuseHomeRoot(verb: "recreate" | "unlink"): void {
+  #refuseHomeRoot(verb: "recreate" | "replace" | "unlink"): void {
     if (this.getSpace() !== this.runtime.userIdentityDID) return;
     throw new Error(
       `Cannot ${verb} an identity Home root. A Home is created on its ` +
