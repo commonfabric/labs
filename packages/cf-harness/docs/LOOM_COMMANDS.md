@@ -165,8 +165,11 @@ it refuses no call the host would run:
   `integer` (a boolean is not one), `number` (a boolean is one), `boolean`,
   `object`, or `array`; any other type name is not checked;
 - an `array` input's elements are checked against an `items` that names a `type`
-  or an `enum`;
-- an input with an `enum` must equal one of its members;
+  or an `enum`, by both, unless that type (read as `string` when absent) is
+  `array` or one the host does not check;
+- an input with an `enum` must equal one of its members, compared as Python's
+  `==` compares: a number equal to a boolean of its value, and objects by their
+  keys in any order;
 - an input the schema does not declare is refused where the schema closes its
   properties (`additionalProperties: false`); the host refuses it whatever the
   schema says;
@@ -243,16 +246,17 @@ Each call, alone or in a batch, comes back as one of:
 `results` holds one result per call, in the calls' order, each in the shape the
 call alone would have returned, with its own `outputId`, minted in the calls'
 order. Two things differ from sending the calls one at a time. A batch shows the
-model no more than one call may: each call's result is charged against one
-output bound for the whole batch, in the calls' order. An executed call's result
-that no longer fits keeps its outcome's `ok`, `id`, codes, and `mayHaveLanded`,
-and leaves out its `completed` ids, counted as `outcome.completedOmitted`, and
-its `hint` and `signature`, named in `omitted`. The answers are then measured in
-the same order against what is left: an answer that would have fit alone can be
-left out of its result, which is then marked truncated, and `truncated` says
-whether any was. And an answer without a label of its own takes the label of the
-batch's input as a whole, which covers every call's arguments: for a call whose
-own arguments carried less, that is the conservative choice.
+model no more than one call may, under one output bound for the whole batch.
+Every call's result is first reserved at its smallest: an executed call's keeps
+its outcome's `ok`, `id`, codes, and `mayHaveLanded`, and leaves out its
+`completed` ids, counted as `outcome.completedOmitted`, and its `hint` and
+`signature`, named in `omitted`. What remains of the bound restores results
+whole in the calls' order. The answers are then measured in the same order
+against what is left: an answer that would have fit alone can be left out of its
+result, which is then marked truncated, and `truncated` says whether any was.
+And an answer without a label of its own takes the label of the batch's input as
+a whole, which covers every call's arguments: for a call whose own arguments
+carried less, that is the conservative choice.
 
 ### Authorization
 
