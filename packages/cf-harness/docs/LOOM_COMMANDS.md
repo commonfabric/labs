@@ -205,15 +205,19 @@ Each call, alone or in a batch, comes back as one of:
 `results` holds one result per call, in the calls' order, each in the shape the
 call alone would have returned, with its own `outputId`, minted in the calls'
 order. Three things differ from sending the calls one at a time. An executed
-call's summary is always compact: `completed` is replaced by its count,
+call's summary is compact: `completed` is replaced by its count,
 `outcome.completedOmitted`, and `hint` is left out; the `signature` a `bad-args`
-refusal carries is kept. The summaries are thus bounded together, and the
-answers are measured in the calls' order against one output bound for the whole
-batch, what the summaries leave: an answer that would have fit alone can be left
-out of its result, which is then marked truncated, and `truncated` says whether
-any was. And an answer without a label of its own takes the label of the batch's
-input as a whole, which covers every call's arguments: for a call whose own
-arguments carried less, that is the conservative choice.
+refusal carries is kept. The summaries are charged against one output bound for
+the whole batch at their serialized size, in the calls' order, each beside the
+smallest form of every call after it; one that does not fit drops its
+`signature`, and then keeps only the outcome's `ok`, `code`, and `bodyBytes`,
+marked `summaryOmitted: true`, so later calls shrink first. The answers are
+measured in the calls' order against what the summaries leave: an answer that
+would have fit alone can be left out of its result, which is then marked
+truncated, and `truncated` says whether any was. And an answer without a label
+of its own takes the label of the batch's input as a whole, which covers every
+call's arguments: for a call whose own arguments carried less, that is the
+conservative choice.
 
 ### Authorization
 

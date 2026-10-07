@@ -49,7 +49,11 @@ import {
   nearestCommandNames,
   runLoomCommand,
 } from "../loom-commands.ts";
-import { type LoomRetrievalEntry, measureLoomRows } from "./loom-retrieval.ts";
+import {
+  LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
+  type LoomRetrievalEntry,
+  measureLoomRows,
+} from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
 /** The notice every listing carries beside its entries. */
@@ -220,6 +224,12 @@ export type RunCommandCallOutput =
 
     /** The command's signature, when the host refused its args. */
     signature?: string;
+
+    /**
+     * In a batch, the summary was cut to the outcome's `ok`, `code`, and
+     * size to fit the batch's output bound.
+     */
+    summaryOmitted?: true;
 
     /** The answer's label, kept for the artifact and the observation. */
     cfc: { version: 1; observedLabel?: IFCLabel };
@@ -781,17 +791,22 @@ const readCatalog = async (
 };
 
 /**
- * Helper for batches, which cuts an executed call's summary to a size
- * bounded by construction: `completed` becomes the count of its ids, and
- * the hint is left out. The signature a `bad-args` refusal carries is kept,
- * since it is what the refusal is for, and is bounded.
+ * Helper for batches, which returns the forms an executed call's summary may
+ * take: the `larger` ones, largest first, and the `smallest`. The compact
+ * form replaces `completed` with the count of its ids and leaves out the
+ * hint, keeping the signature a `bad-args` refusal carries; the next leaves
+ * out the signature too; the smallest keeps only the outcome's `ok`, `code`,
+ * and size, marked `summaryOmitted`.
  */
-const compactSkeleton = (
+const skeletonForms = (
   skeleton: AnsweredCall["skeleton"],
-): AnsweredCall["skeleton"] => {
-  const { hint: _hint, outcome, ...rest } = skeleton;
+): {
+  larger: AnsweredCall["skeleton"][];
+  smallest: AnsweredCall["skeleton"];
+} => {
+  const { hint: _hint, signature, outcome, ...rest } = skeleton;
   const { completed, ...kept } = outcome;
-  return {
+  const compact = {
     ...rest,
     outcome: {
       ...kept,
@@ -800,32 +815,61 @@ const compactSkeleton = (
         : {}),
     },
   };
+  const { ok, code, bodyBytes } = outcome;
+  return {
+    larger: [
+      ...(signature !== undefined ? [{ ...compact, signature }] : []),
+      compact,
+    ],
+    smallest: {
+      ...rest,
+      outcome: { ok, ...(code !== undefined ? { code } : {}), bodyBytes },
+      summaryOmitted: true,
+    },
+  };
 };
 
 /**
  * Helper for `run_command`, which measures a batch's answers in the calls'
  * order against one output bound for the whole batch, so a batch shows the
- * model no more than one call may. Every result's summary is compact, so
- * the summaries together are bounded; what they leave holds the answers,
- * and an answer that no longer fits is left out and its result marked
- * truncated, as a lone call's would be.
+ * model no more than one call may. Each executed call's summary takes, in
+ * the calls' order, the largest of its forms whose serialized size fits
+ * beside the smallest forms of the calls after it, so a later call's
+ * summary shrinks first. What the summaries leave holds the answers, and an
+ * answer that no longer fits is left out and its result marked truncated,
+ * as a lone call's would be.
  */
 const measureBatch = async (
   context: HarnessToolContext,
   outputId: ToolOutputId,
   sent: readonly (AnsweredCall | RunCommandCallOutput)[],
 ): Promise<RunCommandBatchOutput> => {
-  const compacted = sent.map((call) =>
-    isAnswered(call)
-      ? { ...call, skeleton: compactSkeleton(call.skeleton) }
-      : call
-  );
+  // Each result costs its serialized size, escapes included, the comma
+  // that separates it from the next, and an answered one its `truncated`
+  // turning from `true` to `false`.
+  const charge = (result: object) => JSON.stringify(result).length + 2;
+  const smallest = (call: AnsweredCall | RunCommandCallOutput) =>
+    isAnswered(call) ? skeletonForms(call.skeleton).smallest : call;
+  let later = sent.reduce((sum, call) => sum + charge(smallest(call)), 0);
   let reserved = JSON.stringify({
     outputId,
     status: "batch",
-    results: compacted.map((call) => isAnswered(call) ? call.skeleton : call),
-    truncated: true,
+    results: [],
+    truncated: false,
   }).length + LABEL_JOIN_ALLOWANCE;
+  const compacted = sent.map((call) => {
+    later -= charge(smallest(call));
+    if (!isAnswered(call)) {
+      reserved += charge(call);
+      return call;
+    }
+    const forms = skeletonForms(call.skeleton);
+    const skeleton = forms.larger.find((form) =>
+      reserved + charge(form) + later <= LOOM_RETRIEVAL_MAX_OUTPUT_CHARS
+    ) ?? forms.smallest;
+    reserved += charge(skeleton);
+    return { ...call, skeleton };
+  });
   const results: RunCommandCallOutput[] = [];
   for (const call of compacted) {
     if (!isAnswered(call)) {

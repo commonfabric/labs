@@ -784,6 +784,56 @@ describe("loom-commands tools", () => {
         }
       });
 
+      it("shrinks later calls' summaries when their escaped size would pass the bound", async () => {
+        const control = String.fromCharCode(0).repeat(128);
+        const { context } = contextWith({
+          manifest: JSON.stringify({
+            commands: [{
+              id: "loom.compose",
+              inputs: { type: "object" },
+              outputs: [control, control, control],
+            }],
+          }),
+          answer: JSON.stringify({ ok: false, code: "bad-args", id: control }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: Array.from(
+              { length: RUN_COMMAND_BATCH_LIMIT },
+              () => ({ command: "loom.compose", args: {} }),
+            ),
+          }),
+        );
+        expect(
+          JSON.stringify(runCommandModelView({ ...output }).output).length,
+        ).toBeLessThanOrEqual(LOOM_RETRIEVAL_MAX_OUTPUT_CHARS);
+        const results = output.results.map(executed);
+        expect(results).toHaveLength(RUN_COMMAND_BATCH_LIMIT);
+        expect(results[0].signature).toBeDefined();
+        expect(results.at(-1)?.signature).toBeUndefined();
+        for (const result of results) {
+          expect(result.outcome).toMatchObject({ ok: false, code: "bad-args" });
+        }
+      });
+
+      it("keeps every `bad-args` signature in a batch whose summaries fit", async () => {
+        const { context } = contextWith({
+          answer: JSON.stringify({ ok: false, code: "bad-args" }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: Array.from(
+              { length: RUN_COMMAND_BATCH_LIMIT },
+              () => ({ command: "people-discovery.dossier", args: {} }),
+            ),
+          }),
+        );
+        for (const result of output.results.map(executed)) {
+          expect(result.signature).toBe(DOSSIER_SIGNATURE);
+          expect(result).not.toHaveProperty("summaryOmitted");
+        }
+      });
+
       it("leaves out a result's hint and keeps the signature a `bad-args` refusal carries", async () => {
         const { context } = contextWith({
           answer: (request) =>
