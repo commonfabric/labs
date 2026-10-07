@@ -14,6 +14,15 @@
  * This is deliberately NOT derived from `isEffect`, which carries scheduler
  * semantics — a demand root — rather than anything about replay.
  *
+ * Membership also decides how CFC labels what the builtin writes. A node
+ * listed here reads its inputs and writes its outputs in the one attempt
+ * replay reproduces, so the runtime measures the writes against the reads,
+ * and the confidentiality the node factory joins onto its outputs is named
+ * an input join (`measuresOutputs` in `node-utils.ts`), which a runtime
+ * persisting flow labels leaves to that measurement. A builtin added here
+ * must write only what the attempt that read its inputs writes; one that
+ * writes later, after a fetch or a model call, keeps the join as a floor.
+ *
  * Reciprocal note lives at `builtins/index.ts` (`registerBuiltins`): when a
  * builtin is added there, record it here — either as replayable or in the
  * documented non-replayable list below.

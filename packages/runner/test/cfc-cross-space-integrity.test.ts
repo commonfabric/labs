@@ -750,9 +750,10 @@ describe("CFC cross-space integrity", () => {
 // Scenario 2 — declassify while releasing/copying the value. Declassification
 // is a boundary-time rewrite expressed by EXCHANGE RULES: a rule adds an
 // alternative to (or drops) a CONFIDENTIALITY clause, gated by evidence. The
-// rewrite is never persisted, and — critically for "copy retains integrity" —
-// the rules operate on confidentiality ONLY and never touch integrity. So a
-// declassified copy keeps every integrity claim it had.
+// rewrite never changes the store it was evaluated on (only a value-intrinsic
+// rule's result reaches a value derived from it), and — critically for "copy
+// retains integrity" — the rules operate on confidentiality ONLY and never
+// touch integrity. So a declassified copy keeps every integrity claim it had.
 //
 // These use the exchange evaluator directly, which is the label transform the
 // sink/egress boundary applies under `cfcPolicyEvaluation: "enforce"`.

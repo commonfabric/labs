@@ -270,14 +270,24 @@ included. CFC §5.3 evaluates value-intrinsic exchange rules at those
 observations and carries their result onto the derived value, and a declared
 clause that no evidence discharges would undo that carry. So for those modules
 the builders also name the join `ifc.inputConfidentiality` (`measuresOutputs`
-in `node-utils.ts`), and prepare leaves those clauses out of the `declared`
-entry it mints unless the schema declares them itself at that path or above it
-(`persistedSchemaEntryLabel` in `packages/runner/src/cfc/schema-label-view.ts`).
-That is not §8.9.1's flow-precision claim, which is a label narrower than the
-attempt's conservative join; the derived component is that join.
+in `node-utils.ts`, `packages/runner/src/cfc/input-join.ts`). A schema
+position holding nothing but that join is no authored declaration: prepare
+mints no `declared` entry there (`leftToMeasurement` in
+`packages/runner/src/cfc/schema-label-view.ts`), and the store there is one
+§8.12.5 lets the runtime tighten, which the writer-fit route below does with
+whatever a write carries that nothing released. A position that declares
+anything of its own keeps its whole label, the join included. Leaving the
+join to the measurement is not §8.9.1's flow-precision claim, which is a label
+narrower than the attempt's conservative join; the derived component is that
+join. It does rest on that join being complete: what the module's code learns
+outside the transaction's reads, which the sandbox exists to prevent, is
+labeled by nothing.
+
 `ifc.confidentiality` keeps the whole join, so whatever reads the schema itself
-still meets it, and a schema merge keeps a clause declared when either side
-declares it, so a document stored before the join was named keeps its floor.
+still sees it. A schema merge keeps a clause declared when either side declares
+it, and a declared entry already stored at a position the walk leaves to the
+measurement carries forward, so a document stored before the join was named,
+or written by a runtime not persisting flow labels, keeps its floor.
 
 The two build-time mechanisms differ in what each ranges over.
 `applyArgumentIfcToResult` runs once per module factory, joining the schema
@@ -310,16 +320,16 @@ label back in rather than replacing it. Four do: `mapWithPattern`,
 `filterWithPattern` and `flatMapWithPattern` stamp a result-container schema
 onto the cell their node factory has just labeled, and a named aggregate stamps
 a scalar one. `schemaCarryingLinkIfc` in `packages/runner/src/cell.ts` carries
-the label onto what they write, the named input join with it. CFC §8.5.4.3 requires it: a decomposed
-collection operation's coordinator taints its own structural writes —
-container, membership, order, length — with what its journal consumed. §8.9.2's
-propagation takes the output container's confidentiality from the source
-container's, through `lengthPreserved` for a map and
-`propagateCollectionConstraint` for the two that change length. The label lands
-at the container root, which is the conservative shape rather than the
-pointwise one: `joinSchema` flattens a source's member-level atoms in with its
-container-level ones, so what §8.5.6.1 keeps apart as member and structural
-confidentiality arrives together.
+the label onto what they write, the named input join with it. CFC §8.5.4.3
+requires it: a decomposed collection operation's coordinator taints its own
+structural writes — container, membership, order, length — with what its
+journal consumed. §8.9.2's propagation takes the output container's
+confidentiality from the source container's, through `lengthPreserved` for a
+map and `propagateCollectionConstraint` for the two that change length. The
+label lands at the container root, which is the conservative shape rather than
+the pointwise one: `joinSchema` flattens a source's member-level atoms in with
+its container-level ones, so what §8.5.6.1 keeps apart as member and
+structural confidentiality arrives together.
 `packages/runner/test/list-result-schema.test.ts` measures a labeled source and
 an unlabeled one. An aggregate reduces without per-value attribution, so
 §8.17.1 gives its scalar the join of its contributors — a count and a sum are

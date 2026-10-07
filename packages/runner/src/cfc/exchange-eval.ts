@@ -57,12 +57,11 @@ import type { TrustResolver } from "./trust.ts";
  * Clauses are never merged, created, or reordered; sibling clauses are
  * untouched (invariant 11 clause locality); integrity is never modified
  * (B2a rules carry no integrity postcondition). A rewritten label is the
- * caller's to use for the decision it is making. Prepare alone persists
- * one: it evaluates value-intrinsic rules alone
- * (`isValueIntrinsicExchangeRule`) at each observation a transformation
- * makes and at each stored label a reference write copies, and the label of
- * what is derived carries the result (spec §5.3). No other rewrite reaches a
- * stored label.
+ * caller's to use for the decision it is making. Only prepare persists one,
+ * and only the result of value-intrinsic rules
+ * (`isValueIntrinsicExchangeRule`), evaluated at each observation a
+ * transformation makes and at each stored label a reference write copies:
+ * the label of what is derived carries that result (spec §5.3).
  *
  * Rule scoping (B2b, label-carried selection): `ambient` records are in
  * scope for every label (the B2a posture — operator-vetted standard

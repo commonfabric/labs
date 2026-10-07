@@ -1,3 +1,21 @@
+/**
+ * A module policy releases what `project` computes over a sealed input, by a
+ * value-intrinsic rule (spec §5.3). The view shows the released value, values
+ * derived from it alone, and a public store a handler copied it into, beside
+ * a value an unreleased function computed and one that also read the sealed
+ * input. Each is mounted as the worker mounts a piece, under the viewer's
+ * default display ceiling, so what the policy has not released is replaced
+ * by the placeholder. Every value that must stay sealed carries a prefix that
+ * appears nowhere else, so a search of the operations for it is a search for
+ * the value having escaped. The card module is the one
+ * `packages/runner/test/cfc-exchange-carry.test.ts` measures the stored labels
+ * of, trimmed to what the view shows.
+ *
+ * `Deno.test` rather than `describe`/`it`: this package installs its fake
+ * clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
+ * a `@std/testing/bdd` `it()` callback never receives that context.
+ */
+
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -19,20 +37,6 @@ import {
 } from "../../runtime-client/src/backends/utils.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
-
-// A module policy releases what `project` computes over a sealed input, by a
-// value-intrinsic rule (spec §5.3). The view shows the released value, values
-// derived from it alone, and a public store a handler copied it into, beside
-// a value an unreleased function computed and one that also read the sealed
-// input. Each is mounted as the worker mounts a piece, under the viewer's
-// default display ceiling, so what the policy has not released is replaced
-// by the placeholder. Every value that must stay sealed carries a prefix that
-// appears nowhere else, so a search of the operations for it is a search for
-// the value having escaped.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 const CARD = `/// <cts-enable />
 import { exchangeRule, exchangeRules, type PolicyOf, THIS_POLICY } from "commonfabric/cfc";

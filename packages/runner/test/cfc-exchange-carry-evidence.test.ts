@@ -1,3 +1,12 @@
+/**
+ * What evidence a value-intrinsic exchange rule may rest on when a
+ * transformation observes a label (spec §5.3), and what never carries. Each
+ * case seeds the label map of one input document, runs one transformation over
+ * it under an implementation identity, and reads the confidentiality the
+ * transformation's output was stamped with. The rule releases the room clause
+ * of a value the `project` step computed.
+ */
+
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
@@ -20,13 +29,6 @@ import type {
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
-
-// What evidence a value-intrinsic exchange rule may rest on when a
-// transformation observes a label (spec §5.3), and what never carries. Each
-// case seeds the label map of one input document, runs one transformation over
-// it under an implementation identity, and reads the confidentiality the
-// transformation's output was stamped with. The rule releases the room clause
-// of a value the `project` step computed.
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-exchange-carry-evidence",
@@ -174,7 +176,7 @@ const stamp = (
 });
 
 describe("value-intrinsic exchange evidence", () => {
-  it("drops a clause the observed location's own stamp releases, and records the guard as a witness", async () => {
+  it("drops a clause the observed location's own stamp releases, and records its `TransformedBy` guard as a witness", async () => {
     await withRuntime(RELEASE, async (runtime) => {
       await seedLabeled(runtime, "card", { text: "released" }, [
         stamp([], PROJECT),
@@ -216,8 +218,8 @@ describe("value-intrinsic exchange evidence", () => {
     });
   });
 
-  it("keeps a clause whose only evidence is a declared or link-carried entry's integrity", async () => {
-    for (const origin of ["declared", "link"] as const) {
+  for (const origin of ["declared", "link"] as const) {
+    it(`keeps a clause whose only evidence is a ${origin} entry's integrity`, async () => {
       await withRuntime(RELEASE, async (runtime) => {
         await seedLabeled(runtime, "card", { text: "sealed" }, [
           stamp([], PROJECT, origin),
@@ -227,8 +229,8 @@ describe("value-intrinsic exchange evidence", () => {
           ROOM,
         );
       });
-    }
-  });
+    });
+  }
 
   it("keeps a membership clause a link entry beside it would release", async () => {
     // A filter's output slot: the reference it holds carries the released
@@ -254,7 +256,7 @@ describe("value-intrinsic exchange evidence", () => {
         integrity: [transformedBy(PROJECT)],
         boundary: [{ type: CFC_ATOM_TYPE.BoundaryContext }],
       }],
-      ["guarded by access evidence", {
+      ["access-guarded", {
         integrity: [{ type: CFC_ATOM_TYPE.HasRole } as AtomPattern],
       }],
     ];

@@ -157,7 +157,7 @@ const RELEASED = program(CARD);
 // (spec §5.3), so its result stays at the access it was evaluated for.
 const GRANT_GUARDED = (() => {
   const post = "  post: { dropClause: true },\n});";
-  expect(CARD).toContain(post);
+  if (!CARD.includes(post)) throw new Error("CARD no longer ends its rule");
   return program(CARD.replace(
     post,
     '  guard: { policyState: [{ kind: "approved" }] },\n' + post,
@@ -246,7 +246,7 @@ const runPiece = async (
         readTx.abort();
       }
     };
-    // Every entry a reader of the location meets on its way to the value:
+    // Every entry a reader of the location reads on its way to the value:
     // those overlapping it in the piece's own document, and in each
     // document a reference at it leads to in turn.
     const entriesAlong = (...keys: string[]) => {
@@ -422,13 +422,20 @@ describe("value-intrinsic exchange carry", () => {
     });
 
     it("keeps the clause when policy evaluation only observes", async () => {
+      // Also the companion of the map case above: the locations it finds
+      // free of the clause hold it here, so that case is not passing over
+      // locations nothing labels.
       await runPiece(
         RELEASED,
         "observe",
         { cfcPolicyEvaluation: "observe" },
-        async ({ send, entriesAt }) => {
+        async ({ send, entriesAt, entriesAlong }) => {
           await send("seed", { a: "alpha", b: "beta" });
           expect(policyClausesOf(entriesAt("viaComputed")).length)
+            .toBeGreaterThan(0);
+          expect(policyClausesOf(entriesAt("mapped", "0")).length)
+            .toBeGreaterThan(0);
+          expect(policyClausesOf(entriesAlong("mapped")).length)
             .toBeGreaterThan(0);
         },
       );

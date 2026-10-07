@@ -66,21 +66,27 @@ export const atomPropagationClass = (atom: unknown): PropagationClass => {
   return "value-bound";
 };
 
-const REGISTRY_ATOM_URI = "https://commonfabric.org/cfc/atom/";
+const ATOM_URI = "https://commonfabric.org/cfc/atom/";
 
-// The spec §15 registry's class for the families `CLASS_BY_TYPE` either
-// classes differently or does not list. The registry has `TransformedBy`,
-// `Builtin`, `ExternalIngest` and `UserSurfaceInput` value-bound, each a
-// claim about how the exact current value was produced, where
-// `CLASS_BY_TYPE` has them provenance. The provenance families are evidence
-// of an event, an environment or an access rather than claims about a value.
-// The hereditary meet asks only whether a class is hereditary, which the two
-// tables agree on.
-const REGISTRY_CLASS_BY_TYPE = new Map<string, PropagationClass>([
+// The spec §15 registry's class, as a value-intrinsic exchange guard reads it
+// (`matchesOnlyValueBoundClaims`), for the families `CLASS_BY_TYPE` classes
+// differently or does not list. The two tables differ for five families. The
+// registry has `TransformedBy`, `Builtin`, `ExternalIngest` and
+// `UserSurfaceInput` value-bound, each a claim about how the exact current
+// value was produced, where `CLASS_BY_TYPE` has them provenance; and it has
+// `PromptSlotBound` provenance, where `CLASS_BY_TYPE` has it value-bound.
+// `CLASS_BY_TYPE` decides the hereditary meet and which integrity a
+// projection scopes onto its output, and whether `TransformedBy` stays
+// provenance there is an open question to the specification. The other
+// provenance families below are evidence of an event, an environment or an
+// access rather than claims about a value, and `CLASS_BY_TYPE` does not list
+// them.
+const GUARD_CLASS_BY_TYPE = new Map<string, PropagationClass>([
   [CFC_ATOM_TYPE.TransformedBy, "value-bound"],
   [CFC_ATOM_TYPE.Builtin, "value-bound"],
   [CFC_ATOM_TYPE.ExternalIngest, "value-bound"],
   [CFC_ATOM_TYPE.UserSurfaceInput, "value-bound"],
+  [CFC_ATOM_TYPE.PromptSlotBound, "provenance"],
   ...[
     "AddMemberIntent",
     "Attestation",
@@ -91,7 +97,6 @@ const REGISTRY_CLASS_BY_TYPE = new Map<string, PropagationClass>([
     "DeviceTier",
     "GestureProvenance",
     "PromptInfluenceVerified",
-    "PromptSlotBound",
     "RuntimeImage",
     "RuntimeObservationLimited",
     "RuntimeObservationProfile",
@@ -103,7 +108,7 @@ const REGISTRY_CLASS_BY_TYPE = new Map<string, PropagationClass>([
     "UIIntent",
     "UserAcknowledgedCaveat",
   ].map((name): [string, PropagationClass] => [
-    `${REGISTRY_ATOM_URI}${name}`,
+    `${ATOM_URI}${name}`,
     "provenance",
   ]),
 ]);
@@ -120,9 +125,9 @@ export const matchesOnlyValueBoundClaims = (pattern: unknown): boolean => {
   if (!isObjectOrArray(pattern) || Array.isArray(pattern)) return false;
   const type = pattern.type;
   if (typeof type !== "string") return false;
-  if (type === `${REGISTRY_ATOM_URI}IntegritySummary`) {
+  if (type === `${ATOM_URI}IntegritySummary`) {
     return pattern.basis === "surviving-content";
   }
-  return (REGISTRY_CLASS_BY_TYPE.get(type) ?? CLASS_BY_TYPE.get(type) ??
+  return (GUARD_CLASS_BY_TYPE.get(type) ?? CLASS_BY_TYPE.get(type) ??
     "value-bound") === "value-bound";
 };

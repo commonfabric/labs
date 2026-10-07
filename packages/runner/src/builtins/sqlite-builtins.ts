@@ -1275,9 +1275,11 @@ export function sqliteQuery(
     // Derived at most once per run, and not at all where no CFC gate can
     // act on the answer. The condition is the ENFORCEMENT dial, not the flow
     // dial: `deriveFlowJoin` resolves the labels a transaction's reads
-    // carry, and a value's label does not depend on whether the runtime
-    // propagates the join onto writes — prepare's own short-circuit on
-    // `flowMode === "off"` is about what it STAMPS, not about what exists.
+    // carry, as value-intrinsic exchange leaves them under the `enforce`
+    // policy-evaluation dial (spec §5.3), and a value's label does not
+    // depend on whether the runtime propagates the join onto writes —
+    // prepare's own short-circuit on `flowMode === "off"` is about what it
+    // STAMPS, not about what exists.
     // Keying this on the flow dial would hand a statically labeled parameter
     // to a foreign space's provider as though it carried nothing.
     let derivedRequestLabel: readonly CfcConfClause[] | undefined;
