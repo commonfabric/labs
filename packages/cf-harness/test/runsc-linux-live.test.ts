@@ -36,6 +36,18 @@ const context = (command: string) =>
     command,
   });
 
+/** The warnings root's pasta writes to its stderr, as root alone. */
+const ROOT_PASTA_WARNINGS = [
+  "Couldn't write to /proc/self/uid_map: Operation not permitted\n",
+  "Couldn't configure user mappings\n",
+];
+
+/** `stderr` less root's pasta warnings, where this process is root. */
+const withoutRootPasta = (stderr: string): string =>
+  Deno.uid() === 0
+    ? ROOT_PASTA_WARNINGS.reduce((rest, line) => rest.replace(line, ""), stderr)
+    : stderr;
+
 describe("runsc-linux-live", () => {
   it({
     name:
@@ -93,11 +105,11 @@ describe("runsc-linux-live", () => {
           command: "cat /workspace/seen.txt && echo written > /workspace/out",
           cfcInvocationContext: await context("cat"),
         });
-        expect([read.exitCode, read.stdout, read.stderr]).toEqual([
-          0,
-          "from-host\n",
-          "",
-        ]);
+        // As root, pasta writes two warnings of its own to the stderr it
+        // shares with the call, whatever its log and `--quiet` say; a run
+        // that is not root has none.
+        expect([read.exitCode, read.stdout, withoutRootPasta(read.stderr)])
+          .toEqual([0, "from-host\n", ""]);
         expect(await Deno.readTextFile(join(workspace, "out"))).toBe(
           "written\n",
         );
@@ -116,7 +128,10 @@ describe("runsc-linux-live", () => {
           command:
             "curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://1.1.1.1/",
         });
-        expect([egress.exitCode, egress.stderr]).toEqual([0, ""]);
+        expect([egress.exitCode, withoutRootPasta(egress.stderr)]).toEqual([
+          0,
+          "",
+        ]);
         expect(egress.stdout).toMatch(/^[23]\d\d$/);
 
         const reached = await runtime.runShell({
