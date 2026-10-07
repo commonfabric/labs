@@ -244,15 +244,13 @@ Home's handler records the refusal an event names, in place of one recorded
 before, under the check it makes of an adoption: the profile the event names is
 in Home's list and still points at the refused inbox. So an event that a moved
 pointer has left behind, or one naming no profile, records nothing. The record
-is cleared when Home adopts or creates an inbox, and when the profile an event
-names is in Home's list and points at the inbox Home holds. A pointer moved
-away from the refused inbox is therefore cleared by the next ensure that adopts,
-creates or finds the deciding profile pointing at the held inbox. Where the
-pointer moves to no inbox while Home holds one and no other profile points at
-an inbox, that ensure finds no profile advertising and keeps the record, and
-the pointing step then points the profile at Home's inbox, so the ensure after
-that clears it. Like every other ensure, these run only at a runtime worker's
-bring-up of Home.
+is cleared when Home adopts or creates an inbox, when the profile an event names
+is in Home's list and points at the inbox Home holds, and, on any event that
+records no refusal, when no profile in Home's list points at the refused inbox
+any longer, by the comparison the check uses. So once no profile points at the
+refused inbox, whether its pointers moved to another inbox or to none, the next
+ensure clears the record, or records in its place a refusal it names. Like
+every other ensure, that runs only at a runtime worker's bring-up of Home.
 
 The record is part of Home's result, and so is read wherever Home is: by Home's
 own UI, by `cf` and by an agent, through Home's root, which the `#default` wish
@@ -271,8 +269,8 @@ schemas are open, so its handler is delivered the fields it declares, `adopt`
 and `from`, and not `refused`, whose link it does not follow; it keeps what it
 holds, as for an event naming nothing. A host of a vintage that names no
 refusal sends a newer Home an event naming nothing, so Home records nothing,
-and an event that names no deciding profile, which it also sends for an inbox
-Home keeps, clears nothing.
+and clears a record only when it adopts or creates an inbox, or when no profile
+points at the refused inbox.
 
 ## The access its space grants
 

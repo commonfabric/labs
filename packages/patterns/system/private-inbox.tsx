@@ -455,8 +455,9 @@ export type EnsurePrivateInboxEvent = {
  * inbox. A refusal the event names is recorded, in place of any recorded
  * before, under the same check as an adoption: the profile the event names is
  * in Home's list and still points at the refused inbox. The record is cleared
- * when Home adopts or creates an inbox, and when the profile the event names
- * is in Home's list and points at the inbox Home holds.
+ * when Home adopts or creates an inbox, when the profile the event names is in
+ * Home's list and points at the inbox Home holds, and, on an event recording
+ * no refusal, when no profile in Home's list points at the refused inbox.
  *
  * The check is list membership and the profile's pointer, not order: which
  * profile decides is the host's alone. So an event the owner's own code sends,
@@ -548,6 +549,19 @@ export const ensurePrivateInbox = handler<
     deciding !== undefined && held !== undefined && equals(held, deciding)
   ) {
     privateInboxRefusal.set({});
+  } else {
+    // A recorded refusal says the deciding profile points at the refused
+    // inbox, so it ends once no profile in the list points there.
+    const recorded = privateInboxRefusal.get()?.refusal?.inbox;
+    if (
+      recorded !== undefined &&
+      !(profiles ?? []).some((profile) =>
+        profile?.inbox?.piece !== undefined &&
+        equals(profile.inbox.piece, recorded)
+      )
+    ) {
+      privateInboxRefusal.set({});
+    }
   }
   pointProfiles.send();
 });

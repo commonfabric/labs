@@ -166,8 +166,9 @@ profile pointing at another inbox as it is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
 the host's reason code, a link to the refused inbox, and when Home recorded it.
-It is cleared when Home adopts or creates an inbox, and when the deciding
-profile points at the inbox Home holds. It is read from Home's root like any
+It is cleared when Home adopts or creates an inbox, when the deciding profile
+points at the inbox Home holds, and when no profile points at the refused inbox
+any longer. It is read from Home's root like any
 other field, for instance
 `cf wish '#default' -s "$(cf id did ./my.key)" --select privateInboxRefusal`.
 A profile created once Home holds the inbox is pointed at it as it is created;

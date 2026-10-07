@@ -134,8 +134,9 @@ export type HomeOutput = {
   // `refusal`: why, by the host's code, the inbox refused, and when Home
   // recorded it. `ensurePrivateInbox` records one only while that profile is
   // in Home's list and still points at the refused inbox, and clears it when
-  // Home adopts or creates an inbox, and when the deciding profile points at
-  // the inbox Home holds. No `refusal` while there is none to report.
+  // Home adopts or creates an inbox, when the deciding profile points at the
+  // inbox Home holds, and when no profile points at the refused inbox any
+  // longer. No `refusal` while there is none to report.
   privateInboxRefusal: Writable<
     PrivateInboxRefusalHolder | Default<Record<PropertyKey, never>>
   >;
