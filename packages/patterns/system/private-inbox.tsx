@@ -350,9 +350,8 @@ export function advertisedInbox(
 }
 
 /**
- * Whether some profile in `profiles` points at `inbox`, a comparison of links
- * that reads nothing in the inbox's space. Call it as {@link advertisedInbox}
- * is called.
+ * Whether some profile in `profiles` points at `inbox`, comparing links as
+ * `equals()` does. Call it as {@link advertisedInbox} is called.
  */
 function isAdvertised(
   profiles: readonly (PointTarget | undefined)[] | undefined,
@@ -402,7 +401,7 @@ export type EnsurePrivateInboxEvent = {
  * holds none: the host names an inbox only once it has vetted it, and leaves
  * one that fails vetting where it is (`PiecesController.ensurePrivateInbox()`
  * in `packages/piece`). A profile pointing at another inbox keeps its pointer.
- * Running it again creates nothing and re-points nothing.
+ * Running it again creates, re-points and retains nothing.
  *
  * The inbox's space is named in Home's own space, so one identity gets one
  * such space however many times, and from however many runtimes, this runs.

@@ -122,7 +122,7 @@ export type HomeOutput = {
   // keeps the inbox it holds while a profile points at it. Each of their
   // profiles that points at no inbox is pointed here; one that points at
   // another inbox keeps it. Absent until `ensurePrivateInbox` runs, and while
-  // the only advertised inbox failed vetting.
+  // Home holds none and the advertised inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
   // The inboxes `privateInbox` held before, in the order Home gave them up, so
   // that what senders delivered to them stays readable. Nothing reads them
@@ -335,8 +335,8 @@ const Home = pattern(
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
-    // The inboxes Home held before, which the host's ensure moves there when
-    // it adopts another.
+    // The inboxes Home held before, where `ensurePrivateInbox` moves the one
+    // Home holds when it adopts another.
     const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
       .for("retainedPrivateInboxes");
     // Untrusted-write regression surface: this stream is exported so tests can
