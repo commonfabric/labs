@@ -7907,7 +7907,7 @@ describe("runtime-processor", () => {
               { did: apiSpace, host: "https://app.test" },
               { did: thirdSpace, host: "http://third.test/" },
             ]);
-            await tx.commit();
+            await tx.commit().settled;
 
             const cc = new PiecesController(
               { as: cfcSigner, space: userDid },
@@ -8006,7 +8006,7 @@ describe("runtime-processor", () => {
         const write = async (value: ReturnType<typeof rows>) => {
           const tx = runtime.edit();
           table.withTx(tx).set(value);
-          await tx.commit();
+          await tx.commit().settled;
         };
         await write(rows(["http://a.test/", "http://b.test/"]));
         const cc = new PiecesController(

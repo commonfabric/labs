@@ -146,13 +146,13 @@ async function createProfile(config: RoutedProfileFixture) {
     // deno-lint-ignore no-explicit-any
     const run = writer.run(tx, host as any, {}, result);
     writer.prepareTxForCommit(tx);
-    const opened = await tx.commit();
+    const opened = await tx.commit().settled;
     if (opened.error !== undefined) throw opened.error;
     await run.pull();
     const create = writer.edit();
     run.withTx(create).key("createProfile").send(createEvent("Ada"));
     writer.prepareTxForCommit(create);
-    const created = await create.commit();
+    const created = await create.commit().settled;
     if (created.error !== undefined) throw created.error;
     await run.pull();
     await writer.idle();
