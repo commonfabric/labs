@@ -163,6 +163,7 @@ async function decidingProfile(
 ): Promise<{ profile: Cell<unknown>; piece: Cell<unknown> } | undefined> {
   const list = await home.key("profiles").asSchema(profilesSchema).pull();
   const length = Array.isArray(list) ? list.length : 0;
+  if (length === 0) return undefined;
   const profilesCell = home.key("profiles").resolveAsCell();
   const candidates: Cell<unknown>[] = [];
   const unreadable = new Set<Cell<unknown>>();
@@ -181,6 +182,7 @@ async function decidingProfile(
       candidates[index] = profile;
     }),
   );
+  if (candidates.length === 0) return undefined;
   await Promise.all(
     ["defaultProfile", "legacyDefaultProfile", "mru"].map((key) =>
       home.key(key).resolveAsCell().sync()
