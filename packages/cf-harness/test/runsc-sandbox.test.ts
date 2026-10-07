@@ -19,6 +19,7 @@ import {
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
+  SETPRIV_ARGS,
   UNSHARE_ARGS,
   verifyPrivateScratchParent,
 } from "../src/sandbox/runsc.ts";
@@ -1645,15 +1646,24 @@ const PASTA = "/opt/passt/bin/pasta";
 /** The `unshare` root's pasta runs under in those cases; nothing is there. */
 const UNSHARE = "/opt/util-linux/bin/unshare";
 
+/** The `setpriv` that ties what pasta runs to pasta; nothing is there. */
+const SETPRIV = "/opt/util-linux/bin/setpriv";
+
+/** A configuration with pasta's network, as the Linux default's is. */
+const pastaConfig = (
+  overrides: Partial<Parameters<typeof resolveRunscSandboxConfig>[0]> = {},
+) => config({ networkHelper: PASTA, setpriv: SETPRIV, ...overrides });
+
 /**
  * A runner that hands the fake what a command run under pasta runs, and
  * keeps every command it was given as it was given, with the spec of each
- * container started.
+ * container started and the request that started it.
  */
 class UnderPasta implements ProcessRunner {
   readonly fake = new FakeRunscRunner();
   readonly given: { command: string; args: string[] }[] = [];
   readonly specs: string[] = [];
+  readonly started: ProcessRunRequest[] = [];
 
   async #unwrap<T extends { command: string; args: string[] }>(
     request: T,
@@ -1669,6 +1679,7 @@ class UnderPasta implements ProcessRunner {
   }
 
   async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+    this.started.push(request);
     return await this.fake.run(await this.#unwrap(request));
   }
 
@@ -1680,8 +1691,8 @@ class UnderPasta implements ProcessRunner {
 
   /**
    * Checks what pasta is given, run as `command`, which is pasta itself or
-   * the `unshare` root's pasta runs under, and returns the command pasta
-   * runs.
+   * the `unshare` root's pasta runs under, and that pasta runs its command
+   * under `setpriv`, and returns the command `setpriv` runs.
    */
   #underPasta(command: string, given: readonly string[]): string[] {
     const throughUnshare = command === UNSHARE;
@@ -1703,7 +1714,13 @@ class UnderPasta implements ProcessRunner {
     const log = rest.indexOf("--log-file");
     assertMatch(rest[log + 1], /\/pasta\.log$/);
     this.pastaFlags.push(rest.filter((_, i) => i !== log && i !== log + 1));
-    return args.slice(end + 1);
+    const run = args.slice(end + 1);
+    assertEquals(run.slice(0, SETPRIV_ARGS.length + 2), [
+      SETPRIV,
+      ...SETPRIV_ARGS,
+      "--",
+    ]);
+    return run.slice(SETPRIV_ARGS.length + 2);
   }
 
   /** What pasta was given beyond its own arguments and its log file. */
@@ -1713,9 +1730,13 @@ class UnderPasta implements ProcessRunner {
   readonly unshared: boolean[] = [];
 }
 
+/** The runsc `--root` a command the fake ran was given. */
+const rootOf = (args: readonly string[]): string =>
+  args[args.indexOf("--root") + 1];
+
 Deno.test("under pasta, a call starts its container in pasta's namespace, on that namespace as runsc's host network, with a hosts file naming the host", async () => {
   const runner = new UnderPasta();
-  const c = config({ networkHelper: PASTA, unshare: UNSHARE });
+  const c = pastaConfig({ unshare: UNSHARE });
   const runtime = new RunscSandboxRuntime(c, runner);
 
   const result = await runtime.runShell({ command: "echo hi" });
@@ -1747,39 +1768,131 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
 });
 
 Deno.test("under pasta, root keeps root in a network namespace alone and a mount namespace of unshare's, and a user that is not root gets pasta's user namespace", async () => {
-  for (const rootless of [false, true]) {
+  for (
+    const [unshare, rootless] of [
+      [UNSHARE, false],
+      [undefined, true],
+      // A `runsc` named for a user that is not root runs as it is.
+      [undefined, false],
+    ] as const
+  ) {
     const runner = new UnderPasta();
     await new RunscSandboxRuntime(
-      config({ networkHelper: PASTA, unshare: UNSHARE, rootless }),
+      pastaConfig({ ...(unshare !== undefined ? { unshare } : {}), rootless }),
       runner,
     ).runShell({ command: "echo hi" });
 
-    assertEquals(runner.pastaFlags, [rootless ? [] : [...PASTA_ROOT_ARGS]]);
-    assertEquals(runner.unshared, [!rootless]);
+    assertEquals(runner.pastaFlags, [
+      unshare !== undefined ? [...PASTA_ROOT_ARGS] : [],
+    ]);
+    assertEquals(runner.unshared, [unshare !== undefined]);
   }
 });
 
-Deno.test("under pasta as root, a call is refused, starting nothing, where no unshare was given", async () => {
+Deno.test("under pasta, a call is refused, starting nothing, where no setpriv was given", async () => {
   const runner = new UnderPasta();
   const runtime = new RunscSandboxRuntime(
-    config({ networkHelper: PASTA }),
+    config({ networkHelper: PASTA, unshare: UNSHARE }),
     runner,
   );
 
   await assertRejects(
     () => runtime.runShell({ command: "echo hi" }),
     Error,
-    "which no `unshare` was given to make",
+    "since no `setpriv` was given to tie it to pasta",
   );
-  assertEquals(
-    runner.given.filter((request) => request.args.includes("run")),
-    [],
-  );
+  assertEquals(runner.given, []);
+});
+
+Deno.test("under pasta, each call keeps its container's state in a root of its own, which goes when the call does, however it ends", async () => {
+  for (const ending of ["exits", "times out"] as const) {
+    const runner = new UnderPasta();
+    const c = pastaConfig({ rootless: true });
+    const runtime = new RunscSandboxRuntime(c, runner);
+    const base = runner.fake.run.bind(runner.fake);
+    // As a `runsc run` killed with its namespace does, the fake leaves its
+    // container's state behind.
+    runner.fake.run = async (request) => {
+      const root = rootOf(request.args);
+      await Deno.mkdir(root, { recursive: true });
+      await Deno.writeTextFile(join(root, "container.state"), "{}");
+      if (ending === "times out") {
+        throw new ProcessTimeoutError("pasta", 1000);
+      }
+      return await base(request);
+    };
+
+    const calls = await Promise.allSettled([
+      runtime.runShell({ command: "echo one" }),
+      runtime.runShell({ command: "echo two" }),
+    ]);
+    for (const call of calls) {
+      if (ending === "times out") {
+        assert(
+          call.status === "rejected" &&
+            call.reason instanceof ProcessTimeoutError,
+        );
+      } else {
+        assert(call.status === "fulfilled" && call.value.exitCode === 0);
+      }
+    }
+
+    const roots = runner.started.map((request) => rootOf(request.args));
+    assertEquals(new Set(roots).size, 2);
+    for (const root of roots) {
+      assertEquals(join(root, ".."), join(c.scratchDir, "state"));
+      await assertRejects(() => Deno.stat(root), Deno.errors.NotFound);
+    }
+    await runtime.close();
+    await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
+  }
+});
+
+Deno.test("under pasta, closing the runtime stops a call in flight through pasta, and waits for it to end before taking its scratch directory down", async () => {
+  const runner = new UnderPasta();
+  const c = pastaConfig({ rootless: true });
+  const runtime = new RunscSandboxRuntime(c, runner);
+  let running!: () => void;
+  const inFlight = new Promise<void>((resolve) => (running = resolve));
+  // Pasta ending is slow next to all a close does: many reads of the file
+  // system go by before the state its `runsc run` left is there.
+  const ending = async (root: string): Promise<ProcessRunResult> => {
+    for (let read = 0; read < 50; read += 1) await Deno.stat(c.scratchDir);
+    await Deno.mkdir(root, { recursive: true });
+    await Deno.writeTextFile(join(root, "container.state"), "{}");
+    return { stdout: "", stderr: "", exitCode: 143 };
+  };
+  // The fake pasta runs until it is stopped, as a call that never ends would,
+  // and ends as a SIGTERM ends pasta, with what its `runsc run` left in the
+  // call's root, which `close()` must wait to see taken down.
+  runner.fake.run = (request) => {
+    running();
+    return new Promise((resolve, reject) => {
+      request.signal?.addEventListener("abort", () => {
+        ending(rootOf(request.args)).then(resolve, reject);
+      });
+    });
+  };
+
+  let ended = false;
+  const call = runtime.runShell({ command: "sleep 600" }).finally(() => {
+    ended = true;
+  });
+  await inFlight;
+  await runtime.close();
+
+  assertEquals(ended, true);
+
+  assertEquals(runner.started.map((request) => request.signal?.aborted), [
+    true,
+  ]);
+  assertEquals((await call).exitCode, 143);
+  await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
 });
 
 Deno.test("under pasta, closing the runtime takes its scratch directory down, hosts file and pasta's log included", async () => {
   const runner = new UnderPasta();
-  const c = config({ networkHelper: PASTA, rootless: true });
+  const c = pastaConfig({ rootless: true });
   const runtime = new RunscSandboxRuntime(c, runner);
   await runtime.runShell({ command: "echo hi" });
   // pasta writes its log beside the hosts file; the fake runs no pasta.
@@ -1793,7 +1906,7 @@ Deno.test("under pasta, closing the runtime takes its scratch directory down, ho
 Deno.test("under pasta, no session is offered, and one asked for is refused, starting nothing", async () => {
   const runner = new UnderPasta();
   const runtime = new RunscSandboxRuntime(
-    config({ networkHelper: PASTA, rootless: true }),
+    pastaConfig({ rootless: true }),
     runner,
   );
 
@@ -1808,7 +1921,7 @@ Deno.test("under pasta, no session is offered, and one asked for is refused, sta
   // Every other network mode keeps them.
   assertEquals(
     new RunscSandboxRuntime(
-      config({ networkHelper: PASTA, networkMode: "none" }),
+      pastaConfig({ networkMode: "none" }),
       runner,
     ).describe().sessions,
     true,
@@ -1819,13 +1932,45 @@ Deno.test("a network other than runsc's own takes no pasta, whatever is configur
   for (const networkMode of ["none", "host"] as const) {
     const runner = new UnderPasta();
     await new RunscSandboxRuntime(
-      config({ networkHelper: PASTA, networkMode }),
+      pastaConfig({ networkMode }),
       runner,
     ).runShell({ command: "echo hi" });
 
     assertEquals(runner.given[0].command, "/bin/sh");
     assert(runner.given[0].args.includes(`--network=${networkMode}`));
+    assertEquals(rootOf(runner.given[0].args).endsWith("/state"), true);
   }
+});
+
+Deno.test("under pasta, a mount that covers the hosts file, or sits in it, is refused", () => {
+  for (const sandboxPath of ["/etc/hosts", "/etc"]) {
+    assertThrows(
+      () =>
+        pastaConfig({
+          additionalMounts: [{
+            kind: "host-bind",
+            name: "etc",
+            hostPath: "/tmp/elsewhere",
+            sandboxPath,
+            readOnly: true,
+          }],
+        }),
+      Error,
+      "where pasta's network binds the hosts file naming `host.docker.internal`",
+    );
+  }
+  // Without pasta's network the hosts file is the image's, and `/etc/hosts`
+  // is a mount like any other.
+  pastaConfig({
+    networkMode: "none",
+    additionalMounts: [{
+      kind: "host-bind",
+      name: "etc",
+      hostPath: "/tmp/elsewhere",
+      sandboxPath: "/etc/hosts",
+      readOnly: true,
+    }],
+  });
 });
 
 Deno.test("executableOnPath finds an executable file in the first entry holding one, and nothing elsewhere", async () => {

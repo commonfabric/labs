@@ -1085,11 +1085,15 @@ that `unshare` (util-linux) makes, since it then mounts its own `/proc` in the
 mount namespace it runs in. Pasta starts what it runs in a PID namespace of its
 own, so a session's container started under it would record pids its later calls
 could not find: under pasta's network no sandbox session is offered, and the
-`bash` tool takes no `session`. No port is forwarded into the container, or from
-the container's loopback to the host's. A user id, or a kernel parameter, that
-cannot be read refuses the default rather than being guessed at. Where no
-`pasta` is on `PATH`, or for root no `unshare`, the default is refused, saying
-to install passt (`sudo apt install passt`) or to name a network:
+`bash` tool takes no `session`. Pasta also clears the parent-death signal of
+what it runs, so the driver runs it through `setpriv --pdeathsig KILL`
+(util-linux): a call that times out, or is in flight when the runtime closes,
+stops its pasta, and its container dies with pasta's namespace. No port is
+forwarded into the container, or from the container's loopback to the host's. A
+user id, or a kernel parameter, that cannot be read refuses the default rather
+than being guessed at. Where no `pasta` is on `PATH`, no `setpriv`, or for root
+no `unshare`, the default is refused, saying to install passt
+(`sudo apt install passt`) or util-linux, or to name a network:
 `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
 `host` the host's own network, interfaces and all.
 

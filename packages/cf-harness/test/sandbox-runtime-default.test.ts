@@ -119,12 +119,21 @@ const PASTA = "/usr/bin/pasta";
 /** The `unshare` a case's Linux process finds on its `PATH`. */
 const UNSHARE = "/usr/bin/unshare";
 
+/** The `setpriv` a case's Linux process finds on its `PATH`. */
+const SETPRIV = "/usr/bin/setpriv";
+
 /**
- * Finds `pasta` and `unshare`, and nothing else, as a Linux host with passt
- * and util-linux does.
+ * Finds `pasta`, `unshare` and `setpriv`, and nothing else, as a Linux host
+ * with passt and util-linux does.
  */
 const withPasta = (name: string): string | undefined =>
-  name === "pasta" ? PASTA : name === "unshare" ? UNSHARE : undefined;
+  name === "pasta"
+    ? PASTA
+    : name === "unshare"
+    ? UNSHARE
+    : name === "setpriv"
+    ? SETPRIV
+    : undefined;
 
 /**
  * The selection of a defaulted Linux runtime for root, taken whole from
@@ -137,6 +146,7 @@ const fromLinuxStore = (store: string): SandboxRuntimeSelection => ({
   sandboxRunscBinary: join(store, LINUX_RUNSC),
   sandboxRunscNetworkHelper: PASTA,
   sandboxRunscUnshare: UNSHARE,
+  sandboxRunscSetpriv: SETPRIV,
   sandboxRuntimeChoice: {
     runtime: "runsc",
     source: "default",
@@ -972,7 +982,9 @@ describe("sandbox-runtime-default", () => {
             { uid: () => 1000 },
           ),
         ).toEqual({
-          ...fromLinuxStore(store),
+          // The named `runsc` runs as it is, and pasta as this user does: no
+          // `unshare`, which is root's alone.
+          ...withoutUnshare(fromLinuxStore(store)),
           sandboxRunscBinary: "/usr/local/bin/runsc",
         });
       });
@@ -1100,7 +1112,7 @@ describe("sandbox-runtime-default", () => {
 
         const refusal = await rejection(
           select({ HOME: home }, {}, {
-            which: (name) => name === "pasta" ? PASTA : undefined,
+            which: (name) => name === "unshare" ? undefined : withPasta(name),
           }),
         );
 
@@ -1113,11 +1125,56 @@ describe("sandbox-runtime-default", () => {
         );
       });
 
+      it("throws where no `setpriv` ties what pasta runs to pasta, for root and for a user that is not root", async () => {
+        await installLinuxStore(home);
+
+        for (const uid of [0, 1000]) {
+          const refusal = await rejection(
+            select({ HOME: home }, {}, {
+              uid: () => uid,
+              readSysctl: () => Promise.resolve(undefined),
+              which: (name) => name === "setpriv" ? undefined : withPasta(name),
+            }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(messageOf(refusal)).toContain(
+            "its network is `pasta`'s, and a container under pasta outlives " +
+              "a `pasta` that is stopped unless `setpriv` (util-linux) ties " +
+              "it to pasta, and no `setpriv` is on `PATH`. Install " +
+              "util-linux, or name a network with",
+          );
+        }
+      });
+
+      it("throws for a `runsc` named by a process whose user cannot be read, rather than guess how pasta runs", async () => {
+        await installLinuxStore(home);
+        const binary = join(home, "own-runsc");
+        await Deno.writeTextFile(binary, "#!/bin/sh\n", { mode: 0o755 });
+
+        const refusal = await rejection(
+          select({ HOME: home, CF_HARNESS_RUNSC_BINARY: binary }, {}, {
+            uid: () => {
+              throw new Error("not capable");
+            },
+          }),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toContain(
+          "which user this process runs as could not be read (Error: not " +
+            "capable), so whether `pasta` runs as root, in a mount namespace " +
+            "of its own, or in a user namespace of its own is not known. " +
+            "Grant it `--allow-sys=uid`",
+        );
+      });
+
       it("returns the native runtime with no `pasta` where a network that needs none is named", async () => {
         const store = await installLinuxStore(home);
         const {
           sandboxRunscNetworkHelper: _,
           sandboxRunscUnshare: __,
+          sandboxRunscSetpriv: ___,
           ...withoutPasta
         } = fromLinuxStore(store);
 
@@ -1145,6 +1202,7 @@ describe("sandbox-runtime-default", () => {
           const {
             sandboxRunscNetworkHelper: _,
             sandboxRunscUnshare: __,
+            sandboxRunscSetpriv: ___,
             ...withoutPasta
           } = fromLinuxStore(store);
           expect(
@@ -2746,6 +2804,9 @@ describe("sandbox-runtime-default", () => {
     ...(options?.sandboxRunscUnshare !== undefined
       ? { sandboxRunscUnshare: options.sandboxRunscUnshare }
       : {}),
+    ...(options?.sandboxRunscSetpriv !== undefined
+      ? { sandboxRunscSetpriv: options.sandboxRunscSetpriv }
+      : {}),
     ...(options?.sandboxRunscRootless === true
       ? { sandboxRunscRootless: true as const }
       : {}),
@@ -3137,6 +3198,7 @@ describe("sandbox-runtime-default", () => {
       expect(parsed).toMatchObject({
         sandboxRunscNetworkHelper: "/handed/pasta",
         sandboxRunscUnshare: "/handed/unshare",
+        sandboxRunscSetpriv: "/handed/setpriv",
       });
     });
 

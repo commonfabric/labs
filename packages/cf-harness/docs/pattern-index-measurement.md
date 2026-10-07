@@ -98,10 +98,10 @@ named as not taken rather than left out.
    elsewhere. Where that default cannot run it is refused rather than put on
    Docker: on any other Mac; where its store is not set up; and on Linux, where
    a console that is not root and names no `runsc` of its own gets no user
-   namespace, and where its default network finds no `pasta` (or, for root, no
-   `unshare`). A named runtime, and a named `none` or `host` network, take none
-   of those. A run written before runs recorded the runtime reads as not
-   recorded.
+   namespace, and where its default network finds no `pasta` or `setpriv` (or,
+   for root, no `unshare`). A named runtime, and a named `none` or `host`
+   network, take none of those. A run written before runs recorded the runtime
+   reads as not recorded.
 
 ## Running a batch
 

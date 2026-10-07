@@ -123,6 +123,7 @@ export const childSandboxOptions = (
   sandboxRunscRootless?: boolean;
   sandboxRunscNetworkHelper?: string;
   sandboxRunscUnshare?: string;
+  sandboxRunscSetpriv?: string;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
 } => {
   if (parent.ownedRunscSandboxConfig !== undefined) {
@@ -157,6 +158,9 @@ export const childSandboxOptions = (
         : {}),
       ...(runsc.unshare !== undefined
         ? { sandboxRunscUnshare: runsc.unshare }
+        : {}),
+      ...(runsc.setpriv !== undefined
+        ? { sandboxRunscSetpriv: runsc.setpriv }
         : {}),
       additionalMounts: mounts,
     };

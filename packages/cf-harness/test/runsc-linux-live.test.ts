@@ -85,6 +85,7 @@ describe("runsc-linux-live", () => {
         rootless: selection.sandboxRunscRootless === true,
         networkHelper: selection.sandboxRunscNetworkHelper,
         unshare: selection.sandboxRunscUnshare,
+        setpriv: selection.sandboxRunscSetpriv,
         platform: "linux",
         homeDir: home,
       });
@@ -156,6 +157,18 @@ describe("runsc-linux-live", () => {
           command: "cat /proc/net/dev",
         });
         expect(interfaces.stdout).not.toContain("docker0");
+
+        // A call that times out under pasta ends with all it ran: pasta's
+        // command is tied to pasta, so the container dies with it, and the
+        // call ends only once nothing holding its output is left, its
+        // sandbox included. Had the container outlived pasta, the call
+        // would have waited for it, and found what it wrote.
+        await expect(runtime.runShell({
+          command: "sleep 30; echo late > /workspace/late",
+          timeoutMs: 3000,
+        })).rejects.toThrow("process timed out after 3000ms");
+        await expect(Deno.stat(join(workspace, "late"))).rejects
+          .toBeInstanceOf(Deno.errors.NotFound);
 
         // Under pasta no session is offered; with no network, one keeps
         // its state between calls.

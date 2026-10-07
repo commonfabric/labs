@@ -48,3 +48,38 @@ Deno.test({
     }
   },
 });
+
+Deno.test("DenoProcessRunner stops a process its signal aborts, which ends with the status it ends with, not as a timeout", async () => {
+  const runner = new DenoProcessRunner();
+  const stop = new AbortController();
+
+  // Left alone it would run for a minute.
+  const running = runner.run({
+    command: "/bin/sh",
+    args: ["-c", "exec sleep 60"],
+    signal: stop.signal,
+  });
+  // Nothing to wait on but the abort: a SIGTERM ends `sleep` whenever it
+  // lands, before or after `exec`.
+  stop.abort();
+  const result = await running;
+
+  assertEquals(result.exitCode, 143);
+});
+
+Deno.test("DenoProcessRunner refuses, running nothing, a run whose signal has already aborted", async () => {
+  const runner = new DenoProcessRunner();
+  const stop = new AbortController();
+  stop.abort();
+  const marker = await Deno.makeTempFile();
+  await Deno.remove(marker);
+
+  await assertRejects(() =>
+    runner.run({
+      command: "/bin/sh",
+      args: ["-c", `touch ${marker}`],
+      signal: stop.signal,
+    })
+  );
+  await assertRejects(() => Deno.stat(marker), Deno.errors.NotFound);
+});

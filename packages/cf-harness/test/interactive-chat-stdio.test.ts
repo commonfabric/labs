@@ -1748,6 +1748,7 @@ const linuxDefault = (): SandboxRuntimeSelection => {
     sandboxRunscBinary: join(store, "bin", "runsc"),
     sandboxRunscNetworkHelper: join(LINUX_HOME, "bin", "pasta"),
     sandboxRunscUnshare: join(LINUX_HOME, "bin", "unshare"),
+    sandboxRunscSetpriv: join(LINUX_HOME, "bin", "setpriv"),
     sandboxRuntimeChoice: {
       runtime: "runsc",
       source: "default",

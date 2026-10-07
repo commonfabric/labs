@@ -82,9 +82,15 @@ export interface SandboxRuntimeSelection {
 
   /**
    * The `unshare` that gives root's pasta a mount namespace of its own, beside
-   * `sandboxRunscNetworkHelper` for a Linux default that runs as root.
+   * `sandboxRunscNetworkHelper` for a Linux default run by root.
    */
   sandboxRunscUnshare?: string;
+
+  /**
+   * The `setpriv` that ties what pasta runs to pasta, beside
+   * `sandboxRunscNetworkHelper`.
+   */
+  sandboxRunscSetpriv?: string;
 
   /** How the runtime was selected, which the run records beside it. */
   sandboxRuntimeChoice: SandboxRuntimeChoice;
@@ -94,8 +100,8 @@ export interface SandboxRuntimeSelection {
  * Values a caller received explicitly (a flag), which win over the
  * environment. A present value takes part even when it is empty: an empty
  * runtime is refused, an empty policy means "none", every default included,
- * and an empty rootfs names none, which the macOS default refuses, since its
- * runtime runs only from one. A named `runsc` given an empty rootfs is left
+ * and an empty rootfs names none, which the macOS and Linux defaults refuse,
+ * since their runtime runs only from one. A named `runsc` given an empty rootfs is left
  * to its driver's own default. An empty variable names nothing, and the
  * default applies as though it were unset.
  */
@@ -909,6 +915,29 @@ export const resolveSandboxRuntimeSelection = async (
   const namedBinary = nonEmpty(env[RUNSC_BINARY_ENV]);
   let nativeStore: string | undefined;
   let rootless = false;
+  // The user this process runs as, read once, where something turns on it.
+  let uidRead: { uid: number | null } | undefined;
+  const processUid = (
+    platform: NativeRuntimePlatform,
+    turnsOn: string,
+  ): number | null => {
+    if (uidRead === undefined) {
+      try {
+        uidRead = { uid: (options.uid ?? Deno.uid)() };
+      } catch (error) {
+        // Not known to be root, nor known not to be, so nothing that turns
+        // on it is chosen.
+        throw nativeDefaultRefusal(
+          platform,
+          `which user this process runs as could not be read (${error}), ` +
+            `so ${turnsOn} is not known`,
+          "Grant it `--allow-sys=uid`",
+          options.flags,
+        );
+      }
+    }
+    return uidRead.uid;
+  };
   if (nativePlatform !== undefined) {
     const arch = options.arch ?? Deno.build.arch;
     if (nativePlatform === "darwin" && arch !== "aarch64") {
@@ -943,21 +972,10 @@ export const resolveSandboxRuntimeSelection = async (
     if (nativePlatform === "linux" && namedBinary === undefined) {
       // Before the store is looked for: the store is the one under the home
       // of whoever runs, and how its `runsc` runs depends on who that is.
-      let uid: number | null;
-      try {
-        uid = (options.uid ?? Deno.uid)();
-      } catch (error) {
-        // Not known to be root, nor known not to be, so neither way of
-        // running the store's `runsc` is taken.
-        throw nativeDefaultRefusal(
-          nativePlatform,
-          `which user this process runs as could not be read (${error}), ` +
-            "so whether the store's `runsc` runs as root or rootless is not " +
-            "known",
-          "Grant it `--allow-sys=uid`",
-          options.flags,
-        );
-      }
+      const uid = processUid(
+        nativePlatform,
+        "whether the store's `runsc` runs as root or rootless",
+      );
       if (uid !== 0) {
         // Not root, so rootless: runsc maps this user to root in a user
         // namespace of its own, which the host has to allow.
@@ -1146,6 +1164,7 @@ export const resolveSandboxRuntimeSelection = async (
   // alone; pasta is what gives it egress and the host, as Docker's bridge did.
   let networkHelper: string | undefined;
   let unshare: string | undefined;
+  let setpriv: string | undefined;
   if (
     nativePlatform === "linux" &&
     (sandboxRunscNetworkMode === undefined ||
@@ -1164,7 +1183,29 @@ export const resolveSandboxRuntimeSelection = async (
         options.flags,
       );
     }
-    if (!rootless) {
+    setpriv = which("setpriv");
+    if (setpriv === undefined) {
+      throw nativeDefaultRefusal(
+        nativePlatform,
+        "its network is `pasta`'s, and a container under pasta outlives a " +
+          "`pasta` that is stopped unless `setpriv` (util-linux) ties it to " +
+          "pasta, and no `setpriv` is on `PATH`",
+        "Install util-linux, or name a network with " +
+          `\`${SANDBOX_NETWORK_MODE_ENV}=none\` or \`${SANDBOX_NETWORK_MODE_ENV}=host\``,
+        options.flags,
+      );
+    }
+    // Root's pasta runs in a mount namespace of its own; whoever else runs
+    // has pasta make a user namespace, whether its `runsc` is rootless or a
+    // named one that runs as it is.
+    if (
+      !rootless &&
+      processUid(
+          nativePlatform,
+          "whether `pasta` runs as root, in a mount namespace of its own, or " +
+            "in a user namespace of its own",
+        ) === 0
+    ) {
       unshare = which("unshare");
       if (unshare === undefined) {
         throw nativeDefaultRefusal(
@@ -1193,6 +1234,7 @@ export const resolveSandboxRuntimeSelection = async (
       ? { sandboxRunscNetworkHelper: networkHelper }
       : {}),
     ...(unshare !== undefined ? { sandboxRunscUnshare: unshare } : {}),
+    ...(setpriv !== undefined ? { sandboxRunscSetpriv: setpriv } : {}),
     sandboxRuntimeChoice: nativePlatform !== undefined &&
         nativeStore !== undefined
       ? {

@@ -682,7 +682,7 @@ describe("sandbox-runtime-resume", () => {
           arch: "aarch64",
           uid: () => 0,
           which: (name: string) =>
-            name === "pasta" || name === "unshare"
+            name === "pasta" || name === "unshare" || name === "setpriv"
               ? `/usr/bin/${name}`
               : undefined,
           cwd: root,

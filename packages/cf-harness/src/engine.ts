@@ -457,6 +457,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscNetworkHelper?: string;
   /** runsc runtime: the `unshare` root's pasta runs under. */
   sandboxRunscUnshare?: string;
+  /** runsc runtime: the `setpriv` that ties what pasta runs to pasta. */
+  sandboxRunscSetpriv?: string;
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -1081,6 +1083,9 @@ export class CfHarnessEngine {
           : {}),
         ...(options.sandboxRunscUnshare !== undefined
           ? { unshare: options.sandboxRunscUnshare }
+          : {}),
+        ...(options.sandboxRunscSetpriv !== undefined
+          ? { setpriv: options.sandboxRunscSetpriv }
           : {}),
         additionalMounts: options.additionalMounts,
         runId,

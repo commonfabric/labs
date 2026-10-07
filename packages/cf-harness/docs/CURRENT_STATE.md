@@ -72,8 +72,11 @@ label string beside an empty structured label is withheld under both.
   context and the result travel through two host sidecar directories that the
   runtime's registration names.
 - The **direct driver** writes an OCI bundle and invokes a `runsc` binary
-  itself, with the same command line on Linux and on macOS. On Linux that binary
-  is expected to be gVisor's `runsc`. On macOS it is expected to be the darwin
+  itself, with the same command line on Linux and on macOS but for two things on
+  Linux: `--rootless` where the selection runs it rootless, and, under pasta's
+  network (below), `--network=host` inside pasta's namespace, with the whole
+  command started through `pasta` and `setpriv`. On Linux that binary is
+  expected to be gVisor's `runsc`. On macOS it is expected to be the darwin
   build from the sibling `gvisor` repository, which is expected to forward the
   command line into one VM that every run on the machine shares; the forwarding
   and the VM are that build's behavior and not the harness's. Where a CFC policy
@@ -181,21 +184,31 @@ for it once.
 The Linux default's `sandbox` network, unless `CF_HARNESS_DOCKER_NETWORK_MODE`
 names another, is `pasta`'s, from passt, found on `PATH` as the selection runs;
 with none there the default is refused, naming passt and the two networks that
-need none. The driver starts each container, a session's included, inside
+need none. The driver starts each container inside
 `pasta --config-net -a 10.0.2.15 -n 24 -g 10.0.2.2` with every port forward off
 (for root with `--netns-only --runas 0`, inside
 `unshare --mount --propagation private`, since pasta then mounts its own `/proc`
-in the mount namespace it runs in, and refused where no `unshare` is on `PATH`),
-runs runsc there with `--network=host` and a bundle with no network namespace of
-its own, and binds a hosts file over `/etc/hosts` that names the gateway, which
-pasta maps to the host's loopback, `host.docker.internal`. The container has
-egress and the host, and sees none of the host's interfaces. Pasta starts what
-it runs in a PID namespace of its own, so a session's container started under it
-would record pids that `exec` and the control commands, run outside it, cannot
-find: under pasta's network the runtime describes no sessions, the `bash` tool
-offers no `session`, and a session asked of the runtime directly is refused as
-`start-failed`. `none` gives the container loopback alone, and `host` the host's
-own network, with no network namespace of its own either.
+in the mount namespace it runs in, and refused where no `unshare` is on `PATH`;
+whoever else runs, a named `runsc` included, has pasta make a user namespace),
+runs runsc there through `setpriv --pdeathsig KILL` (util-linux, refused where
+no `setpriv` is on `PATH`) with `--network=host` and a bundle with no network
+namespace of its own, and binds a hosts file over `/etc/hosts` that names the
+gateway, which pasta maps to the host's loopback, `host.docker.internal`. The
+container has egress and the host, and sees none of the host's interfaces. Pasta
+starts what it runs in a PID namespace of its own, so a session's container
+started under it would record pids that `exec` and the control commands, run
+outside it, cannot find: under pasta's network the runtime describes no
+sessions, the `bash` tool offers no `session`, and a session asked of the
+runtime directly is refused as `start-failed`. For the same reason no control
+command reaches a container under pasta from outside. Pasta clears the
+parent-death signal of what it runs, so `setpriv` sets one, SIGKILL: when pasta
+goes (a call's timeout, a close of the runtime, which stops each call in flight
+through its pasta), the first process of its PID namespace dies, and every
+process of the namespace, the container's included, with it. Each such container
+keeps its state in a runsc root of its own call's, which goes when the call
+ends. A mount at or over `/etc/hosts` is refused under pasta's network. `none`
+gives the container loopback alone, and `host` the host's own network, with no
+network namespace of its own either.
 
 The macOS default is refused for three more things, and the Linux default for
 the first and the last, each checked before the pieces above:

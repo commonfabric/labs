@@ -36,8 +36,8 @@ import { createLoomLocalCfHarnessHost as createLoomLocalCfHarnessHostOnHost } fr
 /**
  * A home whose store holds everything the Linux default takes from it: a
  * `runsc` that runs nothing, an empty rootfs and an empty CFC policy, and a
- * `pasta` and an `unshare` beside it that run nothing, which the exports find
- * for the default's network. Made
+ * `pasta`, an `unshare` and a `setpriv` beside it that run nothing, which the
+ * exports find for the default's network. Made
  * once per process outside every tree a case mounts, and removed as the
  * process ends.
  */
@@ -53,7 +53,7 @@ export const LINUX_HOME: string = (() => {
   Deno.mkdirSync(join(store, "images", "kitchensink"), { recursive: true });
   Deno.writeTextFileSync(join(store, "cfc-policy.json"), "{}\n");
   Deno.mkdirSync(join(home, "bin"));
-  for (const helper of ["pasta", "unshare"]) {
+  for (const helper of ["pasta", "unshare", "setpriv"]) {
     Deno.writeTextFileSync(join(home, "bin", helper), "#!/bin/sh\nexit 0\n", {
       mode: 0o755,
     });
@@ -72,7 +72,7 @@ const LINUX = {
   platform: "linux",
   uid: () => 0,
   which: (name: string) =>
-    name === "pasta" || name === "unshare"
+    name === "pasta" || name === "unshare" || name === "setpriv"
       ? join(LINUX_HOME, "bin", name)
       : undefined,
 } as const;

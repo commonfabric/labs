@@ -1408,6 +1408,9 @@ const resolveConsoleRunscConfig = (
     ...(options.sandboxRunscUnshare !== undefined
       ? { unshare: options.sandboxRunscUnshare }
       : {}),
+    ...(options.sandboxRunscSetpriv !== undefined
+      ? { setpriv: options.sandboxRunscSetpriv }
+      : {}),
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,

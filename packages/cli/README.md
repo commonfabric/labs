@@ -1268,13 +1268,13 @@ none named a Mac with Apple silicon and Linux run on their native runtime and
 every other platform on Docker. The native runtime needs its store set up (the
 cfc-vm store on a Mac, `~/.local/share/runsc-cfc` on Linux), though a named
 `runsc` binary, rootfs or policy replaces that piece of it. On Linux its default
-network needs `pasta` (passt), and `unshare` for a root runner; a named `none`
-or `host` network needs neither. A runner that is not root runs the store's
-`runsc` rootless, on a host that allows it unprivileged user namespaces; a
-`runsc` named with `CF_HARNESS_RUNSC_BINARY` runs as it is. A Mac that is not
-Apple silicon has no native runtime. The runner derives that selection as it
-starts, before either lane serves, and exits with the harness's refusal where
-the harness would refuse its jobs.
+network needs `pasta` (passt) and `setpriv` (util-linux), and `unshare` for a
+root runner; a named `none` or `host` network needs neither. A runner that is
+not root runs the store's `runsc` rootless, on a host that allows it
+unprivileged user namespaces; a `runsc` named with `CF_HARNESS_RUNSC_BINARY`
+runs as it is. A Mac that is not Apple silicon has no native runtime. The runner
+derives that selection as it starts, before either lane serves, and exits with
+the harness's refusal where the harness would refuse its jobs.
 
 What the Fabric lane does, in order:
 

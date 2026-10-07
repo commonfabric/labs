@@ -116,6 +116,8 @@ export interface HarnessSessionConfig {
   sandboxRunscNetworkHelper?: string;
   /** The `unshare` root's pasta runs under. */
   sandboxRunscUnshare?: string;
+  /** The `setpriv` that ties what pasta runs to pasta. */
+  sandboxRunscSetpriv?: string;
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -336,6 +338,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscUnshare !== undefined
       ? { sandboxRunscUnshare: config.sandboxRunscUnshare }
+      : {}),
+    ...(config.sandboxRunscSetpriv !== undefined
+      ? { sandboxRunscSetpriv: config.sandboxRunscSetpriv }
       : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }

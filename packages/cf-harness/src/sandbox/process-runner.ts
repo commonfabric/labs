@@ -6,6 +6,13 @@ export interface ProcessRunRequest {
   clearEnv?: boolean;
   stdinText?: string;
   timeoutMs?: number;
+  /**
+   * Stops the process with SIGTERM when it aborts, as a timeout does; the
+   * run then ends as the process does, with the status it ends with, and
+   * not with a timeout. A run whose signal has already aborted throws its
+   * reason, starting nothing.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ProcessRunResult {
@@ -104,6 +111,9 @@ export class DenoProcessRunner implements ProcessRunner {
   }
 
   async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+    // Deno starts a process whose signal has already aborted, and runs it to
+    // its end, so a run that is stopped before it starts starts nothing.
+    request.signal?.throwIfAborted();
     const controller = new AbortController();
     let timeoutTriggered = false;
     const timeoutId = request.timeoutMs !== undefined
@@ -112,6 +122,8 @@ export class DenoProcessRunner implements ProcessRunner {
         controller.abort();
       }, request.timeoutMs)
       : undefined;
+    const stop = () => controller.abort();
+    request.signal?.addEventListener("abort", stop, { once: true });
     try {
       const child = new Deno.Command(request.command, {
         args: request.args,
@@ -156,7 +168,10 @@ export class DenoProcessRunner implements ProcessRunner {
         exitCode: status.code,
       };
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (
+        timeoutTriggered && error instanceof DOMException &&
+        error.name === "AbortError"
+      ) {
         throw new ProcessTimeoutError(
           [request.command, ...request.args].join(" "),
           request.timeoutMs ?? 0,
@@ -164,6 +179,7 @@ export class DenoProcessRunner implements ProcessRunner {
       }
       throw error;
     } finally {
+      request.signal?.removeEventListener("abort", stop);
       if (timeoutId !== undefined) {
         clearTimeout(timeoutId);
       }

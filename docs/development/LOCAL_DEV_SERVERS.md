@@ -64,7 +64,7 @@ installer writes, and does not start where that store is not set up, and any
 other Mac does not start at all; Linux serves on its native runtime too, the
 store gVisor's Linux installer writes under `~/.local/share/runsc-cfc`, and does
 not start where that store is not set up, where its default network finds no
-`pasta` (passt) on `PATH` or, for a root console, no `unshare`, or where the
+`pasta` (passt) or `setpriv` on `PATH` or, for a root console, no `unshare`, or where the
 console is not root, names no `runsc` with `CF_HARNESS_RUNSC_BINARY`, and the
 host allows it no user namespace to run the store's `runsc` rootless; every other platform serves on
 Docker. Each refusal says how to select Docker. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
@@ -397,7 +397,7 @@ Mac with Apple silicon runs each run on its native runtime, from the cfc-vm
 store, Linux on its own, from the store under `~/.local/share/runsc-cfc`, the
 store's `runsc` rootless for a runner that is not root (a `runsc` named with
 `CF_HARNESS_RUNSC_BINARY` runs as it is) and `pasta` for its default network,
-with `unshare` for a root runner, while
+with `setpriv`, and `unshare` for a root runner, while
 every other platform runs Docker. The runner derives that selection as it
 starts, and where the harness would refuse its runs, any other Mac, and a Mac
 or a Linux host whose store is not set up, among them, it exits with the harness's refusal before either of its lanes, the

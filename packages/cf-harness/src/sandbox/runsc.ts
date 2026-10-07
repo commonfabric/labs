@@ -223,8 +223,21 @@ export const UNSHARE_ARGS: readonly string[] = [
   "private",
 ];
 
+/**
+ * How `setpriv` (util-linux) ties what pasta runs to pasta: SIGKILL when pasta
+ * goes. Pasta starts its command as the first process of a PID namespace of
+ * its own, and clears the parent-death signal it gave it before the command
+ * starts, so a `runsc run` whose pasta is stopped (a timeout, a close) would
+ * otherwise keep its container running. A SIGKILL to that first process ends
+ * every process of the namespace, the container's included.
+ */
+export const SETPRIV_ARGS: readonly string[] = ["--pdeathsig", "KILL"];
+
 /** The address a container under pasta reaches the host at. */
 export const PASTA_HOST_ADDRESS = "10.0.2.2";
+
+/** Where a container under pasta gets {@link PASTA_HOSTS_FILE}. */
+export const PASTA_HOSTS_PATH = "/etc/hosts";
 
 /** The hosts file a container under pasta gets, naming the host. */
 export const PASTA_HOSTS_FILE = "127.0.0.1\tlocalhost\n" +
@@ -267,10 +280,17 @@ export interface RunscSandboxConfig {
   networkHelper?: string;
   /**
    * The `unshare` that gives pasta a mount namespace of its own where this
-   * process is root; read only where `networkHelper` is, and required there
-   * for root.
+   * process is root, and that this process is root: given, pasta runs as
+   * {@link PASTA_ROOT_ARGS} says, in that namespace; absent, pasta makes a
+   * user namespace of its own. Read only where `networkHelper` is.
    */
   unshare?: string;
+  /**
+   * The `setpriv` that ties what pasta runs to pasta, as
+   * {@link SETPRIV_ARGS} says; read only where `networkHelper` is, and
+   * required there.
+   */
+  setpriv?: string;
   /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
@@ -312,6 +332,8 @@ export interface ResolveRunscSandboxConfigOptions {
   networkHelper?: string;
   /** The `unshare` binary; see {@link RunscSandboxConfig}. */
   unshare?: string;
+  /** The `setpriv` binary; see {@link RunscSandboxConfig}. */
+  setpriv?: string;
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -699,9 +721,14 @@ export const resolveRunscSandboxConfig = (
   const additionalMounts = resolveAdditionalMounts(
     options.additionalMounts ?? [],
   );
+  // Under pasta's network the hosts file is bound in as well, and no mount
+  // may cover it or sit in it.
+  const underPasta = options.networkHelper !== undefined &&
+    (options.networkMode ?? DEFAULT_RUNSC_NETWORK_MODE) === "sandbox";
   const roots = [
     workspaceMountPath,
     ...additionalMounts.map((m) => m.sandboxPath),
+    ...(underPasta ? [PASTA_HOSTS_PATH] : []),
   ];
   // By index, so two mounts at the very same path are an overlap too: the
   // later bind would shadow the earlier one while the description still
@@ -711,7 +738,14 @@ export const resolveRunscSandboxConfig = (
       const a = roots[i]!;
       const b = roots[j]!;
       if (isWithinRoot(a, b) || isWithinRoot(b, a)) {
-        throw new Error(`sandbox roots overlap: ${a} and ${b}`);
+        throw new Error(
+          `sandbox roots overlap: ${a} and ${b}${
+            underPasta && j === roots.length - 1
+              ? ", where pasta's network binds the hosts file naming " +
+                "`host.docker.internal`"
+              : ""
+          }`,
+        );
       }
     }
   }
@@ -920,6 +954,15 @@ export const resolveRunscSandboxConfig = (
         ),
       }
       : {}),
+    ...(options.setpriv !== undefined
+      ? {
+        setpriv: trusted(
+          "setpriv binary",
+          options.setpriv,
+          canonicalHostPath("setpriv binary", options.setpriv),
+        ),
+      }
+      : {}),
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
     scratchDir,
     ...(options.scratchDir === undefined
@@ -1081,6 +1124,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   readonly #lostSessions = new Map<string, string>();
   /** Fresh-call containers in flight, so `close()` can take them down. */
   readonly #liveCalls = new Set<string>();
+  /**
+   * The calls in flight under pasta, each with what stops it and what tells
+   * that it has ended, its state taken down.
+   */
+  readonly #pastaCalls = new Map<
+    string,
+    { stop: AbortController; ended: Promise<void> }
+  >();
   #sessionsStarted = 0;
   #scratchVerified: Promise<void> | undefined;
   /**
@@ -1187,10 +1238,15 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   }
 
   /** Global runsc flags: what every subcommand of this runtime is run with. */
-  #globalArgs(): string[] {
+  /**
+   * The global flags of every runsc command. `callId` names the call a
+   * container is started for under pasta, which keeps its state in a root of
+   * its own, {@link RunscSandboxRuntime.#stateRoot}.
+   */
+  #globalArgs(callId?: string): string[] {
     return [
       "--root",
-      joinHostPath(this.config.scratchDir, "state"),
+      this.#stateRoot(callId),
       "--ignore-cgroups",
       ...(this.config.rootless ? ["--rootless"] : []),
       // Under pasta runsc takes pasta's namespace as the host's network.
@@ -1203,6 +1259,18 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         : []),
       ...this.config.extraRunscArgs,
     ];
+  }
+
+  /**
+   * Where runsc keeps container state: the run's `state` directory, and for
+   * the call `callId` names a directory of its own inside it. A container
+   * under pasta that is stopped dies with pasta's namespace, before runsc can
+   * take its state down, and a root of the call's own is one that can be
+   * taken down after it whole, touching no other call's.
+   */
+  #stateRoot(callId?: string): string {
+    const state = joinHostPath(this.config.scratchDir, "state");
+    return callId === undefined ? state : joinHostPath(state, callId);
   }
 
   /** A call's working directory: inside the mounts, as the docker runtime requires. */
@@ -1288,7 +1356,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       })),
       ...(this.#pasta() !== undefined
         ? [{
-          destination: "/etc/hosts",
+          destination: PASTA_HOSTS_PATH,
           type: "bind",
           source: this.#hostsFile(),
           options: ["rbind", "ro"],
@@ -1414,21 +1482,26 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   ): { command: string; args: string[] } {
     const pasta = this.#pasta();
     if (pasta === undefined) return { command, args: [...args] };
+    if (this.config.setpriv === undefined) {
+      throw new Error(
+        "a container under pasta would outlive a pasta that is stopped, " +
+          "since no `setpriv` was given to tie it to pasta",
+      );
+    }
     const underPasta = [
       ...PASTA_ARGS,
-      ...(this.config.rootless ? [] : PASTA_ROOT_ARGS),
+      ...(this.config.unshare !== undefined ? PASTA_ROOT_ARGS : []),
       "--log-file",
       joinHostPath(this.config.scratchDir, "pasta.log"),
+      "--",
+      this.config.setpriv,
+      ...SETPRIV_ARGS,
       "--",
       command,
       ...args,
     ];
-    if (this.config.rootless) return { command: pasta, args: underPasta };
     if (this.config.unshare === undefined) {
-      throw new Error(
-        "runsc runs as root under pasta, and pasta then needs a mount " +
-          "namespace of its own, which no `unshare` was given to make",
-      );
+      return { command: pasta, args: underPasta };
     }
     return {
       command: this.config.unshare,
@@ -1449,6 +1522,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     const callId = `c-${this.#runTag}-${crypto.randomUUID().slice(0, 8)}`;
     // Validated before anything is written or registered.
     const specText = this.#spec(request);
+    const underPasta = this.#pasta() !== undefined;
     this.#liveCalls.add(callId);
     const bundleDir = await this.#writeBundle(callId, specText).catch(
       (error) => {
@@ -1470,7 +1544,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
     const withResult = this.config.cfcPolicyPath !== undefined;
     const runscArgs = [
-      ...this.#globalArgs(),
+      ...this.#globalArgs(underPasta ? callId : undefined),
       "run",
       ...(withContext ? ["--cfc-invocation-context-fd", "3"] : []),
       ...(withResult ? ["--cfc-result-fd", "4"] : []),
@@ -1494,6 +1568,15 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     // happens below: a run that throws — a timeout, a runsc that will not
     // start — must not leave one behind per call, since the bash tool turns
     // timeouts into recoverable results and the model may repeat them.
+    // Under pasta, how `close()` stops the call, and learns it has ended.
+    const stop = new AbortController();
+    let ended!: () => void;
+    if (underPasta) {
+      this.#pastaCalls.set(callId, {
+        stop,
+        ended: new Promise<void>((resolve) => (ended = resolve)),
+      });
+    }
     try {
       let result: ProcessRunResult;
       try {
@@ -1501,15 +1584,30 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           ...this.#starting("/bin/sh", shellArgs),
           stdinText: request.stdinText,
           timeoutMs: request.timeoutMs,
+          ...(underPasta ? { signal: stop.signal } : {}),
         });
       } finally {
         // A timed-out or killed run leaves the container registered; make
         // sure the sandbox is gone before the bundle it was started from.
         // Not under pasta: the state of a container started there records
         // pids of pasta's PID namespace, and a control command run out here
-        // would signal whatever process of this one has that pid.
-        if (this.#pasta() === undefined) await this.#destroyContainer(callId);
+        // would signal whatever process of this one has that pid. There the
+        // run ends only once pasta has, and every process of its namespace
+        // with it (see SETPRIV_ARGS), so all that is left is the state of a
+        // container whose `runsc run` died before it could remove it.
+        if (underPasta) {
+          await Deno.remove(this.#stateRoot(callId), { recursive: true })
+            .catch((error) => {
+              if (!(error instanceof Deno.errors.NotFound)) throw error;
+            });
+        } else {
+          await this.#destroyContainer(callId);
+        }
         this.#liveCalls.delete(callId);
+        if (underPasta) {
+          this.#pastaCalls.delete(callId);
+          ended();
+        }
       }
       const commandResult: SandboxCommandResult = {
         stdout: result.stdout,
@@ -1897,6 +1995,11 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       await state.ready.catch(() => undefined);
       await this.#dropSession(state);
     }
+    // A call under pasta is stopped through pasta, and its container ends
+    // with it; its bundle goes once it has.
+    const pastaCalls = [...this.#pastaCalls.values()];
+    for (const call of pastaCalls) call.stop.abort();
+    await Promise.all(pastaCalls.map((call) => call.ended));
     for (const callId of [...this.#liveCalls]) {
       // Not under pasta, for the reason `#runOnce` gives.
       if (this.#pasta() === undefined) await this.#destroyContainer(callId);
