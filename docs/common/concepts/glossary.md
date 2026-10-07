@@ -83,9 +83,12 @@ FabriChat rooms are the main example. A room is the chat of a social space and
 keeps no membership of its own: who is in the conversation is who is in the
 space ([FabriChat](../../specs/fabrichat/README.md)). A room can be the chat of
 any social space, such as a container that shows chats among other things. A
-standalone room, one that is not the chat of some other social space, is a
-social space in its own right: the chat manager creates each room it starts in
-a space of its own, whose access list admits the members named at its creation.
+standalone room, one that is not the chat of some other social space, has a
+space of its own: the chat manager creates each room it starts in a new space,
+whose access list admits the members named at its creation. That space is a
+social space in its own right once it has more than one member, as a direct
+room's space has from its creation; a group room can start with its creator
+alone.
 
 The term is "social space", never "shared space". "Share" already names other
 things here, none of them about how many people a space has: the share inbox
