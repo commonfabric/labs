@@ -4,7 +4,11 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import { collectionKeyBucket } from "../../src/builtins/collection-index-key.ts";
-import type { MaintainedCollectionIndex } from "../../src/builtins/collection-index-membership.ts";
+import type {
+  CollectionIndexMembership,
+  MaintainedCollectionIndex,
+} from "../../src/builtins/collection-index-membership.ts";
+import { ownedCell } from "../../src/builtins/runtime-owned-store.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import {
@@ -175,4 +179,126 @@ describe("collection-index-label-fanout", () => {
       }
     });
   }
+
+  it("runs a member again when the reference in its own state slot is replaced", async () => {
+    // The member's argument document names the shared state and index it
+    // maintains. Resolving those documents is plumbing and wakes no member
+    // when another member's write stamps them, but which document a slot
+    // names stays the member's own dependency: a write that retargets the
+    // slot runs the member again, against the document it now names.
+    const signer = await Identity.fromPassphrase("index-label-fanout-retarget");
+    const space = signer.did();
+    const storage = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager: storage,
+      cfcFlowLabels: "persist",
+    });
+    let cancel: (() => void) | undefined;
+    try {
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+            import { pattern, Writable } from "commonfabric";
+            export default pattern<{rows: Writable<{label: string}[]>}>(({rows}) => {
+              const index = rows.groupBy(row => row.label);
+              return {index, selected: index.lookup("a")};
+            });`,
+        }],
+      });
+      const rows = runtime.getCell<{ label: string }[]>(space, "rows");
+      const seed = runtime.edit();
+      const row = runtime.getCell<{ label: string }>(
+        space,
+        "row-0",
+        undefined,
+        seed,
+      );
+      const rowId = row.getAsNormalizedFullLink().id;
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, { space, scope: "space", id: rowId, path: [] }, {
+        value: { label: "a" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: ["row-secret"] } }],
+          },
+        },
+      });
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: rows.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: [{ "/": { "link@1": { id: rowId, path: [] } } }] as never,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [] },
+        },
+      });
+      expect((await seed.commit().settled).error).toBeUndefined();
+      const tx = runtime.edit();
+      const result = runtime.run(
+        tx,
+        compiled,
+        { rows },
+        runtime.getCell<
+          { index: MaintainedCollectionIndex; selected: unknown }
+        >(space, "result", compiled.resultSchema, tx),
+      );
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      cancel = result.key("selected").sink(() => {});
+      await runtime.idle();
+      const member = () =>
+        runtime.scheduler.getGraphSnapshot().nodes
+          .find((node) => node.id.startsWith("raw:collectionIndexMember:"))!;
+      const before = member().stats?.runCount ?? 0;
+      expect(before).toBeGreaterThan(0);
+      // The member's argument document is the one it reads its key from.
+      const reads = member().reads as string[];
+      const argumentRead = reads.find((read) =>
+        read.includes("/value/extracted")
+      );
+      if (argumentRead === undefined) {
+        throw new Error(`no argument read among ${JSON.stringify(reads)}`);
+      }
+      const argumentId = argumentRead.match(/(of:fid1:[A-Za-z0-9_-]+)/)![1];
+      const argument = runtime.getCellFromLink({
+        space,
+        id: argumentId as `${string}:${string}`,
+        path: [],
+      });
+      // A store the member may write into: enrolled as runtime-owned, as the
+      // coordinator's own state is.
+      const retarget = runtime.edit();
+      const replacement = ownedCell<CollectionIndexMembership>(
+        runtime,
+        retarget,
+        result,
+        { replacementState: true },
+        undefined,
+        "space",
+      );
+      replacement.set({ assignments: {}, members: {}, occupied: {} });
+      argument.withTx(retarget).key("state").set(replacement);
+      expect((await retarget.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      expect(member().stats?.runCount).toBe(before + 1);
+      // The member maintained the document its slot now names.
+      expect(Object.keys(replacement.key("assignments").get() ?? {}))
+        .toHaveLength(1);
+    } finally {
+      cancel?.();
+      await storage.synced();
+      await runtime.dispose({ closeStorage: false });
+      await storage.close();
+    }
+  });
 });

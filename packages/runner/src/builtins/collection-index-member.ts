@@ -61,12 +61,17 @@ export function collectionIndexMember(
       ? extracted.key("value").asSchema({ asCell: ["cell"] }).get()
       : extracted.key("value").get();
     // Maintenance reads concrete slots behind the opaque setup references.
-    // Resolving those references is runtime plumbing, not an observation:
-    // every member writes into the one index document, and each write
-    // stamps that document's CFC label map. A member that resolved the
+    // Which documents the two slots name is this member's own dependency:
+    // the coordinator fixes them for the member's lifetime, and a write that
+    // retargets a slot runs the member again against the document it now
+    // names. Resolving the named documents is runtime plumbing, not an
+    // observation: every member writes into the one index document, and each
+    // write stamps that document's CFC label map. A member that resolved the
     // shared documents as ordinary dependencies would wake on every other
     // member's stamp, so one added source element re-ran every member the
     // index already had.
+    args.key("state").getRaw();
+    args.key("index").getRaw();
     const [state, index] = tx.runWithAmbientReadMeta(
       { ...ignoreReadForScheduling, ...machineryRead },
       () =>
