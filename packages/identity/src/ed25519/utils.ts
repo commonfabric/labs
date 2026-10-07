@@ -107,6 +107,19 @@ export function bytesToDid(publicKey: Uint8Array): DIDKey {
 const canonicalDids = new Set<DIDKey>();
 const CANONICAL_DID_CACHE_LIMIT = 4096;
 
+/** The shape of an Ed25519 `did:key`: the multicodec prefix and 32 bytes, base58btc. */
+const ED25519_DID_SHAPE = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
+
+/**
+ * Whether a value has the shape of an Ed25519 `did:key`, without decoding its
+ * point. A string of this shape may still name no valid key, so it suits a
+ * check run often, such as on every engine turn, where
+ * {@link isCanonicalEd25519DID} runs before anything is created for it.
+ */
+export function hasEd25519DIDShape(value: unknown): value is DIDKey {
+  return typeof value === "string" && ED25519_DID_SHAPE.test(value);
+}
+
 /** Whether a value is the canonical DID of one Ed25519 public key. */
 export function isCanonicalEd25519DID(value: unknown): value is DIDKey {
   if (

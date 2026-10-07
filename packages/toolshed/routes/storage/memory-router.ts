@@ -1,5 +1,8 @@
 /** Private Mode A endpoint policy, enabled only by tracked deployment configuration. */
-import { isCanonicalEd25519DID } from "@commonfabric/identity";
+import {
+  hasEd25519DIDShape,
+  isCanonicalEd25519DID,
+} from "@commonfabric/identity";
 import {
   parseUnlistedPlacement,
   type UnlistedPlacement,
@@ -82,9 +85,6 @@ function load(path: string): RouterConfig {
   requireRouted(routers.size > 0 && routers.size <= 16);
   return { ...value, routers } as unknown as RouterConfig;
 }
-
-/** An Ed25519 `did:key`: the multicodec prefix and 32 bytes, base58btc. */
-const ED25519_DID_SHAPE = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
 
 /** Directory snapshot shared with the placement broker; no request supplies an address. */
 export class MemoryRouterPolicy {
@@ -260,7 +260,7 @@ export class MemoryRouterPolicy {
    */
   owns(space: string): boolean {
     return this.ownership(space) !== undefined &&
-      (this.#listed.has(space) || ED25519_DID_SHAPE.test(space));
+      (this.#listed.has(space) || hasEd25519DIDShape(space));
   }
 
   /**
