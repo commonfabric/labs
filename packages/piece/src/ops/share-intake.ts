@@ -3,8 +3,8 @@
  * holds and retains, vets each one as the owner, and registers each offer that
  * passes in Home's shared-space catalog through Home's `registerSharedSpace`
  * stream. Vetting reads the offered space's access list and root, in that
- * space, which a Home handler cannot do; `docs/features/private-inbox.md`
- * describes the whole arrangement.
+ * space, and the root's declared result, which a Home handler cannot do;
+ * `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
 import type { DID } from "@commonfabric/identity";
@@ -14,8 +14,11 @@ import {
   ACLManager,
   type Cancel,
   type Cell,
+  getPatternIdentityRef,
   isCell,
+  normalizeSpaceHost,
   type Runtime,
+  SpaceHostValidationError,
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -26,13 +29,37 @@ const logger = getLogger("piece.share-intake");
 /** The `kind` of the offers a loom daemon admits, which this intake skips. */
 export const LOOM_OFFER_KIND = "loom";
 
+/**
+ * The kinds of offer the intake admits, each with the members a root of that
+ * kind declares in its result schema. An offer of a kind not here is refused
+ * and left in its inbox, and one whose space's root declares fewer members is
+ * refused as not of its kind. The members are the ones a kind's contract
+ * fixes, and that no other kind's root is expected to declare all of.
+ *
+ * - `fabrichat-room`, a FabriChat room, whose root's result is a
+ *   `ChatRoomOutput` (`docs/specs/fabrichat/ChatRoomOutput.md`): `about`,
+ *   `messages`, `sendMessage` and `recentActivity`.
+ */
+export const ADMITTED_OFFER_KINDS: Readonly<
+  Record<string, readonly string[]>
+> = Object.freeze({
+  "fabrichat-room": Object.freeze([
+    "about",
+    "messages",
+    "sendMessage",
+    "recentActivity",
+  ]),
+});
+
 /** Why an offer is not registered. */
 export type OfferRefusal =
   | "offer-malformed"
+  | "offer-kind-unknown"
   | "offer-foreign-host"
   | "sender-not-member"
   | "recipient-access-refused"
-  | "space-root-missing";
+  | "space-root-missing"
+  | "space-root-wrong-kind";
 
 /**
  * What an instance decided about an offer: `sent` to Home's
@@ -103,15 +130,19 @@ export function startShareIntakeOf(
  * `kind`, `host` and `title`, when:
  *
  * - its envelope is well formed: `space` and `from` are well-formed DIDs,
- *   `host` and a nonempty `ownerOrigin` are each their own origin, and every
- *   string fits the bounds the inbox cuts to;
- * - its `host` is this runtime's own, whose memory is the one this host can
- *   read;
+ *   `host` and a nonempty `ownerOrigin` are each an origin, as
+ *   `normalizeSpaceHost()` reads one, and every string fits the bounds the
+ *   inbox cuts to;
+ * - its `kind` is one of {@link ADMITTED_OFFER_KINDS};
+ * - its `host` is this runtime's own, compared as `normalizeSpaceHost()`
+ *   normalizes both, since that is the host whose memory this one reads;
  * - `from` holds a `WRITE` or `OWNER` entry of its own in the space's access
  *   list, a grant to every principal (`"*"`) not counting;
  * - the identity can open the space, holding `WRITE` or `OWNER` there, its own
  *   or every principal's;
- * - the space has a root.
+ * - the space has a root, and the root's pattern declares in its result
+ *   schema every member {@link ADMITTED_OFFER_KINDS} lists for the kind,
+ *   which is read without running the root.
  *
  * A refused offer is logged once, under `piece.share-intake`, with its reason.
  * Each offer is decided once per instance: an offer refused, or sent, is not
@@ -151,7 +182,7 @@ export class ShareIntake {
     this.#home = home;
     this.#identity = identity;
     this.#signal = signal;
-    this.#host = new URL(runtime.apiUrl).origin;
+    this.#host = normalizeSpaceHost(new URL(runtime.apiUrl).origin).origin;
     signal?.addEventListener("abort", () => this.stop(), { once: true });
     if (signal?.aborted) {
       this.#stopped = true;
@@ -356,6 +387,10 @@ export class ShareIntake {
    *   a refusal of access.
    */
   async #refusalOf(offer: VettableOffer): Promise<OfferRefusal | undefined> {
+    const members = Object.hasOwn(ADMITTED_OFFER_KINDS, offer.kind)
+      ? ADMITTED_OFFER_KINDS[offer.kind]
+      : undefined;
+    if (members === undefined) return "offer-kind-unknown";
     if (offer.host !== this.#host) return "offer-foreign-host";
     const runtime = this.#runtime;
     let stored;
@@ -382,8 +417,40 @@ export class ShareIntake {
       !isCell(root) || root.space !== offer.space ||
       root.getAsNormalizedFullLink().path.length !== 0
     ) return "space-root-missing";
+    const declared = await declaredResultMembers(runtime, root);
+    if (!members.every((member) => declared.has(member))) {
+      return "space-root-wrong-kind";
+    }
     return undefined;
   }
+}
+
+/**
+ * The members `root`'s pattern declares in its result schema, read from the
+ * pattern the root records without running it, or none when the root records
+ * no pattern that can be loaded, or its result schema names no members.
+ */
+async function declaredResultMembers(
+  runtime: Runtime,
+  root: Cell<unknown>,
+): Promise<Set<string>> {
+  // Loads the root's document, and with it the pattern it records, and none
+  // of its result.
+  await root.asSchema({ type: "object", properties: {} }).pull();
+  const ref = getPatternIdentityRef(root);
+  if (ref === undefined) return new Set();
+  const pattern = await runtime.patternManager.loadPatternByIdentity(
+    ref.identity,
+    ref.symbol,
+    root.space,
+    { repairCache: false },
+  );
+  const schema = pattern?.resultSchema;
+  return new Set(
+    isObjectNotArray(schema) && isObjectNotArray(schema.properties)
+      ? Object.keys(schema.properties)
+      : [],
+  );
 }
 
 /** The longest `kind` an offer may carry, as the inbox cuts it. */
@@ -406,19 +473,22 @@ function wellFormedOffer(
   raw: Record<string, unknown>,
 ): VettableOffer | undefined {
   const { kind, id, space, host, ownerOrigin, title, from, sharedAt } = raw;
+  const origin = boundedString(host, ADDRESS_MAX_LENGTH)
+    ? originOf(host)
+    : undefined;
   if (
+    origin === undefined ||
     !boundedString(kind, KIND_MAX_LENGTH) ||
     !boundedString(id, ID_MAX_LENGTH) ||
     !boundedString(title, TITLE_MAX_LENGTH, true) ||
     !boundedString(space, ADDRESS_MAX_LENGTH) || !isWellFormedDID(space) ||
     !boundedString(from, ADDRESS_MAX_LENGTH) || !isWellFormedDID(from) ||
-    !boundedString(host, ADDRESS_MAX_LENGTH) || !isOrigin(host) ||
     !boundedString(ownerOrigin, ADDRESS_MAX_LENGTH, true) ||
-    (ownerOrigin !== "" && !isOrigin(ownerOrigin)) ||
+    (ownerOrigin !== "" && originOf(ownerOrigin) === undefined) ||
     typeof sharedAt !== "number" || !Number.isSafeInteger(sharedAt) ||
     sharedAt < 0
   ) return undefined;
-  return { kind, id, space, host, title, from };
+  return { kind, id, space, host: origin, title, from };
 }
 
 /** Whether `value` is a string no longer than `max`, and nonempty unless `empty`. */
@@ -432,18 +502,17 @@ function boundedString(
 }
 
 /**
- * Whether `value` is an `http` or `https` origin written as its own origin, as
- * the inbox's `receive` requires of `host`.
+ * The origin `value` names, as `normalizeSpaceHost()` normalizes it, or
+ * `undefined` when it refuses `value`, as one holding a path, a query, a
+ * fragment or credentials.
  */
-function isOrigin(value: string): boolean {
-  let url: URL;
+function originOf(value: string): string | undefined {
   try {
-    url = new URL(value);
-  } catch {
-    return false;
+    return normalizeSpaceHost(value).origin;
+  } catch (error) {
+    if (error instanceof SpaceHostValidationError) return undefined;
+    throw error;
   }
-  return (url.protocol === "https:" || url.protocol === "http:") &&
-    url.origin === value;
 }
 
 /** Whether an access-list grant lets its holder write. */

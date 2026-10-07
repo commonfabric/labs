@@ -77,6 +77,52 @@ export default pattern(() => {
   }],
 };
 
+/**
+ * A root whose result declares the members a `fabrichat-room` root declares,
+ * and no more.
+ */
+const roomProgram: RuntimeProgram = {
+  main: "/room.tsx",
+  files: [{
+    name: "/room.tsx",
+    contents: `
+import { handler, pattern, Writable } from "commonfabric";
+
+const sendMessage = handler<{ text: string }, { messages: Writable<string[]> }>(
+  (event, { messages }) => {
+    messages.push(event.text);
+  },
+);
+
+export default pattern(() => {
+  const messages = new Writable<string[]>([]).for("messages");
+  const recentActivity = new Writable<string[]>([]).for("recentActivity");
+  return {
+    about: { kind: "group" },
+    messages,
+    recentActivity,
+    sendMessage: sendMessage({ messages }),
+  };
+});`,
+  }],
+};
+
+/** A root declaring all but one of the members a room's root declares. */
+const almostRoomProgram: RuntimeProgram = {
+  main: "/almost.tsx",
+  files: [{
+    name: "/almost.tsx",
+    contents: `
+import { pattern, Writable } from "commonfabric";
+
+export default pattern(() => ({
+  about: { kind: "group" },
+  messages: new Writable<string[]>([]).for("messages"),
+  recentActivity: new Writable<string[]>([]).for("recentActivity"),
+}));`,
+  }],
+};
+
 /** An offer as an inbox holds it, which a test varies field by field. */
 type Row = Record<string, unknown>;
 
@@ -137,17 +183,22 @@ describe("share-intake", () => {
 
   /**
    * A space granting `grants`, owned by the owner unless `owner` says
-   * otherwise, whose space cell links a root in it unless `root` is false.
+   * otherwise, whose root is a piece running `root`, a room's by default: a
+   * plain document, recording no pattern, for `"document"`, and none for
+   * `false`.
    */
   async function offeredSpace(
     grants: ACL,
-    { owner, root = true }: { owner?: string; root?: boolean } = {},
+    { owner, root = roomProgram }: {
+      owner?: string;
+      root?: RuntimeProgram | "document" | false;
+    } = {},
   ): Promise<MemorySpace> {
     const space = await runtime.createSpace({
       grants,
       ...(owner === undefined ? {} : { owner: owner as never }),
     });
-    if (root) {
+    if (root === "document") {
       const piece = runtime.getCell<unknown>(space, crypto.randomUUID());
       await runtime.editWithRetry((tx) => {
         piece.withTx(tx).set({ name: "Room" } as never);
@@ -155,6 +206,15 @@ describe("share-intake", () => {
           piece as never,
         );
       });
+    } else if (root !== false) {
+      // Disposing a controller disposes the runtime, which `afterEach` does
+      // through the Home space's controller.
+      const rooms = new PiecesController(
+        createSession({ identity, spaceDid: space }),
+        runtime,
+      );
+      await rooms.synced();
+      await rooms.recreateDefaultPattern({ customProgram: root });
     }
     return space;
   }
@@ -273,6 +333,17 @@ describe("share-intake", () => {
         kind: "fabrichat-room",
         offer: { from: sender, id: "untitled" },
       });
+    });
+
+    it("is registered under its host's origin when the host is written with a default port and a trailing slash", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      await deliver([
+        offerOf(space, "spelled", { host: "HTTPS://Home.Example:443/" }),
+      ]);
+
+      const [registered] = await registeredThrough("spelled");
+      expect(registered.host).toBe(HOST);
     });
 
     it("is registered when it was in the inbox before the intake started", async () => {
@@ -531,6 +602,42 @@ describe("share-intake", () => {
         ids: ["barrier"],
         logged: 1,
         decision: "recipient-access-refused",
+      });
+    });
+
+    it("is not registered, and is logged, when its `kind` is not one the intake admits", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(
+        await refuse(offerOf(space, "other kind", { kind: "board-game" })),
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "offer-kind-unknown",
+      });
+    });
+
+    it("is not registered, and is logged, when the space's root declares fewer members than its kind's", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        root: almostRoomProgram,
+      });
+
+      expect(await refuse(offerOf(space, "almost"))).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "space-root-wrong-kind",
+      });
+    });
+
+    it("is not registered, and is logged, when the space's root records no pattern", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        root: "document",
+      });
+
+      expect(await refuse(offerOf(space, "patternless"))).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decision: "space-root-wrong-kind",
       });
     });
 

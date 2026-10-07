@@ -336,26 +336,36 @@ an offer whose `from` and `id` already key a receipt in the catalog. Any other
 offer is registered when:
 
 - its envelope is well formed: `space` and `from` are well-formed DIDs, `host`
-  and a nonempty `ownerOrigin` are each written as their own origin, every
-  string fits the length `receive` cuts it to, and `sharedAt` is a
-  nonnegative integer;
+  and a nonempty `ownerOrigin` are each an origin, as `normalizeSpaceHost()`
+  reads one, every string fits the length `receive` cuts it to, and `sharedAt`
+  is a nonnegative integer;
+- its `kind` is one the intake admits, which `ADMITTED_OFFER_KINDS` in the
+  intake's module lists, each with the members a root of that kind declares:
+  for `fabrichat-room`, `about`, `messages`, `sendMessage` and
+  `recentActivity`, the members of a room's `ChatRoomOutput` that its
+  contract fixes (`docs/specs/fabrichat/ChatRoomOutput.md`). An offer of any
+  other kind is refused, and stays in the inbox for a reader that knows it;
 - its `host` is the origin of the host the intake runs against, the one whose
-  memory it can read;
+  memory it can read, with both normalized as `normalizeSpaceHost()` normalizes
+  a host, so a default port or a trailing slash makes no difference;
 - `from` holds a `WRITE` or `OWNER` entry of its own in the access list of
   `space`; a grant to every principal, `"*"`, does not count, since any
   principal holds that;
 - the owner can open `space` and holds `WRITE` or `OWNER` there, through an
   entry of its own or the grant to every principal;
-- `space` has a root: its space cell links a piece in `space` itself.
+- `space` has a root, its space cell linking a piece in `space` itself, as
+  `inSpace()` makes one with `root: true`; and the root's pattern declares, in
+  its result schema, every member its kind lists. The intake reads the pattern
+  the root records, and its schema, without running the root.
 
-The intake sends Home's `registerSharedSpace` the offer's `space`, `host`,
-`kind`, its `title` unless it is empty, and `{ from, id }`. It sends no `since`,
-so Home's handler records the time it admits the entry, as the catalog's `since`
-requires, rather than the sender's `sharedAt`. The handler reads only Home's own
-catalog, never an inbox pointer, so the hazard an untyped pointer read carries,
-above, cannot reach it. Registration is insert-if-absent, so an offer of a space
-already in the catalog, archived or not, adds a receipt and leaves the entry as
-it is.
+The intake sends Home's `registerSharedSpace` the offer's `space`, its `host` as
+normalized, its `kind`, its `title` unless it is empty, and `{ from, id }`. It
+sends no `since`, so Home's handler records the time it admits the entry, as the
+catalog's `since` requires, rather than the sender's `sharedAt`. The handler
+reads only Home's own catalog, never an inbox pointer, so the hazard an untyped
+pointer read carries, above, cannot reach it. Registration is insert-if-absent,
+so an offer of a space already in the catalog, archived or not, adds a receipt
+and leaves the entry as it is.
 
 A refused offer is logged once, as a warning under `piece.share-intake`, with
 its reason. Each runtime worker decides each offer once: one it sent or
