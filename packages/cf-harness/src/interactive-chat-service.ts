@@ -19,6 +19,12 @@ import {
   type RunHarnessTranscriptOptions,
 } from "./prompt-loop.ts";
 import { establishHarnessSessionContext } from "./session-assembly.ts";
+import {
+  SANDBOX_RUNTIME_ENV,
+  sandboxRuntimeNamed,
+  sandboxRuntimeOfOptions,
+} from "./sandbox/runtime-selection.ts";
+import type { SandboxRuntimeKind } from "./sandbox/types.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import type { HarnessBrowserHost } from "./contracts/browser-host.ts";
@@ -859,6 +865,7 @@ export class HarnessInteractiveChatService {
   readonly #runIdForTurn?: (sessionId: string, turnId: string) => string;
   readonly #loomLocalHostBinding?: LoomLocalHostBinding;
   readonly #loomLocalHostModel?: string;
+  readonly #sandboxRuntime: SandboxRuntimeKind;
   readonly #createPromptLoop: HarnessInteractivePromptLoopFactory;
   readonly #now: () => string;
   readonly #randomUUID: () => string;
@@ -900,6 +907,13 @@ export class HarnessInteractiveChatService {
       );
     }
     this.#runIdForTurn = options.runIdForTurn;
+    // Every turn of this host runs on one runtime: the one of the engine or
+    // runtime it was handed, or the one its options select.
+    this.#sandboxRuntime = sandboxRuntimeOfOptions({
+      sandboxRuntime: this.#basePromptLoopOptions.engine?.sandbox ??
+        this.#basePromptLoopOptions.sandboxRuntime,
+      sandboxRuntimeKind: this.#basePromptLoopOptions.sandboxRuntimeKind,
+    });
     if (options.systemPrompt !== undefined) {
       this.#systemPrompt = options.systemPrompt;
     }
@@ -1424,6 +1438,7 @@ export class HarnessInteractiveChatService {
       model,
       loomLocalHostBinding: this.#loomLocalHostBinding,
       artifactRoot: params.artifactRoot,
+      sandboxRuntime: this.#sandboxRuntime,
       capabilities: params.capabilities,
       policy: resolveHarnessChatPolicy(
         params.policy,
@@ -1511,6 +1526,37 @@ export class HarnessInteractiveChatService {
           "durable chat session model does not match the local Loom host binding",
         );
       }
+    }
+    // What the session's earlier turns labelled is labelled where the runtime
+    // they ran on keeps labels, which the other runtime need not read. A
+    // session stored before hosts recorded a runtime has none to compare, and
+    // is bound below to the runtime this turn runs on. The status is read
+    // from a store another build may have written, so a runtime it names is
+    // checked rather than trusted to be one of the two.
+    const recorded: string | undefined = record.status.sandboxRuntime;
+    const startedOn = recorded === undefined
+      ? undefined
+      : sandboxRuntimeNamed(recorded);
+    if (recorded !== undefined && startedOn === undefined) {
+      return providerMismatchError(
+        requestId,
+        `chat session \`${params.sessionId}\` records that it started on the ` +
+          `sandbox runtime \`${recorded}\`, which this cf-harness does not ` +
+          "know, so it cannot tell whether this host runs the same one. " +
+          "Start a new session, or go on with this one on the cf-harness " +
+          "that started it.",
+      );
+    }
+    if (startedOn !== undefined && startedOn !== this.#sandboxRuntime) {
+      return providerMismatchError(
+        requestId,
+        `chat session \`${params.sessionId}\` started on the \`${startedOn}\` ` +
+          `sandbox runtime, and this host runs \`${this.#sandboxRuntime}\`. ` +
+          "The two need not keep the CFC labels of a session's files where " +
+          "the other reads them, and on macOS they do not, so a session goes " +
+          "on only on the runtime it started on: restart the host with " +
+          `\`${SANDBOX_RUNTIME_ENV}=${startedOn}\`, or start a new session.`,
+      );
     }
     if (record.status.status === "closed") {
       return sessionClosedError(requestId, params.sessionId);
@@ -1606,6 +1652,15 @@ export class HarnessInteractiveChatService {
           undefined
       ) {
         return turnExistsError(requestId, params.sessionId, turnId);
+      }
+      // A session with no recorded runtime is bound to the one its first turn
+      // here runs on. The status is saved with the event below, so the
+      // binding is durable exactly where the turn is.
+      if (startedOn === undefined) {
+        record.status = {
+          ...record.status,
+          sandboxRuntime: this.#sandboxRuntime,
+        };
       }
       await this.#emit(params.sessionId, turn.turnId, {
         kind: "turn_started",

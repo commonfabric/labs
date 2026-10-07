@@ -16,10 +16,12 @@ import { HARNESS_BROWSER_ACCESS_LEASE_TYPE } from "../src/contracts/browser-acce
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
+import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
-  parseHostMountSpecs,
+  NAMES_DOCKER,
   resolveInteractiveProvisioning,
-} from "../src/host-mounts.ts";
+  runHarnessInteractiveChatStdioCli,
+} from "./support/on-linux.ts";
 import {
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
@@ -30,11 +32,14 @@ import {
   parseHarnessInteractiveChatStdioCliOptions,
   runHarnessInteractiveChatNdjsonTransport,
   runHarnessInteractiveChatStdio,
-  runHarnessInteractiveChatStdioCli,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessClientActionRequester } from "../src/client-actions/coordinator.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
+import type {
+  SandboxRuntimeChoice,
+  SandboxRuntimeSelection,
+} from "../src/sandbox/runtime-selection.ts";
 import {
   HARNESS_SUPPORTED_CLIENT_FEATURES,
   harnessClientProtocolEcho,
@@ -101,6 +106,7 @@ const runStdioCli = async (
       fromFileUrl(new URL("../src/interactive-chat-stdio.ts", import.meta.url)),
       ...args,
     ],
+    env: NAMES_DOCKER,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -1727,11 +1733,22 @@ Deno.test("a typo in a host-mount field is refused, not silently defaulted", asy
   }
 });
 
-Deno.test("no provisioning flags leaves the run options untouched", async () => {
+Deno.test("no provisioning flags hand on nothing but how the sandbox runtime was selected", async () => {
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
-  // embedder gets a behaviour change for free.
-  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd(), {}), {});
+  // embedder gets a behavior change for free. The one thing handed on is the
+  // record of how the runtime was selected, which sets nothing.
+  const defaulted: Pick<SandboxRuntimeSelection, "sandboxRuntimeChoice"> = {
+    sandboxRuntimeChoice: {
+      runtime: "docker",
+      source: "default",
+      platform: "linux",
+    },
+  };
+  assertEquals(
+    await resolveInteractiveProvisioning({}, Deno.cwd(), {}),
+    defaulted,
+  );
 
   const seen: RunHarnessInteractiveChatStdioOptions[] = [];
   await runHarnessInteractiveChatStdioCli(
@@ -1743,14 +1760,21 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
     },
   );
   assertEquals(seen.length, 1);
-  assertEquals(seen[0].basePromptLoopOptions, undefined);
+  assertEquals(seen[0].basePromptLoopOptions, defaulted);
   assertEquals(seen[0].maxInMemoryEvents, 8);
 });
 
 Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
     await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
-    { maxModelTurns: 32 },
+    {
+      maxModelTurns: 32,
+      sandboxRuntimeChoice: {
+        runtime: "docker",
+        source: "default",
+        platform: "linux",
+      },
+    },
   );
 });
 
@@ -1826,6 +1850,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
   ];
   const first = new Deno.Command(Deno.execPath(), {
     args,
+    env: NAMES_DOCKER,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -1856,6 +1881,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
     reader.releaseLock();
     second = await new Deno.Command(Deno.execPath(), {
       args,
+      env: NAMES_DOCKER,
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
@@ -2013,6 +2039,10 @@ Deno.test("interactive stdio writes one refusal line to its error output for a h
 Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
   // Same derivation as the batch CLI, so a chat session and a batch run
   // launched from one environment execute in the same sandbox.
+  const namedRunsc: SandboxRuntimeChoice = {
+    runtime: "runsc",
+    source: "environment",
+  };
   assertEquals(
     await resolveInteractiveProvisioning({}, Deno.cwd(), {
       CF_HARNESS_SANDBOX_RUNTIME: "runsc",
@@ -2027,6 +2057,7 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
       sandboxCfcPolicy: "/p",
       sandboxRunscBinary: "/b",
       sandboxRunscNetworkMode: "host",
+      sandboxRuntimeChoice: namedRunsc,
     },
   );
   await assertRejects(
@@ -2055,7 +2086,7 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
         HOME: home,
         CF_HARNESS_SANDBOX_RUNTIME: "runsc",
       }),
-      { sandboxRuntimeKind: "runsc" },
+      { sandboxRuntimeKind: "runsc", sandboxRuntimeChoice: namedRunsc },
     );
     await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
       recursive: true,
@@ -2066,7 +2097,11 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
         HOME: home,
         CF_HARNESS_SANDBOX_RUNTIME: "runsc",
       }),
-      { sandboxRuntimeKind: "runsc", sandboxCfcPolicy: policy },
+      {
+        sandboxRuntimeKind: "runsc",
+        sandboxCfcPolicy: policy,
+        sandboxRuntimeChoice: namedRunsc,
+      },
     );
   } finally {
     await Deno.remove(home, { recursive: true });

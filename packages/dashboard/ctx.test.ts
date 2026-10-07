@@ -19,6 +19,7 @@ import {
   REPO,
 } from "./config.ts";
 import type { GitHubRun } from "./github-runs.ts";
+import { GreenBranch } from "./green-branch.ts";
 import { type Ctx, runSource } from "./types.ts";
 
 const DAY_MS = 86_400_000;
@@ -65,20 +66,23 @@ const isRun = (url: URL) => /\/actions\/runs\/\d+$/.test(url.pathname);
 /**
  * The GitHub API as these tests stub it: `lists` maps a repository to its
  * workflow's whole run list, served a page at a time, `filtered` answers every
- * filtered list, and `fails` makes a request fail. `requests` collects every
- * url asked for.
+ * filtered list, `activity` maps a repository to the updates of its branches,
+ * and `fails` makes a request fail. `requests` collects every url asked for.
  */
 interface Github {
   lists: Record<string, GitHubRun[]>;
   filtered?: (url: URL) => GitHubRun[];
+  activity?: Record<string, { id: number; after: string; timestamp: string }[]>;
   fails?: (url: URL) => boolean;
 }
 
-// Run `body` against `github`, stubbed. The real fetch and GH_TOKEN are
-// restored afterwards, since other test files share this process.
+// Run `body` against `github`, stubbed, with a context that reads green
+// branches through `green`. The real fetch and GH_TOKEN are restored
+// afterwards, since other test files share this process.
 async function withGithub(
   github: Github,
   body: (ctx: Ctx, requests: URL[]) => Promise<void>,
+  green: (repo: string) => GreenBranch | undefined = () => undefined,
 ): Promise<void> {
   const requests: URL[] = [];
   const realFetch = globalThis.fetch;
@@ -93,7 +97,9 @@ async function withGithub(
     const repo = url.pathname.split("/").slice(2, 4).join("/");
     const all = github.lists[repo] ?? [];
     let answer: unknown;
-    if (isRun(url)) {
+    if (url.pathname.endsWith("/activity")) {
+      answer = github.activity?.[repo] ?? [];
+    } else if (isRun(url)) {
       answer = all.find((held) => url.pathname.endsWith(`/${held.id}`));
     } else if (isPage(url)) {
       const size = Number(url.searchParams.get("per_page"));
@@ -105,7 +111,7 @@ async function withGithub(
     return Promise.resolve(Response.json(answer));
   }) as typeof fetch;
   try {
-    await body(makeCtx(), requests);
+    await body(makeCtx(green), requests);
   } finally {
     globalThis.fetch = realFetch;
     if (realToken === undefined) Deno.env.delete("GH_TOKEN");
@@ -447,4 +453,53 @@ Deno.test("runs(): a failed read of a later unfiltered page fails the fetch", as
   }, async (ctx) => {
     await assertRejects(() => ctx.runs(), Error, "HTTP 502");
   });
+});
+
+Deno.test("runsFor: a run on main carries what its repo's green branch says of its commit, and a pull request's run does not", async () => {
+  const current = "c".repeat(40);
+  const former = "d".repeat(40);
+  const recently = new Date(Date.now() - 3_600_000).toISOString();
+  const loom = new GreenBranch(LOOM_REPO, "main-green");
+  await withGithub({
+    lists: {
+      [LOOM_REPO]: [
+        run({ id: TOP, head_sha: current }),
+        run({ id: TOP - 1, head_sha: former }),
+        run({ id: TOP - 2, head_sha: "e".repeat(40) }),
+        run({
+          id: TOP - 3,
+          head_sha: current,
+          event: "pull_request",
+          head_branch: "feature",
+        }),
+      ],
+    },
+    activity: {
+      [LOOM_REPO]: [
+        { id: 902, after: current, timestamp: recently },
+        { id: 901, after: former, timestamp: recently },
+      ],
+    },
+  }, async (ctx, requests) => {
+    const main = await ctx.runsFor(
+      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+    );
+    assertEquals(main.map((r) => r.green), [
+      { branch: "main-green", current: true },
+      { branch: "main-green", current: false },
+      undefined,
+    ]);
+    const pulls = await ctx.runsFor(
+      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+    );
+    assertEquals(pulls.map((r) => r.green), [undefined]);
+    // Only the main source reads the branch, and labs has none.
+    await ctx.runs();
+    assertEquals(
+      requests.filter((url) => url.pathname.endsWith("/activity")).map((url) =>
+        url.pathname
+      ),
+      [`/repos/${LOOM_REPO}/activity`],
+    );
+  }, (repo) => repo === LOOM_REPO ? loom : undefined);
 });

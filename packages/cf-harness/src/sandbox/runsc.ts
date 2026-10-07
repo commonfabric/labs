@@ -37,6 +37,7 @@ import {
   SANDBOX_SESSION_NAME_PATTERN,
   type SandboxCommandRequest,
   type SandboxCommandResult,
+  type SandboxPlatform,
   type SandboxRuntime,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
@@ -115,11 +116,32 @@ export const RUNSC_BINARY_ENV = "CF_HARNESS_RUNSC_BINARY";
 export const defaultDarwinCfcVmStore = (home: string): string =>
   joinHostPath(home, "Library", "Application Support", "cfc-vm");
 
-/** Where the macOS runsc keeps the block image a bundle can name as rootfs. */
-export const defaultDarwinRootfs = (
-  home: string,
-  imageKey = "kitchensink",
-): string => joinHostPath(defaultDarwinCfcVmStore(home), "images", imageKey);
+/**
+ * The store the macOS runsc uses, named the way it names one: `cfcVmHome`,
+ * the value of `CFC_VM_HOME`, where that is set and not empty, and otherwise
+ * the default store under `home`. `undefined` where neither names one.
+ */
+export const darwinCfcVmStore = (
+  cfcVmHome: string | undefined,
+  home: string | undefined,
+): string | undefined =>
+  cfcVmHome !== undefined && cfcVmHome !== ""
+    ? cfcVmHome
+    : home !== undefined && home !== ""
+    ? defaultDarwinCfcVmStore(home)
+    : undefined;
+
+/** The image a macOS runsc store unpacks when it is installed, by its key. */
+export const DARWIN_CFC_VM_IMAGE_KEY = "kitchensink";
+
+/**
+ * Where the macOS runsc `store` keeps the marker a bundle names as rootfs to
+ * run from the block image `imageKey`.
+ */
+export const darwinCfcVmRootfs = (
+  store: string,
+  imageKey = DARWIN_CFC_VM_IMAGE_KEY,
+): string => joinHostPath(store, "images", imageKey);
 
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 
@@ -183,9 +205,25 @@ export interface ResolveRunscSandboxConfigOptions {
   scratchDir?: string;
   runId?: string;
   containerUser?: string;
+
+  /**
+   * The home, and the value of `CFC_VM_HOME`, that the macOS `runsc` this
+   * runs finds its store by. On macOS an unnamed rootfs is the kitchen-sink
+   * image of that store, as `darwinCfcVmStore()` names it from these two, so
+   * that it is in the store the shim runs from.
+   */
   homeDir?: string;
-  platform?: "darwin" | "linux" | string;
+  cfcVmHome?: string;
+
+  platform?: SandboxPlatform;
   sessionStartTimeoutMs?: number;
+
+  /**
+   * A sentence added to the refusal of a binary, rootfs or policy that a
+   * writable mount holds. An entrypoint that selected this runtime for a
+   * caller who named none says so here, and how another is selected.
+   */
+  unnamedRuntimeNote?: string;
 }
 
 const normalizeSandboxRoot = (path: string): string => {
@@ -485,23 +523,35 @@ const resolveRunscBinary = (given: string): string => {
  * The runsc binary, the CFC policy and the rootfs are each resolved once,
  * here, to a canonical path. That path is what is compared with the mounts,
  * what the returned configuration holds, and so what every later use names.
- * One of them that does not exist is accepted, as the path it will have under
- * its nearest existing ancestor: no writable mount holds that ancestor, so
- * what later appears there was not put there from a sandbox.
+ * On macOS the cfc-vm store is resolved and compared the same way, since the
+ * macOS runsc runs from it whatever the other three name. One of them that
+ * does not exist is accepted, as the path it will have under its nearest
+ * existing ancestor: no writable mount holds that ancestor, so what later
+ * appears there was not put there from a sandbox.
  *
- * @throws When a setting is malformed, when two sandbox roots overlap, when
- * the scratch directory lies inside a mount, when the binary, the policy or
- * the rootfs lies inside a writable mount, and when {@link canonicalHostPath}
- * cannot tell where one of those paths, or a mount, leads.
+ * @throws When a setting is malformed (on macOS, a store that is not an
+ * absolute path), when two sandbox roots overlap, when the scratch directory
+ * lies inside a mount, when the binary, the policy, the rootfs or, on macOS,
+ * the cfc-vm store lies inside a writable mount, when on macOS a writable
+ * mount lies inside the store, and when {@link canonicalHostPath} cannot tell
+ * where one of those paths, or a mount, leads.
  */
 export const resolveRunscSandboxConfig = (
   options: ResolveRunscSandboxConfigOptions,
 ): RunscSandboxConfig => {
   const platform = options.platform ?? Deno.build.os;
+  const store = platform === "darwin"
+    ? darwinCfcVmStore(options.cfcVmHome, options.homeDir)
+    : undefined;
+  if (store !== undefined && !isAbsoluteHostPath(store)) {
+    // The macOS `runsc` reads the same `CFC_VM_HOME` and resolves it against
+    // its own working directory, which need not be this one.
+    throw new Error(
+      `runsc sandbox needs the cfc-vm store by its absolute path: \`${store}\` is not an absolute path (set CFC_VM_HOME to the store's absolute path)`,
+    );
+  }
   const rootfs = options.rootfs ??
-    (platform === "darwin" && options.homeDir !== undefined
-      ? defaultDarwinRootfs(options.homeDir)
-      : undefined);
+    (store !== undefined ? darwinCfcVmRootfs(store) : undefined);
   if (rootfs === undefined) {
     throw new Error(
       `runsc sandbox needs a rootfs: pass --sandbox-rootfs or set ${RUNSC_ROOTFS_ENV} (on macOS the default is the cfc-vm kitchensink image)`,
@@ -629,6 +679,11 @@ export const resolveRunscSandboxConfig = (
   // sandbox's reach as well: a policy inside a writable mount was rewritten
   // from inside one container and the next read a labelled file as public
   // (review, verified live). The rootfs and the runsc binary likewise.
+  // Whoever ran into this on a runtime they did not name may know of no
+  // store, so the entrypoint that selected it has its say after the reason.
+  const unnamed = options.unnamedRuntimeNote === undefined
+    ? ""
+    : `. ${options.unnamedRuntimeNote}`;
   const trusted = (
     label: string,
     given: string,
@@ -639,7 +694,7 @@ export const resolveRunscSandboxConfig = (
         throw new Error(
           `${label} ${given}${
             canonical === given ? "" : ` (which is ${canonical})`
-          } lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it`,
+          } lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it${unnamed}`,
         );
       }
     }
@@ -663,6 +718,27 @@ export const resolveRunscSandboxConfig = (
       options.cfcPolicyPath,
       canonicalHostPath("CFC policy", options.cfcPolicyPath),
     );
+  // The macOS `runsc` runs from its store whatever binary, rootfs and policy
+  // are named: the VM's config, image and daemon socket are there. So the
+  // store is kept out of reach both ways: not inside a writable mount, and
+  // no writable mount inside it.
+  if (store !== undefined) {
+    const canonicalStore = trusted(
+      "cfc-vm store",
+      store,
+      canonicalHostPath("cfc-vm store", store),
+    );
+    for (const mount of hostMounts) {
+      if (
+        !mount.readOnly &&
+        mount.canonical.some((root) => inside(root, [canonicalStore]))
+      ) {
+        throw new Error(
+          `the writable mount ${mount.hostPath} lies inside the cfc-vm store ${store}: the sandbox could rewrite what the macOS runsc runs from${unnamed}`,
+        );
+      }
+    }
+  }
   // Frozen, mounts included: the engine checks containment against this
   // set and the runtime rereads it at every launch, and a caller holding
   // `ownedRunscSandboxConfig` must not be able to make those two differ.

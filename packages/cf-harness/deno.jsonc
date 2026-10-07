@@ -47,6 +47,8 @@
     "./contracts/prompt-slot": "./src/contracts/prompt-slot.ts",
     "./contracts/cfc-invocation-context": "./src/contracts/cfc-invocation-context.ts",
     "./contracts/native-model-tool": "./src/contracts/native-model-tool.ts",
+    "./contracts/browser-host": "./src/contracts/browser-host.ts",
+    "./console/sse": "./console/sse.ts",
     "./contracts/client-action": "./src/contracts/client-action.ts",
     "./contracts/client-command": "./src/contracts/client-command.ts",
     "./contracts/image": "./src/contracts/image.ts",

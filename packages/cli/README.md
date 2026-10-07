@@ -1266,6 +1266,12 @@ home directory. The Fabric lane uses the `context` prompt role, so the default
 `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
+A run's sandbox, and a local job's, is the one `cf-harness` selects from the
+environment: `CF_HARNESS_SANDBOX_RUNTIME` names `docker` or `runsc`, and with
+none named a Mac runs on its native runtime and every other platform on Docker.
+The runner derives that selection as it starts, before either lane serves, and
+exits with the harness's refusal where the harness would refuse its jobs.
+
 What the Fabric lane does, in order:
 
 1. Connects to the home toolshed as the identity, creates the home pattern if
@@ -1333,18 +1339,20 @@ The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?}`
+instructions?, context?, resultSchema, tools?, maxModelTurns?, browserHost?}`
 with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
 `GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
 with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
 ends after the job's terminal state. `GET /health` says which lanes run.
 
 A profile, named in the host's file, is the authority a job runs with: its
-tools, its host Loom files, its model-turn cap, and the prompt-slot role its
-task binds as. A request may name fewer tools and fewer turns, and nothing else.
-A job runs through the same `cf-harness` path as an agent run, with no fabric
-session, and reports a `step` event for each tool its loop calls and a `command`
-event for each command the host ran for it.
+tools, its host Loom files, its model-turn cap, the prompt-slot role its task
+binds as, and whether a job may bring a browser host (`browserHost: true`). A
+request may name fewer tools and fewer turns, and, under a profile that admits
+one, declare a browser host (below); leaving it out declines the browser. It may
+set nothing else. A job runs through the same `cf-harness` path as an agent run,
+with no fabric session, and reports a `step` event for each tool its loop calls
+and a `command` event for each command the host ran for it.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
@@ -1357,6 +1365,24 @@ configuration may name `jobIdEnvVar`; command discovery and execution then
 receive that job id in the named variable of their cleared host environment. The
 request and model tool arguments cannot select the identity, and concurrent jobs
 have separate bindings.
+
+A caller that can show a browser declares `browserHost: {}` on enqueue, under a
+profile that admits one, and the job browses through it: the lane adds
+`delegate_task` and the `browser` subagent profile to that job alone, as the
+console's `--allow-browser-host` does for a turn. The caller holds
+`GET /jobs/<id>/browser/stream` open, a stream of server-sent
+`request {id,
+operation}`, `withdraw {id}` and `close` events, and answers each
+operation with `POST /jobs/<id>/browser/result {id, result}` (the operations and
+results are cf-harness's `contracts/browser-host.ts`). The semantics are the
+console host's: every operation is answered, one withdrawn while the host holds
+it is acknowledged by its answer before the next is sent, and the job's end says
+`close` and settles anything outstanding as `session-ended`. Unlike the
+console's, the stream is resumable, since the caller is usually a relay: a
+dropped stream leaves the host open, a new attach replaces the old and is sent
+every operation still unanswered and every withdrawal still unacknowledged
+first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
+host as `browser {state, attached, outstanding, withdrawn}`.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already

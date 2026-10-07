@@ -43,10 +43,13 @@ shared host, a tailnet with an access policy — and not behind a public address
   the repository root, which serves the API on `http://localhost:8000`. See
   [`docs/development/LOCAL_DEV_SERVERS.md`](../../../docs/development/LOCAL_DEV_SERVERS.md).
 - **A sandbox runtime.** Every tool the model runs executes in the harness
-  sandbox. By default that is a Docker container under the `runsc-cfc` runtime,
-  and a stopped Docker daemon is a run that fails on its first `bash` call. With
-  `CF_HARNESS_SANDBOX_RUNTIME=runsc` it is the direct `runsc` driver instead,
-  and Docker is not needed; see [Sandbox runtime](#sandbox-runtime).
+  sandbox. On macOS that is, unless the environment names another, the native
+  runtime: the direct `runsc` driver over the cfc-vm store gVisor's macOS
+  installer writes, with no Docker, and the console refuses to start where that
+  store is not set up. On every other platform it is, by default, a Docker
+  container under the `runsc-cfc` runtime, and a stopped Docker daemon is a run
+  that fails on its first `bash` call. `CF_HARNESS_SANDBOX_RUNTIME` names either
+  on any platform; see [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
@@ -94,11 +97,16 @@ The flag calls `console:launch`, which is also how to put a console on a fabric
 that is already running:
 
 ```sh
-deno task --cwd packages/cf-harness console:launch --instance <loom-instance>
+CF_HARNESS_SANDBOX_RUNTIME=docker \
+  deno task --cwd packages/cf-harness console:launch --instance <loom-instance>
 deno task --cwd packages/cf-harness console:launch \
   --fabric-api-url http://localhost:8000 --store packages/toolshed/cache/memory \
   --fabric-identity "$HOME/.cf/my-key.pkcs8" --fabric-space my-space
 ```
+
+The first names the sandbox runtime, here the one an instance on Docker runs on:
+a launch with `--instance` takes no default, as
+[Sandbox runtime](#sandbox-runtime) says.
 
 That task reads the identity, the space and the toolshed URL off a loom
 instance's `pieces.json` when `--instance` names one, the store off
@@ -229,13 +237,47 @@ one environment execute on the same driver. The package's
 [CURRENT_STATE](../docs/CURRENT_STATE.md#sandbox-runtimes) describes both
 drivers.
 
-| Environment                      | Selects                                                                                       |
-| -------------------------------- | --------------------------------------------------------------------------------------------- |
-| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; unset is `docker`, and any other value refuses to start                  |
-| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names                                                      |
-| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`                     |
-| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there |
-| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                    |
+| Environment                      | Selects                                                                                                                                                                                         |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; any other value refuses to start. Unset, macOS takes the native runtime from the cfc-vm store, and every other platform takes `docker`; a launch with `--instance` refuses |
+| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names; unset on macOS, `images/kitchensink` in the store `CFC_VM_HOME` names, else in the one under the home, whether `runsc` is named or the default        |
+| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`, or under the macOS default it is the store's `bin/runsc`                                                             |
+| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there, and under the macOS default the store's `policy.json` next                                       |
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                                                                                                                      |
+| `CFC_VM_HOME`                    | the cfc-vm store the macOS `runsc` and the macOS default use; unset, `~/Library/Application Support/cfc-vm`                                                                                     |
+
+A console launched for a Loom instance takes no default at all. `console:launch`
+given `--instance`, which is how `scripts/start-local-dev.sh` launches it where
+`LOOM_INSTANCE_ID` is set, refuses to start on any platform where the
+environment names no runtime, saying that Loom must name `docker` or `runsc`:
+Loom chooses each instance's runtime, and a console on a default could be on
+another than the instance's runs. It tells the console it serves to hold to the
+same. What follows is the default of a launch with no `--instance`.
+
+A session stays on the runtime it started on. After a restart under another
+runtime, a follow-up turn on a session started before it is refused as
+`provider-mismatch`, naming the runtime the session started on: restart the
+console with that runtime named, or start a new session. The
+[cf-harness README](../README.md#sandbox-runtimes) sets out how runs and
+sessions are bound.
+
+With no runtime named on macOS, the console and `console:launch` refuse to start
+unless the store holds a `config.json` and each piece no setting replaces: an
+executable `bin/runsc` and `bin/cfc-vm` unless `CF_HARNESS_RUNSC_BINARY` names a
+binary, the `images/kitchensink` directory and the `ext4/kitchensink.ext4` image
+unless `CF_HARNESS_SANDBOX_ROOTFS` names a rootfs, and its own `policy.json`
+unless a CFC policy is under the home or `CF_HARNESS_RUNSC_CFC_POLICY` names
+one. The binaries, `config.json`, the rootfs directory and the image have to be
+the files and directories themselves, not symbolic links. The refusal names the
+store and what is missing, and says to set `CF_HARNESS_SANDBOX_RUNTIME=docker`
+to serve on Docker instead. They refuse the same way where the environment sets
+one of the Docker driver's own variables, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` among them, since whoever set it
+means Docker; where a default CFC policy could not be read; and where the store
+is reached through a symbolic link, which the macOS `runsc` cannot run from.
+There is no fallback from one driver to the other. The package's
+[current-state reference](../docs/CURRENT_STATE.md#selection) has the rule in
+full.
 
 The batch CLI's `--sandbox-runtime`, `--sandbox-rootfs` and
 `--sandbox-cfc-policy` are refused here and by `console:launch`, in any
@@ -252,9 +294,17 @@ session. `console:launch` reads no Docker runtime table, sites no sidecar
 directory, and refuses `--cfc-result-dir` and `--cfc-invocation-context-dir`,
 which it takes on the Docker driver only, because only that driver reads them;
 it prints the `runsc` binary, rootfs and CFC policy in their place, and so does
-the server when it binds. With no CFC policy, both say that every turn is
-refused. A console that names no runtime, or names `docker`, builds the Docker
-driver exactly as it would with no variable set.
+the server when it binds. With no CFC policy, which only a named `runsc` can
+have, both say that every turn is refused. A console that names `docker`, or
+names no runtime off macOS, builds the Docker driver.
+
+Both printouts say how the driver was selected. `console:launch` prints a
+`sandbox` row whose source is `CF_HARNESS_SANDBOX_RUNTIME`, inherited, or the
+harness default with its platform and, on macOS, the native store; and beside
+each of the `runsc` binary, rootfs and CFC policy, the variable that named it,
+the native store, or the harness default. The server's banner opens its sandbox
+lines with the driver followed by `named by CF_HARNESS_SANDBOX_RUNTIME` or
+`default on <platform>` and the reason.
 
 Every turn scans the skills root and records the registry on its run before the
 first model call, so `read_skill_resource` can answer and a delegated
@@ -330,27 +380,32 @@ an unknown row can have a null timestamp. An unavailable observation stays
 unknown rather than claiming a failure.
 
 Configuration rows name the active console address, port, space, store, model,
-sandbox runtime, and skill-script switch. The launcher passes its decision
-report directly into the server: connector rows retain every accepted or refused
-grant, its CFC classes or refusal reason, and the injection receipt and piece
-declaration that decided it. Changing those files requires a console restart to
-establish new grants. A server flag takes precedence over the inherited launch
-value and its source. A directly configured server reports its explicit grants
-and marks the full connector inventory unknown. An absent injection receipt is
-also unknown; an observed empty receipt establishes an empty inventory.
+sandbox runtime, and skill-script switch. The sandbox runtime's row carries, as
+its detail, the variable that named the runtime or the platform default that
+selected it. The launcher passes its decision report directly into the server:
+connector rows retain every accepted or refused grant, its CFC classes or
+refusal reason, and the injection receipt and piece declaration that decided it.
+Changing those files requires a console restart to establish new grants. A
+server flag takes precedence over the inherited launch value and its source. A
+directly configured server reports its explicit grants and marks the full
+connector inventory unknown. An absent injection receipt is also unknown; an
+observed empty receipt establishes an empty inventory.
 
 External rows check the selected sandbox driver and the configured index's
-health and enrollment for the console identity. On the Docker driver the sandbox
-rows read the running daemon's `runsc-cfc` registration. On the direct `runsc`
-driver they ask Docker nothing: they resolve the driver's configuration the way
-a turn resolves it, and report whether the `runsc` binary is an executable file,
-whether the rootfs is a directory, and whether a CFC policy is configured,
-readable and a JSON object. A policy that is missing, not a file, unreadable for
-want of permission or malformed is failed: runsc cannot use it, and every
-command's output then arrives without a CFC result and is denied to the model.
-The console takes no enforcement mode, so its turns run at `enforce-strict`, and
-with no policy the runtime row is failed because the engine refuses every turn
-before any tool runs.
+health and enrollment for the console identity. The **Sandbox Runtime** row,
+`sandbox.runtime`, ends its detail with how the driver was selected, as
+`selected: runsc (default on macOS: the native store at <store>)` reads for the
+native runtime. On the Docker driver the sandbox rows read the running daemon's
+`runsc-cfc` registration. On the direct `runsc` driver they ask Docker nothing:
+they resolve the driver's configuration the way a turn resolves it, and report
+whether the `runsc` binary is an executable file, whether the rootfs is a
+directory, and whether a CFC policy is configured, readable and a JSON object. A
+policy that is missing, not a file, unreadable for want of permission or
+malformed is failed: runsc cannot use it, and every command's output then
+arrives without a CFC result and is denied to the model. The console takes no
+enforcement mode, so its turns run at `enforce-strict`, and with no policy the
+runtime row is failed because the engine refuses every turn before any tool
+runs.
 
 On macOS the direct driver runs every sandbox in one VM, which `runsc` starts on
 a command's first use and which stops itself once it has gone its idle timeout

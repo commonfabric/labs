@@ -76,6 +76,7 @@ import type {
 } from "../src/storage/interface.ts";
 import {
   isAclDocumentWriteRefusal,
+  stageSpaceAccessChanges,
   stampWaveRunContext,
   WaveAccumulator,
   type WaveCommitRejection,
@@ -98,6 +99,7 @@ import {
 } from "../src/executor/effect-completion.ts";
 import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("executor wave test");
@@ -114,6 +116,9 @@ describe("stage D seal-into-wave", () => {
     foreignWriteGrant?: ConstructorParameters<
       typeof WaveAccumulator
     >[0]["foreignWriteGrant"];
+    spaceAccessAuthority?: ConstructorParameters<
+      typeof WaveAccumulator
+    >[0]["spaceAccessAuthority"];
   } = {}): WaveAccumulator =>
     new WaveAccumulator({
       space,
@@ -142,6 +147,9 @@ describe("stage D seal-into-wave", () => {
       // foreignWriteAuthorityFor.
       foreignWriteGrant: options.foreignWriteGrant ?? (() => true),
       ...(options.lease !== undefined ? { lease: options.lease } : {}),
+      ...(options.spaceAccessAuthority !== undefined
+        ? { spaceAccessAuthority: options.spaceAccessAuthority }
+        : {}),
     });
 
   const newSink = (): EngineWaveCommitSink =>
@@ -753,6 +761,170 @@ describe("stage D seal-into-wave", () => {
         recoveryEpoch: "acl-document-write",
         permanentEvidence: true,
       }]);
+    });
+  });
+
+  describe("a served run's access-list changes", () => {
+    // These drive the wave's own handling of a staged change, with the
+    // memory server's decisions stood in for: the seal's check by
+    // `spaceAccessAuthority`, and the commit by the sink's hook.
+
+    const alice = "did:key:z6Mk-wave-access-alice";
+
+    /**
+     * Stamps `tx` as a run delivering the durable entry of `eventId` for
+     * alice, and stages a grant to carol in `space` on it.
+     */
+    const stageGrant = (tx: IExtendedStorageTransaction, eventId: string) => {
+      stampWaveRunContext(tx, {
+        actionId: `access-change/${eventId}`,
+        kind: "event-handler",
+        eventId,
+        streamEntry: {
+          sidecarId: "of:stream-events:wave-access",
+          index: 0,
+          seq: 1,
+        },
+        acting: { user: alice, session: "wave-access-session" },
+        capabilityRef: `event-consequence:${eventId}`,
+      });
+      stageSpaceAccessChanges(
+        tx,
+        new Map([[space, [{
+          principal: "did:key:z6Mk-wave-access-carol",
+          level: "READ" as const,
+          actor: alice,
+        }]]]),
+      );
+    };
+
+    /** A sink whose access-list hook records each change and returns `verdict`. */
+    const accessSink = (
+      holder: string,
+      verdict: { refused: string } | { admitted: true; seq?: number },
+      committed: string[],
+    ) =>
+      new EngineWaveCommitSink({
+        engineFor: () => engine,
+        sessionId: holder,
+        commitServedAclChange: (change) => {
+          committed.push(change.capabilityRef);
+          return Promise.resolve(verdict);
+        },
+      });
+
+    it("holds a change-only contribution's settlement until the wave commits the change", async () => {
+      const lease = liveLease();
+      const wave = newWave({
+        lease,
+        spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
+      });
+      runtime.installSealDestination(wave);
+      const tx = runtime.edit();
+      stageGrant(tx, "e-change-only");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      // Another run's write gives the wave's home batch an operation, which
+      // a batch carrying a consequence needs.
+      const other = runtime.edit();
+      stampWaveRunContext(other, {
+        actionId: "access-change/other",
+        kind: "bookkeeping",
+      });
+      runtime.getCell<{ n: number }>(space, "wave-access-other", undefined)
+        .withTx(other).set({ n: 1 });
+      expect((await other.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+      const settlement = waveSettlementOf(tx)!;
+      let settledBeforeCommit = false;
+      settlement.then(() => {
+        settledBeforeCommit = true;
+      });
+      // A settlement that needed no wave would have resolved by the end of
+      // this turn.
+      await flushMicrotasks();
+      const committed: string[] = [];
+
+      const outcome = await wave.commitWave(
+        accessSink(lease.holder, { admitted: true, seq: 7 }, committed),
+      );
+
+      expect(settledBeforeCommit).toBe(false);
+      expect(committed).toEqual(["event-consequence:e-change-only"]);
+      expect(outcome.dispositions).toEqual([
+        { kind: "committed" },
+        { kind: "committed" },
+      ]);
+      expect((await settlement).error).toBeUndefined();
+    });
+
+    it("requeues the event of a change the commit refuses, and commits none of the run's writes", async () => {
+      const lease = liveLease();
+      const wave = newWave({
+        lease,
+        spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
+      });
+      runtime.installSealDestination(wave);
+      const doc = runtime.getCell<{ n: number }>(
+        space,
+        "wave-access-refused",
+        undefined,
+      );
+      const tx = runtime.edit();
+      stageGrant(tx, "e-refused");
+      doc.withTx(tx).set({ n: 1 });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+      const committed: string[] = [];
+
+      const outcome = await wave.commitWave(
+        accessSink(
+          lease.holder,
+          { refused: "the list changed since the seal" },
+          committed,
+        ),
+      );
+      await wave.settled();
+
+      expect(committed).toEqual(["event-consequence:e-refused"]);
+      expect(outcome.dispositions).toEqual([{ kind: "requeued" }]);
+      expect(outcome.requeuedEventIds).toEqual(["e-refused"]);
+      expect(
+        Engine.read(engine, { id: doc.getAsNormalizedFullLink().id }),
+      ).toBeNull();
+    });
+
+    it("refuses at the seal a change whose run is not delivering a durable entry", async () => {
+      const wave = newWave({
+        spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
+      });
+      runtime.installSealDestination(wave);
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "access-change/in-process",
+        kind: "event-handler",
+        eventId: "e-in-process",
+        acting: { user: alice },
+        capabilityRef: "event-consequence:e-in-process",
+      });
+      stageSpaceAccessChanges(
+        tx,
+        new Map([[space, [{
+          principal: "did:key:z6Mk-wave-access-carol",
+          level: "READ" as const,
+          actor: alice,
+        }]]]),
+      );
+
+      const result = await tx.commit().settled;
+      runtime.clearSealDestination();
+      const contributionCount = wave.contributionCount;
+      wave.abandon("test-only");
+
+      expect(isAclDocumentWriteRefusal(result.error)).toBe(true);
+      expect(result.error?.message).toContain(
+        "Only a handler run delivering a durable stream entry",
+      );
+      expect(contributionCount).toBe(0);
     });
   });
 

@@ -25,7 +25,9 @@
  * reads the same variables the same way. A console on the direct runsc driver
  * reads no Docker runtime table and needs no sidecar directory; the launch
  * prints the `runsc` binary, rootfs and CFC policy the environment named in
- * their place.
+ * their place. Where the environment names no driver, a launch by hand takes
+ * its platform's default, and a launch with `--instance` is refused: loom
+ * chooses the driver of each instance, and names it for the console it starts.
  *
  * A loom instance is one source among several rather than the shape of this
  * module: `--instance` reads the identity, space and toolshed URL off that
@@ -61,11 +63,15 @@ import {
 } from "../src/sandbox/docker-runsc.ts";
 import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
 import {
+  nativeStoreCfcPolicy,
   resolveSandboxRuntimeSelection,
   RUNSC_BINARY_ENV,
   RUNSC_CFC_POLICY_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
+  type SandboxPlatform,
+  type SandboxRuntimeChoice,
+  sandboxRuntimeChoiceReason,
   type SandboxRuntimeSelection,
 } from "../src/sandbox/runtime-selection.ts";
 import {
@@ -83,6 +89,7 @@ import {
   CONSOLE_FLAGS,
   CONSOLE_STRING_FLAGS,
   consoleHelpText,
+  type ConsoleHost,
   parseConsoleArgs,
   refuseBatchSandboxFlags,
   runscWithoutPolicyRefusesTurns,
@@ -199,8 +206,9 @@ export interface ConsoleLaunchRecords {
   /** Why `dockerRuntimes` is absent, for error text. */
   dockerRuntimesUnreadable?: string;
   /**
-   * The sandbox runtime the launch environment selects. Absent, or naming
-   * `docker`, the console runs on the Docker driver.
+   * The sandbox runtime the launch environment selects. Absent, the console
+   * runs on the Docker driver and the launch does not report how that was
+   * selected.
    */
   sandbox?: ConsoleLaunchSandbox;
 }
@@ -209,9 +217,16 @@ export interface ConsoleLaunchRecords {
 export interface ConsoleLaunchSandbox {
   /** As `resolveSandboxRuntimeSelection` derives it from the environment. */
   selection: SandboxRuntimeSelection;
+
+  /** Whether `CF_HARNESS_RUNSC_BINARY` named the `runsc` binary. */
+  binaryNamed: boolean;
+
+  /** Whether `CF_HARNESS_SANDBOX_ROOTFS` named the rootfs. */
+  rootfsNamed: boolean;
+
   /**
    * Whether `CF_HARNESS_RUNSC_CFC_POLICY` named the policy, rather than the
-   * selection finding the default one under `HOME`.
+   * selection finding a default one.
    */
   policyNamed: boolean;
 }
@@ -528,11 +543,16 @@ export const resolveConsoleLaunchPlan = (
       ? "--cfc-invocation-context-dir"
       : undefined;
     if (named !== undefined) {
+      const choice = runsc.selection.sandboxRuntimeChoice;
       throw new Error(
         `\`${named}\` names a sidecar directory of the Docker driver, and ` +
-          `\`${SANDBOX_RUNTIME_ENV}\` puts this console on the direct runsc ` +
-          `driver, which reads none; drop the flag, or unset ` +
-          `\`${SANDBOX_RUNTIME_ENV}\` to run on Docker`,
+          (choice.source === "default"
+            ? "this console is on the direct runsc driver, the default on " +
+              "macOS, which reads none"
+            : `\`${SANDBOX_RUNTIME_ENV}\` puts this console on the direct ` +
+              "runsc driver, which reads none") +
+          `; drop the flag, or set \`${SANDBOX_RUNTIME_ENV}=docker\` to run ` +
+          "on Docker",
       );
     }
   } else {
@@ -651,6 +671,11 @@ export const resolveConsoleLaunchPlan = (
       source: store.source,
     },
     ...(runsc !== undefined ? runscResolvedValues(runsc) : [
+      ...(records.sandbox === undefined ? [] : [{
+        name: "sandbox",
+        value: "docker",
+        source: sandboxSource(records.sandbox.selection.sandboxRuntimeChoice),
+      }]),
       {
         name: "cfc results",
         value: cfcResultDir!,
@@ -739,33 +764,49 @@ export const resolveConsoleLaunchPlan = (
   };
 };
 
+/** Helper for the launch report, which labels a value a variable named. */
+const inherited = (variable: string): string => `\`${variable}\`, inherited`;
+
 /**
- * What a console on the direct runsc driver runs under, each value beside the
- * variable that named it. These pass through to the console as inherited
- * rather than being set by the launch, and are printed so the report
- * accounts for them.
+ * Helper for the launch report, which returns the source of the sandbox
+ * runtime: the variable that named it, or the platform default the harness
+ * applied where none did.
+ */
+const sandboxSource = (choice: SandboxRuntimeChoice): string =>
+  choice.source === "default"
+    ? `harness ${sandboxRuntimeChoiceReason(choice)}`
+    : inherited(SANDBOX_RUNTIME_ENV);
+
+/**
+ * What a console on the direct runsc driver runs under, each value beside
+ * what decided it: the variable that named it, the native store a defaulted
+ * runtime takes it from, or the harness's own default. These pass through to
+ * the console as inherited rather than being set by the launch, and are
+ * printed so the report accounts for them.
  */
 const runscResolvedValues = (
   sandbox: ConsoleLaunchSandbox,
 ): ResolvedValue[] => {
   const { selection } = sandbox;
-  const inherited = (variable: string) => `\`${variable}\`, inherited`;
+  const choice = selection.sandboxRuntimeChoice;
+  const store = choice.source === "default" && choice.runtime === "runsc"
+    ? choice.nativeStore
+    : undefined;
+  const fromStore = store === undefined
+    ? "harness default"
+    : `the native store at \`${store}\``;
   return [{
     name: "sandbox",
     value: "runsc",
-    source: inherited(SANDBOX_RUNTIME_ENV),
+    source: sandboxSource(choice),
   }, {
     name: "runsc",
     value: selection.sandboxRunscBinary ?? "`runsc`, looked for on `PATH`",
-    source: selection.sandboxRunscBinary !== undefined
-      ? inherited(RUNSC_BINARY_ENV)
-      : "harness default",
+    source: sandbox.binaryNamed ? inherited(RUNSC_BINARY_ENV) : fromStore,
   }, {
     name: "rootfs",
     value: selection.sandboxRootfs ?? "(the driver's default)",
-    source: selection.sandboxRootfs !== undefined
-      ? inherited(SANDBOX_ROOTFS_ENV)
-      : "harness default",
+    source: sandbox.rootfsNamed ? inherited(SANDBOX_ROOTFS_ENV) : fromStore,
   }, {
     name: "cfc policy",
     // The console takes no loop enforcement mode, so its turns run at the
@@ -774,8 +815,13 @@ const runscResolvedValues = (
       (runscWithoutPolicyRefusesTurns(DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE)
         ? `(none: every turn is refused at \`${DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE}\`)`
         : "(none: `runsc` runs without `--cfc`)"),
+    // The policy under `HOME` is the harness's default on either runtime; the
+    // store's own is one only a defaulted native runtime takes.
     source: sandbox.policyNamed
       ? inherited(RUNSC_CFC_POLICY_ENV)
+      : store !== undefined &&
+          selection.sandboxCfcPolicy === nativeStoreCfcPolicy(store)
+      ? fromStore
       : "harness default",
   }];
 };
@@ -941,15 +987,37 @@ export const consoleLaunchHelpText = (
 };
 
 /**
+ * Who names the sandbox runtime of a console launched with `--instance`. Loom
+ * chooses a runtime for each of its instances and starts their consoles, so a
+ * console launched for an instance in an environment that names none is one
+ * Loom did not choose for. It is refused on every platform, instead of being
+ * put on a default that need not be the runtime the instance's runs are on.
+ */
+const INSTANCE_RUNTIME_NAMED_BY = "Loom";
+
+/**
  * Reads what the fabric records and resolves the console's environment from
  * it, stopping short of serving: the plan, and the arguments after `--` that
- * belong to the console rather than to this launcher.
+ * belong to the console rather than to this launcher. `host.platform` is the
+ * platform whose default sandbox runtime applies where `env` names none, as
+ * `Deno.build.os` writes it, which it is when absent. A launch with
+ * `--instance` takes no such default, and returns in `sandboxRuntimeNamedBy`
+ * who has to name the runtime, for the console it serves to hold to as well.
+ *
+ * @throws HarnessControlError where `env` names no sandbox runtime and the
+ * launch is for a Loom instance; and where it names none on macOS and the
+ * native runtime cannot be provided.
  */
 export const prepareConsoleLaunch = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   io: ConsoleLaunchIo = REAL_IO,
-): Promise<{ plan: ConsoleLaunchPlan; consoleArgs: string[] }> => {
+  host: { platform?: SandboxPlatform } = {},
+): Promise<{
+  plan: ConsoleLaunchPlan;
+  consoleArgs: string[];
+  sandboxRuntimeNamedBy?: string;
+}> => {
   const undeclared: string[] = [];
   const parsed = parseArgs([...args], {
     string: [...LAUNCH_STRING_FLAGS],
@@ -1050,7 +1118,14 @@ export const prepareConsoleLaunch = async (
 
   // Read the way the server reads it, from the same environment, so the
   // launch and the console describe one sandbox.
+  const sandboxRuntimeNamedBy = instance === undefined
+    ? undefined
+    : INSTANCE_RUNTIME_NAMED_BY;
   const selection = await resolveSandboxRuntimeSelection(env, {}, {
+    ...(sandboxRuntimeNamedBy !== undefined
+      ? { namedBy: sandboxRuntimeNamedBy }
+      : { platform: host.platform ?? Deno.build.os }),
+    flags: false,
     cwd: Deno.cwd(),
   });
   // Only the Docker driver has a runtime table to read. Not configurable
@@ -1064,6 +1139,8 @@ export const prepareConsoleLaunch = async (
     ...(instance !== undefined ? { instance } : {}),
     sandbox: {
       selection,
+      binaryNamed: nonEmpty(env[RUNSC_BINARY_ENV]) !== undefined,
+      rootfsNamed: nonEmpty(env[SANDBOX_ROOTFS_ENV]) !== undefined,
       policyNamed: nonEmpty(env[RUNSC_CFC_POLICY_ENV]) !== undefined,
     },
     ...(docker.runtimes !== undefined
@@ -1153,13 +1230,21 @@ export const prepareConsoleLaunch = async (
     );
   }
 
-  return { plan, consoleArgs };
+  return {
+    plan,
+    consoleArgs,
+    ...(sandboxRuntimeNamedBy !== undefined ? { sandboxRuntimeNamedBy } : {}),
+  };
 };
 
 /**
  * Reads what the fabric records, prints the account of what it resolved to,
  * and serves under it. Where `args` ask for help it prints the usage instead,
- * and reads and serves nothing.
+ * and reads and serves nothing. `host.platform` is the platform whose default
+ * sandbox runtime applies to the launch and to the console it serves, as
+ * `Deno.build.os` writes it, which it is when absent. `serve` is handed what
+ * the console is to be told of where it runs: that platform, and, for a
+ * launch with `--instance`, who has to name the runtime.
  */
 export const launchConsole = async (
   args: readonly string[] = Deno.args,
@@ -1167,9 +1252,11 @@ export const launchConsole = async (
   serve: (
     consoleArgs: string[],
     health: ConsoleObservedLaunchHealth,
-  ) => Promise<void> = (consoleArgs, health) =>
-    startConsoleServer(consoleArgs, undefined, undefined, health),
+    consoleHost: ConsoleHost,
+  ) => Promise<void> = (consoleArgs, health, consoleHost) =>
+    startConsoleServer(consoleArgs, undefined, undefined, health, consoleHost),
   io: ConsoleLaunchIo = REAL_IO,
+  host: { platform?: SandboxPlatform } = {},
 ): Promise<void> => {
   // A flag with no value first, on either side of `--`: the `-h` it leaves
   // behind is not a question.
@@ -1183,7 +1270,8 @@ export const launchConsole = async (
     console.log(help);
     return;
   }
-  const { plan, consoleArgs } = await prepareConsoleLaunch(args, env, io);
+  const { plan, consoleArgs, sandboxRuntimeNamedBy } =
+    await prepareConsoleLaunch(args, env, io, host);
   const health = { ...plan.health, checkedAt: new Date().toISOString() };
 
   console.log("");
@@ -1199,7 +1287,10 @@ export const launchConsole = async (
   }
   // These are the decisions that produced the running console's grants. A
   // status request reports this observation even if the files later change.
-  await serve(consoleArgs, health);
+  await serve(consoleArgs, health, {
+    ...host,
+    ...(sandboxRuntimeNamedBy !== undefined ? { sandboxRuntimeNamedBy } : {}),
+  });
 };
 
 /**

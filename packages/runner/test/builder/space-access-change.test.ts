@@ -15,11 +15,14 @@ import {
   commitSpaceAccessChanges,
   grantSpaceAccess,
   revokeSpaceAccess,
+  settleSpaceAccessChanges,
 } from "../../src/builder/space-access-change.ts";
 import type { Frame } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
+import { stampWaveRunContext } from "../../src/executor/wave.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { stampSpeculationRunContext } from "../../src/speculation/overlay-destination.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import type { SessionFactory } from "../../src/storage/v2.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
@@ -756,7 +759,7 @@ describe("space-access-change", () => {
       ).toThrow("requires the handler's event to be a trusted gesture");
     });
 
-    it("throws on a serving runtime", () => {
+    it("throws on a serving runtime for a run the serving loop stamped with no actor", () => {
       const runtime = servingRuntime();
       const target = runtime.getCell(alice.did() as MemorySpace, "target");
       expect(() =>
@@ -765,7 +768,7 @@ describe("space-access-change", () => {
           runtime.edit(),
           () => grantSpaceAccess(target, bob.did(), "READ"),
         )
-      ).toThrow("not available on a serving runtime");
+      ).toThrow("requires an event with an actor");
     });
 
     it("throws in a `lift()` frame", async () => {
@@ -1054,6 +1057,75 @@ describe("space-access-change", () => {
         [alice.did()]: "OWNER",
         [bob.did()]: "OWNER",
       });
+    });
+  });
+
+  describe("settleSpaceAccessChanges()", () => {
+    it("commits a client handler's changes before it settles", async () => {
+      const { runtime } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+
+      await settleSpaceAccessChanges(frame);
+
+      expect(frame.pendingSpaceAccessChanges).toBeUndefined();
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "READ",
+      });
+    });
+
+    it("returns `undefined` and commits nothing for a speculative run's changes", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const target = runtime.getCell(space, "target");
+      const tx = runtime.edit();
+      stampSpeculationRunContext(tx, {
+        actionId: "space-access-change echo",
+        kind: "event-handler",
+        eventId: "space-access-change echo event",
+      });
+      const frame = inHandler(
+        runtime,
+        tx,
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
+      const before = aclCommitCount(factory, space);
+
+      expect(settleSpaceAccessChanges(frame)).toBeUndefined();
+
+      expect(frame.pendingSpaceAccessChanges).toBeUndefined();
+      await runtime.storageManager.synced();
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+    });
+
+    it("returns `undefined` and commits nothing itself for a served run's changes", () => {
+      const runtime = servingRuntime();
+      const target = runtime.getCell(carol.did() as MemorySpace, "target");
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "space-access-change served",
+        kind: "event-handler",
+        acting: { user: alice.did() },
+      });
+      const frame = inHandler(
+        runtime,
+        tx,
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(carol.did() as MemorySpace))
+        .toHaveLength(1);
+
+      expect(settleSpaceAccessChanges(frame)).toBeUndefined();
+
+      expect(frame.pendingSpaceAccessChanges).toBeUndefined();
     });
   });
 

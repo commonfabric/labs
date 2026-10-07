@@ -118,19 +118,24 @@ session, as a friendly suggestion, that `deno task test-records-key setup` is
 worth running once your user contributes regularly
 (`docs/development/test-records.md`, "Getting a key").
 
-### Avoid timeouts, retry loops, and sleeps
+### Avoid timeouts, retry loops, sleeps, and polling
 
 Timeouts cause flakiness because they put an upper bound on success: anything
 that would have eventually completed cannot complete once it hits the timeout.
 
-Retry loops mask errors: anything that should have succeeded first time now gets
-missed because if it succeeds sometimes.
+Retry loops mask errors: an operation that should succeed the first time fails
+intermittently, and the retry hides the failure.
 
 Sleeps are flaky and expensive: they increase the floor on the amount of time
 operations take, and they rely on unpredictable timings to align for success.
 
-Avoid all three; when you see them in existing code, point them out and suggest
-starting an agent to remove them.
+Polling wastes work while nothing changes and notices a change late when
+something does. When one component needs to learn that another's state has
+changed, the component that changes the state sends a notification, for example
+over a long-lived socket.
+
+Avoid all four. When you work in code that has one, refactor it to remove it,
+unless `docs/development/waiting-in-tests.md` lists it as a wait the repo keeps.
 
 For tests, `docs/development/waiting-in-tests.md` is the canonical guidance. It
 names the event-driven primitives to reach for instead of a poll, and the

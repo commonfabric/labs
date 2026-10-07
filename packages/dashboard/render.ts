@@ -24,6 +24,7 @@ import {
   TEXTURE_WIDTH,
 } from "./palette.ts";
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
+import { GREEN_STAR_RULES } from "./green-star.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
@@ -248,6 +249,7 @@ ${TILE_RULES}
   ${textureRules(["tile"])}
   ${tileContentRules(SPARKLINE_HEIGHT)}
   ${BIG_RULES}
+  ${GREEN_STAR_RULES}
   a.cell{display:block}
   a.cell:hover{outline:1px solid var(--accent);outline-offset:-1px}
   a.tile.link:hover{border-color:var(--border-hover)}

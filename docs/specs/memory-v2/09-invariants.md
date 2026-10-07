@@ -507,7 +507,10 @@ separately stated motivation, and no spec gives one. Anyone proposing to relax
 it owes the argument #4670 did not record.
 
 Layer: server admission (`#validateAclCommit` in
-`packages/memory/v2/server.ts`); client emission (`writeAcl()` in
+`packages/memory/v2/server.ts`, for a session's transact and, with the carried
+actor as the principal, for a served run's change through
+`commitServedAclChange()` and `checkServedAclChange()`); client emission
+(`writeAcl()` in
 `packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
 `grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
 satisfies the rule by addressing the whole document at path `[]` — a write
@@ -516,12 +519,18 @@ details and is refused). The self-removal exception to the capability check
 is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
 the client that sends one.
 
-The served plane has no writer of the ACL document, and refuses one outright,
-in every mode, `off` included. A serving wave commits engine-direct, so
-`#validateAclCommit` never sees its commits, and neither its `derived` lease
-admission nor its foreign batches' delegated admission checks this rule or
-the acting user's level. So the wave's seal refuses a run that writes
-`of:<space>` of any space, failing that run alone
+The served plane writes the ACL document only through the memory server. A
+serving wave commits engine-direct, so `#validateAclCommit` never sees its
+commits, and neither its `derived` lease admission nor its foreign batches'
+delegated admission checks this rule or the acting user's level. So no run
+writes the document itself, in any mode, `off` included: a served handler's
+`grantSpaceAccess()` or `revokeSpaceAccess()` stages its change instead, and
+the memory server commits it as an ACL-only authored commit, admitted by
+`#validateAclCommit` and the capability check with the event's actor as the
+principal
+([`space-access-changes.md`](../../features/space-access-changes.md#serving-runtimes)).
+The wave's seal refuses a run that writes `of:<space>` of any space, failing
+that run alone
 (`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
 refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
 and the wave sink refuses a foreign batch carrying one
@@ -554,7 +563,11 @@ resulting value. Served plane,
 `packages/runner/test/executor-acl-document-write.test.ts` drives a served
 handler's cell-shaped and whole-document writes under `off` and `enforce`,
 and `packages/runner/test/executor-wave.test.ts` hands the engine and the
-sink batches built directly, past the seal.
+sink batches built directly, past the seal. The served change's admission is
+"checkServedAclChange() and commitServedAclChange()" in
+`packages/memory/test/v2-server-acl.test.ts`, and
+`packages/runner/test/executor-space-access-change.test.ts` drives served
+handlers' grants and revokes, and their refusals, under `off` and `enforce`.
 
 ### INV-13 — ACL genesis precedence and authority
 

@@ -1493,6 +1493,12 @@ describe("agent runner", () => {
       options: {
         report?: (message: string) => void;
         omitHarnessArgs?: boolean;
+
+        /**
+         * The platform the harness runs as and the home it finds, for a run
+         * that names no sandbox runtime. Absent, the run names Docker.
+         */
+        unnamedSandbox?: { platform: typeof Deno.build.os; home: string };
       } = {},
     ) => {
       const sessionRuntime = connect(CLOUD);
@@ -1523,7 +1529,15 @@ describe("agent runner", () => {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
             CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+            // Named, so the run does not take the default of the machine the
+            // suite runs on, which on macOS is that machine's native runtime.
+            ...(options.unnamedSandbox !== undefined
+              ? { HOME: options.unnamedSandbox.home }
+              : { CF_HARNESS_SANDBOX_RUNTIME: "docker" }),
           },
+          ...(options.unnamedSandbox !== undefined
+            ? { platform: options.unnamedSandbox.platform }
+            : {}),
           fabricSessionFactory: () => Promise.resolve({ pieces }),
           createPromptLoop: (options) => ({
             runPrompt: (prompt) => {
@@ -1596,6 +1610,41 @@ describe("agent runner", () => {
       expect(
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
+    });
+
+    it("reports the harness's refusal, naming the variable alone, for a run on macOS with no native runtime", async () => {
+      const messages: string[] = [];
+      let looped = false;
+      // By the path the file system has for it: a home reached through a
+      // link is refused for that before its store is looked at.
+      const home = await Deno.realPath(workRoot);
+      await startHarnessRunner(() => {
+        looped = true;
+        return Promise.resolve(loopResult("run-unreached"));
+      }, {
+        report: (message) => messages.push(message),
+        unnamedSandbox: { platform: "darwin", home },
+      });
+      const result = await submit();
+
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(looped).toBe(false);
+      const refusal = messages.find((message) =>
+        message.includes("No sandbox runtime is named")
+      );
+      // The runner writes the harness's arguments itself, so the way to
+      // Docker it is told is the variable, and no flag.
+      expect(refusal).toContain(
+        `it is not set up at \`${
+          join(home, "Library", "Application Support", "cfc-vm")
+        }\``,
+      );
+      expect(refusal).toContain(
+        "select Docker with `CF_HARNESS_SANDBOX_RUNTIME=docker`.",
+      );
+      expect(refusal).not.toContain("--sandbox");
     });
 
     for (const explicitCeiling of [false, true]) {

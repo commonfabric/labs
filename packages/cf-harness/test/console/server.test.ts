@@ -14,9 +14,11 @@ import {
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
   parseConsoleArgs,
+} from "../../console/server.ts";
+import {
   resolveConsoleConfig,
   startConsoleServer,
-} from "../../console/server.ts";
+} from "../support/on-linux.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
 import {
   harnessSessionChatPolicy,
@@ -28,7 +30,10 @@ import {
   bashToolDescriptorForRuntime,
 } from "../../src/tools/bash.ts";
 import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
-import { defaultDarwinRootfs } from "../../src/sandbox/runsc.ts";
+import {
+  darwinCfcVmRootfs,
+  defaultDarwinCfcVmStore,
+} from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
@@ -856,8 +861,11 @@ describe("console/server", () => {
     });
 
     it("observes the driver's own default rootfs for a runsc console that names none", async () => {
-      // On macOS the driver finds the rootfs under the process's `HOME`; on
-      // any other platform a rootfs must be named, and the turn is refused.
+      // On macOS the driver finds the rootfs in the store under the `HOME` of
+      // the environment the console runs in, where no `CFC_VM_HOME` names
+      // another; on any other platform a rootfs must be named, and the turn
+      // is refused. `/Users/console` has no link on the way, as macOS's
+      // `/home` does, so its spelling is the path the driver resolves.
       const [, runtime, rootfs] = await (async () => {
         const health = createConsoleHealth(
           await resolveConsoleConfig(ARGS, {
@@ -867,7 +875,7 @@ describe("console/server", () => {
           }, "/console"),
           undefined,
           undefined,
-          {},
+          { HOME: "/Users/console" },
           undefined,
           () => Promise.reject(new Error("Docker is not asked")),
         );
@@ -878,7 +886,9 @@ describe("console/server", () => {
       })();
 
       if (Deno.build.os === "darwin") {
-        const expected = defaultDarwinRootfs(Deno.env.get("HOME")!);
+        const expected = darwinCfcVmRootfs(
+          defaultDarwinCfcVmStore("/Users/console"),
+        );
         expect(rootfs.detail).toBe(expected);
         expect(runtime.detail).toContain(`rootfs ${expected}`);
       } else {
@@ -1224,10 +1234,11 @@ describe("console/server", () => {
       ]);
     });
 
-    it("returns the sidecar directories as its banner for a console on Docker", async () => {
+    it("returns the driver and its sidecar directories as its banner for a console on Docker", async () => {
       expect(
         consoleSandboxBanner(await resolveConsoleConfig(ARGS, {}, "/console")),
       ).toEqual([
+        "  sandbox:    docker; default on linux: the native runtime is macOS only",
         "  results:    /console/.cf-harness-console/cfc/results",
         "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
       ]);
@@ -1258,7 +1269,7 @@ describe("console/server", () => {
           await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
         ),
       ).toEqual([
-        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  sandbox:    runsc, the direct driver (no Docker); named by CF_HARNESS_SANDBOX_RUNTIME",
         "  runsc:      /store/bin/runsc",
         "  rootfs:     /store/images/kitchensink",
         "  policy:     /store/policy.json",
@@ -1327,7 +1338,7 @@ describe("console/server", () => {
         "  skills:     (not configured)",
       ]);
       expect(banner.slice(-6)).toEqual([
-        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  sandbox:    runsc, the direct driver (no Docker); named by CF_HARNESS_SANDBOX_RUNTIME",
         "  runsc:      /store/bin/runsc",
         "  rootfs:     /store/images/kitchensink",
         "  policy:     /store/policy.json",
